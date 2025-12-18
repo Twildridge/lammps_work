@@ -1,0 +1,287 @@
+# ========== Slab equilibrating in solvent WITH SUPPORT ==========
+# Variables loaded via bash script:
+# - dataname: name of data file
+# - interaction: epsSS_epsSP
+# - nsteps: production run steps
+# - oldsteps: previous timesteps (for restart)
+# - totsteps: total cumulative timesteps
+# - datasteps: timesteps in data file
+# - epsSS: solvent-solvent interaction strength
+# - epsSP: solvent-polymer interaction strength
+
+
+# ========== Simulation Parameters ==========
+variable sigma equal 1.0
+variable binWidth equal 2
+
+# Time averaging parameters
+variable nevery_avg_stress equal 250
+variable nrepeat_avg_stress equal 20
+variable nfreq_avg_stress equal 5000
+
+variable nevery_avg_vol equal 1000
+variable nrepeat_avg_vol equal 1
+variable nfreq_avg_vol equal 1000
+
+# Output frequencies
+variable thermo_freq equal 1000
+variable dump_freq equal 1000
+variable volume_freq equal 1000
+
+# Equilibration parameters
+variable temp_target equal 1.0
+variable press_target equal 0.01
+variable tdamp equal 1.0
+variable pdamp equal 1.0
+variable timestep_gentle equal 0.001
+variable timestep_prod equal 0.005
+variable nsteps_gentle equal 1000
+
+
+
+# ========== Initialization ==========
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+# Read initial data or restart
+variable is_restart equal is_file(restart_${dataname}_${interaction}_${oldsteps}.restart)
+variable restartFlag string file
+
+if "${nsteps} == ${oldsteps}" then &
+    "variable is_restart equal 0"
+
+if "${is_restart} == 1" then &
+    "read_restart restart_${dataname}_${interaction}_${oldsteps}.restart" &
+else &
+    "read_data data_files/${dataname}.data"
+
+if "${is_restart} == 1" then &
+    "variable restartFlag string append"
+
+
+print ">>> is_restart = ${is_restart}"
+print ">>> Previous    # of timesteps: ${oldsteps}"
+print ">>> Current     # of timesteps: ${nsteps}"
+print ">>> Cumulative  # of timesteps: ${totsteps}"
+
+comm_modify cutoff 5.0
+
+
+
+# ========== Group Definitions ==========
+group polymer type 1 2
+group solvent type 3
+group support type 4
+group piston type 5
+group mobile type 1 2 3
+group polymer_and_support type 1 2 4 5
+
+
+
+# ========== Interatomic Potentials ==========
+pair_style lj/cut 2.5
+pair_coeff * * 1.0 ${sigma} 2.5
+pair_coeff 1 3 ${epsSP} ${sigma} 2.5  # polymer-solvent (poor solvent)
+pair_coeff 2 3 ${epsSP} ${sigma} 2.5  # crosslinker-solvent
+pair_coeff 3 3 ${epsSS} ${sigma} 2.5  # solvent-solvent
+pair_coeff 1 4 1.0 ${sigma} 1.22      # polymer-support (repulsive WCA)
+pair_coeff 2 4 1.0 ${sigma} 1.22      # crosslinker-support (repulsive WCA)
+pair_coeff 3 4 0.0 ${sigma} 0.0       # solvent-support (no interaction)
+pair_coeff 4 4 0.0 ${sigma} 0.0       # support-support (frozen)
+pair_coeff 1 5 1.0 ${sigma} 1.22      # polymer-piston (repulsive WCA)
+pair_coeff 2 5 1.0 ${sigma} 1.22      # crosslinker-piston (repulsive WCA)
+pair_coeff 3 5 0.0 ${sigma} 0.0       # solvent-piston (no interaction)
+pair_coeff 4 5 0.0 ${sigma} 0.0       # support-piston (no interaction)
+pair_coeff 5 5 0.0 ${sigma} 0.0       # piston-piston (moving together)
+
+bond_style fene
+bond_coeff * 40.0 3.0 1.0 1.0
+special_bonds fene
+
+# Freeze support atoms
+velocity support set 0.0 0.0 0.0
+fix freeze_support support setforce 0.0 0.0 0.0
+
+
+
+# ========== Energy Minimization ==========
+if "${is_restart} == 0" then &
+    "minimize 1.0e-4 1.0e-6 10000 100000"
+
+
+
+# ========== Thermo Output ==========
+thermo_style custom step temp pe ke etotal press vol lx ly lz
+thermo ${thermo_freq}
+
+
+
+# ========== Gentle Equilibration ==========
+if "${is_restart} == 0" then "reset_timestep 0"
+if "${is_restart} == 0" then "velocity mobile create 0.1 12345 mom yes rot no"
+if "${is_restart} == 0" then "fix 1 mobile nve/limit 0.01"
+if "${is_restart} == 0" then "fix 2 mobile langevin ${temp_target} ${temp_target} ${tdamp} 904297"
+if "${is_restart} == 0" then "timestep ${timestep_gentle}"
+if "${is_restart} == 0" then "run ${nsteps_gentle}"
+if "${is_restart} == 0" then "unfix 1"
+
+
+
+# ========== Cylindrical Chunk Definitions ==========
+# Box centers
+variable xcen equal lx/2
+variable ycen equal ly/2
+variable zcen equal lz/2
+
+# Disk radii (1/2 cross-sectional area)
+variable disk_radius_x equal sqrt((${ycen}*${ycen} + ${zcen}*${zcen})/2.0)
+variable disk_radius_y equal sqrt((${xcen}*${xcen} + ${zcen}*${zcen})/2.0)
+variable disk_radius_z equal sqrt((${xcen}*${xcen} + ${ycen}*${ycen})/2.0)
+
+# Cylindrical chunks for polymer
+compute chunk_x_polymer polymer chunk/atom bin/cylinder x lower ${binWidth} ${ycen} ${zcen} 0.0 ${disk_radius_x} 1
+compute chunk_y_polymer polymer chunk/atom bin/cylinder y lower ${binWidth} ${xcen} ${zcen} 0.0 ${disk_radius_y} 1
+compute chunk_z_polymer polymer chunk/atom bin/cylinder z lower ${binWidth} ${xcen} ${ycen} 0.0 ${disk_radius_z} 1
+
+# Cylindrical chunks for solvent
+compute chunk_x_solvent solvent chunk/atom bin/cylinder x lower ${binWidth} ${ycen} ${zcen} 0.0 ${disk_radius_x} 1
+compute chunk_y_solvent solvent chunk/atom bin/cylinder y lower ${binWidth} ${xcen} ${zcen} 0.0 ${disk_radius_y} 1
+compute chunk_z_solvent solvent chunk/atom bin/cylinder z lower ${binWidth} ${xcen} ${ycen} 0.0 ${disk_radius_z} 1
+
+
+
+# ========== Virial Stress Calculations ==========
+# Compute stress per atom
+compute stress_polymer polymer stress/atom NULL
+compute stress_solvent solvent stress/atom NULL
+
+# Convert stress to pressure (hydrostatic component)
+variable press_polymer atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/3.0
+variable press_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
+
+# Sum pressure over chunks
+compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer
+compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer
+compute press_z_polymer polymer reduce/chunk chunk_z_polymer sum v_press_polymer
+compute press_x_solvent solvent reduce/chunk chunk_x_solvent sum v_press_solvent
+compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent
+compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent
+
+
+
+# ========== Voronoi Volume Calculations ==========
+# Compute Voronoi volumes for polymer/solvent
+#compute voronoi_polymer polymer voronoi/atom
+#compute voronoi_solvent solvent voronoi/atom
+#variable voronoi_vol_polymer atom c_voronoi_polymer[1]
+#variable voronoi_vol_solvent atom c_voronoi_solvent[1]
+#
+# Sum Voronoi volumes over chunks
+#compute vol_x_polymer polymer reduce/chunk chunk_x_polymer sum v_voronoi_vol_polymer
+#compute vol_y_polymer polymer reduce/chunk chunk_y_polymer sum v_voronoi_vol_polymer
+#compute vol_z_polymer polymer reduce/chunk chunk_z_polymer sum v_voronoi_vol_polymer
+#compute vol_x_solvent solvent reduce/chunk chunk_x_solvent sum v_voronoi_vol_solvent
+#compute vol_y_solvent solvent reduce/chunk chunk_y_solvent sum v_voronoi_vol_solvent
+#compute vol_z_solvent solvent reduce/chunk chunk_z_solvent sum v_voronoi_vol_solvent
+
+
+
+# ========== Gel Volume Calculations ==========
+# Method 1: Bounding box
+compute minx polymer reduce min x
+compute maxx polymer reduce max x
+compute miny polymer reduce min y
+compute maxy polymer reduce max y
+compute minz polymer reduce min z
+compute maxz polymer reduce max z
+
+variable gel_lx equal c_maxx-c_minx
+variable gel_ly equal c_maxy-c_miny
+variable gel_lz equal c_maxz-c_minz
+variable gel_vol_box equal v_gel_lx*v_gel_ly*v_gel_lz
+
+# Method 2: Radius of gyration
+compute rg_polymer polymer gyration
+variable rg_cubed equal c_rg_polymer^3
+
+
+
+# ========== Box Dimensions ==========
+variable box_lx equal lx
+variable box_ly equal ly
+variable box_lz equal lz
+
+
+
+# ========== NPT Equilibration ==========
+if "${is_restart} == 0" then "reset_timestep 0"
+fix 1 mobile npt temp ${temp_target} ${temp_target} ${tdamp} iso ${press_target} ${press_target} ${pdamp}
+timestep ${timestep_prod}
+if "${is_restart} == 0" then "run ${nsteps_gentle}"
+
+
+
+# ========== Production Run with Time Averaging ==========
+
+# Trajectory output
+dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
+
+# Volume and dimension output
+fix gel_vol_bb_output all print ${volume_freq} "${gel_vol_box}" &
+    ${restartFlag} output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${totsteps}.dat screen no
+
+fix gel_vol_rg_output all print ${volume_freq} "$(step) ${rg_cubed}" &
+    ${restartFlag} output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${totsteps}.dat screen no
+
+fix gel_dims_output all print ${volume_freq} "$(step) ${gel_lx} ${gel_ly} ${gel_lz}" &
+    ${restartFlag} output_files/volume_data/gel_dimensions_${dataname}_${interaction}_${totsteps}.dat screen no
+
+fix box_dims_output all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_lz}" &
+    ${restartFlag} output_files/volume_data/box_dimensions_${dataname}_${interaction}_${totsteps}.dat screen no
+
+# Stress profile time averaging
+fix avg_x_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_x_polymer &
+    mode vector ${restartFlag} output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${totsteps}.dat
+fix avg_y_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_y_polymer &
+    mode vector ${restartFlag} output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${totsteps}.dat
+fix avg_z_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_z_polymer &
+    mode vector ${restartFlag} output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${totsteps}.dat
+
+fix avg_x_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_x_solvent &
+    mode vector ${restartFlag} output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${totsteps}.dat
+fix avg_y_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_y_solvent &
+    mode vector ${restartFlag} output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${totsteps}.dat
+fix avg_z_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_z_solvent &
+    mode vector ${restartFlag} output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${totsteps}.dat
+
+# Voronoi volume time averaging (commented out - uncomment if needed)
+#fix avg_vol_x_polymer all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_x_polymer &
+#    mode vector ${restartFlag} output_files/volume_data/vol_x_polymer_${dataname}_${interaction}_${totsteps}.dat
+#fix avg_vol_y_polymer all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_y_polymer &
+#    mode vector ${restartFlag} output_files/volume_data/vol_y_polymer_${dataname}_${interaction}_${totsteps}.dat
+#fix avg_vol_z_polymer all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_z_polymer &
+#    mode vector ${restartFlag} output_files/volume_data/vol_z_polymer_${dataname}_${interaction}_${totsteps}.dat
+#fix avg_vol_x_solvent all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_x_solvent &
+#    mode vector ${restartFlag} output_files/volume_data/vol_x_solvent_${dataname}_${interaction}_${totsteps}.dat
+#fix avg_vol_y_solvent all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_y_solvent &
+#    mode vector ${restartFlag} output_files/volume_data/vol_y_solvent_${dataname}_${interaction}_${totsteps}.dat
+#fix avg_vol_z_solvent all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_z_solvent &
+#    mode vector ${restartFlag} output_files/volume_data/vol_z_solvent_${dataname}_${interaction}_${totsteps}.dat
+
+# Production run
+run ${nsteps}
+
+
+
+# ========== Cleanup ==========
+unfix 1
+undump poly_traj
+
+
+
+# ========== Save Final Configuration ==========
+write_restart restart_${dataname}_${interaction}_${totsteps}.restart
+write_data final_config_${dataname}_${interaction}_${totsteps}.data

@@ -1,0 +1,30 @@
+#!/bin/bash
+#SBATCH --job-name=slab_support
+#SBATCH --output=slurm_%j.out
+#SBATCH --error=slurm_%j.err
+#SBATCH --time=24:00:00
+#SBATCH --partition=gpu
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=6
+#SBATCH --gres=gpu:1
+#SBATCH --mem=32G
+
+# Load required modules
+module load cuda
+# Add any other modules you need (e.g., python, gcc, etc.)
+
+# Set simulation parameters
+FOLDER="slab_with_support"
+DATANAME="slab_support_10beads_10x10x5_rho6_extra_padding3"
+INTERACTION="1.5_1.6"
+NSTEPS=40000
+OLDSTEPS=40000
+DATASTEPS=40000
+TYPE="stress"  # Options: stress, volume, stressvol, or leave empty
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$DATASTEPS" "$TYPE"
