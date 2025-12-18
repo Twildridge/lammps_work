@@ -3,16 +3,18 @@
 #SBATCH --output=slurm_%j.out
 #SBATCH --error=slurm_%j.err
 #SBATCH --time=24:00:00
-#SBATCH --partition=gpu
+#SBATCH --partition=RM
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=6
-#SBATCH --gres=gpu:1
-#SBATCH --mem=32G
+#SBATCH --ntasks=4
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
 
-# Load required modules
-module load cuda
-# Add any other modules you need (e.g., python, gcc, etc.)
+# Load required modules for LAMMPS on Bridges-2
+module load python/3.8.6
+module load openmpi/5.0.8-gcc13.3.1
+module load cuda/12.6.1
+module load intel-mkl/2023.2.0
+module load LAMMPS/22Jul25-gcc
 
 # Set simulation parameters
 FOLDER="slab_with_support"
@@ -21,7 +23,7 @@ INTERACTION="1.5_1.4"
 NSTEPS=10000
 OLDSTEPS=10000
 DATASTEPS=10000
-TYPE=""  # Options: stress, volume, stressvol, or leave empty
+TYPE="stress"  # Options: stress, volume, stressvol, or leave empty
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1
