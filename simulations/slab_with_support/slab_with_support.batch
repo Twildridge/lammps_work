@@ -16,12 +16,12 @@ module load cuda
 
 # Set simulation parameters
 FOLDER="slab_with_support"
-DATANAME="slab_support_10beads_10x10x5_rho6_extra_padding3"
-INTERACTION="1.5_1.6"
-NSTEPS=40000
-OLDSTEPS=40000
-DATASTEPS=40000
-TYPE="stress"  # Options: stress, volume, stressvol, or leave empty
+DATANAME="slab_support_5beads_10x10x5_rho6_extra_padding43"
+INTERACTION="1.5_1.4"
+NSTEPS=10000
+OLDSTEPS=10000
+DATASTEPS=10000
+TYPE=""  # Options: stress, volume, stressvol, or leave empty
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1
