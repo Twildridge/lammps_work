@@ -73,8 +73,8 @@ echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
 # INTERLAYER KOKKOS KSPACE MACHDYN MANYBODY MC MEAM MISC ML-SNAP MOLECULE OPENMP 
 # OPT PHONON PYTHON QEQ REAXFF REPLICA RIGID 
 
-srun --ntasks $SLURM_NTASKS \
-    --cpus-per-task=$SLURM_CPUS_PER_TASK
+srun --mpi=pmix --ntasks $SLURM_NTASKS \
+    --cpus-per-task=$SLURM_CPUS_PER_TASK \
     /opt/packages/LAMMPS/lammps-22Jul2025/build-RM-gcc13.3.1/lmp \
     -sf omp -pk omp $SLURM_CPUS_PER_TASK  \
     -var dataname $DATANAME \
