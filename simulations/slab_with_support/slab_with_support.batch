@@ -5,8 +5,8 @@
 #SBATCH --time=24:00:00
 #SBATCH --partition=RM
 #SBATCH --nodes=1
-#SBATCH --ntasks=4
-#SBATCH --cpus-per-task=16
+#SBATCH --ntasks=8
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
 
 # Load required modules for LAMMPS on Bridges-2
@@ -27,6 +27,9 @@ TYPE="stress"  # Options: stress, volume, stressvol, or leave empty
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1
+
+# Set OpenMP threads
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 # Run the simulation
 ./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$DATASTEPS" "$TYPE"

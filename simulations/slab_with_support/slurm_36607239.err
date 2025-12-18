@@ -1,0 +1,13 @@
+srun: error: Invalid numeric value "p" for --ntasks.
+Traceback (most recent call last):
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/plot_lammps_log.py", line 2, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'
+Traceback (most recent call last):
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/plot_stress_profiles.py", line 2, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'
+Traceback (most recent call last):
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/write_tracking.py", line 7, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'
