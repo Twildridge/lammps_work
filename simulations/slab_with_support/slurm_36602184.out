@@ -1,0 +1,26 @@
+======================================
+Working directory: /jet/home/dpollard/Documents/lammps_runs/slab_with_support_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_20251218_105432
+======================================
+Running LAMMPS in slab_with_support with:
+  dataname=slab_support_5beads_10x10x5_rho6_extra_padding43
+  epsSS=1.5, epsSP=1.4
+  nsteps=10000, oldsteps=10000, totsteps=20000
+  datasteps=10000
+SLURM tasks: 4
+SLURM CPUs per task: 16
+LAMMPS (22 Jul 2025)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread.
+  using 1 OpenMP thread(s) per MPI task
+set 16 OpenMP thread(s) per MPI task
+using multi-threaded neighbor list subroutines
+Reading data file ...
+ERROR on proc 0: Unexpected end of data file (src/read_data.cpp:1284)
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+Generating stress profiles...
+Generating computational efficiency plot...
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/slab_with_support_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_20251218_105432
+======================================
