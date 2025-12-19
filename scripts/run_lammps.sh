@@ -65,18 +65,17 @@ echo "  dataname=$DATANAME"
 echo "  epsSS=$EPSSS, epsSP=$EPSSP"
 echo "  nsteps=$NSTEPS, oldsteps=$OLDSTEPS, totsteps=$TOTSTEPS"
 echo "  datasteps=$DATASTEPS"
-echo "SLURM tasks: $SLURM_NTASKS"
+echo "SLURM tasks per node: $SLURM_NTASKS_PER_NODE"
 echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
 
 # Run LAMMPS — has these installed packages:
 # ASPHERE COLVARS DIELECTRIC DIPOLE DRUDE EFF EXTRA-FIX EXTRA-PAIR FEP GRANULAR 
 # INTERLAYER KOKKOS KSPACE MACHDYN MANYBODY MC MEAM MISC ML-SNAP MOLECULE OPENMP 
-# OPT PHONON PYTHON QEQ REAXFF REPLICA RIGID 
+# OPT PHONON PYTHON QEQ REAXFF REPLICA RIGID
 
-srun --mpi=pmix --ntasks $SLURM_NTASKS \
-    --cpus-per-task=$SLURM_CPUS_PER_TASK \
+mpirun -n $SLURM_NTASKS \
     /opt/packages/LAMMPS/lammps-22Jul2025/build-RM-gcc13.3.1/lmp \
-    -sf omp -pk omp $SLURM_CPUS_PER_TASK  \
+    -sf omp -pk omp $OMP_NUM_THREADS  \
     -var dataname $DATANAME \
     -var interaction $INTERACTION \
     -var epsSS $EPSSS \
