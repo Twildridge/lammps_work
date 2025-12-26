@@ -3,6 +3,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sys
 import os
+import re
+
+# HOW TO RUN
+# cd ~/Documents/lammps_runs/slab_with_support_*_<latest_timestamp>
+# module load anaconda3
+# python ~/Documents/lammps_work/scripts/plot_stress_profiles.py . "slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_40000" "40000"
 
 def read_ave_time_file(filepath):
     """Read LAMMPS ave/time output file with format: timestep nrows, then row pressure."""
@@ -36,9 +42,40 @@ def read_ave_time_file(filepath):
     return data_by_time
 
 def get_box_dims(folder, dataname):
-    """Extract box dimensions from data file."""
-    data_file = f'slab_with_flow/data_files/equil_{dataname}.data'
-
+    """Extract box dimensions from data file in the working directory."""
+    # Extract base dataname without interaction and timesteps
+    # Format: slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_40000
+    # Need to strip: _1.5_1.4_40000
+    parts = dataname.split('_')
+    
+    # Find where interaction starts (format: number.number)
+    base_parts = []
+    for part in parts:
+        if re.match(r'\d+\.\d+', part):  # Found interaction parameter
+            break
+        base_parts.append(part)
+    
+    base_name = '_'.join(base_parts)
+    
+    # Try multiple possible locations for the data file
+    possible_paths = [
+        os.path.join(folder, 'data_files', f'{base_name}.data'),  # Original input file (symlink)
+        os.path.join(folder, f'final_config_{dataname}.data'),    # Final output from LAMMPS
+        os.path.join(folder, 'data_files', f'{dataname}.data'),   # Full name fallback
+    ]
+    
+    data_file = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            data_file = path
+            print(f"Found data file: {path}")
+            break
+    
+    if not data_file:
+        # Fallback: extract from dataname (assumes format includes dimensions)
+        print(f"Warning: Could not find data file (tried {base_name}.data and {dataname}.data), using default box dimensions")
+        return {'x': 100.0, 'y': 100.0, 'z': 50.0}
+    
     box_dims = {}
     with open(data_file, 'r') as f:
         for line in f:
@@ -56,24 +93,24 @@ def get_box_dims(folder, dataname):
 
 def check_stress_data_exists(folder, dataname):
     """Check if any stress data files exist."""
-    data_dir = f'{folder}/output_files/stress_data'
+    data_dir = os.path.join(folder, 'output_files', 'stress_data')
     dims = ['x', 'y', 'z']
     
     for dim in dims:
-        poly_file = f'{data_dir}/stress_{dim}_polymer_{dataname}.dat'
-        solv_file = f'{data_dir}/stress_{dim}_solvent_{dataname}.dat'
+        poly_file = os.path.join(data_dir, f'stress_{dim}_polymer_{dataname}.dat')
+        solv_file = os.path.join(data_dir, f'stress_{dim}_solvent_{dataname}.dat')
         if os.path.exists(poly_file) or os.path.exists(solv_file):
             return True
     return False
 
 def check_volume_data_exists(folder, dataname):
     """Check if any volume data files exist."""
-    data_dir = f'{folder}/output_files/volume_data'
+    data_dir = os.path.join(folder, 'output_files', 'volume_data')
     dims = ['x', 'y', 'z']
     
     for dim in dims:
-        poly_file = f'{data_dir}/vol_{dim}_polymer_{dataname}.dat'
-        solv_file = f'{data_dir}/vol_{dim}_solvent_{dataname}.dat'
+        poly_file = os.path.join(data_dir, f'vol_{dim}_polymer_{dataname}.dat')
+        solv_file = os.path.join(data_dir, f'vol_{dim}_solvent_{dataname}.dat')
         if os.path.exists(poly_file) or os.path.exists(solv_file):
             return True
     return False
@@ -90,15 +127,15 @@ def plot_stress_profiles(folder, dataname, datasteps):
     colors = plt.cm.viridis(np.linspace(0, 1, 10))
     binWidth = 2
     
-    data_dir = f'{folder}/output_files/stress_data'
+    data_dir = os.path.join(folder, 'output_files', 'stress_data')
     
     polymer_ylims = [float('inf'), float('-inf')]
     solvent_ylims = [float('inf'), float('-inf')]
     total_ylims = [float('inf'), float('-inf')]
     
     for row, (label, dim) in enumerate(zip(labels, dims)):
-        poly_file = f'{data_dir}/stress_{dim}_polymer_{dataname}.dat'
-        solv_file = f'{data_dir}/stress_{dim}_solvent_{dataname}.dat'
+        poly_file = os.path.join(data_dir, f'stress_{dim}_polymer_{dataname}.dat')
+        solv_file = os.path.join(data_dir, f'stress_{dim}_solvent_{dataname}.dat')
         
         poly_data = read_ave_time_file(poly_file) if os.path.exists(poly_file) else []
         solv_data = read_ave_time_file(solv_file) if os.path.exists(solv_file) else []
@@ -185,8 +222,10 @@ def plot_stress_profiles(folder, dataname, datasteps):
             axes[row, 2].set_ylim(total_ylims)
     
     plt.tight_layout()
-    plt.savefig(f'{folder}/output_plots/stress_plots/{dataname}_stress.png', dpi=150)
-    print(f"Stress profile saved to {folder}/output_plots/stress_plots/{dataname}_stress.png")
+    output_dir = os.path.join(folder, 'output_plots')
+    os.makedirs(output_dir, exist_ok=True)
+    plt.savefig(os.path.join(output_dir, f'{dataname}_stress.png'), dpi=150)
+    print(f"Stress profile saved to {os.path.join(output_dir, f'{dataname}_stress.png')}")
     plt.close()
 
 def plot_volume_fraction_profiles(folder, dataname, datasteps):
@@ -201,7 +240,7 @@ def plot_volume_fraction_profiles(folder, dataname, datasteps):
     colors = plt.cm.viridis(np.linspace(0, 1, 10))
     binWidth = 0.5
     
-    data_dir = f'{folder}/output_files/volume_data'
+    data_dir = os.path.join(folder, 'output_files', 'volume_data')
     
     polymer_ylims = [float('inf'), float('-inf')]
     solvent_ylims = [float('inf'), float('-inf')]
@@ -216,8 +255,8 @@ def plot_volume_fraction_profiles(folder, dataname, datasteps):
         else:  # z
             bin_volume = box_dims['x'] * box_dims['y'] * binWidth
         
-        poly_file = f'{data_dir}/vol_{dim}_polymer_{dataname}.dat'
-        solv_file = f'{data_dir}/vol_{dim}_solvent_{dataname}.dat'
+        poly_file = os.path.join(data_dir, f'vol_{dim}_polymer_{dataname}.dat')
+        solv_file = os.path.join(data_dir, f'vol_{dim}_solvent_{dataname}.dat')
         
         poly_data = read_ave_time_file(poly_file) if os.path.exists(poly_file) else []
         solv_data = read_ave_time_file(solv_file) if os.path.exists(solv_file) else []
@@ -308,8 +347,10 @@ def plot_volume_fraction_profiles(folder, dataname, datasteps):
             axes[row, 2].set_ylim(total_ylims)
     
     plt.tight_layout()
-    plt.savefig(f'{folder}/output_plots/volfrac_plots/{dataname}_volume.png', dpi=150)
-    print(f"Volume fraction profile saved to {folder}/output_plots/volfrac_plots/{dataname}_volume.png")
+    output_dir = os.path.join(folder, 'output_plots')
+    os.makedirs(output_dir, exist_ok=True)
+    plt.savefig(os.path.join(output_dir, f'{dataname}_volume.png'), dpi=150)
+    print(f"Volume fraction profile saved to {os.path.join(output_dir, f'{dataname}_volume.png')}")
     plt.close()
 
 if __name__ == "__main__":
@@ -326,13 +367,11 @@ if __name__ == "__main__":
     volume_exists = check_volume_data_exists(folder, dataname)
     
     if stress_exists:
-        os.makedirs(f'{folder}/output_plots/stress_plots', exist_ok=True)
         plot_stress_profiles(folder, dataname, datasteps)
     else:
         print(f"No stress data found for {dataname}, skipping stress plots")
     
     if volume_exists:
-        os.makedirs(f'{folder}/output_plots/volfrac_plots', exist_ok=True)
         plot_volume_fraction_profiles(folder, dataname, datasteps)
     else:
         print(f"No volume data found for {dataname}, skipping volume fraction plots")

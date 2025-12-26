@@ -7,33 +7,38 @@ import shutil
 import numpy as np
 import matplotlib.pyplot as plt
 
-def get_tracking_info(foldername):
-    """Determine tracking file path and plot directory based on folder name."""
-    parent_dir = os.path.dirname(foldername) or '.'
-    folder_basename = os.path.basename(foldername)
-    
-    if 'flow' in folder_basename.lower():
-        tracking_file = os.path.join(parent_dir, 'tracking_flow.txt')
-        plot_dir = parent_dir
-        plot_prefix = 'flow_'
-    else:
-        tracking_file = os.path.join(parent_dir, 'tracking.txt')
-        plot_dir = parent_dir
-        plot_prefix = ''
-    
-    return tracking_file, plot_dir, plot_prefix
+# HOW TO RUN
+# cd ~/Documents/lammps_runs/slab_with_support_*_<latest_timestamp>
+# module load anaconda3
+# python ~/Documents/lammps_work/scripts/write_tracking.py . "slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_40000" "1"
 
-
+def get_tracking_file_path():
+    """Get path to central tracking file in lammps_work."""
+    # Look for lammps_work directory
+    home = os.path.expanduser('~')
+    tracking_file = os.path.join(home, 'Documents', 'lammps_work', 'tracking.txt')
+    return tracking_file
 
 def parse_data_file(foldername, dataname, suffix=""):
     """Extract box dimensions and atom count from LAMMPS data file (excluding support atoms)."""
-    # Remove suffix, interaction, and nsteps from dataname
-    base_name = dataname.rsplit("_", 3)[0]
-
-    # Remove the suffix digit if present
+    # Extract base dataname without interaction and timesteps
+    # Format: slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_20000
+    parts = dataname.split('_')
+    
+    # Find where interaction starts (format: number.number)
+    base_parts = []
+    for part in parts:
+        if re.match(r'\d+\.\d+', part):  # Found interaction parameter
+            break
+        base_parts.append(part)
+    
+    base_name = '_'.join(base_parts)
+    
+    # Remove suffix digit if present
     if suffix and base_name.endswith(suffix):
         base_name = base_name[:-len(suffix)]
     
+    # Look for data file in working directory
     data_file = os.path.join(foldername, 'data_files', f'{base_name}.data')
     
     if not os.path.exists(data_file):
@@ -68,7 +73,7 @@ def parse_data_file(foldername, dataname, suffix=""):
                         num_support += 1
     
     natoms_mobile = natoms - num_support
-    print(natoms_mobile)
+    print(f"Mobile atoms: {natoms_mobile}")
     return box_dims, natoms_mobile
 
 def parse_lammps_log(filepath):
@@ -134,9 +139,12 @@ def parse_tracking_file(tracking_file):
     
     return data
 
-def write_tracking_file(foldername, dataname, box_dims, natoms, wall_time):
-    """Write or append to tracking file, sorted by wall time."""
-    tracking_file, _, _ = get_tracking_info(foldername)
+def write_tracking_file(dataname, box_dims, natoms, wall_time):
+    """Write or append to central tracking file in lammps_work."""
+    tracking_file = get_tracking_file_path()
+    
+    # Create directory if needed
+    os.makedirs(os.path.dirname(tracking_file), exist_ok=True)
     
     # Backup existing tracking file
     if os.path.exists(tracking_file):
@@ -186,7 +194,7 @@ def write_tracking_file(foldername, dataname, box_dims, natoms, wall_time):
     if not entry_exists:
         # Add new entry
         box_str = f"{box_dims.get('x', 0):<10.2f} {box_dims.get('y', 0):<10.2f} {box_dims.get('z', 0):<10.2f}"
-        new_entry = f"{dataname:<50} {box_str} {natoms:<10} {time_str:<15}"
+        new_entry = f"{dataname:<70} {box_str} {natoms:<10} {time_str:<15}"
         entries.append((new_entry, wall_time if wall_time != float('inf') else float('inf')))
     
     # Sort by wall time
@@ -194,17 +202,18 @@ def write_tracking_file(foldername, dataname, box_dims, natoms, wall_time):
     
     # Write sorted entries
     with open(tracking_file, 'w') as f:
-        f.write(f"{'Simulation':<50} {'Box X':<10} {'Box Y':<10} {'Box Z':<10} {'Atoms':<10} {'Simulation Time':<15}\n")
-        f.write("-" * 105 + "\n")
+        f.write(f"{'Simulation':<70} {'Box X':<10} {'Box Y':<10} {'Box Z':<10} {'Atoms':<10} {'Simulation Time':<15}\n")
+        f.write("-" * 125 + "\n")
         for entry, _ in entries:
             f.write(entry + "\n")
     
     print(f"Tracking info written to {tracking_file}")
 
-def plot_performance(data, output_dir, plot_prefix=''):
+def plot_performance(data, output_dir):
     """Create performance plots."""
     if not data:
         return
+    
     # Separate data by third digit of padding AND whether padding starts with 4 (piston)
     data_sim_only = []
     data_stress = []
@@ -317,8 +326,8 @@ def plot_performance(data, output_dir, plot_prefix=''):
     ax.set_title('Computation Time per Timestep vs Number of Atoms (Log-Log)')
     ax.grid(alpha=0.3, which='both')
     plt.tight_layout()
-    plt.savefig(f'{output_dir}/{plot_prefix}time_vs_atoms.png', dpi=150, bbox_inches='tight')
-    print(f"Saved {output_dir}/{plot_prefix}time_vs_atoms.png")
+    plt.savefig(os.path.join(output_dir, 'time_vs_atoms.png'), dpi=150, bbox_inches='tight')
+    print(f"Saved {os.path.join(output_dir, 'time_vs_atoms.png')}")
     plt.close()
 
     # Plot 2: Time vs Timesteps
@@ -344,12 +353,9 @@ def plot_performance(data, output_dir, plot_prefix=''):
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     ax.grid(alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f'{output_dir}/{plot_prefix}time_vs_timesteps.png', dpi=150, bbox_inches='tight')
-    print(f"Saved {output_dir}/{plot_prefix}time_vs_timesteps.png")
+    plt.savefig(os.path.join(output_dir, 'time_vs_timesteps.png'), dpi=150, bbox_inches='tight')
+    print(f"Saved {os.path.join(output_dir, 'time_vs_timesteps.png')}")
     plt.close()
-
-
-
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
@@ -366,17 +372,14 @@ if __name__ == "__main__":
     # Parse log file
     logfile = os.path.join(foldername, 'log.lammps')
     wall_time = parse_lammps_log(logfile)
-    # Override with cumulative time if provided
-    if len(sys.argv) > 4:
-        wall_time = float(sys.argv[4])
-    print(wall_time)
     
     if box_dims and natoms:
-        write_tracking_file(foldername, dataname, box_dims, natoms, wall_time)
+        write_tracking_file(dataname, box_dims, natoms, wall_time)
         
-        # Generate performance plots with appropriate prefix
-        tracking_file, plot_dir, plot_prefix = get_tracking_info(foldername)
+        # Generate performance plots in lammps_work directory
+        tracking_file = get_tracking_file_path()
+        output_dir = os.path.dirname(tracking_file)
         data = parse_tracking_file(tracking_file)
-        plot_performance(data, plot_dir, plot_prefix)
+        plot_performance(data, output_dir)
     else:
         print("Error: Could not parse data file")

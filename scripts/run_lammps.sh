@@ -2,7 +2,7 @@
 if [ $# -lt 4 ]; then
     echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [oldsteps] [datasteps] [type]"
     echo "Example: ./run_lammps.sh slab_with_support slab_support_10beads_10x10x5_rho6_extra_padding3 1.5_1.6 40000 40000 40000 stress"
-    echo "  interaction format: epsSS_epsSP (e.g., 1.5_0.8)"
+    echo "  interaction format: epsSS_epsSP (e.g., 1.5_0.4)"
     echo "  oldsteps: previous timesteps for restart (defaults to nsteps)"
     echo "  datasteps: number of timesteps in the data file (defaults to nsteps)"
     echo "  type: optional, 'stress' (adds 1), 'volume' (adds 2), or 'stressvol' (adds 3) to dataname"
@@ -75,7 +75,7 @@ echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
 
 mpirun -n $SLURM_NTASKS \
     /opt/packages/LAMMPS/lammps-22Jul2025/build-RM-gcc13.3.1/lmp \
-    -sf omp -pk omp $OMP_NUM_THREADS  \
+    -sf omp -pk omp $SLURM_CPUS_PER_TASK  \
     -var dataname $DATANAME \
     -var interaction $INTERACTION \
     -var epsSS $EPSSS \
@@ -108,6 +108,8 @@ echo "Running post-processing..."
 echo "======================================"
 
 cd "$WORK_DIR" || exit 1
+
+module load anaconda3/2024.10-1
 
 echo "Generating convergence plot..."
 python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
