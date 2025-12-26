@@ -227,7 +227,7 @@ if "${is_restart} == 0" then "run ${nsteps_gentle}"
 # ========== Production Run with Time Averaging ==========
 
 # Trajectory output
-dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
+# dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
 
 # Volume and dimension output
 fix gel_vol_bb_output all print ${volume_freq} "${gel_vol_box}" &
@@ -278,7 +278,7 @@ run ${nsteps}
 
 # ========== Cleanup ==========
 unfix 1
-undump poly_traj
+# undump poly_traj
 
 
 
