@@ -1,0 +1,143 @@
+# ========== Pure Solvent Equilibration ==========
+# Variables loaded via bash script:
+# - dataname: name of data file
+# - interaction: epsSS_epsSP (only epsSS used here)
+# - nsteps: production run steps
+# - oldsteps: previous timesteps (for restart)
+# - totsteps: total cumulative timesteps
+# - epsSS: solvent-solvent interaction strength
+
+
+# ========== Simulation Parameters ==========
+variable sigma equal 1.0
+variable binWidth equal 2
+
+# Time averaging parameters
+variable nevery_avg_stress equal 200 
+variable nrepeat_avg_stress equal 50
+variable nfreq_avg_stress equal 10000
+
+# Output frequencies
+variable thermo_freq equal 5000
+variable dump_freq equal 10000
+
+# Equilibration parameters
+variable temp_target equal 1.0
+variable press_target equal 0.01
+variable tdamp equal 1.0
+variable pdamp equal 1.0
+variable timestep_gentle equal 0.001
+variable timestep_prod equal 0.005
+variable nsteps_gentle equal 1000
+
+
+# ========== Initialization ==========
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+# Read initial data (no restart for pure solvent)
+read_data data_files/${dataname}.data
+
+print ">>> Fresh run (no restart for pure solvent)"
+print ">>> Current     # of timesteps: ${nsteps}"
+print ">>> Cumulative  # of timesteps: ${totsteps}"
+
+comm_modify cutoff 5.0
+
+
+# ========== Group Definitions ==========
+group solvent type 1
+
+
+# ========== Interatomic Potentials ==========
+pair_style lj/cut 2.5
+pair_coeff 1 1 ${epsSS} ${sigma} 2.5  # solvent-solvent
+
+bond_style none
+special_bonds lj 0.0 0.0 0.0
+
+
+# ========== Energy Minimization ==========
+minimize 1.0e-4 1.0e-6 10000 100000
+
+
+# ========== Thermo Output ==========
+thermo_style custom step temp pe ke etotal press vol lx ly lz
+thermo ${thermo_freq}
+
+
+# ========== Gentle Equilibration ==========
+reset_timestep 0
+velocity solvent create 0.1 12345 mom yes rot no
+fix 1 solvent nve/limit 0.01
+fix 2 solvent langevin ${temp_target} ${temp_target} ${tdamp} 904297
+timestep ${timestep_gentle}
+run ${nsteps_gentle}
+unfix 1
+
+
+# ========== Planar Chunk Definitions ==========
+# Planar slabs perpendicular to each axis
+compute chunk_x solvent chunk/atom bin/1d x lower ${binWidth}
+compute chunk_y solvent chunk/atom bin/1d y lower ${binWidth}
+compute chunk_z solvent chunk/atom bin/1d z lower ${binWidth}
+
+
+# ========== Virial Stress Calculations ==========
+# Compute stress per atom
+compute stress_solvent solvent stress/atom NULL
+
+# Convert stress to pressure (hydrostatic component)
+variable press_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
+
+# Sum pressure over chunks
+compute press_x_solvent solvent reduce/chunk chunk_x sum v_press_solvent
+compute press_y_solvent solvent reduce/chunk chunk_y sum v_press_solvent
+compute press_z_solvent solvent reduce/chunk chunk_z sum v_press_solvent
+
+
+# ========== Global Pressure ==========
+# Compute global average pressure for the entire box
+compute avg_press_global solvent reduce ave v_press_solvent
+
+
+# ========== NPT Equilibration ==========
+reset_timestep 0
+fix 1 solvent npt temp ${temp_target} ${temp_target} ${tdamp} iso ${press_target} ${press_target} ${pdamp}
+timestep ${timestep_prod}
+run ${nsteps_gentle}
+
+
+# ========== Production Run with Time Averaging ==========
+
+# Trajectory output
+dump solv_traj solvent custom ${dump_freq} traj_files/solvent_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
+
+# Stress profile time averaging
+fix avg_x_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_x_solvent &
+    mode vector file output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${totsteps}.dat
+
+fix avg_y_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_y_solvent &
+    mode vector file output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${totsteps}.dat
+
+fix avg_z_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_z_solvent &
+    mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${totsteps}.dat
+
+# Global average pressure over time
+fix avg_press_global_output all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_avg_press_global &
+    file output_files/stress_data/pressure_global_${dataname}_${interaction}_${totsteps}.dat
+
+# Production run
+run ${nsteps}
+
+
+# ========== Cleanup ==========
+unfix 1
+undump solv_traj
+
+
+# ========== Save Final Configuration ==========
+write_data final_config_${dataname}_${interaction}_${totsteps}.data
