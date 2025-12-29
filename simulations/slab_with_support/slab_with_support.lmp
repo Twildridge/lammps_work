@@ -14,9 +14,9 @@ variable sigma equal 1.0
 variable binWidth equal 2
 
 # Time averaging parameters
-variable nevery_avg_stress equal 2  # 2 or 200
-variable nrepeat_avg_stress equal 625
-variable nfreq_avg_stress equal 1250 # 1250 or 125000
+variable nevery_avg_stress equal 200 
+variable nrepeat_avg_stress equal 50 # 625 or 50
+variable nfreq_avg_stress equal 10000 # 125000 or 10000
 
 variable nevery_avg_vol equal 1000
 variable nrepeat_avg_vol equal 1

@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=120
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=RM
-#SBATCH --time=48:00:00
+#SBATCH --time=2:00:00 # shortening this will reduce queue time but might risk killing job
 
 # note that Bridges-2 has 128 cores per node
 # 120 tasks per node is the most efficient
