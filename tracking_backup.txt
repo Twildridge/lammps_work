@@ -1,4 +1,4 @@
 Simulation                                                             Box X      Box Y      Box Z      Atoms      Simulation Time
 -----------------------------------------------------------------------------------------------------------------------------
 slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_8000000       87.00      87.00      55.50      547168     647:32
-slab_support_5beads_10x10x5_rho6_extra_padding431_1.5_1.4_20000        87.00      87.00      55.50      547168     N/A            
+slab_support_5beads_10x10x5_rho6_extra_padding431_1.5_1.4_20000        87.00      87.00      55.50      547168     N/A
