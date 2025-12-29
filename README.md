@@ -58,7 +58,7 @@ sbatch slab_with_support.batch
 
 Check status:
 ```bash
-squeue -u $USER
+squeue -u $USER  # or, watch -n 2 squeue -u $USER
 ssh r164    # Replace with your node number
 htop        # Watch those cores work
 ```

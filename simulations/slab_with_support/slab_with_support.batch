@@ -26,7 +26,7 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 FOLDER="slab_with_support"
 DATANAME="slab_support_5beads_10x10x5_rho6_extra_padding43"
 INTERACTION="1.5_1.4"
-NSTEPS=5000000
+NSTEPS=50000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE="stress"             # Options: stress, volume, stressvol, or leave empty (just type "")
 

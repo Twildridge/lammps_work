@@ -14,17 +14,17 @@ variable sigma equal 1.0
 variable binWidth equal 2
 
 # Time averaging parameters
-variable nevery_avg_stress equal 250
-variable nrepeat_avg_stress equal 20
-variable nfreq_avg_stress equal 5000
+variable nevery_avg_stress equal 2  # 2 or 200
+variable nrepeat_avg_stress equal 625
+variable nfreq_avg_stress equal 1250 # 1250 or 125000
 
 variable nevery_avg_vol equal 1000
 variable nrepeat_avg_vol equal 1
 variable nfreq_avg_vol equal 1000
 
 # Output frequencies
-variable thermo_freq equal 1000
-variable dump_freq equal 1000
+variable thermo_freq equal 5000
+variable dump_freq equal 10000
 variable volume_freq equal 1000
 
 # Equilibration parameters
