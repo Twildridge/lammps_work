@@ -72,7 +72,6 @@ echo "Running LAMMPS in $FOLDER with:"
 echo "  dataname=$DATANAME"
 echo "  epsSS=$EPSSS, epsSP=$EPSSP"
 echo "  nsteps=$NSTEPS, oldsteps=$OLDSTEPS, totsteps=$TOTSTEPS"
-echo "  datasteps=$DATASTEPS"
 echo "SLURM tasks per node: $SLURM_NTASKS_PER_NODE"
 echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
 
@@ -91,7 +90,6 @@ mpirun -n $SLURM_NTASKS \
     -var nsteps $NSTEPS \
     -var oldsteps $OLDSTEPS \
     -var totsteps $TOTSTEPS \
-    -var datasteps $DATASTEPS \
     -in $LAMMPS_FILE
 
 # Determine suffix based on 6th argument (type) - moved from 7th position
