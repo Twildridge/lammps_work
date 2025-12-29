@@ -1,6 +1,6 @@
 # LAMMPS Simulation Workflow on Bridges-2
 
-This is the setup for running coarse-grained hydrogel simulations on Bridges-2. The system handles ~400k-1M beads and stores trajectory files in scratch to avoid filling up the home directory quota.
+This is the setup for running coarse-grained hydrogel simulations on Bridges-2. The system handles ~400k-1M beads and stores trajectory files in scratch to avoid filling up the home directory quota (10 GB).
 
 ## Folder Organization
 
@@ -112,7 +112,7 @@ ls -la ~/Documents/lammps_runs/slab_*/traj_files
 
 **Jobs stuck in CG state**: Contact Bridges-2 support. This is a system issue, not your fault.
 
-**Simulation diverged**: Your gel probably exploded. Check that your interaction parameters make sense and you're not using too large a timestep. Also verify you're actually reading the correct data file.
+**Simulation diverged**: Your gel probably evaporated. Check that your interaction parameters make sense and you're not using too large a timestep. Also verify you're actually reading the correct data file.
 
 ## Notes
 
@@ -120,5 +120,3 @@ ls -la ~/Documents/lammps_runs/slab_*/traj_files
 - Each run gets a timestamped directory so you don't accidentally overwrite data
 - The tracking file aggregates performance across all runs for easy comparison
 - Don't delete restart files if you plan to continue the run later
-
-Now go equilibrate some hydrogels. May your simulations converge and your atoms stay bonded.
