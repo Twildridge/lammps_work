@@ -1,10 +1,10 @@
 #!/bin/bash
 if [ $# -lt 4 ]; then
-    echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [oldsteps] [datasteps] [type]"
-    echo "Example: ./run_lammps.sh slab_with_support slab_support_10beads_10x10x5_rho6_extra_padding3 1.5_1.6 40000 40000 40000 stress"
+    echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [oldsteps] [type]"
+    echo "Example (fresh run):  ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000"
+    echo "Example (continuation): ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000 20000"
     echo "  interaction format: epsSS_epsSP (e.g., 1.5_0.4)"
-    echo "  oldsteps: previous timesteps for restart (defaults to nsteps)"
-    echo "  datasteps: number of timesteps in the data file (defaults to nsteps)"
+    echo "  oldsteps: total timesteps from previous run (defaults to 0 for fresh runs)"
     echo "  type: optional, 'stress' (adds 1), 'volume' (adds 2), or 'stressvol' (adds 3) to dataname"
     exit 1
 fi
@@ -13,9 +13,11 @@ FOLDER=$1
 DATANAME=$2
 INTERACTION=$3
 NSTEPS=$4
-OLDSTEPS=${5:-$NSTEPS}
-DATASTEPS=${6:-$NSTEPS}
+OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
 TOTSTEPS=$((OLDSTEPS + NSTEPS))
+
+# Scratch directory for trajectories
+SCRATCH_DIR="/ocean/projects/chm250028p/$USER"
 
 # Get the directory where this script lives (should be lammps_work/scripts/)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -38,12 +40,18 @@ if [ ! -f "$LAMMPS_FILE" ]; then
     exit 1
 fi
 
-# Create a working directory for this run
+# Create a working directory for this run in home (for small files)
 WORK_DIR="$HOME/Documents/lammps_runs/${FOLDER}_${DATANAME}_${INTERACTION}_$(date +%Y%m%d_%H%M%S)"
-mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data},output_plots,traj_files}
+mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data},output_plots}
+
+# Create trajectory directory in scratch and symlink to it
+TRAJ_DIR="$SCRATCH_DIR/lammps_trajectories/${FOLDER}_${DATANAME}_${INTERACTION}_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$TRAJ_DIR"
+ln -s "$TRAJ_DIR" "$WORK_DIR/traj_files"
 
 echo "======================================"
 echo "Working directory: $WORK_DIR"
+echo "Trajectory directory (scratch): $TRAJ_DIR"
 echo "======================================"
 
 # Copy or link the data file
@@ -86,10 +94,10 @@ mpirun -n $SLURM_NTASKS \
     -var datasteps $DATASTEPS \
     -in $LAMMPS_FILE
 
-# Determine suffix based on 7th argument (type)
+# Determine suffix based on 6th argument (type) - moved from 7th position
 SUFFIX=""
-if [ $# -ge 7 ]; then
-    case "$7" in
+if [ $# -ge 6 ]; then
+    case "$6" in
         stress)
             SUFFIX="1"
             ;;
@@ -115,7 +123,7 @@ echo "Generating convergence plot..."
 python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
 
 echo "Generating stress profiles..."
-python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$DATASTEPS"
+python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
 
 echo "Generating computational efficiency plot..."
 python "$SCRIPT_DIR/write_tracking.py" "." "${DATANAME}${SUFFIX}_${INTERACTION}_${TOTSTEPS}" "$SUFFIX"

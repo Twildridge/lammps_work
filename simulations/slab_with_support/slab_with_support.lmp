@@ -50,7 +50,8 @@ atom_modify map array
 variable is_restart equal is_file(restart_${dataname}_${interaction}_${oldsteps}.restart)
 variable restartFlag string file
 
-if "${nsteps} == ${oldsteps}" then &
+# Force fresh start if oldsteps is 0
+if "${oldsteps} == 0" then &
     "variable is_restart equal 0"
 
 if "${is_restart} == 1" then &
@@ -227,7 +228,7 @@ if "${is_restart} == 0" then "run ${nsteps_gentle}"
 # ========== Production Run with Time Averaging ==========
 
 # Trajectory output
-# dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
+dump poly_traj polymer_and_support custom ${dump_freq} /ocean/projects/chm250028p/dpollard/traj_files/polymer_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
 
 # Volume and dimension output
 fix gel_vol_bb_output all print ${volume_freq} "${gel_vol_box}" &
@@ -278,7 +279,7 @@ run ${nsteps}
 
 # ========== Cleanup ==========
 unfix 1
-# undump poly_traj
+undump poly_traj
 
 
 
