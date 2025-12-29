@@ -27,12 +27,15 @@ FOLDER="slab_with_support"
 DATANAME="slab_support_5beads_10x10x5_rho6_extra_padding43"
 INTERACTION="1.5_1.4"
 NSTEPS=4000000
-OLDSTEPS=4000000
-DATASTEPS=4000000
-TYPE="stress"  # Options: stress, volume, stressvol, or leave empty
+OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
+TYPE=""             # Options: stress, volume, stressvol, or leave empty
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1
 
 # Run the simulation
-./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$DATASTEPS" "$TYPE"
+if [ -z "$TYPE" ]; then
+    ./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS"
+else
+    ./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$TYPE"
+fi

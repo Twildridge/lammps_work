@@ -5,11 +5,6 @@ import sys
 import os
 import re
 
-# HOW TO RUN
-# cd ~/Documents/lammps_runs/slab_with_support_*_<latest_timestamp>
-# module load anaconda3
-# python ~/Documents/lammps_work/scripts/plot_stress_profiles.py . "slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_40000" "40000"
-
 def read_ave_time_file(filepath):
     """Read LAMMPS ave/time output file with format: timestep nrows, then row pressure."""
     data_by_time = []
@@ -115,12 +110,15 @@ def check_volume_data_exists(folder, dataname):
             return True
     return False
 
-def plot_stress_profiles(folder, dataname, datasteps):
+def plot_stress_profiles(folder, dataname, oldsteps):
     """Plot pressure profiles for polymer (left), solvent (middle), and total (right)."""
     box_dims = get_box_dims(folder, dataname)
     
     fig, axes = plt.subplots(3, 3, figsize=(18, 10))
-    fig.suptitle(f'{dataname} (original {datasteps} steps)', fontsize=14, fontweight='bold')
+    if oldsteps > 0:
+        fig.suptitle(f'{dataname} (continuing from {oldsteps} steps)', fontsize=14, fontweight='bold')
+    else:
+        fig.suptitle(f'{dataname} (fresh run)', fontsize=14, fontweight='bold')
     
     labels = ['X', 'Y', 'Z']
     dims = ['x', 'y', 'z']
@@ -228,12 +226,15 @@ def plot_stress_profiles(folder, dataname, datasteps):
     print(f"Stress profile saved to {os.path.join(output_dir, f'{dataname}_stress.png')}")
     plt.close()
 
-def plot_volume_fraction_profiles(folder, dataname, datasteps):
+def plot_volume_fraction_profiles(folder, dataname, oldsteps):
     """Plot volume fraction profiles for polymer (left), solvent (middle), and total (right)."""
     box_dims = get_box_dims(folder, dataname)
     
     fig, axes = plt.subplots(3, 3, figsize=(18, 10))
-    fig.suptitle(f'{dataname} Volume Fractions (original {datasteps} steps)', fontsize=14, fontweight='bold')
+    if oldsteps > 0:
+        fig.suptitle(f'{dataname} Volume Fractions (continuing from {oldsteps} steps)', fontsize=14, fontweight='bold')
+    else:
+        fig.suptitle(f'{dataname} Volume Fractions (fresh run)', fontsize=14, fontweight='bold')
     
     labels = ['X', 'Y', 'Z']
     dims = ['x', 'y', 'z']
@@ -355,23 +356,23 @@ def plot_volume_fraction_profiles(folder, dataname, datasteps):
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: python plot_stress_profiles.py <folder> <dataname> <datasteps>")
+        print("Usage: python plot_stress_profiles.py <folder> <dataname> <oldsteps>")
         sys.exit(1)
     
     folder = sys.argv[1]
     dataname = sys.argv[2]
-    datasteps = sys.argv[3] if len(sys.argv) > 3 else 'N/A'
+    oldsteps = int(sys.argv[3]) if len(sys.argv) > 3 else 0
     
     # Check if data exists before creating plots
     stress_exists = check_stress_data_exists(folder, dataname)
     volume_exists = check_volume_data_exists(folder, dataname)
     
     if stress_exists:
-        plot_stress_profiles(folder, dataname, datasteps)
+        plot_stress_profiles(folder, dataname, oldsteps)
     else:
         print(f"No stress data found for {dataname}, skipping stress plots")
     
     if volume_exists:
-        plot_volume_fraction_profiles(folder, dataname, datasteps)
+        plot_volume_fraction_profiles(folder, dataname, oldsteps)
     else:
         print(f"No volume data found for {dataname}, skipping volume fraction plots")
