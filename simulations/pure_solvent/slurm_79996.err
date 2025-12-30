@@ -1,0 +1,34 @@
+mkdir: cannot create directory ‘/ocean’: Permission denied
+--------------------------------------------------------------------------
+prterun was unable to launch the specified application as it lacked
+permissions to execute an executable:
+
+   Executable: /opt/packages/LAMMPS/lammps-22Jul2025/build-RM-gcc13.3.1/lmp
+   Node: node25
+
+while attempting to start process rank 0.
+--------------------------------------------------------------------------
+Lmod has detected the following error: The following module(s) are unknown:
+"anaconda3/2024.10-1"
+
+Please check the spelling or version number. Also try "module spider ..."
+It is also possible your cache file is out-of-date; it may help to try:
+  $ module --ignore_cache load "anaconda3/2024.10-1"
+
+Also make sure that all modulefiles written in TCL start with the string
+#%Module
+
+
+
+Traceback (most recent call last):
+  File "/home/pollard/Documents/lammps_work/scripts/plot_lammps_log.py", line 2, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'
+Traceback (most recent call last):
+  File "/home/pollard/Documents/lammps_work/scripts/plot_stress_profiles.py", line 2, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'
+Traceback (most recent call last):
+  File "/home/pollard/Documents/lammps_work/scripts/write_tracking.py", line 7, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'

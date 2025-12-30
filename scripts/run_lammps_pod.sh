@@ -17,7 +17,7 @@ OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
 TOTSTEPS=$((OLDSTEPS + NSTEPS))
 
 # Scratch directory for trajectories
-SCRATCH_DIR="/ocean/projects/chm250028p/$USER"
+SCRATCH_DIR="/scratch/$USER"
 
 # Get the directory where this script lives (should be lammps_work/scripts/)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
