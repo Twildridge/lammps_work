@@ -200,3 +200,58 @@ Per MPI rank memory allocation (min/avg/max) = 22.16 | 27.78 | 33.37 Mbytes
      40000   0.77731274    -1.1199106      1.1659676      0.046056983    0.0081869773   675735.22      101.93757      101.93757      65.029139    
      45000   0.7776996     -1.1097549      1.1665479      0.056792931    0.012002839    676614.75      101.98178      101.98178      65.057341    
      50000   0.78053635    -1.1046287      1.170803       0.066174248    0.022832259    677064.35      102.00436      102.00436      65.071747    
+     51000   0.78251846    -1.1019932      1.1737762      0.071782932    0.02558555     677276.7       102.01502      102.01502      65.07855     
+Loop time of 478.625 on 120 procs for 50000 steps with 766478 atoms
+
+Performance: 45129.318 tau/day, 104.466 timesteps/s, 80.071 Matom-step/s
+98.7% CPU use with 120 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 93.896     | 105.13     | 117.86     |  62.2 | 21.97
+Bond    | 0.25676    | 1.6711     | 3.3875     |  76.0 |  0.35
+Neigh   | 225.76     | 229.69     | 235.08     |  16.4 | 47.99
+Comm    | 69.105     | 87.637     | 101.27     |  95.9 | 18.31
+Output  | 0.045249   | 0.11127    | 0.18705    |  14.6 |  0.02
+Modify  | 41.788     | 50.544     | 65.717     |  84.0 | 10.56
+Other   |            | 3.838      |            |       |  0.80
+
+Nlocal:        6387.32 ave        8418 max        4380 min
+Histogram: 49 11 0 0 0 0 0 0 6 54
+Nghost:        19753.2 ave       26752 max       12476 min
+Histogram: 60 0 0 0 0 0 0 0 0 60
+Neighs:         164110 ave      182008 max      149058 min
+Histogram: 8 23 9 28 12 4 0 7 15 14
+
+Total # of neighbors = 19693236
+Ave neighs/atom = 25.693152
+Ave special neighs/atom = 0.37574464
+Neighbor list builds = 8511
+Dangerous builds = 0
+System init for write_restart ...
+Generated 0 of 10 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+System init for write_data ...
+Generated 0 of 10 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: Not all mixed pair coeffs generated from mixing. Use write_data with 'pair ij' option to store all pair coeffs. (src/write_data.cpp:364)
+Total wall time: 0:09:39
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+Plot saved to ./output_plots/convergence_plots/slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_50000_convergence.png
+Generating stress profiles...
+Found data file: ./data_files/slab_support_5beads_10x10x5_rho6_extra_padding43.data
+Stress profile saved to ./output_plots/slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_50000_stress.png
+No volume data found for slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_50000, skipping volume fraction plots
+Generating computational efficiency plot...
+Mobile atoms: 547168
+Entry 'slab_support_5beads_10x10x5_rho6_extra_padding431_1.5_1.4_50000' already exists in tracking file, skipping.
+Tracking info written to /jet/home/dpollard/Documents/lammps_work/tracking.txt
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_atoms.png
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_timesteps.png
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/slab_with_support_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_20251230_113125
+======================================

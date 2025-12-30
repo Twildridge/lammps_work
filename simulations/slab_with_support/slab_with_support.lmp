@@ -29,7 +29,7 @@ variable volume_freq equal 1000
 
 # Equilibration parameters
 variable temp_target equal 1.0
-variable press_target equal 0.01
+variable press_target equal 1 # 0.01
 variable tdamp equal 1.0
 variable pdamp equal 1.0
 variable timestep_gentle equal 0.001
