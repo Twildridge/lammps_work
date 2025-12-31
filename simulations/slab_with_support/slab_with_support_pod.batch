@@ -29,7 +29,7 @@ cd ~/Documents/lammps_work/scripts || exit 1
 
 # Run the simulation
 if [ -z "$TYPE" ]; then
-    ./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS"
+    ./run_lammps_pod.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS"
 else
-    ./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$TYPE"
+    ./run_lammps_pod.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$TYPE"
 fi

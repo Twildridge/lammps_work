@@ -18,9 +18,9 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 
 # Set simulation parameters
 FOLDER="pure_solvent"
-DATANAME="solvent_box_rho6_01"
+DATANAME="solvent_box_rho6_02"
 INTERACTION="1.5_1.4"
-NSTEPS=20000
+NSTEPS=2000000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE="stress"             # Options: stress, volume, stressvol, or leave empty (just type "")
 
