@@ -80,20 +80,28 @@ echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
 # INTERLAYER KOKKOS KSPACE MACHDYN MANYBODY MC MEAM MISC ML-SNAP MOLECULE OPENMP 
 # OPT PHONON PYTHON QEQ REAXFF REPLICA RIGID
 
+# check within lammps build directory with: 
+# grep "PKG_.*:BOOL=\(yes\|ON\)$" CMakeCache.txt | sed 's/PKG_//; s/:BOOL.*//'
 
 # Check if GPUs are allocated
-NGPUS=${SLURM_GPUS_PER_NODE:-0}
-NTHREADS=${SLURM_CPUS_PER_TASK:-1}
+NGPUS=${SLURM_GPUS_ON_NODE:-0}
+echo "SLURM_GPUS_ON_NODE: $SLURM_GPUS_ON_NODE"
+
+
 
 if [ $NGPUS -gt 0 ]; then
     # GPU mode with Kokkos
-    echo "Running with $NGPUS GPU(s) and $NTHREADS threads per GPU"
+    echo "Running with $NGPUS GPU(s) and $SLURM_CPUS_PER_TASK threads per GPU"
     mpirun -n $SLURM_NTASKS \
-        /opt/packages/LAMMPS/lammps-22Jul2025/build-RM-gcc13.3.1/lmp \
-        -k on g $NGPUS t $NTHREADS -sf kk -pk kokkos newton on neigh half comm device \
+        /opt/packages/LAMMPS/lammps-22Jul2025/build-V100-gcc13.3.1/lmp \
+        -k on g $NGPUS t $SLURM_CPUS_PER_TASK -sf kk -pk kokkos newton on neigh half comm device \
         -var dataname $DATANAME \
         -var interaction $INTERACTION \
-        ... \
+        -var epsSS $EPSSS \
+        -var epsSP $EPSSP \
+        -var nsteps $NSTEPS \
+        -var oldsteps $OLDSTEPS \
+        -var totsteps $TOTSTEPS \
         -in $LAMMPS_FILE
 else
     # CPU-only mode

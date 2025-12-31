@@ -178,3 +178,67 @@ Per MPI rank memory allocation (min/avg/max) = 97.36 | 98.32 | 98.59 Mbytes
       4000   0.99987756    -8.6144268      1.4998161     -7.1146107      1.0004833      9398394.2      211.03341      211.03341      211.03341    
       5000   1.000319      -8.6128346      1.5004782     -7.1123564      0.99781099     9400216.3      211.04705      211.04705      211.04705    
       6000   0.9997865     -8.6136532      1.4996796     -7.1139737      1.0013901      9398604.4      211.03498      211.03498      211.03498    
+      7000   0.99999099    -8.612863       1.4999863     -7.1128767      0.99885975     9399892        211.04462      211.04462      211.04462    
+      8000   0.9998018     -8.6148645      1.4997025     -7.115162       0.99692849     9398615.9      211.03507      211.03507      211.03507    
+      9000   1.000215      -8.6136535      1.5003222     -7.1133312      1.0005754      9398984.7      211.03783      211.03783      211.03783    
+     10000   1.0000241     -8.6140259      1.500036      -7.1139899      0.99935945     9398885        211.03708      211.03708      211.03708    
+     11000   1.0003289     -8.6140186      1.5004932     -7.1135254      1.0012994      9398661.2      211.03541      211.03541      211.03541    
+     12000   1.0001781     -8.613751       1.5002669     -7.1134841      1.0042118      9398433.1      211.0337       211.0337       211.0337     
+     13000   0.99987346    -8.6137382      1.49981       -7.1139282      1.005183       9398297.9      211.03269      211.03269      211.03269    
+     14000   0.99997981    -8.6141851      1.4999695     -7.1142156      0.99506701     9399451.1      211.04132      211.04132      211.04132    
+     15000   1.0004717     -8.6128855      1.5007074     -7.1121781      0.99948097     9399954.5      211.04509      211.04509      211.04509    
+     16000   1.0001206     -8.6144295      1.5001807     -7.1142488      0.99400341     9399421.4      211.0411       211.0411       211.0411     
+     17000   1.0004062     -8.614351       1.5006092     -7.1137419      1.001893       9398296.3      211.03268      211.03268      211.03268    
+     18000   1.000068      -8.6138496      1.5001018     -7.1137478      0.99899039     9399091.4      211.03863      211.03863      211.03863    
+     19000   1.0001876     -8.6142001      1.5002812     -7.113919       1.0006578      9398619.5      211.0351       211.0351       211.0351     
+     20000   1.0001921     -8.614758       1.5002879     -7.1144701      0.99927341     9398345.8      211.03305      211.03305      211.03305    
+     21000   1.0005236     -8.6137967      1.5007852     -7.1130115      1.0007013      9398806.3      211.0365       211.0365       211.0365     
+Loop time of 1650.69 on 120 procs for 20000 steps with 8000000 atoms
+
+Performance: 5234.179 tau/day, 12.116 timesteps/s, 96.929 Matom-step/s
+97.6% CPU use with 120 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 606.81     | 652.1      | 677.75     |  74.8 | 39.50
+Bond    | 0.010606   | 0.016913   | 0.023364   |   1.7 |  0.00
+Neigh   | 422.63     | 437.12     | 495.19     |  53.5 | 26.48
+Comm    | 212.71     | 265.27     | 323.92     | 176.7 | 16.07
+Output  | 2.2297     | 5.3437     | 8.5713     |  80.5 |  0.32
+Modify  | 222.67     | 253.99     | 276.14     | 102.7 | 15.39
+Other   |            | 36.86      |            |       |  2.23
+
+Nlocal:        66666.7 ave       66788 max       66532 min
+Histogram: 1 7 11 10 25 23 20 14 6 3
+Nghost:        59324.8 ave       59492 max       59126 min
+Histogram: 2 3 6 10 28 22 25 16 6 2
+Neighs:    2.51852e+06 ave 2.52715e+06 max 2.51103e+06 min
+Histogram: 6 11 10 20 19 21 13 15 4 1
+
+Total # of neighbors = 3.0222195e+08
+Ave neighs/atom = 37.777743
+Ave special neighs/atom = 0
+Neighbor list builds = 3585
+Dangerous builds = 0
+System init for write_data ...
+Generated 0 of 0 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is pair_style lj/cut/omp
+Total wall time: 0:31:37
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+Plot saved to ./output_plots/convergence_plots/solvent_box_rho6_02_1.5_1.4_20000_convergence.png
+Generating stress profiles...
+Found data file: ./data_files/solvent_box_rho6_02.data
+Stress profile saved to ./output_plots/solvent_box_rho6_02_1.5_1.4_20000_stress.png
+No volume data found for solvent_box_rho6_02_1.5_1.4_20000, skipping volume fraction plots
+Generating computational efficiency plot...
+Mobile atoms: 8000000
+Tracking info written to /jet/home/dpollard/Documents/lammps_work/tracking.txt
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_atoms.png
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_timesteps.png
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/pure_solvent_solvent_box_rho6_02_1.5_1.4_20251231_125552
+======================================
