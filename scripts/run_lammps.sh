@@ -75,22 +75,43 @@ echo "  nsteps=$NSTEPS, oldsteps=$OLDSTEPS, totsteps=$TOTSTEPS"
 echo "SLURM tasks per node: $SLURM_NTASKS_PER_NODE"
 echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
 
-# Run LAMMPS — has these installed packages:
+# Run LAMMPS-22Jul2025 — has these installed packages:
 # ASPHERE COLVARS DIELECTRIC DIPOLE DRUDE EFF EXTRA-FIX EXTRA-PAIR FEP GRANULAR 
 # INTERLAYER KOKKOS KSPACE MACHDYN MANYBODY MC MEAM MISC ML-SNAP MOLECULE OPENMP 
 # OPT PHONON PYTHON QEQ REAXFF REPLICA RIGID
 
-mpirun -n $SLURM_NTASKS \
-    /opt/packages/LAMMPS/lammps-22Jul2025/build-RM-gcc13.3.1/lmp \
-    -sf omp -pk omp $SLURM_CPUS_PER_TASK  \
-    -var dataname $DATANAME \
-    -var interaction $INTERACTION \
-    -var epsSS $EPSSS \
-    -var epsSP $EPSSP \
-    -var nsteps $NSTEPS \
-    -var oldsteps $OLDSTEPS \
-    -var totsteps $TOTSTEPS \
-    -in $LAMMPS_FILE
+
+# Check if GPUs are allocated
+NGPUS=${SLURM_GPUS_PER_NODE:-0}
+NTHREADS=${SLURM_CPUS_PER_TASK:-1}
+
+if [ $NGPUS -gt 0 ]; then
+    # GPU mode with Kokkos
+    echo "Running with $NGPUS GPU(s) and $NTHREADS threads per GPU"
+    mpirun -n $SLURM_NTASKS \
+        /opt/packages/LAMMPS/lammps-22Jul2025/build-RM-gcc13.3.1/lmp \
+        -k on g $NGPUS t $NTHREADS -sf kk -pk kokkos newton on neigh half comm device \
+        -var dataname $DATANAME \
+        -var interaction $INTERACTION \
+        ... \
+        -in $LAMMPS_FILE
+else
+    # CPU-only mode
+    echo "Running CPU-only with $SLURM_NTASKS tasks"
+    mpirun -n $SLURM_NTASKS \
+        /opt/packages/LAMMPS/lammps-22Jul2025/build-RM-gcc13.3.1/lmp \
+        -sf omp -pk omp $SLURM_CPUS_PER_TASK  \
+        -var dataname $DATANAME \
+        -var interaction $INTERACTION \
+        -var epsSS $EPSSS \
+        -var epsSP $EPSSP \
+        -var nsteps $NSTEPS \
+        -var oldsteps $OLDSTEPS \
+        -var totsteps $TOTSTEPS \
+        -in $LAMMPS_FILE
+fi
+
+
 
 # Determine suffix based on 6th argument (type) - moved from 7th position
 SUFFIX=""
