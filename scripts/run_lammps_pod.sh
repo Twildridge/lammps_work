@@ -117,6 +117,7 @@ echo "======================================"
 cd "$WORK_DIR" || exit 1
 
 module load miniconda
+source $(conda info --base)/etc/profile.d/conda.sh # loads Conda's shell functions into bash session
 conda activate lammps_analysis
 
 echo "Generating convergence plot..."
