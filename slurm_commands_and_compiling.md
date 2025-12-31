@@ -36,13 +36,19 @@ mpirun -n $SLURM_NTASKS \
 #SBATCH --output=slurm_%j.out
 #SBATCH --error=slurm_%j.err
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
-#SBATCH --partition=GPU-shared
-#SBATCH --gpus=v100-32:1
+#SBATCH --ntasks-per-node=8
+#SBATCH --cpus-per-task=4
+#SBATCH --partition=GPU
+#SBATCH --gpus=v100-16:8
 #SBATCH --time=1:00:00
 ```
 
+Other options:
+Format: --gpus=type:n
+"n" is the number of GPUs
+
+#SBATCH --gpus=v100-16:8
+#SBATCH --gpus=v100-32:16
 
 ## Compiling
 
