@@ -87,7 +87,7 @@ bridges-2 run time: 08:22
 PURE SOLVENT:
 
 120 CPUs, no GPU: 0:56
-1 CPU, no GPU: 
+1 CPU, no GPU: 22:33
 8 GPUs, 4 threads/GPU, 1 task/node: 2:56
 8 GPUs, 4 threads/GPU, 8 tasks/node: 
 
