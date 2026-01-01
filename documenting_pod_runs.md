@@ -32,11 +32,13 @@ nodes: 1
 ntasks: 35
 cpus_per_ntask: 1
 run time: 06:27
+run time: 11:43
 
 nodes: 1
 ntasks: 40
 cpus_per_ntask: 1
 run time: 06:24
+run time: 10:36 (12/31)
 bridges-2 run time: 10:15
 
 nodes: 1
@@ -84,12 +86,23 @@ bridges-2 run time: 08:22
 
 
 
-PURE SOLVENT:
+PURE SOLVENT (9,000 atoms, 200000 timesteps):
 
 120 CPUs, no GPU: 0:56
 1 CPU, no GPU: 22:33
+
 8 GPUs, 4 threads/GPU, 1 task/node: 2:56
-8 GPUs, 4 threads/GPU, 8 tasks/node: 
+8 GPUs, 4 threads/GPU, 8 tasks/node: 4:59
+1 GPU, 4 threads/GPU, 1 task/node: 2:59
+1 GPU, 2 threads/GPU, 1 task/node: 2:57
+1 GPU, 1 threads/GPU, 5 task/node: at 18 minutes now
 
 
+PURE SOLVENT (800,000 atoms, 20000 timesteps):
+
+120 CPUs, no GPU (519): 30:52
+8 GPUs, 4 threads/GPU, 1 tasks/node (541): 
+1 GPU, 4 threads/GPU, 1 task/node (586): 
+2 GPUs, 4 threads/GPU, 1 task/node (852): 
+4 GPUs, 4 threads/GPU, 1 task/node (594): 
 
