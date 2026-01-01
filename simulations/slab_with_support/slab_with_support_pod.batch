@@ -1,11 +1,11 @@
 #!/bin/bash -l
-#SBATCH --job-name=slab_support
+#SBATCH --job-name=slab_support_test
 #SBATCH --output=slurm_%j.out
 #SBATCH --error=slurm_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=35
 #SBATCH --cpus-per-task=1
-#SBATCH --time=24:00:00 # shortening this will reduce queue time but might risk killing job
+#SBATCH --time=1:00:00 # shortening this will reduce queue time but might risk killing job
 
 # note that Pod has 40 cores per node
 
@@ -20,9 +20,9 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 FOLDER="slab_with_support"
 DATANAME="slab_support_5beads_10x10x5_rho6_extra_padding43"
 INTERACTION="1.5_1.4"
-NSTEPS=50000
+NSTEPS=20000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
-TYPE="stress"             # Options: stress, volume, stressvol, or leave empty (just type "")
+TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1
