@@ -1,19 +1,18 @@
 #!/bin/bash -l
-#SBATCH --job-name=pure_solv
+#SBATCH --job-name=pure_solv_02
 #SBATCH --output=slurm_%j.out
 #SBATCH --error=slurm_%j.err
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=8
+#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=4
-#SBATCH --partition=GPU
-#SBATCH --gpus=v100-16:8
+#SBATCH --partition=GPU-shared
+#SBATCH --gpus=v100-16:2
 #SBATCH --time=1:00:00 # shortening this will reduce queue time but might risk killing job
 
 # note that Bridges-2 has 128 cores per node
 # 120 tasks per node is the most efficient
 # can use #SBATCH --mem=24G or less for a short test run (64G is default)
 
-# MAKE SURE ntasks-per-node is the same as number of gpus!! (e.g., 8 or 16)
 
 # Load required modules for LAMMPS on Bridges-2
 module purge
@@ -31,9 +30,9 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 
 # Set simulation parameters
 FOLDER="pure_solvent"
-DATANAME="solvent_box_rho6_01"
+DATANAME="solvent_box_rho6_02"
 INTERACTION="1.5_1.4"
-NSTEPS=200000
+NSTEPS=20000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE="stress"             # Options: stress, volume, stressvol, or leave empty (just type "")
 
