@@ -106,3 +106,14 @@ PURE SOLVENT (800,000 atoms, 20000 timesteps):
 2 GPUs, 4 threads/GPU, 1 task/node (852): " "
 4 GPUs, 4 threads/GPU, 1 task/node (594): " "
 
+
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=4
+#SBATCH --partition=GPU-shared
+#SBATCH --gpus=l40s-48:4
+
+gave error (also l40s-48:8)
+
+
+
+

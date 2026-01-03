@@ -2,16 +2,25 @@
 #SBATCH --job-name=pure_solv_long
 #SBATCH --output=slurm_%j.out
 #SBATCH --error=slurm_%j.err
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=120
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=RM
-#SBATCH --time=48:00:00
+#SBATCH --time=1:00:00
 
 # note that Bridges-2 has 128 cores per node
 # 120 tasks per node is the most efficient
 # can use #SBATCH --mem=24G or less for a short test run (64G is default)
+
+# h100-80 nodes
+# There are ten h100-80 nodes containing eight H100 GPUs, each with 80GB of GPU memory. These nodes have 2TB RAM per node.
+# l40s-48 nodes
+# There are three l40s-48 nodes containing eight L40S GPUs, each with 48GB of GPU memory. These nodes have 1TB RAM per node.
+# v100-32 nodes
+# There are 24 Tesla v100-32 nodes. Each has eight V100 GPUs and 32GB of GPU memory per GPU. These nodes have 512GB RAM per node.
+# There is one DGX-2 node, with 16 V100 GPUs, each with 32GB of GPU memory. It has 1.5TB RAM.
+# v100-16 nodes
+# There are 9 v100-16 nodes containing eight V100 GPUs, each with 16GB of GPU memory. These nodes have 192GB RAM per node.
 
 
 # Load required modules for LAMMPS on Bridges-2
@@ -32,7 +41,7 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 FOLDER="pure_solvent"
 DATANAME="solvent_box_rho6_02"
 INTERACTION="1.5_1.4"
-NSTEPS=2000000
+NSTEPS=20000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE="stress"             # Options: stress, volume, stressvol, or leave empty (just type "")
 

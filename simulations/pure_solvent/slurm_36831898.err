@@ -1,0 +1,21 @@
+[gl001:68239:0:68239] Caught signal 4 (Illegal instruction: illegal operand)
+--------------------------------------------------------------------------
+prterun noticed that process rank 0 with PID 68239 on node gl001 exited on
+signal 4 (Illegal instruction).
+--------------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/plot_lammps_log.py", line 212, in <module>
+    data = parse_lammps_log(filepath)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/plot_lammps_log.py", line 40, in parse_lammps_log
+    with open(filepath, 'r') as f:
+         ^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: './log.lammps'
+Traceback (most recent call last):
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/write_tracking.py", line 374, in <module>
+    wall_time = parse_lammps_log(logfile)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/write_tracking.py", line 82, in parse_lammps_log
+    with open(filepath, 'r') as f:
+         ^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: './log.lammps'

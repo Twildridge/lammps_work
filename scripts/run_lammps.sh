@@ -86,8 +86,7 @@ echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
 # Check if GPUs are allocated
 NGPUS=${SLURM_GPUS_ON_NODE:-0}
 echo "SLURM_GPUS_ON_NODE: $SLURM_GPUS_ON_NODE"
-
-
+echo "GPUs allocated: $SLURM_GPUS"
 
 if [ $NGPUS -gt 0 ]; then
     # GPU mode with Kokkos
