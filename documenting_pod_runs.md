@@ -101,8 +101,8 @@ PURE SOLVENT (9,000 atoms, 200000 timesteps):
 PURE SOLVENT (800,000 atoms, 20000 timesteps):
 
 120 CPUs, no GPU (519): 30:52
-8 GPUs, 4 threads/GPU, 1 tasks/node (541): 
-1 GPU, 4 threads/GPU, 1 task/node (586): 
-2 GPUs, 4 threads/GPU, 1 task/node (852): 
-4 GPUs, 4 threads/GPU, 1 task/node (594): 
+8 GPUs, 4 threads/GPU, 1 tasks/node (541): > 30 mins
+1 GPU, 4 threads/GPU, 1 task/node (586): " "
+2 GPUs, 4 threads/GPU, 1 task/node (852): " "
+4 GPUs, 4 threads/GPU, 1 task/node (594): " "
 

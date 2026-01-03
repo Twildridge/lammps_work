@@ -14,18 +14,18 @@ variable sigma equal 1.0
 variable binWidth equal 2
 
 # Time averaging parameters
-variable nevery_avg_stress equal 200 
-variable nrepeat_avg_stress equal 50 # 625 or 50
-variable nfreq_avg_stress equal 10000 # 125000 or 10000
+variable nevery_avg_stress equal 2000 
+variable nrepeat_avg_stress equal 500 # 625 or 50
+variable nfreq_avg_stress equal 100000 # 125000 or 10000
 
-variable nevery_avg_vol equal 1000
+variable nevery_avg_vol equal 10000
 variable nrepeat_avg_vol equal 1
-variable nfreq_avg_vol equal 1000
+variable nfreq_avg_vol equal 10000
 
 # Output frequencies
-variable thermo_freq equal 5000
+variable thermo_freq equal 10000
 variable dump_freq equal 10000
-variable volume_freq equal 1000
+variable volume_freq equal 10000
 
 # Equilibration parameters
 variable temp_target equal 1.0
@@ -155,20 +155,20 @@ compute chunk_z_solvent solvent chunk/atom bin/cylinder z lower ${binWidth} ${xc
 
 # ========== Virial Stress Calculations ==========
 # Compute stress per atom
-compute stress_polymer polymer stress/atom NULL
-compute stress_solvent solvent stress/atom NULL
+#compute stress_polymer polymer stress/atom NULL
+#compute stress_solvent solvent stress/atom NULL
 
 # Convert stress to pressure (hydrostatic component)
-variable press_polymer atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/3.0
-variable press_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
+#variable press_polymer atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/3.0
+#variable press_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
 
 # Sum pressure over chunks
-compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer
-compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer
-compute press_z_polymer polymer reduce/chunk chunk_z_polymer sum v_press_polymer
-compute press_x_solvent solvent reduce/chunk chunk_x_solvent sum v_press_solvent
-compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent
-compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent
+#compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer
+#compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer
+#compute press_z_polymer polymer reduce/chunk chunk_z_polymer sum v_press_polymer
+#compute press_x_solvent solvent reduce/chunk chunk_x_solvent sum v_press_solvent
+#compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent
+#compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent
 
 
 
@@ -227,7 +227,7 @@ if "${is_restart} == 0" then "run ${nsteps_gentle}"
 # ========== Production Run with Time Averaging ==========
 
 # Trajectory output
-dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
+#dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
 
 # Volume and dimension output
 fix gel_vol_bb_output all print ${volume_freq} "${gel_vol_box}" &
@@ -243,19 +243,19 @@ fix box_dims_output all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_
     ${restartFlag} output_files/volume_data/box_dimensions_${dataname}_${interaction}_${totsteps}.dat screen no
 
 # Stress profile time averaging
-fix avg_x_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_x_polymer &
-    mode vector ${restartFlag} output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${totsteps}.dat
-fix avg_y_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_y_polymer &
-    mode vector ${restartFlag} output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${totsteps}.dat
-fix avg_z_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_z_polymer &
-    mode vector ${restartFlag} output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${totsteps}.dat
+#fix avg_x_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_x_polymer &
+#    mode vector ${restartFlag} output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${totsteps}.dat
+#fix avg_y_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_y_polymer &
+#    mode vector ${restartFlag} output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${totsteps}.dat
+#fix avg_z_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_z_polymer &
+#    mode vector ${restartFlag} output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${totsteps}.dat
 
-fix avg_x_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_x_solvent &
-    mode vector ${restartFlag} output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${totsteps}.dat
-fix avg_y_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_y_solvent &
-    mode vector ${restartFlag} output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${totsteps}.dat
-fix avg_z_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_z_solvent &
-    mode vector ${restartFlag} output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${totsteps}.dat
+#fix avg_x_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_x_solvent &
+#    mode vector ${restartFlag} output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${totsteps}.dat
+#fix avg_y_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_y_solvent &
+#    mode vector ${restartFlag} output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${totsteps}.dat
+#fix avg_z_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_z_solvent &
+#    mode vector ${restartFlag} output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${totsteps}.dat
 
 # Voronoi volume time averaging (commented out - uncomment if needed)
 #fix avg_vol_x_polymer all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_x_polymer &
@@ -278,7 +278,7 @@ run ${nsteps}
 
 # ========== Cleanup ==========
 unfix 1
-undump poly_traj
+#undump poly_traj
 
 
 
