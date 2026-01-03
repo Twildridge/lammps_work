@@ -1,13 +1,13 @@
 #!/bin/bash -l
-#SBATCH --job-name=pure_solv_02
+#SBATCH --job-name=pure_solv_long
 #SBATCH --output=slurm_%j.out
 #SBATCH --error=slurm_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=4
-#SBATCH --partition=GPU-shared
-#SBATCH --gpus=v100-16:2
-#SBATCH --time=1:00:00 # shortening this will reduce queue time but might risk killing job
+#SBATCH --ntasks-per-node=120
+#SBATCH --cpus-per-task=1
+#SBATCH --partition=RM
+#SBATCH --time=48:00:00
 
 # note that Bridges-2 has 128 cores per node
 # 120 tasks per node is the most efficient
@@ -32,7 +32,7 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 FOLDER="pure_solvent"
 DATANAME="solvent_box_rho6_02"
 INTERACTION="1.5_1.4"
-NSTEPS=20000
+NSTEPS=2000000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE="stress"             # Options: stress, volume, stressvol, or leave empty (just type "")
 
