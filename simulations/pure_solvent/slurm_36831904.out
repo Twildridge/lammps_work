@@ -1,0 +1,181 @@
+======================================
+Working directory: /jet/home/dpollard/Documents/lammps_runs/pure_solvent_solvent_box_rho6_02_1.5_1.4_20260104_120403
+Trajectory directory (scratch): /ocean/projects/chm250028p/dpollard/lammps_trajectories/pure_solvent_solvent_box_rho6_02_1.5_1.4_20260104_120403
+======================================
+Running LAMMPS in pure_solvent with:
+  dataname=solvent_box_rho6_02
+  epsSS=1.5, epsSP=1.4
+  nsteps=20000, oldsteps=0, totsteps=20000
+SLURM tasks per node: 1
+SLURM CPUs per task: 4
+SLURM_GPUS_ON_NODE: 16
+GPUs allocated: v100-32:16
+Running with 16 GPU(s) and 4 threads per GPU
+LAMMPS (22 Jul 2025)
+KOKKOS mode with Kokkos version 4.6.2 is enabled
+  will use up to 16 GPU(s) per node
+  using 4 OpenMP thread(s) per MPI task
+Reading data file ...
+  orthogonal box = (0 0 0) to (200 200 200)
+  1 by 1 by 1 MPI processor grid
+  reading atoms ...
+  8000000 atoms
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        0        0       
+  special bond factors coul:  0        0        0       
+     0 = max # of 1-2 neighbors
+     0 = max # of 1-3 neighbors
+     0 = max # of 1-4 neighbors
+     1 = max # of special neighbors
+  special bonds CPU = 1.022 seconds
+  read_data CPU = 18.446 seconds
+>>> Fresh run (no restart for pure solvent)
+>>> Current     # of timesteps: 20000
+>>> Cumulative  # of timesteps: 20000
+8000000 atoms in group solvent
+Generated 0 of 0 mixed pair_coeff terms from geometric mixing rule
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 2.8
+  ghost atom cutoff = 5
+  binsize = 2.8, bins = 72 72 72
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair lj/cut/kk, perpetual
+      attributes: half, newton on, kokkos_device
+      pair build: half/bin/newton/kk/device
+      stencil: half/bin/3d
+      bin: kk/device
+Setting up cg/kk style minimization ...
+  Unit style    : lj
+  Current step  : 0
+WARNING: Fix MINIMIZE/kk not compatible with sending data in Kokkos communication (src/KOKKOS/comm_kokkos.cpp:766)
+WARNING: Fix with atom-based arrays not compatible with sending data in Kokkos communication, switching to classic exchange/border communication (src/KOKKOS/comm_kokkos.cpp:779)
+WARNING: Fix MINIMIZE/kk not compatible with Kokkos sorting on device (src/KOKKOS/atom_kokkos.cpp:212)
+WARNING: Fix with atom-based arrays not compatible with Kokkos sorting on device, switching to classic host sorting (src/KOKKOS/atom_kokkos.cpp:218)
+Per MPI rank memory allocation (min/avg/max) = 4655 | 4655 | 4655 Mbytes
+   Step          Temp          E_pair         E_mol          TotEng         Press     
+         0   0              5.3002714e+21  0              5.3002714e+21  2.1201086e+22
+       302   0             -10.454207      0             -10.454207      2.4216313    
+Loop time of 64.9018 on 4 procs for 302 steps with 8000000 atoms
+
+99.6% CPU use with 1 MPI tasks x 4 OpenMP threads
+
+Minimization stats:
+  Stopping criterion = energy tolerance
+  Energy initial, next-to-last, final = 
+    5.30027142704827e+21  -10.4535166027344  -10.4542073054415
+  Force two-norm initial, final = 1.0722922e+32 4991.9616
+  Force max component initial, final = 5.862539e+31 41.379614
+  Final line search alpha, max atom move = 0.00021576226 0.0089281591
+  Iterations, force evaluations = 302 409
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 35.199     | 35.199     | 35.199     |   0.0 | 54.23
+Bond    | 4.0059e-05 | 4.0059e-05 | 4.0059e-05 |   0.0 |  0.00
+Neigh   | 7.5832     | 7.5832     | 7.5832     |   0.0 | 11.68
+Comm    | 15.714     | 15.714     | 15.714     |   0.0 | 24.21
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0          | 0          | 0          |   0.0 |  0.00
+Other   |            | 6.405      |            |       |  9.87
+
+Nlocal:          8e+06 ave       8e+06 max       8e+06 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Nghost:    1.26007e+06 ave 1.26007e+06 max 1.26007e+06 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Neighs:    3.60882e+08 ave 3.60882e+08 max 3.60882e+08 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+
+Total # of neighbors = 3.6088219e+08
+Ave neighs/atom = 45.110274
+Ave special neighs/atom = 0
+Neighbor list builds = 47
+Dangerous builds = 0
+Generated 0 of 0 mixed pair_coeff terms from geometric mixing rule
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 0
+  Time step     : 0.001
+Per MPI rank memory allocation (min/avg/max) = 4016 | 4016 | 4016 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+         0   0.1           -10.454207      0.14999998    -10.304207      2.5216312      8000000        200            200            200          
+      1000   0.71583105    -9.7464954      1.0737464     -8.672749       6.7025323      8000000        200            200            200          
+Loop time of 58.4555 on 4 procs for 1000 steps with 8000000 atoms
+
+Performance: 1478.047 tau/day, 17.107 timesteps/s, 136.856 Matom-step/s
+99.7% CPU use with 1 MPI tasks x 4 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.099136   | 0.099136   | 0.099136   |   0.0 |  0.17
+Bond    | 5.9884e-05 | 5.9884e-05 | 5.9884e-05 |   0.0 |  0.00
+Neigh   | 4.1197     | 4.1197     | 4.1197     |   0.0 |  7.05
+Comm    | 44.582     | 44.582     | 44.582     |   0.0 | 76.27
+Output  | 0.0003758  | 0.0003758  | 0.0003758  |   0.0 |  0.00
+Modify  | 5.5065     | 5.5065     | 5.5065     |   0.0 |  9.42
+Other   |            | 4.148      |            |       |  7.10
+
+Nlocal:          8e+06 ave       8e+06 max       8e+06 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Nghost:    1.26045e+06 ave 1.26045e+06 max 1.26045e+06 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Neighs:     3.5974e+08 ave  3.5974e+08 max  3.5974e+08 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+
+Total # of neighbors = 3.597398e+08
+Ave neighs/atom = 44.967475
+Ave special neighs/atom = 0
+Neighbor list builds = 26
+Dangerous builds = 0
+Generated 0 of 0 mixed pair_coeff terms from geometric mixing rule
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 0
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 5719 | 5719 | 5719 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+         0   0.71583105    -9.7464954      1.0737464     -8.672749       6.7025323      8000000        200            200            200          
+      1000   0.96829805    -8.8505056      1.4524469     -7.3980587      1.2665697      9170711.7      209.31532      209.31532      209.31532    
+Loop time of 269.856 on 4 procs for 1000 steps with 8000000 atoms
+
+Performance: 1600.854 tau/day, 3.706 timesteps/s, 29.645 Matom-step/s
+99.6% CPU use with 1 MPI tasks x 4 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 91.741     | 91.741     | 91.741     |   0.0 | 34.00
+Bond    | 0.00019326 | 0.00019326 | 0.00019326 |   0.0 |  0.00
+Neigh   | 37.142     | 37.142     | 37.142     |   0.0 | 13.76
+Comm    | 77.33      | 77.33      | 77.33      |   0.0 | 28.66
+Output  | 0.00038185 | 0.00038185 | 0.00038185 |   0.0 |  0.00
+Modify  | 20.459     | 20.459     | 20.459     |   0.0 |  7.58
+Other   |            | 43.18      |            |       | 16.00
+
+Nlocal:          8e+06 ave       8e+06 max       8e+06 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Nghost:    1.20217e+06 ave 1.20217e+06 max 1.20217e+06 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+Neighs:    3.09156e+08 ave 3.09156e+08 max 3.09156e+08 min
+Histogram: 1 0 0 0 0 0 0 0 0 0
+
+Total # of neighbors = 3.0915565e+08
+Ave neighs/atom = 38.644456
+Ave special neighs/atom = 0
+Neighbor list builds = 233
+Dangerous builds = 0
+Generated 0 of 0 mixed pair_coeff terms from geometric mixing rule
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 1000
+  Time step     : 0.005
+WARNING: Fix STORE/ATOM not compatible with Kokkos sorting on device (src/KOKKOS/atom_kokkos.cpp:212)
+WARNING: Fix with atom-based arrays not compatible with Kokkos sorting on device, switching to classic host sorting (src/KOKKOS/atom_kokkos.cpp:218)
+Per MPI rank memory allocation (min/avg/max) = 5930 | 5930 | 5930 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      1000   0.96829805    -8.8505056      1.4524469     -7.3980587      1.2665697      9170711.7      209.31532      209.31532      209.31532    
+      5000   1.0000873     -8.6137393      1.5001308     -7.1136085      0.9989391      9399150.7      211.03907      211.03907      211.03907    
+     10000   1.0002551     -8.6137549      1.5003825     -7.1133724      0.99869604     9399333.6      211.04044      211.04044      211.04044    

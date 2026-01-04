@@ -1,0 +1,231 @@
+======================================
+Working directory: /jet/home/dpollard/Documents/lammps_runs/pure_solvent_solvent_box_rho6_02_1.5_1.4_20260103_205131
+Trajectory directory (scratch): /ocean/projects/chm250028p/dpollard/lammps_trajectories/pure_solvent_solvent_box_rho6_02_1.5_1.4_20260103_205131
+======================================
+Running LAMMPS in pure_solvent with:
+  dataname=solvent_box_rho6_02
+  epsSS=1.5, epsSP=1.4
+  nsteps=20000, oldsteps=0, totsteps=20000
+SLURM tasks per node: 120
+SLURM CPUs per task: 1
+SLURM_GPUS_ON_NODE: 
+GPUs allocated: 
+Running CPU-only with 360 tasks
+LAMMPS (22 Jul 2025)
+  using 1 OpenMP thread(s) per MPI task
+using multi-threaded neighbor list subroutines
+Reading data file ...
+  orthogonal box = (0 0 0) to (200 200 200)
+  5 by 8 by 9 MPI processor grid
+  reading atoms ...
+  8000000 atoms
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        0        0       
+  special bond factors coul:  0        0        0       
+     0 = max # of 1-2 neighbors
+     0 = max # of 1-3 neighbors
+     0 = max # of 1-4 neighbors
+     1 = max # of special neighbors
+  special bonds CPU = 2.710 seconds
+  read_data CPU = 22.085 seconds
+>>> Fresh run (no restart for pure solvent)
+>>> Current     # of timesteps: 20000
+>>> Cumulative  # of timesteps: 20000
+8000000 atoms in group solvent
+Generated 0 of 0 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is pair_style lj/cut/omp
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 2.8
+  ghost atom cutoff = 5
+  binsize = 1.4, bins = 143 143 143
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair lj/cut/omp, perpetual
+      attributes: half, newton on, omp
+      pair build: half/bin/newton/omp
+      stencil: half/bin/3d
+      bin: standard
+Setting up cg style minimization ...
+  Unit style    : lj
+  Current step  : 0
+Per MPI rank memory allocation (min/avg/max) = 62.53 | 62.56 | 62.6 Mbytes
+   Step          Temp          E_pair         E_mol          TotEng         Press     
+         0   0              5.3002714e+21  0              5.3002714e+21  2.1201086e+22
+       296   0             -10.414243      0             -10.414243      2.6632334    
+Loop time of 20.8796 on 360 procs for 296 steps with 8000000 atoms
+
+99.1% CPU use with 360 MPI tasks x 1 OpenMP threads
+
+Minimization stats:
+  Stopping criterion = energy tolerance
+  Energy initial, next-to-last, final = 
+    5.30027142704827e+21  -10.4137882597914  -10.4142428177092
+  Force two-norm initial, final = 1.0722922e+32 5426.8219
+  Force max component initial, final = 5.862539e+31 90.975318
+  Final line search alpha, max atom move = 0.00011544953 0.010503057
+  Iterations, force evaluations = 296 403
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 7.9119     | 8.387      | 13.862     |  19.0 | 40.17
+Bond    | 5.7547e-05 | 0.00012924 | 0.00028111 |   0.0 |  0.00
+Neigh   | 1.9334     | 2.0312     | 2.1733     |   3.7 |  9.73
+Comm    | 1.8433     | 3.8698     | 9.3547     | 100.9 | 18.53
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0.076979   | 0.24811    | 0.3144     |   9.4 |  1.19
+Other   |            | 6.343      |            |       | 30.38
+
+Nlocal:        22222.2 ave       22512 max       21937 min
+Histogram: 7 14 33 63 66 69 56 30 12 10
+Nghost:        34164.9 ave       34510 max       33859 min
+Histogram: 3 15 48 67 76 55 62 25 7 2
+Neighs:      1.003e+06 ave 1.03232e+06 max      971592 min
+Histogram: 3 10 30 49 73 82 58 32 17 6
+
+Total # of neighbors = 3.6107827e+08
+Ave neighs/atom = 45.134783
+Ave special neighs/atom = 0
+Neighbor list builds = 45
+Dangerous builds = 1
+Generated 0 of 0 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is pair_style lj/cut/omp
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 0
+  Time step     : 0.001
+Per MPI rank memory allocation (min/avg/max) = 58.03 | 58.06 | 58.1 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+         0   0.1           -10.414243      0.14999998    -10.264243      2.7632334      8000000        200            200            200          
+      1000   0.72203253    -9.7318633      1.0830487     -8.6488146      6.78846        8000000        200            200            200          
+Loop time of 24.0611 on 360 procs for 1000 steps with 8000000 atoms
+
+Performance: 3590.853 tau/day, 41.561 timesteps/s, 332.486 Matom-step/s
+99.2% CPU use with 360 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 11.253     | 11.877     | 13.104     |   7.9 | 49.36
+Bond    | 0.00011041 | 0.00030159 | 0.00068916 |   0.0 |  0.00
+Neigh   | 1.0975     | 1.1471     | 1.2367     |   2.7 |  4.77
+Comm    | 4.3058     | 5.1803     | 7.4708     |  25.2 | 21.53
+Output  | 0.00022855 | 0.0085036  | 0.010505   |   2.6 |  0.04
+Modify  | 1.6612     | 2.0383     | 2.3269     |   9.3 |  8.47
+Other   |            | 3.809      |            |       | 15.83
+
+Nlocal:        22222.2 ave       22429 max       22034 min
+Histogram: 5 22 50 42 85 58 52 28 9 9
+Nghost:          34166 ave       34452 max       33887 min
+Histogram: 1 10 29 58 86 82 57 32 3 2
+Neighs:         999338 ave 1.02178e+06 max      978142 min
+Histogram: 5 14 33 62 75 84 43 31 11 2
+
+Total # of neighbors = 3.5976176e+08
+Ave neighs/atom = 44.97022
+Ave special neighs/atom = 0
+Neighbor list builds = 26
+Dangerous builds = 0
+Generated 0 of 0 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is pair_style lj/cut/omp
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 0
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 61.04 | 61.07 | 61.1 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+         0   0.72203253    -9.7318633      1.0830487     -8.6488146      6.78846        8000000        200            200            200          
+      1000   0.96849052    -8.8483367      1.4527356     -7.3956011      1.2677607      9172187.3      209.32654      209.32654      209.32654    
+Loop time of 31.7836 on 360 procs for 1000 steps with 8000000 atoms
+
+Performance: 13591.906 tau/day, 31.463 timesteps/s, 251.702 Matom-step/s
+98.7% CPU use with 360 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 10.28      | 10.914     | 11.564     |   8.7 | 34.34
+Bond    | 0.00023623 | 0.00051567 | 0.00080889 |   0.0 |  0.00
+Neigh   | 9.4105     | 9.8673     | 10.5       |   7.6 | 31.05
+Comm    | 6.2178     | 6.9971     | 8.107      |  19.5 | 22.01
+Output  | 0.00022252 | 0.00023419 | 0.00027052 |   0.0 |  0.00
+Modify  | 2.8071     | 3.3613     | 3.7148     |   8.7 | 10.58
+Other   |            | 0.643      |            |       |  2.02
+
+Nlocal:        22222.2 ave       22357 max       22105 min
+Histogram: 4 14 39 64 85 92 34 22 5 1
+Nghost:        32191.5 ave       32348 max       32028 min
+Histogram: 2 9 32 44 89 72 63 33 12 4
+Neighs:         858643 ave      868674 max      845787 min
+Histogram: 2 4 13 47 52 92 78 38 30 4
+
+Total # of neighbors = 3.0911142e+08
+Ave neighs/atom = 38.638928
+Ave special neighs/atom = 0
+Neighbor list builds = 233
+Dangerous builds = 0
+Generated 0 of 0 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is pair_style lj/cut/omp
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 1000
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 62.55 | 62.58 | 62.62 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      1000   0.96849052    -8.8483367      1.4527356     -7.3956011      1.2677607      9172187.3      209.32654      209.32654      209.32654    
+      5000   1.0000923     -8.6142392      1.5001382     -7.114101       0.99952414     9398694.6      211.03566      211.03566      211.03566    
+     10000   1.0004327     -8.6136023      1.5006489     -7.1129534      0.99815597     9399561.8      211.04215      211.04215      211.04215    
+     15000   1.0005199     -8.6145234      1.5007796     -7.1137437      1.002207       9398086.9      211.03111      211.03111      211.03111    
+     20000   1.0002565     -8.613362       1.5003846     -7.1129774      1.0016278      9399067.7      211.03845      211.03845      211.03845    
+     21000   1.0002707     -8.6139859      1.5004059     -7.11358        0.99751401     9399165.4      211.03918      211.03918      211.03918    
+Loop time of 559.873 on 360 procs for 20000 steps with 8000000 atoms
+
+Performance: 15432.084 tau/day, 35.722 timesteps/s, 285.779 Matom-step/s
+98.8% CPU use with 360 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 195.22     | 204.9      | 214.35     |  37.2 | 36.60
+Bond    | 0.0044717  | 0.01013    | 0.016585   |   2.1 |  0.00
+Neigh   | 141.34     | 147.91     | 158.03     |  29.2 | 26.42
+Comm    | 110.07     | 123.62     | 142.14     |  79.7 | 22.08
+Output  | 0.15265    | 0.99719    | 1.9794     |  55.1 |  0.18
+Modify  | 60.697     | 69.587     | 76.664     |  36.8 | 12.43
+Other   |            | 12.85      |            |       |  2.30
+
+Nlocal:        22222.2 ave       22305 max       22124 min
+Histogram: 3 15 22 41 69 65 67 49 21 8
+Nghost:        31852.5 ave       31981 max       31730 min
+Histogram: 5 18 35 49 81 74 49 37 9 3
+Neighs:         839487 ave      849635 max      830097 min
+Histogram: 8 25 28 63 69 64 50 33 13 7
+
+Total # of neighbors = 3.0221535e+08
+Ave neighs/atom = 37.776918
+Ave special neighs/atom = 0
+Neighbor list builds = 3581
+Dangerous builds = 0
+System init for write_data ...
+Generated 0 of 0 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is pair_style lj/cut/omp
+Total wall time: 0:11:16
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+Plot saved to ./output_plots/convergence_plots/solvent_box_rho6_02_1.5_1.4_20000_convergence.png
+Generating stress profiles...
+Found data file: ./data_files/solvent_box_rho6_02.data
+Stress profile saved to ./output_plots/solvent_box_rho6_02_1.5_1.4_20000_stress.png
+No volume data found for solvent_box_rho6_02_1.5_1.4_20000, skipping volume fraction plots
+Generating computational efficiency plot...
+Mobile atoms: 8000000
+Entry 'solvent_box_rho6_021_1.5_1.4_20000' already exists in tracking file, skipping.
+Tracking info written to /jet/home/dpollard/Documents/lammps_work/tracking.txt
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_atoms.png
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_timesteps.png
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/pure_solvent_solvent_box_rho6_02_1.5_1.4_20260103_205131
+======================================

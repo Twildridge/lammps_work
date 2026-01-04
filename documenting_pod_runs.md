@@ -100,19 +100,33 @@ PURE SOLVENT (9,000 atoms, 200000 timesteps):
 
 PURE SOLVENT (800,000 atoms, 20000 timesteps):
 
-120 CPUs, no GPU (519): 30:52
+120 CPUs, no GPU: 30:52
+120 CPUs, no GPU, 2 nodes: 16:19
+120 CPUs, no GPU, 3 nodes: 11:16
+120 CPUs, no GPU, 4 nodes: 08:38
+40 CPUs (Pod), no GPU: 43:20
+40 CPUs (Pod), no GPU, 2 nodes: 43:49
+35 CPUs (Pod), no GPU, 2 nodes: 52:15
+40 CPUs (Pod), no GPU, 3 nodes: 28:29
+
 8 GPUs, 4 threads/GPU, 1 tasks/node (541): > 30 mins
 1 GPU, 4 threads/GPU, 1 task/node (586): " "
 2 GPUs, 4 threads/GPU, 1 task/node (852): " "
 4 GPUs, 4 threads/GPU, 1 task/node (594): " "
 
+NOTE: internode communication speed is 200 Gb/s on Bridges-2, but only 100 Gb/s on Pod!!
 
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=4
-#SBATCH --partition=GPU-shared
-#SBATCH --gpus=l40s-48:4
+--gpus=l40s-48:4 gives error! (also l40s-48:8)
 
-gave error (also l40s-48:8)
+
+
+SLAB (547,000 mobile atoms, 20000 timesteps):
+
+120 CPUs, no GPU, 1 node: 04:48 
+120 CPUs, no GPU, 2 node: 03:03
+120 CPUs, no GPU, 3 node: 02:18
+120 CPUs, no GPU, 4 node: 01:55
+
 
 
 

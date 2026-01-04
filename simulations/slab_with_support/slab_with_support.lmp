@@ -27,9 +27,9 @@ variable nrepeat_avg_vol equal 1
 variable nfreq_avg_vol equal 10000
 
 # Output frequencies
-variable thermo_freq equal 10000
-variable dump_freq equal 10000
-variable volume_freq equal 10000
+variable thermo_freq equal 100000
+variable dump_freq equal 100000
+variable volume_freq equal 100000
 
 # Equilibration parameters
 variable temp_target equal 1.0
@@ -231,7 +231,7 @@ if "${is_restart} == 0" then "run ${nsteps_gentle}"
 # ========== Production Run with Time Averaging ==========
 
 # Trajectory output
-#dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
+dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
 
 # Volume and dimension output
 fix gel_vol_bb_output all print ${volume_freq} "${gel_vol_box}" &
@@ -282,7 +282,7 @@ run ${nsteps}
 
 # ========== Cleanup ==========
 unfix 1
-#undump poly_traj
+undump poly_traj
 
 
 

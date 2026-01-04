@@ -2,11 +2,11 @@
 #SBATCH --job-name=slab_support_long
 #SBATCH --output=slurm_%j.out
 #SBATCH --error=slurm_%j.err
-#SBATCH --nodes=1
+#SBATCH --nodes=4
 #SBATCH --ntasks-per-node=120
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=RM
-#SBATCH --time=48:00:00 # shortening this will reduce queue time but might risk killing job
+#SBATCH --time=60:00:00 # shortening this will reduce queue time but might risk killing job
 
 # note that Bridges-2 has 128 cores per node
 # 120 tasks per node is the most efficient

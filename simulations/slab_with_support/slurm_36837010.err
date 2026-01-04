@@ -1,0 +1,15 @@
+ln: failed to create symbolic link '/jet/home/dpollard/Documents/lammps_runs/slab_with_support_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_20260104_140414/data_files/slab_support_5beads_10x10x5_rho6_extra_padding43.data': File exists
+Traceback (most recent call last):
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/plot_lammps_log.py", line 221, in <module>
+    plot_convergence(data, foldername, dataname, output)
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/plot_lammps_log.py", line 145, in plot_convergence
+    axes[plot_idx].plot(timesteps, vol_normalized, 'm-', linewidth=2.0)
+  File "/opt/packages/anaconda3-2024.10-1/lib/python3.12/site-packages/matplotlib/axes/_axes.py", line 1779, in plot
+    lines = [*self._get_lines(self, *args, data=data, **kwargs)]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/packages/anaconda3-2024.10-1/lib/python3.12/site-packages/matplotlib/axes/_base.py", line 296, in __call__
+    yield from self._plot_args(
+               ^^^^^^^^^^^^^^^^
+  File "/opt/packages/anaconda3-2024.10-1/lib/python3.12/site-packages/matplotlib/axes/_base.py", line 486, in _plot_args
+    raise ValueError(f"x and y must have same first dimension, but "
+ValueError: x and y must have same first dimension, but have shapes (3,) and (2,)
