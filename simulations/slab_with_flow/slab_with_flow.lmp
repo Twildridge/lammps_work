@@ -17,7 +17,7 @@ variable timestep_prod equal 0.005
 # ========== Piston Parameters ==========
 # Force per piston bead (tune this for desired flow rate)
 # Positive = push down (-z), negative = pull up (+z)
-variable piston_force equal 0.005
+variable piston_force equal 0.01
 
 # Soft push parameters (resolve solvent-piston overlaps)
 variable nsteps_softpush equal 1000
@@ -39,9 +39,9 @@ variable nrepeat_stress equal 50
 variable nfreq_stress equal 10000
 
 # Volume averaging
-variable nevery_vol equal 1000
-variable nrepeat_vol equal 100
-variable nfreq_vol equal 100000
+variable nevery_vol equal 100
+variable nrepeat_vol equal 10
+variable nfreq_vol equal 10000
 
 
 # ========== Spatial Binning ==========
@@ -55,7 +55,12 @@ boundary p p p
 atom_style molecular
 atom_modify map array
 
-read_data data_files/${dataname}.data
+# Define styles before read_data (nocoeff skips all coefficient sections)
+pair_style hybrid/overlay lj/cut 2.5 soft 2.5
+bond_style fene
+
+# Skip pair/bond coefficients from data file - we define them explicitly below
+read_data data_files/${dataname}.data nocoeff
 
 comm_modify cutoff 5.0
 
@@ -78,7 +83,6 @@ group gel_system type 1 2 4 5
 
 # ========== Interatomic Potentials ==========
 # Using hybrid/overlay to add soft potential during push phase
-pair_style hybrid/overlay lj/cut 2.5 soft 2.5
 pair_modify pair soft special lj/coul 0.0 0.0 0.0
 
 # LJ interactions (same as equilibration)
@@ -99,7 +103,6 @@ pair_coeff 5 5 lj/cut 0.0 ${sigma} 0.0         # piston-piston (rigid)
 # Soft potential for solvent-piston only (starts at 0, will ramp up)
 pair_coeff 3 5 soft 0.0 ${sigma}
 
-bond_style fene
 bond_coeff * 40.0 3.0 1.0 1.0
 special_bonds fene
 
