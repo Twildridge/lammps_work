@@ -104,6 +104,8 @@ PURE SOLVENT (800,000 atoms, 20000 timesteps):
 120 CPUs, no GPU, 2 nodes: 16:19
 120 CPUs, no GPU, 3 nodes: 11:16
 120 CPUs, no GPU, 4 nodes: 08:38
+120 CPUs, no GPU, 5 nodes: 07:22
+
 40 CPUs (Pod), no GPU: 43:20
 40 CPUs (Pod), no GPU, 2 nodes: 43:49
 35 CPUs (Pod), no GPU, 2 nodes: 52:15
@@ -128,6 +130,14 @@ SLAB (547,000 mobile atoms, 20000 timesteps):
 120 CPUs, no GPU, 4 node: 01:55
 
 
+SLAB (547,000 mobile atoms, 10 M timesteps):
+
+120 CPUs, no GPU, 1 node: 10:48:36 
 
 
+
+
+Still waiting on Pod: 
+81279 (slab): timed out because was 10 M timesteps with only one node
+82665 (slab): also timed out
 

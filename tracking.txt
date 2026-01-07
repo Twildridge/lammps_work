@@ -12,5 +12,6 @@ solvent_box_rho6_011_1.5_1.4_2000000                                   24.14    
 slab_support_5beads_10x10x5_rho6_extra_padding431_1.5_1.4_100000       87.00      87.00      55.50      547168     16:11
 solvent_box_rho6_021_1.5_1.4_20000                                     200.00     200.00     200.00     8000000    27:30
 slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_8000000       87.00      87.00      55.50      547168     647:32
+slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000      87.00      87.00      55.50      547168     647:58
 slab_support_5beads_10x10x5_rho6_extra_padding431_1.5_1.4_5000000      87.00      87.00      55.50      547168     812:12
 slab_support_5beads_10x10x5_rho6_extra_padding431_1.5_1.4_20000        87.00      87.00      55.50      547168     N/A
