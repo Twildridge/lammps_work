@@ -1,0 +1,4 @@
+mkdir: cannot create directory ‘/scratch’: Permission denied
+srun: Job step aborted: Waiting up to 32 seconds for job step to finish.
+slurmstepd-node7: error: *** STEP 82665.0 ON node7 CANCELLED AT 2026-01-05T21:56:02 DUE TO TIME LIMIT ***
+slurmstepd-node7: error: *** JOB 82665 ON node7 CANCELLED AT 2026-01-05T21:56:02 DUE TO TIME LIMIT ***
