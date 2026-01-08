@@ -17,7 +17,7 @@ variable timestep_prod equal 0.005
 # ========== Piston Parameters ==========
 # Force per piston bead (tune this for desired flow rate)
 # Negative = push down (-z), positive = pull up (+z)
-variable piston_force equal -0.001
+variable piston_force equal -0.1
 
 # Soft push parameters (resolve solvent-piston overlaps)
 variable nsteps_softpush equal 1000
@@ -25,7 +25,7 @@ variable soft_prefactor_max equal 50.0
 
 
 # ========== Output Frequencies ==========
-variable thermo_freq equal 1000
+variable thermo_freq equal 5000
 variable dump_freq equal 10000
 variable stress_freq equal 10000
 variable volume_freq equal 10000
@@ -77,14 +77,15 @@ group polymer type 1 2
 group solvent type 3
 group support type 4
 group piston type 5
+group walls type 6
 group mobile type 1 2 3
-group gel_system type 1 2 4 5
+group gel_system type 1 2 4 5 6
 
 
 # ========== Interatomic Potentials ==========
 # Using hybrid/overlay to add soft potential during push phase
 
-# LJ interactions (same as equilibration, EXCEPT solvent-piston)
+# LJ interactions (same as equilibration, EXCEPT solvent-piston and solvent-wall)
 pair_coeff * * lj/cut 1.0 ${sigma} 2.5
 pair_coeff 1 3 lj/cut ${epsSP} ${sigma} 2.5    # polymer-solvent
 pair_coeff 2 3 lj/cut ${epsSP} ${sigma} 2.5    # crosslinker-solvent
@@ -98,9 +99,16 @@ pair_coeff 2 5 lj/cut 1.0 ${sigma} 1.22        # crosslinker-piston (WCA)
 pair_coeff 3 5 lj/cut 0.0 ${sigma} 0.0         # solvent-piston (OFF - soft potential only)
 pair_coeff 4 5 lj/cut 0.0 ${sigma} 0.0         # support-piston (none)
 pair_coeff 5 5 lj/cut 0.0 ${sigma} 0.0         # piston-piston (rigid)
+pair_coeff 1 6 lj/cut 1.0 ${sigma} 1.22        # polymer-wall (WCA)
+pair_coeff 2 6 lj/cut 1.0 ${sigma} 1.22        # crosslinker-wall (WCA)
+pair_coeff 3 6 lj/cut 0.0 ${sigma} 0.0         # solvent-wall (OFF - soft potential only)
+pair_coeff 4 6 lj/cut 0.0 ${sigma} 0.0         # support-wall (none)
+pair_coeff 5 6 lj/cut 0.0 ${sigma} 0.0         # piston-wall (none - piston passes through)
+pair_coeff 6 6 lj/cut 0.0 ${sigma} 0.0         # wall-wall (none)
 
-# Soft potential for solvent-piston only (starts at 0, will ramp up)
+# Soft potential for solvent-piston and solvent-wall (starts at 0, will ramp up)
 pair_coeff 3 5 soft 0.0 ${sigma}
+pair_coeff 3 6 soft 0.0 ${sigma}
 
 bond_coeff * 40.0 3.0 1.0 1.0
 special_bonds fene
@@ -114,6 +122,10 @@ fix rigid_support support rigid single force * off off off torque * off off off
 # Piston: rigid body, can move only in z
 velocity piston set 0.0 0.0 0.0
 fix rigid_piston piston rigid single force * off off on torque * off off off
+
+# Walls: frozen rigid body (no motion allowed)
+velocity walls set 0.0 0.0 0.0
+fix rigid_walls walls rigid single force * off off off torque * off off off
 
 
 # ========== Thermo Output ==========
@@ -134,11 +146,13 @@ fix nvt_push mobile nvt temp ${temp_target} ${temp_target} 1.0
 
 # Ramp up soft potential prefactor from 0 to max
 variable soft_ramp equal ramp(0,${soft_prefactor_max})
-fix adapt_soft all adapt 1 pair soft a 3 5 v_soft_ramp
+fix adapt_soft_piston all adapt 1 pair soft a 3 5 v_soft_ramp
+fix adapt_soft_wall all adapt 1 pair soft a 3 6 v_soft_ramp
 
 run ${nsteps_softpush}
 
-unfix adapt_soft
+unfix adapt_soft_piston
+unfix adapt_soft_wall
 unfix nvt_push
 
 print "Soft push complete - overlaps resolved"
@@ -165,6 +179,12 @@ pair_coeff 2 5 1.0 ${sigma} 1.22               # crosslinker-piston (WCA)
 pair_coeff 3 5 1.0 ${sigma} 1.22               # solvent-piston (WCA)
 pair_coeff 4 5 0.0 ${sigma} 0.0                # support-piston
 pair_coeff 5 5 0.0 ${sigma} 0.0                # piston-piston
+pair_coeff 1 6 1.0 ${sigma} 1.22               # polymer-wall (WCA)
+pair_coeff 2 6 1.0 ${sigma} 1.22               # crosslinker-wall (WCA)
+pair_coeff 3 6 1.0 ${sigma} 1.22               # solvent-wall (WCA)
+pair_coeff 4 6 0.0 ${sigma} 0.0                # support-wall
+pair_coeff 5 6 0.0 ${sigma} 0.0                # piston-wall
+pair_coeff 6 6 0.0 ${sigma} 0.0                # wall-wall
 
 # Brief equilibration with new potential
 fix nvt_equil mobile nvt temp ${temp_target} ${temp_target} 1.0
@@ -186,7 +206,7 @@ fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
 # Note: this is force per atom; total force = piston_force * N_piston_beads
 fix push_piston piston addforce 0.0 0.0 ${piston_force}
 # Apply drag force F = -γv to damp oscillations
-fix piston_drag piston viscous 1.0
+fix piston_drag piston viscous 0.1
 
 
 # ========== Cylindrical Chunk Definitions ==========

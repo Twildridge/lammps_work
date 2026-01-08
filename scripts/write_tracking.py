@@ -19,30 +19,71 @@ def get_tracking_file_path():
     tracking_file = os.path.join(home, 'Documents', 'lammps_work', 'tracking.txt')
     return tracking_file
 
-def parse_data_file(foldername, dataname, suffix=""):
-    """Extract box dimensions and atom count from LAMMPS data file (excluding support atoms)."""
-    # Extract base dataname without interaction and timesteps
-    # Format: slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_20000
-    parts = dataname.split('_')
+
+def strip_prefixes(name):
+    """Strip common prefixes from dataname to get core name."""
+    # List of known prefixes to strip (order matters - strip longer ones first)
+    prefixes = [
+        'final_flow_final_config_',
+        'final_flow_',
+        'final_config_',
+    ]
     
-    # Find where interaction starts (format: number.number)
+    result = name
+    for prefix in prefixes:
+        if result.startswith(prefix):
+            result = result[len(prefix):]
+    
+    return result
+
+
+def extract_base_name(dataname, suffix=""):
+    """Extract the base name (before interaction parameters) from dataname."""
+    # First strip any known prefixes
+    stripped_name = strip_prefixes(dataname)
+    
+    # Remove suffix digit if present
+    if suffix and stripped_name.endswith(suffix):
+        stripped_name = stripped_name[:-len(suffix)]
+    
+    # Split and find where interaction starts (format: number.number)
+    parts = stripped_name.split('_')
     base_parts = []
     for part in parts:
         if re.match(r'\d+\.\d+', part):  # Found interaction parameter
             break
         base_parts.append(part)
     
-    base_name = '_'.join(base_parts)
+    return '_'.join(base_parts)
+
+
+def parse_data_file(foldername, dataname, suffix=""):
+    """Extract box dimensions and atom count from LAMMPS data file (excluding support atoms)."""
     
-    # Remove suffix digit if present
-    if suffix and base_name.endswith(suffix):
-        base_name = base_name[:-len(suffix)]
+    base_name = extract_base_name(dataname, suffix)
     
-    # Look for data file in working directory
-    data_file = os.path.join(foldername, 'data_files', f'{base_name}.data')
+    # Try multiple possible data file locations
+    possible_paths = [
+        os.path.join(foldername, 'data_files', f'{base_name}.data'),
+    ]
     
-    if not os.path.exists(data_file):
-        print(f"Data file not found: {data_file}")
+    # Also search for any .data file in data_files that contains the base_name
+    data_files_dir = os.path.join(foldername, 'data_files')
+    if os.path.exists(data_files_dir):
+        for f in os.listdir(data_files_dir):
+            if f.endswith('.data') and base_name in f:
+                possible_paths.append(os.path.join(data_files_dir, f))
+    
+    data_file = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            data_file = path
+            print(f"Found data file: {path}")
+            break
+    
+    if not data_file:
+        print(f"Data file not found. Tried base_name: {base_name}")
+        print(f"Searched in: {data_files_dir}")
         return None, None
     
     box_dims = {}
@@ -76,6 +117,7 @@ def parse_data_file(foldername, dataname, suffix=""):
     print(f"Mobile atoms: {natoms_mobile}")
     return box_dims, natoms_mobile
 
+
 def parse_lammps_log(filepath):
     """Extract wall time from LAMMPS log file."""
     wall_time = None
@@ -87,6 +129,7 @@ def parse_lammps_log(filepath):
                 except:
                     pass
     return wall_time
+
 
 def parse_tracking_file(tracking_file):
     """Parse tracking.txt and extract all simulation data."""
@@ -138,6 +181,7 @@ def parse_tracking_file(tracking_file):
             })
     
     return data
+
 
 def write_tracking_file(dataname, box_dims, natoms, wall_time):
     """Write or append to central tracking file in lammps_work."""
@@ -208,6 +252,7 @@ def write_tracking_file(dataname, box_dims, natoms, wall_time):
             f.write(entry + "\n")
     
     print(f"Tracking info written to {tracking_file}")
+
 
 def plot_performance(data, output_dir):
     """Create performance plots."""
@@ -357,6 +402,7 @@ def plot_performance(data, output_dir):
     print(f"Saved {os.path.join(output_dir, 'time_vs_timesteps.png')}")
     plt.close()
 
+
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("Usage: python write_tracking.py <folder> <dataname> [suffix]")
@@ -383,3 +429,4 @@ if __name__ == "__main__":
         plot_performance(data, output_dir)
     else:
         print("Error: Could not parse data file")
+
