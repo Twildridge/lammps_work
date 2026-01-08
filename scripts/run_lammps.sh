@@ -42,7 +42,7 @@ fi
 
 # Create a working directory for this run in home (for small files)
 WORK_DIR="$HOME/Documents/lammps_runs/${FOLDER}_${DATANAME}_${INTERACTION}_$(date +%Y%m%d_%H%M%S)"
-mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data},output_plots}
+mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data,piston_data},output_plots}
 
 # Create trajectory directory in scratch and symlink to it
 TRAJ_DIR="$SCRATCH_DIR/lammps_trajectories/${FOLDER}_${DATANAME}_${INTERACTION}_$(date +%Y%m%d_%H%M%S)"
@@ -150,6 +150,9 @@ python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTE
 
 echo "Generating stress profiles..."
 python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+
+echo "Generating piston plots..."
+python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
 
 echo "Generating computational efficiency plot..."
 python "$SCRIPT_DIR/write_tracking.py" "." "${DATANAME}${SUFFIX}_${INTERACTION}_${TOTSTEPS}" "$SUFFIX"

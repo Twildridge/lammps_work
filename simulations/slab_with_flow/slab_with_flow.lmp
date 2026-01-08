@@ -16,8 +16,8 @@ variable timestep_prod equal 0.005
 
 # ========== Piston Parameters ==========
 # Force per piston bead (tune this for desired flow rate)
-# Positive = push down (-z), negative = pull up (+z)
-variable piston_force equal 0.01
+# Negative = push down (-z), positive = pull up (+z)
+variable piston_force equal -0.001
 
 # Soft push parameters (resolve solvent-piston overlaps)
 variable nsteps_softpush equal 1000
@@ -26,7 +26,7 @@ variable soft_prefactor_max equal 50.0
 
 # ========== Output Frequencies ==========
 variable thermo_freq equal 1000
-variable dump_freq equal 5000
+variable dump_freq equal 10000
 variable stress_freq equal 10000
 variable volume_freq equal 10000
 
@@ -83,9 +83,8 @@ group gel_system type 1 2 4 5
 
 # ========== Interatomic Potentials ==========
 # Using hybrid/overlay to add soft potential during push phase
-pair_modify pair soft special lj/coul 0.0 0.0 0.0
 
-# LJ interactions (same as equilibration)
+# LJ interactions (same as equilibration, EXCEPT solvent-piston)
 pair_coeff * * lj/cut 1.0 ${sigma} 2.5
 pair_coeff 1 3 lj/cut ${epsSP} ${sigma} 2.5    # polymer-solvent
 pair_coeff 2 3 lj/cut ${epsSP} ${sigma} 2.5    # crosslinker-solvent
@@ -96,7 +95,7 @@ pair_coeff 3 4 lj/cut 0.0 ${sigma} 0.0         # solvent-support (none)
 pair_coeff 4 4 lj/cut 0.0 ${sigma} 0.0         # support-support (frozen)
 pair_coeff 1 5 lj/cut 1.0 ${sigma} 1.22        # polymer-piston (WCA)
 pair_coeff 2 5 lj/cut 1.0 ${sigma} 1.22        # crosslinker-piston (WCA)
-pair_coeff 3 5 lj/cut 1.0 ${sigma} 1.22        # solvent-piston (WCA) - NOW ACTIVE
+pair_coeff 3 5 lj/cut 0.0 ${sigma} 0.0         # solvent-piston (OFF - soft potential only)
 pair_coeff 4 5 lj/cut 0.0 ${sigma} 0.0         # support-piston (none)
 pair_coeff 5 5 lj/cut 0.0 ${sigma} 0.0         # piston-piston (rigid)
 
@@ -186,6 +185,8 @@ fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
 # Apply constant force to piston rigid body (negative = downward in z)
 # Note: this is force per atom; total force = piston_force * N_piston_beads
 fix push_piston piston addforce 0.0 0.0 ${piston_force}
+# Apply drag force F = -γv to damp oscillations
+fix piston_drag piston viscous 1.0
 
 
 # ========== Cylindrical Chunk Definitions ==========
@@ -273,8 +274,16 @@ variable box_lx equal lx
 variable box_ly equal ly
 variable box_lz equal lz
 
-# Piston position tracking
+
+# ========== Output: Piston Data ==========
 compute piston_z piston reduce ave z
+compute piston_vz piston reduce ave vz
+
+fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_z)" &
+    file output_files/piston_data/piston_position_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &
+    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${nsteps}.dat screen no
 
 
 # ========== Output: Trajectories ==========
@@ -335,8 +344,6 @@ fix out_gel_dims all print ${volume_freq} "$(step) ${gel_lx} ${gel_ly} ${gel_lz}
 fix out_box_dims all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_lz}" &
     file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
 
-fix out_piston_z all print ${volume_freq} "$(step) $(c_piston_z)" &
-    file output_files/volume_data/piston_position_${dataname}_${interaction}_${nsteps}.dat screen no
 
 
 # ========== Production Run ==========
