@@ -1,0 +1,40 @@
+======================================
+Working directory: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_final_config_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260108_191129
+Trajectory directory (scratch): /ocean/projects/chm250028p/dpollard/lammps_trajectories/slab_with_flow_final_config_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260108_191129
+======================================
+Running LAMMPS in slab_with_flow with:
+  dataname=final_config_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000
+  epsSS=1.5, epsSP=1.4
+  nsteps=100000, oldsteps=0, totsteps=100000
+SLURM tasks per node: 120
+SLURM CPUs per task: 1
+SLURM_GPUS_ON_NODE: 
+GPUs allocated: 
+Running CPU-only with 480 tasks
+LAMMPS (22 Jul 2025)
+  using 1 OpenMP thread(s) per MPI task
+using multi-threaded neighbor list subroutines
+ERROR: Cannot open file data_files/walled_final_config_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000.data: No such file or directory (src/read_data.cpp:380)
+Last input line: read_data data_files/walled_${dataname}.data nocoeff
+--> parsed line: read_data data_files/walled_final_config_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000.data nocoeff 
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+No thermo data found in ./log.lammps
+Generating stress profiles...
+No stress data found for final_config_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000, skipping stress plots
+No volume data found for final_config_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000, skipping volume fraction plots
+Generating piston plots...
+Error: Piston position file not found: ./output_files/piston_data/piston_position_final_config_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000.dat
+Generating computational efficiency plot...
+Found data file: ./data_files/final_config_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000.data
+Mobile atoms: 766478
+Entry 'final_config_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000' already exists in tracking file, skipping.
+Tracking info written to /jet/home/dpollard/Documents/lammps_work/tracking.txt
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_atoms.png
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_timesteps.png
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_final_config_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260108_191129
+======================================

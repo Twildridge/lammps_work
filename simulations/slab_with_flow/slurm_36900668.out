@@ -1,0 +1,170 @@
+======================================
+Working directory: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260108_193218
+Trajectory directory (scratch): /ocean/projects/chm250028p/dpollard/lammps_trajectories/slab_with_flow_walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260108_193218
+======================================
+Running LAMMPS in slab_with_flow with:
+  dataname=walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000
+  epsSS=1.5, epsSP=1.4
+  nsteps=100000, oldsteps=0, totsteps=100000
+SLURM tasks per node: 120
+SLURM CPUs per task: 1
+SLURM_GPUS_ON_NODE: 
+GPUs allocated: 
+Running CPU-only with 480 tasks
+LAMMPS (22 Jul 2025)
+  using 1 OpenMP thread(s) per MPI task
+using multi-threaded neighbor list subroutines
+Reading data file ...
+  orthogonal box = (-6.8704069 -6.8704069 -4.3828458) to (93.870407 93.870407 59.882846)
+  8 by 10 by 6 MPI processor grid
+  reading atoms ...
+  1988110 atoms
+  scanning bonds ...
+  3 = max bonds/atom
+  orthogonal box = (-6.8704069 -6.8704069 -4.3828458) to (93.870407 93.870407 59.882846)
+  8 by 10 by 6 MPI processor grid
+  reading bonds ...
+  143401 bonds
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        0        0       
+  special bond factors coul:  0        0        0       
+     4 = max # of 1-2 neighbors
+     4 = max # of 1-3 neighbors
+     8 = max # of 1-4 neighbors
+    12 = max # of special neighbors
+  special bonds CPU = 0.157 seconds
+  read_data CPU = 6.078 seconds
+========================================
+Flow simulation: walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000
+Interaction: epsSS=1.5, epsSP=1.4
+Production steps: 100000
+Piston force per bead: -0.1
+========================================
+126674 atoms in group polymer
+309048 atoms in group solvent
+109654 atoms in group support
+109654 atoms in group piston
+1333080 atoms in group walls
+435722 atoms in group mobile
+1679062 atoms in group gel_system
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        1        1       
+  special bond factors coul:  0        1        1       
+     4 = max # of 1-2 neighbors
+    12 = max # of special neighbors
+  special bonds CPU = 0.058 seconds
+  1 rigid bodies with 109654 atoms
+  1 rigid bodies with 109654 atoms
+  1 rigid bodies with 1333080 atoms
+========================================
+Phase 1: Soft push to resolve solvent-piston overlaps
+========================================
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Hybrid pair style last /omp style soft
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 2.8
+  ghost atom cutoff = 5
+  binsize = 1.4, bins = 72 72 46
+  2 neighbor lists, perpetual/occasional/extra = 2 0 0
+  (1) pair lj/cut, perpetual
+      attributes: half, newton on, omp, cut 2.8
+      pair build: half/bin/newton/omp
+      stencil: half/bin/3d
+      bin: standard
+  (2) pair soft, perpetual, skip from (1)
+      attributes: half, newton on, omp
+      pair build: skip/omp
+      stencil: none
+      bin: none
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 0
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 19.33 | 40.02 | 75.82 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+         0   0             -0.015269601    0             -0.015269601    0.020612435    652213.97      100.74081      100.74081      64.265692    
+      1000   1.291442      -0.089147963    0.42456113     0.33541316     2.3667673      652213.97      100.74081      100.74081      64.265692    
+Loop time of 90.8881 on 480 procs for 1000 steps with 1988110 atoms
+
+Performance: 4753.096 tau/day, 11.003 timesteps/s, 21.874 Matom-step/s
+99.2% CPU use with 480 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 1.1195     | 6.3879     | 18.543     | 241.1 |  7.03
+Bond    | 0.0031739  | 0.019111   | 0.046741   |   6.0 |  0.02
+Neigh   | 66.279     | 67.361     | 68.338     |   7.9 | 74.11
+Comm    | 1.2503     | 8.5939     | 20.902     | 217.7 |  9.46
+Output  | 0.0026194  | 0.0026478  | 0.0026767  |   0.0 |  0.00
+Modify  | 1.384      | 8.1896     | 19.543     | 220.9 |  9.01
+Other   |            | 0.334      |            |       |  0.37
+
+Nlocal:         4141.9 ave        9572 max        1114 min
+Histogram: 192 96 0 0 0 0 64 16 85 27
+Nghost:        20362.6 ave       43013 max        6990 min
+Histogram: 144 0 72 57 55 7 49 64 0 32
+Neighs:    2.27627e+06 ave 7.12042e+06 max       40234 min
+Histogram: 288 0 0 0 0 0 64 60 43 25
+
+Total # of neighbors = 1.0926076e+09
+Ave neighs/atom = 549.57099
+Ave special neighs/atom = 0.14425862
+Neighbor list builds = 620
+Dangerous builds = 256
+Soft push complete - overlaps resolved
+========================================
+Phase 2: Switching to full LJ interactions
+========================================
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 2.8
+  ghost atom cutoff = 5
+  binsize = 1.4, bins = 72 72 46
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair lj/cut/omp, perpetual
+      attributes: half, newton on, omp
+      pair build: half/bin/newton/omp
+      stencil: half/bin/3d
+      bin: standard
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 1000
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 18.82 | 30.38 | 51.57 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      1000   1.291442      -0.2413613      0.42456113     0.18319982    -8.7728882      652213.97      100.74081      100.74081      64.265692    
+ERROR: Lost atoms: original 1988110 current 1988109
+For more information see https://docs.lammps.org/err0008 (src/thermo.cpp:526)
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+Plot saved to ./output_plots/convergence_plots/walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000_convergence.png
+Generating stress profiles...
+No stress data found for walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000, skipping stress plots
+No volume data found for walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000, skipping volume fraction plots
+Generating piston plots...
+Error: Piston position file not found: ./output_files/piston_data/piston_position_walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000.dat
+Generating computational efficiency plot...
+Found data file: ./data_files/walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000.data
+Mobile atoms: 1768802
+Entry 'walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000' already exists in tracking file, skipping.
+Tracking info written to /jet/home/dpollard/Documents/lammps_work/tracking.txt
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_atoms.png
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_timesteps.png
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260108_193218
+======================================

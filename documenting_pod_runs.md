@@ -144,3 +144,14 @@ Still waiting on Pod:
 81279 (slab): timed out because was 10 M timesteps with only one node
 82665 (slab): also timed out
 
+
+
+Walled piston (4 nodes):
+
+double wall: 34:06
+single wall with skipped wall–wall interactions (732): 20:36
+single wall with skipped wall/piston/support interactions (818): 18:57
+
+
+
+

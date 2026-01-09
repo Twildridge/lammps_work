@@ -18,3 +18,4 @@ slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_8000000       87.00    
 slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000      87.00      87.00      55.50      547168     647:58
 slab_support_5beads_10x10x5_rho6_extra_padding431_1.5_1.4_5000000      87.00      87.00      55.50      547168     812:12
 slab_support_5beads_10x10x5_rho6_extra_padding431_1.5_1.4_20000        87.00      87.00      55.50      547168     N/A
+walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000 100.74     100.74     64.27      1768802    N/A

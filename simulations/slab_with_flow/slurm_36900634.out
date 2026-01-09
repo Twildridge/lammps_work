@@ -1,0 +1,506 @@
+======================================
+Working directory: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260108_191332
+Trajectory directory (scratch): /ocean/projects/chm250028p/dpollard/lammps_trajectories/slab_with_flow_walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260108_191332
+======================================
+Running LAMMPS in slab_with_flow with:
+  dataname=walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000
+  epsSS=1.5, epsSP=1.4
+  nsteps=100000, oldsteps=0, totsteps=100000
+SLURM tasks per node: 120
+SLURM CPUs per task: 1
+SLURM_GPUS_ON_NODE: 
+GPUs allocated: 
+Running CPU-only with 480 tasks
+LAMMPS (22 Jul 2025)
+  using 1 OpenMP thread(s) per MPI task
+using multi-threaded neighbor list subroutines
+Reading data file ...
+  orthogonal box = (-6.8704069 -6.8704069 -4.3828458) to (93.870407 93.870407 59.882846)
+  8 by 10 by 6 MPI processor grid
+  reading atoms ...
+  1988110 atoms
+  scanning bonds ...
+  3 = max bonds/atom
+  orthogonal box = (-6.8704069 -6.8704069 -4.3828458) to (93.870407 93.870407 59.882846)
+  8 by 10 by 6 MPI processor grid
+  reading bonds ...
+  143401 bonds
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        0        0       
+  special bond factors coul:  0        0        0       
+     4 = max # of 1-2 neighbors
+     4 = max # of 1-3 neighbors
+     8 = max # of 1-4 neighbors
+    12 = max # of special neighbors
+  special bonds CPU = 0.155 seconds
+  read_data CPU = 5.741 seconds
+========================================
+Flow simulation: walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000
+Interaction: epsSS=1.5, epsSP=1.4
+Production steps: 100000
+Piston force per bead: -0.1
+========================================
+126674 atoms in group polymer
+309048 atoms in group solvent
+109654 atoms in group support
+109654 atoms in group piston
+1333080 atoms in group walls
+435722 atoms in group mobile
+1679062 atoms in group gel_system
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        1        1       
+  special bond factors coul:  0        1        1       
+     4 = max # of 1-2 neighbors
+    12 = max # of special neighbors
+  special bonds CPU = 0.057 seconds
+  1 rigid bodies with 109654 atoms
+  1 rigid bodies with 109654 atoms
+  1 rigid bodies with 1333080 atoms
+========================================
+Phase 1: Soft push to resolve solvent-piston overlaps
+========================================
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Hybrid pair style last /omp style soft
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 2.8
+  ghost atom cutoff = 5
+  binsize = 1.4, bins = 72 72 46
+  2 neighbor lists, perpetual/occasional/extra = 2 0 0
+  (1) pair lj/cut, perpetual
+      attributes: half, newton on, omp, cut 2.8
+      pair build: half/bin/newton/omp
+      stencil: half/bin/3d
+      bin: standard
+  (2) pair soft, perpetual, skip from (1)
+      attributes: half, newton on, omp
+      pair build: skip/omp
+      stencil: none
+      bin: none
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 0
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 19.33 | 39.94 | 75.44 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+         0   0              2.866826e+14   0              2.866826e+14   2.8969062e+18  652213.97      100.74081      100.74081      64.265692    
+ERROR on proc 81: Bond atoms 11911 11850 missing on proc 81 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 93: Bond atoms 17318 17324 missing on proc 93 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 87: Bond atoms 17456 17453 missing on proc 87 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 94: Bond atoms 23787 23857 missing on proc 94 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 88: Bond atoms 17725 17723 missing on proc 88 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 80: Bond atoms 11316 11235 missing on proc 80 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 85: Bond atoms 16594 17057 missing on proc 85 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 86: Bond atoms 16755 16759 missing on proc 86 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 393: Bond atoms 639094 639156 missing on proc 393 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 91: Bond atoms 22093 22316 missing on proc 91 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 97: Bond atoms 22233 22017 missing on proc 97 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 397: Bond atoms 638321 638322 missing on proc 397 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 75: Bond atoms 11721 11722 missing on proc 75 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 105: Bond atoms 29229 29226 missing on proc 105 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 104: Bond atoms 28901 28892 missing on proc 104 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 103: Bond atoms 27994 28076 missing on proc 103 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 110: Bond atoms 111037 111035 missing on proc 110 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 111: Bond atoms 35724 35609 missing on proc 111 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 109: Bond atoms 110748 110750 missing on proc 109 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 112: Bond atoms 183582 183561 missing on proc 112 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 68: Bond atoms 6523 6473 missing on proc 68 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 70: Bond atoms 7105 7103 missing on proc 70 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 69: Bond atoms 6719 6767 missing on proc 69 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 78: Bond atoms 10615 10561 missing on proc 78 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 84: Bond atoms 16049 16050 missing on proc 84 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 66: Bond atoms 1593 1592 missing on proc 66 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 83: Bond atoms 12592 12647 missing on proc 83 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 26: Bond atoms 16771 16768 missing on proc 26 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 115: Bond atoms 110588 110590 missing on proc 115 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 25: Bond atoms 16221 16218 missing on proc 25 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 27: Bond atoms 17303 17311 missing on proc 27 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 32: Bond atoms 16719 16661 missing on proc 32 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 28: Bond atoms 17854 17860 missing on proc 28 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 31: Bond atoms 16177 16239 missing on proc 31 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 33: Bond atoms 23009 23010 missing on proc 33 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 16: Bond atoms 12028 12085 missing on proc 16 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 44: Bond atoms 28665 28676 missing on proc 44 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 8: Bond atoms 1959 1960 missing on proc 8 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 116: Bond atoms 182310 182324 missing on proc 116 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 21: Bond atoms 11805 11806 missing on proc 21 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 45: Bond atoms 29143 29229 missing on proc 45 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 39: Bond atoms 29115 29204 missing on proc 39 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 15: Bond atoms 11674 11671 missing on proc 15 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 37: Bond atoms 22294 28025 missing on proc 37 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 369: Bond atoms 545974 546049 missing on proc 369 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 230: Bond atoms 325072 325071 missing on proc 230 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 251: Bond atoms 333462 333546 missing on proc 251 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 9: Bond atoms 6716 6719 missing on proc 9 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 43: Bond atoms 27992 27984 missing on proc 43 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 19: Bond atoms 627066 627131 missing on proc 19 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 34: Bond atoms 23708 23709 missing on proc 34 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 118: Bond atoms 112130 112059 missing on proc 118 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 117: Bond atoms 41243 41242 missing on proc 117 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 10: Bond atoms 2349 2323 missing on proc 10 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 50: Bond atoms 35507 35724 missing on proc 50 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 7: Bond atoms 1845 1746 missing on proc 7 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 51: Bond atoms 35848 35928 missing on proc 51 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 49: Bond atoms 34283 34282 missing on proc 49 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 52: Bond atoms 36314 36325 missing on proc 52 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 114: Bond atoms 110236 110243 missing on proc 114 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 24: Bond atoms 15851 15792 missing on proc 24 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 30: Bond atoms 21623 21629 missing on proc 30 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 36: Bond atoms 21464 21853 missing on proc 36 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 56: Bond atoms 40902 40901 missing on proc 56 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 12: Bond atoms 620153 620152 missing on proc 12 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 18: Bond atoms 626355 626430 missing on proc 18 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 58: Bond atoms 41638 41653 missing on proc 58 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 57: Bond atoms 111951 41349 missing on proc 57 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 48: Bond atoms 33791 33883 missing on proc 48 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 55: Bond atoms 40569 40568 missing on proc 55 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 61: Bond atoms 116645 116763 missing on proc 61 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 63: Bond atoms 47289 47402 missing on proc 63 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 2: Bond atoms 46934 46933 missing on proc 2 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 4: Bond atoms 48326 48342 missing on proc 4 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 1: Bond atoms 45797 45807 missing on proc 1 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 3: Bond atoms 47298 47397 missing on proc 3 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 54: Bond atoms 40427 40415 missing on proc 54 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 17: Bond atoms 7488 7440 missing on proc 17 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 41: Bond atoms 24187 24112 missing on proc 41 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 35: Bond atoms 18256 18033 missing on proc 35 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 23: Bond atoms 12568 12569 missing on proc 23 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 119: Bond atoms 184049 184073 missing on proc 119 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 59: Bond atoms 113815 112732 missing on proc 59 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 5: Bond atoms 48788 48801 missing on proc 5 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 410: Bond atoms 539027 539156 missing on proc 410 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 130: Bond atoms 190267 190991 missing on proc 130 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 411: Bond atoms 649151 649180 missing on proc 411 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 129: Bond atoms 189770 189772 missing on proc 129 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 412: Bond atoms 653391 653390 missing on proc 412 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 190: Bond atoms 261852 261948 missing on proc 190 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 356: Bond atoms 467717 467719 missing on proc 356 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 367: Bond atoms 620739 620727 missing on proc 367 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 187: Bond atoms 259561 260849 missing on proc 187 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 358: Bond atoms 468645 468758 missing on proc 358 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 378: Bond atoms 626353 626355 missing on proc 378 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 189: Bond atoms 261438 261440 missing on proc 189 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 355: Bond atoms 466397 466524 missing on proc 355 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 372: Bond atoms 626562 626256 missing on proc 372 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 304: Bond atoms 404001 404514 missing on proc 304 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 383: Bond atoms 628980 628890 missing on proc 383 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 296: Bond atoms 324882 324888 missing on proc 296 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 413: Bond atoms 649722 649773 missing on proc 413 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 186: Bond atoms 187770 187791 missing on proc 186 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 295: Bond atoms 395675 395689 missing on proc 295 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 458: Bond atoms 643888 643889 missing on proc 458 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 191: Bond atoms 262431 262443 missing on proc 191 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 302: Bond atoms 474021 474022 missing on proc 302 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 446: Bond atoms 633406 633347 missing on proc 446 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 236: Bond atoms 324978 324977 missing on proc 236 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 244: Bond atoms 332778 332779 missing on proc 244 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 452: Bond atoms 638924 638910 missing on proc 452 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 238: Bond atoms 255119 255471 missing on proc 238 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 241: Bond atoms 402506 402509 missing on proc 241 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 447: Bond atoms 633673 633674 missing on proc 447 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 237: Bond atoms 254434 254437 missing on proc 237 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 301: Bond atoms 473197 473273 missing on proc 301 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 457: Bond atoms 638406 638322 missing on proc 457 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 184: Bond atoms 261864 261852 missing on proc 184 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 243: Bond atoms 332031 332029 missing on proc 243 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 464: Bond atoms 648915 648917 missing on proc 464 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 176: Bond atoms 182490 182492 missing on proc 176 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 303: Bond atoms 403822 403826 missing on proc 303 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 460: Bond atoms 644893 644847 missing on proc 460 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 182: Bond atoms 260263 260058 missing on proc 182 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 354: Bond atoms 466104 466118 missing on proc 354 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 445: Bond atoms 632711 632712 missing on proc 445 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 178: Bond atoms 183567 183585 missing on proc 178 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 300: Bond atoms 472541 473589 missing on proc 300 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 451: Bond atoms 638566 638513 missing on proc 451 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 177: Bond atoms 254691 254694 missing on proc 177 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 359: Bond atoms 469338 469352 missing on proc 359 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 436: Bond atoms 628467 628465 missing on proc 436 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 175: Bond atoms 181947 180599 missing on proc 175 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 305: Bond atoms 404882 404867 missing on proc 305 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 433: Bond atoms 620514 626775 missing on proc 433 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 122: Bond atoms 117385 117510 missing on proc 122 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 299: Bond atoms 398328 398423 missing on proc 299 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 463: Bond atoms 648506 648505 missing on proc 463 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 181: Bond atoms 259775 259858 missing on proc 181 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 245: Bond atoms 333547 333462 missing on proc 245 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 448: Bond atoms 634428 634080 missing on proc 448 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 124: Bond atoms 190288 190381 missing on proc 124 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 440: Bond atoms 627174 632913 missing on proc 440 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 123: Bond atoms 189771 189770 missing on proc 123 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 465: Bond atoms 648968 648967 missing on proc 465 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 121: Bond atoms 188075 117181 missing on proc 121 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 441: Bond atoms 633766 633730 missing on proc 441 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 183: Bond atoms 261145 261146 missing on proc 183 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 466: Bond atoms 649522 649521 missing on proc 466 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 174: Bond atoms 181530 181613 missing on proc 174 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 439: Bond atoms 626677 627152 missing on proc 439 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 120: Bond atoms 187782 187674 missing on proc 120 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 442: Bond atoms 628814 634359 missing on proc 442 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 239: Bond atoms 255792 255699 missing on proc 239 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 470: Bond atoms 648840 648796 missing on proc 470 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 185: Bond atoms 263047 261732 missing on proc 185 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 430: Bond atoms 616738 622220 missing on proc 430 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 179: Bond atoms 184061 184058 missing on proc 179 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 471: Bond atoms 648988 649037 missing on proc 471 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 427: Bond atoms 620804 620805 missing on proc 427 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 469: Bond atoms 648346 648148 missing on proc 469 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 429: Bond atoms 622011 622019 missing on proc 429 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 476: Bond atoms 609656 609773 missing on proc 476 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 478: Bond atoms 653394 653396 missing on proc 478 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 472: Bond atoms 653455 653461 missing on proc 472 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 477: Bond atoms 41317 36181 missing on proc 477 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 475: Bond atoms 40681 40682 missing on proc 475 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 444: Bond atoms 638018 637957 missing on proc 444 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 450: Bond atoms 638071 638069 missing on proc 450 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 456: Bond atoms 643189 643238 missing on proc 456 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 432: Bond atoms 626322 626334 missing on proc 432 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 416: Bond atoms 609646 609645 missing on proc 416 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 426: Bond atoms 5707 5712 missing on proc 426 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 438: Bond atoms 632189 632188 missing on proc 438 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 468: Bond atoms 652698 652705 missing on proc 468 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 418: Bond atoms 653398 653397 missing on proc 418 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 415: Bond atoms 608886 608774 missing on proc 415 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 417: Bond atoms 539502 539520 missing on proc 417 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 362: Bond atoms 545408 545483 missing on proc 362 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 361: Bond atoms 544881 544883 missing on proc 361 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 422: Bond atoms 616070 616064 missing on proc 422 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 363: Bond atoms 474351 474354 missing on proc 363 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 421: Bond atoms 615695 615653 missing on proc 421 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 474: Bond atoms 608573 608574 missing on proc 474 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 423: Bond atoms 546323 546211 missing on proc 423 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 461: Bond atoms 644961 644965 missing on proc 461 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 449: Bond atoms 634734 634657 missing on proc 449 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 455: Bond atoms 640024 640027 missing on proc 455 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 437: Bond atoms 622954 623156 missing on proc 437 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 467: Bond atoms 644977 645918 missing on proc 467 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 420: Bond atoms 615480 615483 missing on proc 420 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 473: Bond atoms 654812 653532 missing on proc 473 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 443: Bond atoms 628871 628870 missing on proc 443 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 360: Bond atoms 544363 544426 missing on proc 360 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 479: Bond atoms 612255 612254 missing on proc 479 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 425: Bond atoms 616956 616966 missing on proc 425 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 419: Bond atoms 541019 540906 missing on proc 419 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+ERROR on proc 365: Bond atoms 547159 547215 missing on proc 365 at step 1
+For more information see https://docs.lammps.org/err0005 (src/ntopo_bond_all.cpp:59)
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+No thermo data found in ./log.lammps
+Generating stress profiles...
+No stress data found for walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000, skipping stress plots
+No volume data found for walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000, skipping volume fraction plots
+Generating piston plots...
+Error: Piston position file not found: ./output_files/piston_data/piston_position_walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000.dat
+Generating computational efficiency plot...
+Found data file: ./data_files/walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000.data
+Mobile atoms: 1768802
+Tracking info written to /jet/home/dpollard/Documents/lammps_work/tracking.txt
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_atoms.png
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_timesteps.png
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260108_191332
+======================================
