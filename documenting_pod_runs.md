@@ -146,7 +146,7 @@ Still waiting on Pod:
 
 
 
-Walled piston (4 nodes):
+Walled piston (4 nodes; 100,000 timesteps):
 
 double wall: 34:06
 single wall with skipped wall–wall interactions (732): 20:36
