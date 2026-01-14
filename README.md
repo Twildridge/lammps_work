@@ -100,6 +100,15 @@ Optimal configuration on Bridges-2:
 
 Expected runtime for 4M timesteps with 400k beads: ~20 hours on 120 cores.
 
+## Downloading trajectory files
+
+The fastest way to download LAMMPS trajectory files is by typing this in terminal:
+
+```bash
+rsync -avP $USER@data.bridges2.psc.edu:<PATH-TO-FILE>.lammpstraj.gz ~/Downloads
+```
+Note: Add "z" tag ("-avPz") to compress the file if downloading an uncompressed traj file.
+
 ## Common Issues
 
 **"Disk quota exceeded"**: Trajectory files filled up home directory. Check that `traj_files/` is a symlink to scratch:
