@@ -22,9 +22,9 @@ variable nevery_avg_stress equal 2000
 variable nrepeat_avg_stress equal 500 # 625 or 50
 variable nfreq_avg_stress equal 100000 # 125000 or 10000
 
-variable nevery_avg_vol equal 10000
+variable nevery_avg_vol equal 100000
 variable nrepeat_avg_vol equal 1
-variable nfreq_avg_vol equal 10000
+variable nfreq_avg_vol equal 100000
 
 # Output frequencies
 variable thermo_freq equal 100000

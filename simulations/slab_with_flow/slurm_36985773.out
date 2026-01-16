@@ -1,0 +1,793 @@
+======================================
+Working directory: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260116_132930
+Trajectory directory (scratch): /ocean/projects/chm250028p/dpollard/lammps_trajectories/slab_with_flow_walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260116_132930
+======================================
+Running LAMMPS in slab_with_flow with:
+  dataname=walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000
+  epsSS=1.5, epsSP=1.4
+  nsteps=50000, oldsteps=0, totsteps=50000
+SLURM tasks per node: 120
+SLURM CPUs per task: 1
+SLURM_GPUS_ON_NODE: 
+GPUs allocated: 
+Running CPU-only with 480 tasks
+LAMMPS (22 Jul 2025)
+  using 1 OpenMP thread(s) per MPI task
+using multi-threaded neighbor list subroutines
+Reading data file ...
+  orthogonal box = (-6.8704069 -6.8704069 -4.3828458) to (93.870407 93.870407 59.882846)
+  8 by 10 by 6 MPI processor grid
+  reading atoms ...
+  1323878 atoms
+  scanning bonds ...
+  3 = max bonds/atom
+  orthogonal box = (-6.8704069 -6.8704069 -4.3828458) to (93.870407 93.870407 59.882846)
+  8 by 10 by 6 MPI processor grid
+  reading bonds ...
+  143511 bonds
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        0        0       
+  special bond factors coul:  0        0        0       
+     4 = max # of 1-2 neighbors
+     4 = max # of 1-3 neighbors
+     8 = max # of 1-4 neighbors
+    12 = max # of special neighbors
+  special bonds CPU = 0.131 seconds
+  read_data CPU = 8.623 seconds
+========================================
+Flow simulation: walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000
+Interaction: epsSS=1.5, epsSP=1.4
+Production steps: 50000
+Piston force per bead: -0.1
+========================================
+126752 atoms in group polymer
+310822 atoms in group solvent
+109654 atoms in group support
+109654 atoms in group piston
+666996 atoms in group walls
+437574 atoms in group mobile
+656882 atoms in group gel_system
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        1        1       
+  special bond factors coul:  0        1        1       
+     4 = max # of 1-2 neighbors
+    12 = max # of special neighbors
+  special bonds CPU = 0.044 seconds
+  1 rigid bodies with 109654 atoms
+  1 rigid bodies with 109654 atoms
+  1 rigid bodies with 666996 atoms
+========================================
+Phase 1: Soft push to resolve solvent-piston overlaps
+========================================
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Hybrid pair style last /omp style soft
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 2.8
+  ghost atom cutoff = 5
+  binsize = 1.4, bins = 72 72 46
+  2 neighbor lists, perpetual/occasional/extra = 2 0 0
+  (1) pair lj/cut, perpetual
+      attributes: half, newton on, omp, cut 2.8
+      pair build: half/bin/newton/omp
+      stencil: half/bin/3d
+      bin: standard
+  (2) pair soft, perpetual, skip from (1)
+      attributes: half, newton on, omp
+      pair build: skip/omp
+      stencil: none
+      bin: none
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 0
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 16.79 | 23.64 | 39.16 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+         0   0             -0.032144261    0             -0.032144261    0.021388102    652213.97      100.74081      100.74081      64.265692    
+      1000   1.164402      -0.20198948     0.57730152     0.37531204     2.0089331      652213.97      100.74081      100.74081      64.265692    
+Loop time of 28.8905 on 480 procs for 1000 steps with 1323878 atoms
+
+Performance: 14953.026 tau/day, 34.613 timesteps/s, 45.824 Matom-step/s
+99.3% CPU use with 480 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.51832    | 1.1233     | 1.9478     |  19.2 |  3.89
+Bond    | 0.0033612  | 0.017626   | 0.038165   |   5.4 |  0.06
+Neigh   | 23.964     | 24.42      | 24.854     |   4.9 | 84.53
+Comm    | 1.0461     | 1.9618     | 3.0554     |  32.6 |  6.79
+Output  | 0.0039493  | 0.024855   | 0.043763   |   7.5 |  0.09
+Modify  | 0.68622    | 1.1333     | 1.7598     |  19.5 |  3.92
+Other   |            | 0.2092     |            |       |  0.72
+
+Nlocal:        2758.08 ave        5678 max        1150 min
+Histogram: 192 0 56 40 0 79 19 30 39 25
+Nghost:        14309.8 ave       27886 max        7069 min
+Histogram: 144 16 96 62 10 24 96 0 0 32
+Neighs:        75040.9 ave      139759 max       22537 min
+Histogram: 3 19 132 102 52 64 41 21 20 26
+
+Total # of neighbors = 36019633
+Ave neighs/atom = 27.207668
+Ave special neighs/atom = 0.21680397
+Neighbor list builds = 487
+Dangerous builds = 0
+Soft push complete - overlaps resolved
+========================================
+Phase 2: Switching to full LJ interactions
+========================================
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 2.8
+  ghost atom cutoff = 5
+  binsize = 1.4, bins = 72 72 46
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair lj/cut/omp, perpetual
+      attributes: half, newton on, omp
+      pair build: half/bin/newton/omp
+      stencil: half/bin/3d
+      bin: standard
+Setting up cg style minimization ...
+  Unit style    : lj
+  Current step  : 1000
+Per MPI rank memory allocation (min/avg/max) = 18.78 | 26.14 | 43.39 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      1000   1.164402      -0.32345084     0.57730152     0.25385068     2.2086086      652213.97      100.74081      100.74081      64.265692    
+      1483   1.164402      -0.96444632     0.57730152    -0.3871448     -2.1845677      652213.97      100.74081      100.74081      64.265692    
+Loop time of 7.27054 on 480 procs for 483 steps with 1323878 atoms
+
+99.3% CPU use with 480 MPI tasks x 1 OpenMP threads
+
+Minimization stats:
+  Stopping criterion = energy tolerance
+  Energy initial, next-to-last, final = 
+    -0.323450837283187 -0.964362977505852 -0.964446322922653
+  Force two-norm initial, final = 33796.262 763.18642
+  Force max component initial, final = 7715.4509 181.10987
+  Final line search alpha, max atom move = 0.00043943363 0.079585765
+  Iterations, force evaluations = 483 522
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.041239   | 0.43012    | 1.0564     |  31.9 |  5.92
+Bond    | 0.00056799 | 0.0073537  | 0.017468   |   4.3 |  0.10
+Neigh   | 5.3312     | 5.4282     | 5.5269     |   2.2 | 74.66
+Comm    | 0.42123    | 0.91574    | 1.5691     |  27.0 | 12.60
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0.0055931  | 0.017015   | 0.037072   |   6.4 |  0.23
+Other   |            | 0.4721     |            |       |  6.49
+
+Nlocal:        2758.08 ave        5658 max        1258 min
+Histogram: 192 0 69 27 0 80 36 12 39 25
+Nghost:        14325.9 ave       27809 max        7430 min
+Histogram: 144 16 96 72 0 24 96 0 0 32
+Neighs:        38697.6 ave       65101 max        2175 min
+Histogram: 30 50 65 40 7 24 18 40 143 63
+
+Total # of neighbors = 18574846
+Ave neighs/atom = 14.030633
+Ave special neighs/atom = 0.21680397
+Neighbor list builds = 119
+Dangerous builds = 2
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 1483
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 17.66 | 24.37 | 40.01 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      1483   1.164402      -0.96444632     0.57730152    -0.3871448     -0.69615306     652213.97      100.74081      100.74081      64.265692    
+WARNING: Lost atoms: original 1323878 current 1323877
+For more information see https://docs.lammps.org/err0008 (src/thermo.cpp:532)
+      5000   3.1178585e-46 -0.95579519     1.5458113e-46 -0.95579519    -2.1224476      652213.97      100.74081      100.74081      64.265692    
+      6483   1.7946294e-46 -0.96766077     8.8976406e-47 -0.96766077    -2.1077176      652213.97      100.74081      100.74081      64.265692    
+Loop time of 41.6879 on 480 procs for 5000 steps with 1323877 atoms
+
+Performance: 51813.570 tau/day, 119.939 timesteps/s, 158.784 Matom-step/s
+99.3% CPU use with 480 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.14144    | 2.2482     | 3.5038     |  68.1 |  5.39
+Bond    | 0.0037086  | 0.02408    | 0.041747   |   7.0 |  0.06
+Neigh   | 27.72      | 28.261     | 28.807     |   5.4 | 67.79
+Comm    | 3.4864     | 7.078      | 10.631     |  66.9 | 16.98
+Output  | 0.019152   | 0.1551     | 0.25706    |  18.5 |  0.37
+Modify  | 1.7965     | 3.2841     | 5.4655     |  48.3 |  7.88
+Other   |            | 0.6373     |            |       |  1.53
+
+Nlocal:        2758.08 ave        5717 max        1255 min
+Histogram: 192 0 78 18 0 80 38 11 39 24
+Nghost:        14315.4 ave       28283 max        7456 min
+Histogram: 144 16 96 72 0 26 94 0 3 29
+Neighs:        38145.8 ave       58995 max         954 min
+Histogram: 22 19 34 66 51 6 33 13 84 152
+
+Total # of neighbors = 18309966
+Ave neighs/atom = 13.830564
+Ave special neighs/atom = 0.21680413
+Neighbor list builds = 614
+Dangerous builds = 106
+========================================
+Phase 3: Production flow with piston forcing
+========================================
+  1 rigid bodies with 109654 atoms
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 6483
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 16.29 | 22.92 | 38.14 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      6483   1.7946335e-46 -0.96766077     8.8976406e-47 -0.96766077    -2.0981145      652213.97      100.74081      100.74081      64.265692    
+Loop time of 2.52934e-05 on 480 procs for 0 steps with 1323877 atoms
+
+104.3% CPU use with 480 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0          | 0          | 0          |   0.0 |  0.00
+Bond    | 0          | 0          | 0          |   0.0 |  0.00
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 0          | 0          | 0          |   0.0 |  0.00
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0          | 0          | 0          |   0.0 |  0.00
+Other   |            | 2.529e-05  |            |       |100.00
+
+Nlocal:        2758.08 ave        5717 max        1255 min
+Histogram: 192 0 77 19 0 80 37 12 39 24
+Nghost:        14315.8 ave       28285 max        7459 min
+Histogram: 144 16 96 72 0 26 94 0 3 29
+Neighs:        38152.4 ave       59201 max         972 min
+Histogram: 22 19 35 66 50 7 33 13 90 145
+
+Total # of neighbors = 18313134
+Ave neighs/atom = 13.832957
+Ave special neighs/atom = 0.21680413
+Neighbor list builds = 0
+Dangerous builds = 0
+hw_x = 39.2482124710371
+hw_y = 39.5747925999719
+hw_z = 25.4352569030979
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 6483
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 19.3 | 27.74 | 47.15 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      6483   1.7946335e-46 -0.96766077     8.8976406e-47 -0.96766077    -2.0981145      652213.97      100.74081      100.74081      64.265692    
+ERROR on proc 88: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 0: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 1: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 24: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 111: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 43: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 26: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 25: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 79: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 78: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 77: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 76: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 3: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 17: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 29: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 14: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 15: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 46: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 12: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 44: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 107: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 115: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 65: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 41: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 7: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 112: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 119: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 21: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 52: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 90: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 102: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 91: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 89: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 75: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 73: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 105: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 84: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 106: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 67: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 81: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 95: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 100: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 118: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 93: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 5: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 6: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 32: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 35: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 114: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 4: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 16: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 19: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 110: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 108: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 18: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 98: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 28: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 97: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 13: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 113: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 72: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 117: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 86: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 60: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 47: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 10: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 8: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 70: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 30: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 64: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 31: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 103: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 61: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 33: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 36: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 74: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 39: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 68: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 104: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 53: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 99: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 2: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 45: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 101: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 42: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 82: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 40: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 55: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 23: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 63: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 59: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 38: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 109: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 9: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 83: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 34: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 58: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 71: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 11: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 94: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 27: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 49: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 66: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 87: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 62: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 20: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 331: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 268: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 266: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 192: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 224: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 85: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 80: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 69: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 96: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 92: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 22: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 54: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 50: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 48: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 51: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 37: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 332: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 116: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 57: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 56: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 225: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 187: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 178: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 182: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 143: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 129: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 142: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 134: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 179: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 177: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 226: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 189: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 218: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 219: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 125: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 126: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 188: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 220: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 190: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 128: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 130: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 231: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 228: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 229: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 216: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 217: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 230: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 233: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 227: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 311: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 137: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 152: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 169: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 175: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 139: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 343: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 204: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 172: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 170: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 356: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 147: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 249: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 155: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 276: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 194: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 328: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 153: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 252: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 195: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 329: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 222: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 338: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 151: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 336: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 156: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 248: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 236: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 250: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 145: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 352: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 207: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 305: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 133: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 255: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 185: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 344: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 141: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 346: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 180: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 296: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 205: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 263: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 203: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 306: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 173: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 345: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 149: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 310: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 148: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 294: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 183: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 275: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 234: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 300: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 136: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 301: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 127: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 303: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 158: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 299: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 144: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 354: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 209: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 241: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 181: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 350: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 202: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 340: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 206: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 259: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 131: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 272: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 135: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 273: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 193: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 281: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 164: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 282: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 221: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 283: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 150: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 251: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 171: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 349: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 237: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 288: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 452: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 238: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 317: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 380: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 197: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 291: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 196: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 290: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 401: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 174: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 286: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 372: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 120: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 284: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 391: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 167: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 247: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 475: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 165: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 359: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 422: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 160: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 324: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 466: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 159: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 339: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 461: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 138: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 327: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 364: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 186: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 293: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 434: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 123: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 267: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 428: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 215: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 297: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 377: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 214: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 257: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 414: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 146: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 302: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 390: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 124: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 287: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 373: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 200: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 341: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 472: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 191: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 315: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 411: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 201: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 319: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 412: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 199: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 253: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 459: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 157: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 277: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 381: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 140: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 243: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 435: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 132: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 321: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 404: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 154: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 278: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 432: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 168: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 330: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 463: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 239: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 325: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 376: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 235: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 295: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 409: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 232: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 342: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 379: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 223: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 285: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 369: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 121: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 279: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 446: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 166: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 308: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 397: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 184: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 292: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 417: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 212: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 246: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 444: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 213: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 316: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 378: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 198: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 309: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 405: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 208: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 353: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 384: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 211: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 358: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 370: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 210: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 269: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 395: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 162: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 337: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 462: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 122: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 307: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 453: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 161: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 351: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 363: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 163: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 242: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 416: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 176: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 298: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 465: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 313: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 467: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 320: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 420: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 289: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 471: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 280: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 385: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 322: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 448: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 348: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 427: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 323: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 425: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 347: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 451: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 357: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 402: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 304: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 437: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 260: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 460: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 261: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 399: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 334: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 389: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 335: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 398: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 240: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 374: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 254: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 423: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 271: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 375: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 314: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 371: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 264: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 421: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 312: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 388: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 262: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 368: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 265: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 454: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 244: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 362: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 326: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 457: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 245: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 393: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 355: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 410: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 318: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 413: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 270: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 386: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 333: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 479: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 274: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 438: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 256: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 443: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 258: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 474: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 392: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 408: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 464: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 394: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 478: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 365: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 449: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 360: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 426: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 439: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 433: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 469: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 415: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 473: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 431: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 455: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 418: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 477: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 361: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 447: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 476: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 367: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 445: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 450: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 366: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 403: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 419: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 436: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 424: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 396: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 430: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 407: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 406: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 468: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 470: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 456: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 458: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 442: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 441: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 400: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 382: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 387: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 383: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 440: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+ERROR on proc 429: Variable rg_vol: Sqrt of negative value in variable formula (src/variable.cpp:3825)
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+Plot saved to ./output_plots/convergence_plots/walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_50000_convergence.png
+Generating stress profiles...
+Warning: Could not find data file (tried walled_slab_support_5beads_10x10x5_rho6_extra_padding43.data and walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_50000.data), using default box dimensions
+Stress profile saved to ./output_plots/walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_50000_stress.png
+No volume data found for walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_50000, skipping volume fraction plots
+Generating piston plots...
+Read 1 position points, 1 velocity points
+Piston plot saved to ./output_plots/walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_50000_piston.png
+
+=== Piston Summary ===
+Initial position: 54.4348
+Final position:   54.4348
+Total displacement: 0.0000
+Generating computational efficiency plot...
+Found data file: ./data_files/walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000.data
+Mobile atoms: 1104570
+Entry 'walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_50000' already exists in tracking file, skipping.
+Tracking info written to /jet/home/dpollard/Documents/lammps_work/tracking.txt
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_atoms.png
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_timesteps.png
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_20260116_132930
+======================================

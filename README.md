@@ -105,7 +105,7 @@ Expected runtime for 4M timesteps with 400k beads: ~20 hours on 120 cores.
 The fastest way to download LAMMPS trajectory files is by typing this in terminal:
 
 ```bash
-rsync -avP $USER@data.bridges2.psc.edu:<PATH-TO-FILE>.lammpstraj.gz ~/Downloads
+rsync -avP $USER@data.bridges2.psc.edu:<PATH-TO-FILE>.lammpstrj.gz ~/Downloads
 ```
 Note: Add "z" tag ("-avPz") to compress the file if downloading an uncompressed traj file.
 

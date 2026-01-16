@@ -84,3 +84,55 @@ Generated tetrahedral gel slab:
   Total bonds: 240448
   Output: slab_support_5beads_10x10x5_rho6_extra_padding36.data
 
+
+
+
+
+Generated tetrahedral gel slab with piston:
+  Unit cells: 8 x 8 x 12
+  Beads per chain: 5
+  Gel dimensions: 32.00 x 32.00 x 48.00
+  Box dimensions: 46.40 x 46.40 x 77.20
+  Crosslinks: 6685
+  Chains: 12288
+  Polymer beads: 43549
+  Bottom support: 31088 (spacing: 0.20)
+  Top piston: 31088 (spacing: 0.20)
+  Solvent beads: 166208 (density: 1.00)
+  Total atoms: 271933
+  Total bonds: 49152
+  Output: ../lammps_data/slab_support_5beads_tall_1.data
+
+
+
+Generated tetrahedral gel slab with piston:
+  Unit cells: 9 x 9 x 15
+  Beads per chain: 5
+  Gel dimensions: 36.00 x 36.00 x 60.00
+  Box dimensions: 52.20 x 52.20 x 91.10
+  Crosslinks: 10456
+  Chains: 19440
+  Polymer beads: 68776
+  Bottom support: 39562 (spacing: 0.20)
+  Top piston: 39562 (spacing: 0.20)
+  Solvent beads: 248232 (density: 1.00)
+  Total atoms: 396132
+  Total bonds: 77760
+  Output: ../lammps_data/slab_support_5beads_tall_2.data
+
+
+
+Generated tetrahedral gel slab with piston:
+  Unit cells: 12 x 12 x 16
+  Beads per chain: 5
+  Gel dimensions: 48.00 x 48.00 x 64.00
+  Box dimensions: 69.60 x 69.60 x 100.80
+  Crosslinks: 19529
+  Chains: 36864
+  Polymer beads: 130121
+  Bottom support: 69948 (spacing: 0.20)
+  Top piston: 69948 (spacing: 0.20)
+  Solvent beads: 488291 (density: 1.00)
+  Total atoms: 758308
+  Total bonds: 147456
+  Output: ../lammps_data/slab_support_5beads_tall_3.data

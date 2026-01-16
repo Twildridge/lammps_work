@@ -1,0 +1,405 @@
+# ========== Slab Flow Simulation with Piston Forcing ==========
+# Starting from equilibrated configuration
+# Variables from bash script: dataname, interaction, epsSS, epsSP, nsteps
+#
+# Atom types: 1=polymer, 2=crosslinker, 3=solvent, 4=support (frozen), 5=piston
+#
+# Reduced LJ units: tau = sigma*sqrt(m/epsilon)
+# dt = 0.005 → 1e6 steps ≈ 4.1e3 tau
+
+
+# ========== Physical Parameters ==========
+variable sigma equal 1.0
+variable temp_target equal 1.0
+variable timestep_prod equal 0.005
+
+
+# ========== Piston Parameters ==========
+# Force per piston bead (tune this for desired flow rate)
+# Negative = push down (-z), positive = pull up (+z)
+variable piston_force equal -0.1
+
+# Soft push parameters (resolve solvent-piston overlaps)
+variable nsteps_softpush equal 1000
+variable soft_prefactor_max equal 50.0
+
+
+# ========== Output Frequencies ==========
+variable thermo_freq equal 5000
+variable dump_freq equal 5000
+variable stress_freq equal 10000
+variable volume_freq equal 10000
+
+
+# ========== Time Averaging Parameters ==========
+# Stress averaging: sample every nevery, average nrepeat samples, output every nfreq
+# nfreq = nevery * nrepeat
+variable nevery_stress equal 20
+variable nrepeat_stress equal 50
+variable nfreq_stress equal 10000
+
+# Volume averaging
+variable nevery_vol equal 100
+variable nrepeat_vol equal 10
+variable nfreq_vol equal 10000
+
+
+# ========== Spatial Binning ==========
+variable binWidth equal 2.0
+
+
+# ========== Initialization ==========
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+# Define styles before read_data (nocoeff skips all coefficient sections)
+pair_style hybrid/overlay lj/cut 2.5 soft 2.5
+bond_style fene
+
+# Skip pair/bond coefficients from data file - we define them explicitly below
+read_data data_files/${dataname}.data nocoeff
+
+comm_modify cutoff 5.0
+
+
+print "========================================"
+print "Flow simulation: ${dataname}"
+print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
+print "Production steps: ${nsteps}"
+print "Piston force per bead: ${piston_force}"
+print "========================================"
+
+
+# ========== Group Definitions ==========
+group polymer type 1 2
+group solvent type 3
+group support type 4
+group piston type 5
+group walls type 6
+group mobile type 1 2 3
+group gel_system type 1 2 3 4 5
+
+
+# ========== Interatomic Potentials ==========
+# Using hybrid/overlay to add soft potential during push phase
+
+# LJ interactions (polymer-wall and solvent-wall/piston OFF - soft potential only)
+pair_coeff * * lj/cut 1.0 ${sigma} 2.5
+pair_coeff 1 3 lj/cut ${epsSP} ${sigma} 2.5    # polymer-solvent
+pair_coeff 2 3 lj/cut ${epsSP} ${sigma} 2.5    # crosslinker-solvent
+pair_coeff 3 3 lj/cut ${epsSS} ${sigma} 2.5    # solvent-solvent
+pair_coeff 1 4 lj/cut 1.0 ${sigma} 1.22        # polymer-support (WCA)
+pair_coeff 2 4 lj/cut 1.0 ${sigma} 1.22        # crosslinker-support (WCA)
+pair_coeff 3 4 lj/cut 0.0 ${sigma} 0.0         # solvent-support (none)
+pair_coeff 4 4 lj/cut 0.0 ${sigma} 0.0         # support-support (frozen)
+pair_coeff 1 5 lj/cut 1.0 ${sigma} 1.22        # polymer-piston (WCA)
+pair_coeff 2 5 lj/cut 1.0 ${sigma} 1.22        # crosslinker-piston (WCA)
+pair_coeff 3 5 lj/cut 0.0 ${sigma} 0.0         # solvent-piston (OFF - soft only)
+pair_coeff 4 5 lj/cut 0.0 ${sigma} 0.0         # support-piston (none)
+pair_coeff 5 5 lj/cut 0.0 ${sigma} 0.0         # piston-piston (rigid)
+pair_coeff 1 6 lj/cut 0.0 ${sigma} 0.0         # polymer-wall (OFF - soft only)
+pair_coeff 2 6 lj/cut 0.0 ${sigma} 0.0         # crosslinker-wall (OFF - soft only)
+pair_coeff 3 6 lj/cut 0.0 ${sigma} 0.0         # solvent-wall (OFF - soft only)
+pair_coeff 4 6 lj/cut 0.0 ${sigma} 0.0         # support-wall (none)
+pair_coeff 5 6 lj/cut 0.0 ${sigma} 0.0         # piston-wall (none)
+pair_coeff 6 6 lj/cut 0.0 ${sigma} 0.0         # wall-wall (none)
+
+# Soft potentials for overlapping pairs (start at 0, will ramp up)
+pair_coeff 3 5 soft 0.0 ${sigma}
+pair_coeff 1 6 soft 0.0 ${sigma}
+pair_coeff 2 6 soft 0.0 ${sigma}
+pair_coeff 3 6 soft 0.0 ${sigma}
+
+bond_coeff * 40.0 3.0 1.0 1.0
+special_bonds fene
+
+# Skip non-interacting pairs from neighbor lists
+neigh_modify exclude type 4 4   # support-support
+neigh_modify exclude type 5 5   # piston-piston
+neigh_modify exclude type 6 6   # wall-wall
+neigh_modify exclude type 4 5   # support-piston
+neigh_modify exclude type 4 6   # support-wall
+neigh_modify exclude type 5 6   # piston-wall
+
+# ========== Rigid Bodies ==========
+# Support: frozen rigid body (no motion allowed)
+velocity support set 0.0 0.0 0.0
+fix rigid_support support rigid single force * off off off torque * off off off
+
+# Piston: frozen during soft push (will enable z-motion in Phase 3)
+velocity piston set 0.0 0.0 0.0
+fix rigid_piston piston rigid single force * off off off torque * off off off
+fix freeze_piston piston setforce 0.0 0.0 0.0
+
+# Walls: frozen rigid body (no motion allowed)
+velocity walls set 0.0 0.0 0.0
+fix rigid_walls walls rigid single force * off off off torque * off off off
+
+
+# ========== Thermo Output ==========
+thermo_style custom step temp pe ke etotal press vol lx ly lz
+thermo_modify lost warn # seems to be one atom that is lost
+thermo ${thermo_freq}
+
+
+# ========== Phase 1: Soft Push (Resolve Overlaps) ==========
+print "========================================"
+print "Phase 1: Soft push to resolve solvent-piston overlaps"
+print "========================================"
+
+reset_timestep 0
+timestep ${timestep_prod}
+
+# remember that you need the COMPRESS package for compressing dump files
+dump traj_gel gel_system custom ${dump_freq} traj_files/gel_${dataname}_${interaction}_${nsteps}.lammpstrj &
+    id type mol x y z
+
+# Thermostat for mobile atoms only (rigid fixes handle support/piston)
+fix nvt_push mobile nvt temp ${temp_target} ${temp_target} 1.0
+
+# Ramp up soft potential prefactor from 0 to max
+variable soft_ramp equal ramp(0,${soft_prefactor_max})
+fix adapt_soft_3_5 all adapt 1 pair soft a 3 5 v_soft_ramp
+fix adapt_soft_1_6 all adapt 1 pair soft a 1 6 v_soft_ramp
+fix adapt_soft_2_6 all adapt 1 pair soft a 2 6 v_soft_ramp
+fix adapt_soft_3_6 all adapt 1 pair soft a 3 6 v_soft_ramp
+
+run ${nsteps_softpush}
+
+unfix adapt_soft_3_5
+unfix adapt_soft_1_6
+unfix adapt_soft_2_6
+unfix adapt_soft_3_6
+unfix nvt_push
+
+print "Soft push complete - overlaps resolved"
+
+
+# ========== Phase 2: Switch to Full LJ ==========
+print "========================================"
+print "Phase 2: Switching to full LJ interactions"
+print "========================================"
+
+# Now use pure LJ (soft potential no longer needed)
+pair_style lj/cut 2.5
+
+pair_coeff * * 1.0 ${sigma} 2.5
+pair_coeff 1 3 ${epsSP} ${sigma} 2.5           # polymer-solvent
+pair_coeff 2 3 ${epsSP} ${sigma} 2.5           # crosslinker-solvent
+pair_coeff 3 3 ${epsSS} ${sigma} 2.5           # solvent-solvent
+pair_coeff 1 4 1.0 ${sigma} 1.22               # polymer-support (WCA)
+pair_coeff 2 4 1.0 ${sigma} 1.22               # crosslinker-support (WCA)
+pair_coeff 3 4 0.0 ${sigma} 0.0                # solvent-support (none)
+pair_coeff 4 4 0.0 ${sigma} 0.0                # support-support
+pair_coeff 1 5 1.0 ${sigma} 1.22               # polymer-piston (WCA)
+pair_coeff 2 5 1.0 ${sigma} 1.22               # crosslinker-piston (WCA)
+pair_coeff 3 5 1.0 ${sigma} 1.22               # solvent-piston (WCA)
+pair_coeff 4 5 0.0 ${sigma} 0.0                # support-piston
+pair_coeff 5 5 0.0 ${sigma} 0.0                # piston-piston
+pair_coeff 1 6 1.0 ${sigma} 1.22               # polymer-wall (WCA)
+pair_coeff 2 6 1.0 ${sigma} 1.22               # crosslinker-wall (WCA)
+pair_coeff 3 6 1.0 ${sigma} 1.22               # solvent-wall (WCA)
+pair_coeff 4 6 0.0 ${sigma} 0.0                # support-wall
+pair_coeff 5 6 0.0 ${sigma} 0.0                # piston-wall
+pair_coeff 6 6 0.0 ${sigma} 0.0                # wall-wall
+
+# Minimize to resolve any remaining close contacts
+minimize 1.0e-4 1.0e-6 1000 10000
+
+# Brief equilibration with new potential
+fix nvt_equil mobile nvt temp ${temp_target} ${temp_target} 1.0
+run 5000
+unfix nvt_equil
+
+
+# ========== Phase 3: Production Flow Simulation ==========
+print "========================================"
+print "Phase 3: Production flow with piston forcing"
+print "========================================"
+
+#reset_timestep 0
+
+# Enable piston motion in z (was frozen during soft push)
+unfix freeze_piston
+unfix rigid_piston
+fix rigid_piston piston rigid single force * off off on torque * off off off
+
+# Thermostat for mobile atoms (polymer + solvent)
+fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
+
+# Apply constant force to piston rigid body (negative = downward in z)
+fix push_piston piston addforce 0.0 0.0 ${piston_force}
+# Apply drag force F = -γv to damp oscillations
+fix piston_drag piston viscous 0.1
+
+
+# ========== Cylindrical Chunk Definitions ==========
+variable xcen equal lx/2
+variable ycen equal ly/2
+variable zcen equal lz/2
+
+# Disk radii (half cross-sectional area)
+variable disk_radius_x equal sqrt((ly*ly+lz*lz)/8.0)
+variable disk_radius_y equal sqrt((lx*lx+lz*lz)/8.0)
+variable disk_radius_z equal sqrt((lx*lx+ly*ly)/8.0)
+
+# Polymer chunks
+compute chunk_x_polymer polymer chunk/atom bin/cylinder x lower ${binWidth} &
+    ${ycen} ${zcen} 0.0 ${disk_radius_x} 1
+compute chunk_y_polymer polymer chunk/atom bin/cylinder y lower ${binWidth} &
+    ${xcen} ${zcen} 0.0 ${disk_radius_y} 1
+compute chunk_z_polymer polymer chunk/atom bin/cylinder z lower ${binWidth} &
+    ${xcen} ${ycen} 0.0 ${disk_radius_z} 1
+
+# Solvent chunks
+compute chunk_x_solvent solvent chunk/atom bin/cylinder x lower ${binWidth} &
+    ${ycen} ${zcen} 0.0 ${disk_radius_x} 1
+compute chunk_y_solvent solvent chunk/atom bin/cylinder y lower ${binWidth} &
+    ${xcen} ${zcen} 0.0 ${disk_radius_y} 1
+compute chunk_z_solvent solvent chunk/atom bin/cylinder z lower ${binWidth} &
+    ${xcen} ${ycen} 0.0 ${disk_radius_z} 1
+
+
+# ========== Virial Stress Calculations ==========
+compute stress_polymer polymer stress/atom NULL
+compute stress_solvent solvent stress/atom NULL
+
+# Hydrostatic pressure per atom: P = -(σxx + σyy + σzz)/3
+variable press_polymer atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/3.0
+variable press_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
+
+# Sum over chunks
+compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer
+compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer
+compute press_z_polymer polymer reduce/chunk chunk_z_polymer sum v_press_polymer
+
+compute press_x_solvent solvent reduce/chunk chunk_x_solvent sum v_press_solvent
+compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent
+compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent
+
+
+# ========== Voronoi Volume Calculations ==========
+#compute voronoi_polymer polymer voronoi/atom
+#compute voronoi_solvent solvent voronoi/atom
+
+#variable vol_polymer atom c_voronoi_polymer[1]
+#variable vol_solvent atom c_voronoi_solvent[1]
+
+# Sum over chunks
+#compute vol_x_polymer polymer reduce/chunk chunk_x_polymer sum v_vol_polymer
+#compute vol_y_polymer polymer reduce/chunk chunk_y_polymer sum v_vol_polymer
+#compute vol_z_polymer polymer reduce/chunk chunk_z_polymer sum v_vol_polymer
+
+#compute vol_x_solvent solvent reduce/chunk chunk_x_solvent sum v_vol_solvent
+#compute vol_y_solvent solvent reduce/chunk chunk_y_solvent sum v_vol_solvent
+#compute vol_z_solvent solvent reduce/chunk chunk_z_solvent sum v_vol_solvent
+
+
+# ========== Gel Volume Metrics ==========
+# Bounding box method
+compute minx polymer reduce min x
+compute maxx polymer reduce max x
+compute miny polymer reduce min y
+compute maxy polymer reduce max y
+compute minz polymer reduce min z
+compute maxz polymer reduce max z
+
+variable gel_lx equal c_maxx-c_minx
+variable gel_ly equal c_maxy-c_miny
+variable gel_lz equal c_maxz-c_minz
+variable gel_vol_box equal v_gel_lx*v_gel_ly*v_gel_lz
+
+# Radius of gyration method
+compute rg_polymer polymer gyration
+variable rg_cubed equal c_rg_polymer^3
+
+# Box dimensions
+variable box_lx equal lx
+variable box_ly equal ly
+variable box_lz equal lz
+
+
+# ========== Output: Piston Data ==========
+compute piston_z piston reduce ave z
+compute piston_vz piston reduce ave vz
+
+fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_z)" &
+    file output_files/piston_data/piston_position_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &
+    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${nsteps}.dat screen no
+
+
+# ========== Output: Trajectories ==========
+#dump traj_gel gel_system custom ${dump_freq} traj_files/gel_${dataname}_${interaction}_${nsteps}.lammpstrj &
+#    id type mol x y z
+
+
+# ========== Output: Stress Profiles (Time-Averaged) ==========
+fix avg_stress_x_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_x_polymer mode vector file output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_y_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_y_polymer mode vector file output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_z_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_polymer mode vector file output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_x_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_x_solvent mode vector file output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_y_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_y_solvent mode vector file output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+
+# ========== Output: Voronoi Volumes (Time-Averaged) ==========
+#fix avg_vol_x_poly all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
+#    c_vol_x_polymer mode vector file output_files/volume_data/voronoi_x_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+#fix avg_vol_y_poly all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
+#    c_vol_y_polymer mode vector file output_files/volume_data/voronoi_y_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+#fix avg_vol_z_poly all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
+#    c_vol_z_polymer mode vector file output_files/volume_data/voronoi_z_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+#fix avg_vol_x_solv all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
+#    c_vol_x_solvent mode vector file output_files/volume_data/voronoi_x_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+#fix avg_vol_y_solv all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
+#    c_vol_y_solvent mode vector file output_files/volume_data/voronoi_y_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+#fix avg_vol_z_solv all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
+#    c_vol_z_solvent mode vector file output_files/volume_data/voronoi_z_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+
+# ========== Output: Gel Dimensions ==========
+fix out_gel_vol all print ${volume_freq} "${gel_vol_box}" &
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix out_gel_rg all print ${volume_freq} "$(step) ${rg_cubed}" &
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix out_gel_dims all print ${volume_freq} "$(step) ${gel_lx} ${gel_ly} ${gel_lz}" &
+    file output_files/volume_data/gel_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix out_box_dims all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_lz}" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+
+
+
+# ========== Production Run ==========
+run ${nsteps}
+
+
+# ========== Cleanup ==========
+print "========================================"
+print "Flow simulation complete"
+print "========================================"
+
+write_data final_flow_${dataname}_${interaction}_${nsteps}.data
