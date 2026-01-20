@@ -372,21 +372,6 @@ compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent
 compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent
 
 
-# ==========================================================================
-#                    ANALYSIS: VORONOI VOLUMES (disabled)
-# ==========================================================================
-
-#compute voronoi_polymer polymer voronoi/atom
-#compute voronoi_solvent solvent voronoi/atom
-#variable vol_polymer atom c_voronoi_polymer[1]
-#variable vol_solvent atom c_voronoi_solvent[1]
-#compute vol_x_polymer polymer reduce/chunk chunk_x_polymer sum v_vol_polymer
-#compute vol_y_polymer polymer reduce/chunk chunk_y_polymer sum v_vol_polymer
-#compute vol_z_polymer polymer reduce/chunk chunk_z_polymer sum v_vol_polymer
-#compute vol_x_solvent solvent reduce/chunk chunk_x_solvent sum v_vol_solvent
-#compute vol_y_solvent solvent reduce/chunk chunk_y_solvent sum v_vol_solvent
-#compute vol_z_solvent solvent reduce/chunk chunk_z_solvent sum v_vol_solvent
-
 
 # ==========================================================================
 #                    ANALYSIS: GEL VOLUME METRICS
@@ -450,23 +435,6 @@ fix avg_stress_y_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_st
 fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${nsteps}.dat
 
-
-# ==========================================================================
-#                    OUTPUT: VORONOI VOLUMES (disabled)
-# ==========================================================================
-
-#fix avg_vol_x_poly all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
-#    c_vol_x_polymer mode vector file output_files/volume_data/voronoi_x_polymer_${dataname}_${interaction}_${nsteps}.dat
-#fix avg_vol_y_poly all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
-#    c_vol_y_polymer mode vector file output_files/volume_data/voronoi_y_polymer_${dataname}_${interaction}_${nsteps}.dat
-#fix avg_vol_z_poly all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
-#    c_vol_z_polymer mode vector file output_files/volume_data/voronoi_z_polymer_${dataname}_${interaction}_${nsteps}.dat
-#fix avg_vol_x_solv all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
-#    c_vol_x_solvent mode vector file output_files/volume_data/voronoi_x_solvent_${dataname}_${interaction}_${nsteps}.dat
-#fix avg_vol_y_solv all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
-#    c_vol_y_solvent mode vector file output_files/volume_data/voronoi_y_solvent_${dataname}_${interaction}_${nsteps}.dat
-#fix avg_vol_z_solv all ave/time ${nevery_vol} ${nrepeat_vol} ${nfreq_vol} &
-#    c_vol_z_solvent mode vector file output_files/volume_data/voronoi_z_solvent_${dataname}_${interaction}_${nsteps}.dat
 
 
 # ==========================================================================

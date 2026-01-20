@@ -2,7 +2,7 @@
 #SBATCH --job-name=solv_flow
 #SBATCH --output=slurm_%j.out
 #SBATCH --error=slurm_%j.err
-#SBATCH --nodes=5
+#SBATCH --nodes=4
 #SBATCH --ntasks-per-node=120
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=RM
@@ -39,7 +39,7 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 
 # Set simulation parameters
 FOLDER="slab_with_flow"
-DATANAME="walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000"
+DATANAME="walled_slab_support_5beads_tall_3_1.5_1.4_20000000"
 INTERACTION="1.5_1.4"
 NSTEPS=50000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
