@@ -23,27 +23,22 @@ variable temp_target equal 1.0
 variable timestep_prod equal 0.005
 
 # ----- Piston Parameters -----
-variable piston_force equal -0.1           # Negative = push down (-z)
+variable piston_force equal -0.01           # Negative = push down (-z)
 variable nsteps_softpush equal 1000
 variable soft_prefactor_max equal 50.0
 
 # ----- Output Frequencies -----
-variable thermo_freq equal 5000
+variable thermo_freq equal 10000
 variable dump_freq_setup equal 1000        # Frequent dumps during setup (Phases 1-2)
-variable dump_freq_prod equal 10000        # Sparse dumps during production (Phase 3)
-variable stress_freq equal 10000
-variable volume_freq equal 10000
+variable dump_freq_prod equal 50000        # Sparse dumps during production (Phase 3)
+variable stress_freq equal 50000
+variable volume_freq equal 50000
 
 # ----- Time Averaging (stress) -----
 # nfreq = nevery * nrepeat
-variable nevery_stress equal 20
-variable nrepeat_stress equal 50
-variable nfreq_stress equal 10000
-
-# ----- Time Averaging (volume) -----
-variable nevery_vol equal 100
-variable nrepeat_vol equal 10
-variable nfreq_vol equal 10000
+variable nevery_stress equal 200
+variable nrepeat_stress equal 500
+variable nfreq_stress equal 100000
 
 # ----- Spatial Binning -----
 variable binWidth equal 2.0
@@ -198,6 +193,8 @@ fix adapt_soft_3_6 all adapt 1 pair soft a 3 6 v_soft_ramp
 
 run ${nsteps_softpush}
 
+minimize 1.0e-4 1.0e-6 1000 10000
+
 unfix adapt_soft_3_5
 unfix adapt_soft_1_6
 unfix adapt_soft_2_6
@@ -269,8 +266,13 @@ unfix freeze_piston
 unfix rigid_piston
 fix rigid_piston piston rigid single force * off off on torque * off off off
 
-# ----- Thermostat & Piston Forces -----
+# ----- Thermostat -----
+# Compute temperature from x,y velocities only (flow is in z)
+compute myTemp mobile temp/partial 1 1 0
 fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix_modify nvt_prod temp myTemp
+
+# ----- Piston Forces -----
 fix push_piston piston addforce 0.0 0.0 ${piston_force}
 fix piston_drag piston viscous 0.1
 
