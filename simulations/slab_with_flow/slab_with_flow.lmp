@@ -52,7 +52,7 @@ variable region_frac equal 0.9             # Fraction of polymer extent for anal
 
 units lj
 dimension 3
-boundary p p p
+boundary p p p # WILL NEED TO CHANGE THE THIRD P TO F FOR PRESSURE PROFILES
 atom_style molecular
 atom_modify map array
 
