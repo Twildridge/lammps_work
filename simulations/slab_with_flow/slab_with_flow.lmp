@@ -30,15 +30,15 @@ variable soft_prefactor_max equal 50.0
 # ----- Output Frequencies -----
 variable thermo_freq equal 10000
 variable dump_freq_setup equal 1000        # Frequent dumps during setup (Phases 1-2)
-variable dump_freq_prod equal 50000        # Sparse dumps during production (Phase 3)
-variable stress_freq equal 50000
-variable volume_freq equal 50000
+variable dump_freq_prod equal 5000        # Sparse dumps during production (Phase 3)
+variable stress_freq equal 5000
+variable volume_freq equal 5000
 
 # ----- Time Averaging (stress) -----
 # nfreq = nevery * nrepeat
-variable nevery_stress equal 200
-variable nrepeat_stress equal 500
-variable nfreq_stress equal 100000
+variable nevery_stress equal 20
+variable nrepeat_stress equal 50
+variable nfreq_stress equal 10000
 
 # ----- Spatial Binning -----
 variable binWidth equal 2.0

@@ -28,7 +28,7 @@ variable nfreq_avg_vol equal 100000
 
 # Output frequencies
 variable thermo_freq equal 100000
-variable dump_freq equal 250000
+variable dump_freq equal 500000
 variable volume_freq equal 100000
 
 # Equilibration parameters
