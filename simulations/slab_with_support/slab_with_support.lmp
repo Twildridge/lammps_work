@@ -18,18 +18,18 @@ variable sigma equal 1.0
 variable binWidth equal 2
 
 # Time averaging parameters
-variable nevery_avg_stress equal 200 
-variable nrepeat_avg_stress equal 50 # 625 or 50
+variable nevery_avg_stress equal 100 
+variable nrepeat_avg_stress equal 1000 # 625 or 50
 variable nfreq_avg_stress equal 10000 # 125000 or 10000
 
-variable nevery_avg_vol equal 10000
+variable nevery_avg_vol equal 100000
 variable nrepeat_avg_vol equal 1
-variable nfreq_avg_vol equal 10000
+variable nfreq_avg_vol equal 100000
 
 # Output frequencies
-variable thermo_freq equal 10000
-variable dump_freq equal 25000
-variable volume_freq equal 10000
+variable thermo_freq equal 100000
+variable dump_freq equal 200000
+variable volume_freq equal 100000
 
 # Equilibration parameters
 variable temp_target equal 1.0
@@ -105,6 +105,22 @@ bond_style fene
 bond_coeff * 120.0 2.0 1.0 1.0
 special_bonds fene
 
+
+# Angle style — hybrid because the two types need different potentials
+angle_style hybrid cosine harmonic
+
+# Type 1: intra-chain backbone (eq 180°)
+#   cosine: E = K(1 + cos(theta)), minimum at 180°
+#   K = 10–20 is typical for bead-spring chain stiffness
+angle_coeff 1 cosine 15.0
+
+# Type 2: crosslink tetrahedral junctions (eq 109.47°)
+#   harmonic: E = K(theta - theta0)^2
+#   K = 20–50 gives meaningful compression resistance; start around 30
+angle_coeff 2 harmonic 30.0 109.47
+
+
+
 # Freeze support atoms
 velocity support set 0.0 0.0 0.0
 fix freeze_support support setforce 0.0 0.0 0.0
@@ -141,38 +157,43 @@ variable ycen equal ly/2
 variable zcen equal lz/2
 
 # Disk radii (1/2 cross-sectional area)
-variable disk_radius_x equal sqrt((${ycen}*${ycen} + ${zcen}*${zcen})/2.0)
-variable disk_radius_y equal sqrt((${xcen}*${xcen} + ${zcen}*${zcen})/2.0)
-variable disk_radius_z equal sqrt((${xcen}*${xcen} + ${ycen}*${ycen})/2.0)
+#variable disk_radius_x equal sqrt((${ycen}*${ycen} + ${zcen}*${zcen})/2.0)
+#variable disk_radius_y equal sqrt((${xcen}*${xcen} + ${zcen}*${zcen})/2.0)
+#variable disk_radius_z equal sqrt((${xcen}*${xcen} + ${ycen}*${ycen})/2.0)
 
 # Cylindrical chunks for polymer
-compute chunk_x_polymer polymer chunk/atom bin/cylinder x lower ${binWidth} ${ycen} ${zcen} 0.0 ${disk_radius_x} 1
-compute chunk_y_polymer polymer chunk/atom bin/cylinder y lower ${binWidth} ${xcen} ${zcen} 0.0 ${disk_radius_y} 1
-compute chunk_z_polymer polymer chunk/atom bin/cylinder z lower ${binWidth} ${xcen} ${ycen} 0.0 ${disk_radius_z} 1
+#compute chunk_x_polymer polymer chunk/atom bin/cylinder x lower ${binWidth} ${ycen} ${zcen} 0.0 ${disk_radius_x} 1
+#compute chunk_y_polymer polymer chunk/atom bin/cylinder y lower ${binWidth} ${xcen} ${zcen} 0.0 ${disk_radius_y} 1
+#compute chunk_z_polymer polymer chunk/atom bin/cylinder z lower ${binWidth} ${xcen} ${ycen} 0.0 ${disk_radius_z} 1
 
 # Cylindrical chunks for solvent
-compute chunk_x_solvent solvent chunk/atom bin/cylinder x lower ${binWidth} ${ycen} ${zcen} 0.0 ${disk_radius_x} 1
-compute chunk_y_solvent solvent chunk/atom bin/cylinder y lower ${binWidth} ${xcen} ${zcen} 0.0 ${disk_radius_y} 1
-compute chunk_z_solvent solvent chunk/atom bin/cylinder z lower ${binWidth} ${xcen} ${ycen} 0.0 ${disk_radius_z} 1
+#compute chunk_x_solvent solvent chunk/atom bin/cylinder x lower ${binWidth} ${ycen} ${zcen} 0.0 ${disk_radius_x} 1
+#compute chunk_y_solvent solvent chunk/atom bin/cylinder y lower ${binWidth} ${xcen} ${zcen} 0.0 ${disk_radius_y} 1
+#compute chunk_z_solvent solvent chunk/atom bin/cylinder z lower ${binWidth} ${xcen} ${ycen} 0.0 ${disk_radius_z} 1
 
 
 
-# ========== Virial Stress Calculations ==========
-# Compute stress per atom
+# ========== Partial Stress Calculations ==========
 #compute stress_polymer polymer stress/atom NULL
 #compute stress_solvent solvent stress/atom NULL
 
-# Convert stress to pressure (hydrostatic component)
-#variable press_polymer atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/3.0
-#variable press_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
+# Partial stress for each atom: P = -(σxx + σyy + σzz)/(3*vol)
+#variable press_polymer_x atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*${binWidth}*ly*lz)
+#variable press_polymer_y atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*lx*${binWidth}*lz)
+#variable press_polymer_z atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*lx*ly*${binWidth})
 
-# Sum pressure over chunks
-#compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer
-#compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer
-#compute press_z_polymer polymer reduce/chunk chunk_z_polymer sum v_press_polymer
-#compute press_x_solvent solvent reduce/chunk chunk_x_solvent sum v_press_solvent
-#compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent
-#compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent
+#variable press_solvent_x atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*${binWidth}*ly*lz)
+#variable press_solvent_y atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*lx*${binWidth}*lz)
+#variable press_solvent_z atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*lx*ly*${binWidth})
+
+# Sum pre-divided per-atom contributions over chunks → pressure per bin
+#compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer_x
+#compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer_y
+#compute press_z_polymer polymer reduce/chunk chunk_z_polymer sum v_press_polymer_z
+
+#compute press_x_solvent solvent reduce/chunk chunk_x_solvent sum v_press_solvent_x
+#compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent_y
+#compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent_z
 
 
 

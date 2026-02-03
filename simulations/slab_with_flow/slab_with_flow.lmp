@@ -127,7 +127,7 @@ pair_coeff 2 6 soft 0.0 ${sigma}               # crosslinker-wall
 pair_coeff 3 6 soft 0.0 ${sigma}               # solvent-wall
 
 # ----- Bonds -----
-bond_coeff * 40.0 3.0 1.0 1.0
+bond_coeff * 120.0 2.0 1.0 1.0
 special_bonds fene
 
 # ----- Neighbor List Exclusions -----
@@ -360,18 +360,23 @@ compute chunk_z_solvent solvent chunk/atom bin/1d z lower ${binWidth} region reg
 compute stress_polymer polymer stress/atom NULL
 compute stress_solvent solvent stress/atom NULL
 
-# Hydrostatic pressure per atom: P = -(σxx + σyy + σzz)/3
-variable press_polymer atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/3.0
-variable press_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
+# Partial stress for each atom: P = -(σxx + σyy + σzz)/(3*vol)
+variable press_polymer_x atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*${binWidth}*ly*lz)
+variable press_polymer_y atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*lx*${binWidth}*lz)
+variable press_polymer_z atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*lx*ly*${binWidth})
 
-# Sum over chunks
-compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer
-compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer
-compute press_z_polymer polymer reduce/chunk chunk_z_polymer sum v_press_polymer
+variable press_solvent_x atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*${binWidth}*ly*lz)
+variable press_solvent_y atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*lx*${binWidth}*lz)
+variable press_solvent_z atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*lx*ly*${binWidth})
 
-compute press_x_solvent solvent reduce/chunk chunk_x_solvent sum v_press_solvent
-compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent
-compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent
+# Sum pre-divided per-atom contributions over chunks → pressure per bin
+compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer_x
+compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer_y
+compute press_z_polymer polymer reduce/chunk chunk_z_polymer sum v_press_polymer_z
+
+compute press_x_solvent solvent reduce/chunk chunk_x_solvent sum v_press_solvent_x
+compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent_y
+compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent_z
 
 
 
