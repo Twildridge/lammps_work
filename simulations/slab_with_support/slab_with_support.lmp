@@ -18,18 +18,18 @@ variable sigma equal 1.0
 variable binWidth equal 2
 
 # Time averaging parameters
-variable nevery_avg_stress equal 2000 
-variable nrepeat_avg_stress equal 500 # 625 or 50
-variable nfreq_avg_stress equal 100000 # 125000 or 10000
+variable nevery_avg_stress equal 200 
+variable nrepeat_avg_stress equal 50 # 625 or 50
+variable nfreq_avg_stress equal 10000 # 125000 or 10000
 
-variable nevery_avg_vol equal 100000
+variable nevery_avg_vol equal 10000
 variable nrepeat_avg_vol equal 1
-variable nfreq_avg_vol equal 100000
+variable nfreq_avg_vol equal 10000
 
 # Output frequencies
-variable thermo_freq equal 100000
-variable dump_freq equal 500000
-variable volume_freq equal 100000
+variable thermo_freq equal 10000
+variable dump_freq equal 25000
+variable volume_freq equal 10000
 
 # Equilibration parameters
 variable temp_target equal 1.0
@@ -102,7 +102,7 @@ pair_coeff 4 5 0.0 ${sigma} 0.0       # support-piston (no interaction)
 pair_coeff 5 5 0.0 ${sigma} 0.0       # piston-piston (moving together)
 
 bond_style fene
-bond_coeff * 40.0 3.0 1.0 1.0
+bond_coeff * 120.0 2.0 1.0 1.0
 special_bonds fene
 
 # Freeze support atoms

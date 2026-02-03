@@ -154,4 +154,11 @@ single wall with skipped wall/piston/support interactions (818): 18:57
 
 
 
+SLAB WITH FLOW (1.0_1.5 interactions, 50,000 timesteps):
+
+4 nodes: 24:42
+5 nodes: 21:40
+6 nodes: 23:05
+
+
 

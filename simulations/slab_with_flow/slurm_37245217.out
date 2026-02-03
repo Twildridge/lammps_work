@@ -1,0 +1,410 @@
+======================================
+Working directory: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_20260130_151837
+Trajectory directory (scratch): /ocean/projects/chm250028p/dpollard/lammps_trajectories/slab_with_flow_walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_20260130_151837
+======================================
+Running LAMMPS in slab_with_flow with:
+  dataname=walled_slab_support_5beads_tall_3_1.0_1.4_20000000
+  epsSS=1.0, epsSP=1.4
+  nsteps=50000, oldsteps=0, totsteps=50000
+SLURM tasks per node: 120
+SLURM CPUs per task: 1
+SLURM_GPUS_ON_NODE: 
+GPUs allocated: 
+Running CPU-only with 720 tasks
+LAMMPS (22 Jul 2025)
+  using 1 OpenMP thread(s) per MPI task
+using multi-threaded neighbor list subroutines
+Reading data file ...
+  orthogonal box = (-5.9305206 -5.9305206 -8.5890298) to (75.530521 75.530521 109.38903)
+  8 by 9 by 10 MPI processor grid
+  reading atoms ...
+  1715566 atoms
+  scanning bonds ...
+  3 = max bonds/atom
+  orthogonal box = (-5.9305206 -5.9305206 -8.5890298) to (75.530521 75.530521 109.38903)
+  8 by 9 by 10 MPI processor grid
+  reading bonds ...
+  146951 bonds
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        0        0       
+  special bond factors coul:  0        0        0       
+     4 = max # of 1-2 neighbors
+     4 = max # of 1-3 neighbors
+     8 = max # of 1-4 neighbors
+    12 = max # of special neighbors
+  special bonds CPU = 0.209 seconds
+  read_data CPU = 5.396 seconds
+========================================
+Flow simulation: walled_slab_support_5beads_tall_3_1.0_1.4_20000000
+Interaction: epsSS=1.0, epsSP=1.4
+Production steps: 50000
+Piston force per bead: -0.01
+========================================
+129770 atoms in group polymer
+412670 atoms in group solvent
+69948 atoms in group support
+69948 atoms in group piston
+1033230 atoms in group walls
+542440 atoms in group mobile
+682336 atoms in group gel_system
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        1        1       
+  special bond factors coul:  0        1        1       
+     4 = max # of 1-2 neighbors
+    12 = max # of special neighbors
+  special bonds CPU = 0.124 seconds
+  1 rigid bodies with 69948 atoms
+  1 rigid bodies with 69948 atoms
+  1 rigid bodies with 1033230 atoms
+========================================
+Phase 1: Soft push to resolve solvent-piston overlaps
+========================================
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Hybrid pair style last /omp style soft
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 2.8
+  ghost atom cutoff = 5
+  binsize = 1.4, bins = 59 59 85
+  2 neighbor lists, perpetual/occasional/extra = 2 0 0
+  (1) pair lj/cut, perpetual
+      attributes: half, newton on, omp, cut 2.8
+      pair build: half/bin/newton/omp
+      stencil: half/bin/3d
+      bin: standard
+  (2) pair soft, perpetual, skip from (1)
+      attributes: half, newton on, omp
+      pair build: skip/omp
+      stencil: none
+      bin: none
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 0
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 18.19 | 24.61 | 41.58 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+         0   0              0.1671972      0              0.1671972      0.1142735      782890.75      81.461041      81.461041      117.97806    
+      1000   1.108961       0.029273425    0.52596376     0.55523719     2.7961802      782890.75      81.461041      81.461041      117.97806    
+Loop time of 48.3235 on 720 procs for 1000 steps with 1715566 atoms
+
+Performance: 8939.743 tau/day, 20.694 timesteps/s, 35.502 Matom-step/s
+99.3% CPU use with 720 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.66182    | 0.9307     | 1.6874     |  13.6 |  1.93
+Bond    | 0.0012164  | 0.014253   | 0.027523   |   4.5 |  0.03
+Neigh   | 34.165     | 37.061     | 38.372     |  18.3 | 76.69
+Comm    | 1.0469     | 3.5612     | 9.5524     |  99.2 |  7.37
+Output  | 0.0031539  | 0.028046   | 0.050321   |   8.3 |  0.06
+Modify  | 2.9721     | 6.3978     | 7.5973     |  34.7 | 13.24
+Other   |            | 0.3302     |            |       |  0.68
+
+Nlocal:        2382.73 ave        6767 max         802 min
+Histogram: 336 81 3 0 120 99 62 5 12 2
+Nghost:        15875.6 ave       40018 max        4966 min
+Histogram: 336 16 68 0 0 208 0 80 4 8
+Neighs:          54445 ave      106968 max       22660 min
+Histogram: 12 125 178 137 79 80 48 33 14 14
+
+Total # of neighbors = 39200374
+Ave neighs/atom = 22.84982
+Ave special neighs/atom = 0.17131489
+Neighbor list builds = 487
+Dangerous builds = 0
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Hybrid pair style last /omp style soft
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Setting up cg style minimization ...
+  Unit style    : lj
+  Current step  : 1000
+Per MPI rank memory allocation (min/avg/max) = 20.67 | 27.87 | 46.8 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      1000   1.108961       0.029273425    0.52596376     0.55523719     2.7961802      782890.75      81.461041      81.461041      117.97806    
+      1955   1.108961      -0.57010212     0.52596376    -0.044138351   -0.3491006      782890.75      81.461041      81.461041      117.97806    
+Loop time of 19.1237 on 720 procs for 955 steps with 1715566 atoms
+
+99.3% CPU use with 720 MPI tasks x 1 OpenMP threads
+
+Minimization stats:
+  Stopping criterion = energy tolerance
+  Energy initial, next-to-last, final = 
+    0.0292734248676378 -0.570045267941165 -0.570102115578549
+  Force two-norm initial, final = 30294.911 659.72593
+  Force max component initial, final = 2081.9668 298.60181
+  Final line search alpha, max atom move = 0.00065532093 0.19568002
+  Iterations, force evaluations = 955 1053
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.15829    | 0.78038    | 1.8979     |  31.4 |  4.08
+Bond    | 0.00079277 | 0.011367   | 0.029468   |   4.9 |  0.06
+Neigh   | 12.996     | 13.778     | 14.264     |   8.8 | 72.05
+Comm    | 0.83183    | 2.6549     | 4.9236     |  67.9 | 13.88
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0.0095409  | 0.059188   | 0.22977    |  24.6 |  0.31
+Other   |            | 1.84       |            |       |  9.62
+
+Nlocal:        2382.73 ave        6750 max         887 min
+Histogram: 336 84 0 0 162 66 57 1 12 2
+Nghost:        15864.2 ave       39659 max        4938 min
+Histogram: 336 16 68 0 0 206 2 82 2 8
+Neighs:        36084.8 ave      107147 max        2024 min
+Histogram: 105 113 95 71 294 0 9 14 11 8
+
+Total # of neighbors = 25981048
+Ave neighs/atom = 15.144301
+Ave special neighs/atom = 0.17131489
+Neighbor list builds = 245
+Dangerous builds = 8
+Soft push complete - overlaps resolved
+========================================
+Phase 2: Switching to full LJ interactions
+========================================
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 2.8
+  ghost atom cutoff = 5
+  binsize = 1.4, bins = 59 59 85
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair lj/cut/omp, perpetual
+      attributes: half, newton on, omp
+      pair build: half/bin/newton/omp
+      stencil: half/bin/3d
+      bin: standard
+Setting up cg style minimization ...
+  Unit style    : lj
+  Current step  : 1955
+Per MPI rank memory allocation (min/avg/max) = 20.04 | 27.01 | 45.18 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      1955   1.108961      -0.57116848     0.52596376    -0.045204717   -0.34837578     782890.75      81.461041      81.461041      117.97806    
+      1956   1.108961      -0.57118326     0.52596376    -0.045219499   -0.34950888     782890.75      81.461041      81.461041      117.97806    
+Loop time of 0.0655277 on 720 procs for 1 steps with 1715566 atoms
+
+99.4% CPU use with 720 MPI tasks x 1 OpenMP threads
+
+Minimization stats:
+  Stopping criterion = energy tolerance
+  Energy initial, next-to-last, final = 
+    -0.571168482033321 -0.571168482033321 -0.571183263395428
+  Force two-norm initial, final = 829.91522 348.88579
+  Force max component initial, final = 298.60181 82.073398
+  Final line search alpha, max atom move = 8.3723538e-05 0.0068714752
+  Iterations, force evaluations = 1 4
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.00057714 | 0.0034506  | 0.007202   |   2.7 |  5.27
+Bond    | 4.159e-06  | 5.5212e-05 | 0.00029589 |   0.0 |  0.08
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 0.003107   | 0.009131   | 0.016834   |   4.2 | 13.93
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 3.0538e-05 | 0.00016414 | 0.00095302 |   0.0 |  0.25
+Other   |            | 0.05273    |            |       | 80.46
+
+Nlocal:        2382.73 ave        6750 max         887 min
+Histogram: 336 84 0 0 162 66 57 1 12 2
+Nghost:        15864.2 ave       39659 max        4938 min
+Histogram: 336 16 68 0 0 206 2 82 2 8
+Neighs:        31451.6 ave       50601 max        1498 min
+Histogram: 40 86 57 36 99 24 7 23 113 235
+
+Total # of neighbors = 22645155
+Ave neighs/atom = 13.199816
+Ave special neighs/atom = 0.17131489
+Neighbor list builds = 0
+Dangerous builds = 0
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 1956
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 18.91 | 25.27 | 41.8 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      1956   1.108961      -0.57118326     0.52596376    -0.045219499   -0.57873482     782890.75      81.461041      81.461041      117.97806    
+WARNING: Lost atoms: original 1715566 current 1715565
+For more information see https://docs.lammps.org/err0008 (src/thermo.cpp:532)
+      6956   5.8058738e-50 -0.58276938     2.7536414e-50 -0.58276938    -2.314408       782890.75      81.461041      81.461041      117.97806    
+Loop time of 63.9625 on 720 procs for 5000 steps with 1715565 atoms
+
+Performance: 33769.780 tau/day, 78.171 timesteps/s, 134.107 Matom-step/s
+99.3% CPU use with 720 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.16578    | 1.8367     | 2.7356     |  56.0 |  2.87
+Bond    | 0.0031757  | 0.019985   | 0.035341   |   5.3 |  0.03
+Neigh   | 38.053     | 40.428     | 41.963     |  15.7 | 63.21
+Comm    | 3.9743     | 11.633     | 21.379     | 148.1 | 18.19
+Output  | 0.014606   | 0.13873    | 0.24563    |  18.3 |  0.22
+Modify  | 2.8099     | 8.9935     | 14.402     | 119.5 | 14.06
+Other   |            | 0.9123     |            |       |  1.43
+
+Nlocal:        2382.73 ave        6613 max         938 min
+Histogram: 336 84 0 0 99 127 54 6 12 2
+Nghost:        15868.8 ave       39173 max        4611 min
+Histogram: 336 10 74 0 0 136 72 75 9 8
+Neighs:        30425.2 ave       44253 max         339 min
+Histogram: 41 29 34 32 67 55 34 63 101 264
+
+Total # of neighbors = 21906146
+Ave neighs/atom = 12.769056
+Ave special neighs/atom = 0.17131499
+Neighbor list builds = 744
+Dangerous builds = 173
+========================================
+Phase 3: Production flow with piston forcing
+========================================
+  1 rigid bodies with 69948 atoms
+WARNING: Temperature for fix modify is not for group all (src/fix_nh.cpp:1402)
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 6956
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 17.57 | 23.8 | 39.96 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      6956   5.8058845e-50 -0.58276938     2.7536414e-50 -0.58276938    -2.2761147      782890.75      81.461041      81.461041      117.97806    
+Loop time of 1.3893e-05 on 720 procs for 0 steps with 1715565 atoms
+
+110.8% CPU use with 720 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0          | 0          | 0          |   0.0 |  0.00
+Bond    | 0          | 0          | 0          |   0.0 |  0.00
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 0          | 0          | 0          |   0.0 |  0.00
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0          | 0          | 0          |   0.0 |  0.00
+Other   |            | 1.389e-05  |            |       |100.00
+
+Nlocal:        2382.73 ave        6613 max         939 min
+Histogram: 336 84 0 0 99 127 54 6 12 2
+Nghost:        15868.7 ave       39172 max        4609 min
+Histogram: 336 10 74 0 0 136 72 75 9 8
+Neighs:        30426.3 ave       44236 max         339 min
+Histogram: 41 30 33 31 68 55 34 63 101 264
+
+Total # of neighbors = 21906903
+Ave neighs/atom = 12.769498
+Ave special neighs/atom = 0.17131499
+Neighbor list builds = 0
+Dangerous builds = 0
+Rg_xx = 402.441768863076
+Rg_yy = 407.422716157019
+Rg_zz = 731.195223126587
+hw_x = 32.4987411787635
+hw_y = 32.6992381605823
+hw_z = 43.8058071900681
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 6956
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 20.58 | 28.44 | 48.97 Mbytes
+   Step          Temp          PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      6956   5.8058845e-50 -0.58276938     2.7536414e-50 -0.58276938    -2.2761147      782890.75      81.461041      81.461041      117.97806    
+     10000   0.32715863    -0.54821251     0.15516629    -0.39304622    -0.53976631     782890.75      81.461041      81.461041      117.97806    
+     20000   1.0007437     -0.29394733     0.47463729     0.18068996     0.16704564     782890.75      81.461041      81.461041      117.97806    
+     30000   0.99936956    -0.30301955     0.47398556     0.170966       0.42831524     782890.75      81.461041      81.461041      117.97806    
+     40000   1.0006193     -0.30241023     0.4745783      0.17216808     0.42675827     782890.75      81.461041      81.461041      117.97806    
+     50000   0.99905479    -0.30660613     0.47383627     0.16723013     0.22321752     782890.75      81.461041      81.461041      117.97806    
+     56956   0.99909149    -0.30723657     0.47385367     0.1666171      0.25566773     782890.75      81.461041      81.461041      117.97806    
+Loop time of 1243.43 on 720 procs for 50000 steps with 1715565 atoms
+
+Performance: 17371.280 tau/day, 40.211 timesteps/s, 68.985 Matom-step/s
+99.3% CPU use with 720 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 7.2758     | 19.437     | 24.456     |  94.0 |  1.56
+Bond    | 0.053296   | 0.30365    | 0.67129    |  21.0 |  0.02
+Neigh   | 904.11     | 959.04     | 994.27     |  75.1 | 77.13
+Comm    | 46.73      | 138.07     | 255.01     | 494.4 | 11.10
+Output  | 0.076072   | 0.38191    | 0.68315    |  29.9 |  0.03
+Modify  | 54.318     | 116.84     | 169.7      | 316.6 |  9.40
+Other   |            | 9.354      |            |       |  0.75
+
+Nlocal:        2382.73 ave        6923 max         823 min
+Histogram: 336 84 0 0 113 108 59 6 12 2
+Nghost:        15880.8 ave       40853 max        5504 min
+Histogram: 336 47 37 0 0 208 0 77 7 8
+Neighs:          30859 ave       38642 max       10320 min
+Histogram: 3 8 21 41 115 37 47 68 98 282
+
+Total # of neighbors = 22218508
+Ave neighs/atom = 12.951132
+Ave special neighs/atom = 0.17131499
+Neighbor list builds = 16879
+Dangerous builds = 0
+========================================
+Flow simulation complete
+========================================
+System init for write_data ...
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: Not all mixed pair coeffs generated from mixing. Use write_data with 'pair ij' option to store all pair coeffs. (src/write_data.cpp:364)
+Total wall time: 0:23:05
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+Plot saved to ./output_plots/convergence_plots/walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_50000_convergence.png
+Generating stress profiles...
+Warning: Could not find data file (tried walled_slab_support_5beads_tall_3.data and walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_50000.data), using default box dimensions
+Stress profile saved to ./output_plots/walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_50000_stress.png
+No volume data found for walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_50000, skipping volume fraction plots
+Generating piston plots...
+Read 10 position points, 10 velocity points
+Piston plot saved to ./output_plots/walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_50000_piston.png
+
+=== Piston Summary ===
+Initial position: 107.5353
+Final position:   105.0115
+Total displacement: -2.5238
+Generating computational efficiency plot...
+Found data file: ./data_files/walled_slab_support_5beads_tall_3_1.0_1.4_20000000.data
+Mobile atoms: 1575670
+Entry 'walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_50000' already exists in tracking file, skipping.
+Tracking info written to /jet/home/dpollard/Documents/lammps_work/tracking.txt
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_atoms.png
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_timesteps.png
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_20260130_151837
+======================================

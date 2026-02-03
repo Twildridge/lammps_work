@@ -23,7 +23,7 @@ variable temp_target equal 1.0
 variable timestep_prod equal 0.005
 
 # ----- Piston Parameters -----
-variable piston_force equal -0.01           # Negative = push down (-z)
+variable piston_force equal -0.001           # Negative = push down (-z)
 variable nsteps_softpush equal 1000
 variable soft_prefactor_max equal 50.0
 

@@ -1,0 +1,43 @@
+======================================
+Working directory: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_20260201_123032
+Trajectory directory (scratch): /ocean/projects/chm250028p/dpollard/lammps_trajectories/slab_with_flow_walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_20260201_123032
+======================================
+Running LAMMPS in slab_with_flow with:
+  dataname=walled_slab_support_5beads_tall_3_1.0_1.4_20000000
+  epsSS=1.0, epsSP=1.4
+  nsteps=40000, oldsteps=0, totsteps=40000
+SLURM tasks per node: 120
+SLURM CPUs per task: 1
+SLURM_GPUS_ON_NODE: 
+GPUs allocated: 
+Running CPU-only with 600 tasks
+LAMMPS (22 Jul 2025)
+  using 1 OpenMP thread(s) per MPI task
+using multi-threaded neighbor list subroutines
+Reading data file ...
+  orthogonal box = (-5.9305206 -5.9305206 -8.5890298) to (75.530521 75.530521 109.38903)
+  6 by 10 by 10 MPI processor grid
+  reading atoms ...
+  1714050 atoms
+ERROR: Did not assign all atoms correctly
+For more information see https://docs.lammps.org/err0016 (src/read_data.cpp:1600)
+Last input line: read_data data_files/${dataname}.data nocoeff
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+No thermo data found in ./log.lammps
+Generating stress profiles...
+No stress data found for walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_40000, skipping stress plots
+No volume data found for walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_40000, skipping volume fraction plots
+Generating piston plots...
+Error: Piston position file not found: ./output_files/piston_data/piston_position_walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_40000.dat
+Generating computational efficiency plot...
+Found data file: ./data_files/walled_slab_support_5beads_tall_3_1.0_1.4_20000000.data
+Mobile atoms: 1575670
+Tracking info written to /jet/home/dpollard/Documents/lammps_work/tracking.txt
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_atoms.png
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_timesteps.png
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_20260201_123032
+======================================
