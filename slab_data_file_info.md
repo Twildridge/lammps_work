@@ -163,19 +163,125 @@ Generated tetrahedral gel slab with piston:
   Unit cells: 10 x 10 x 17
   Beads per chain: 5
   Gel dimensions: 40.00 x 40.00 x 68.00
-  Box dimensions: 66.00 x 66.00 x 92.00
-  Side padding (x/y): 13.00
-  Top padding (z):    22.00
+  Box dimensions: 76.00 x 76.00 x 95.00
+  Side padding (x/y): 18.00
+  Top padding (z):    25.00
   Crosslinks: 14518
   Chains: 27200
   Polymer beads: 96118
   Intra-chain angles (type 1, eq 180°): 81600
   Junction angles (type 2, eq 109.47°): 78154
-  Bottom support: 63221 (spacing: 0.20)
-  Top piston: 63221 (spacing: 0.20)
-  Solvent beads: 400752 (density: 1.00)
-  Total atoms: 623312
+  Bottom support: 83820 (spacing: 0.20)
+  Top piston: 83820 (spacing: 0.20)
+  Solvent beads: 548720 (density: 1.00)
+  Total atoms: 812478
   Total bonds: 108800
   Total angles: 159754
   Output: ../../lammps_data_files_local/slab_support_tall_angle_2.data
   
+
+Generated tetrahedral gel slab with piston:
+  Unit cells: 11 x 11 x 18
+  Beads per chain: 5
+  Gel dimensions: 44.00 x 44.00 x 72.00
+  Box dimensions: 81.40 x 81.40 x 101.00
+  Side padding (x/y): 18.70
+  Top padding (z):    27.00
+  Crosslinks: 18499
+  Chains: 34848
+  Polymer beads: 123043
+  Intra-chain angles (type 1, eq 180°): 104544
+  Junction angles (type 2, eq 109.47°): 100488
+  Bottom support: 95880 (spacing: 0.20)
+  Top piston: 95880 (spacing: 0.20)
+  Solvent beads: 669221 (density: 1.00)
+  Total atoms: 984024
+  Total bonds: 139392
+  Total angles: 205032
+  Output: ../../lammps_data_files_local/slab_support_tall_angle_3.data
+
+
+Generated tetrahedral gel slab with piston:
+  Unit cells: 11 x 11 x 18
+  Beads per chain: 5
+  Gel dimensions: 88.00 x 88.00 x 144.00
+  Box dimensions: 127.60 x 127.60 x 176.00
+  Side padding (x/y): 19.80
+  Top padding (z):    30.00
+  Crosslinks: 18499
+  Chains: 34848
+  Polymer beads: 123043
+  Intra-chain angles (type 1, eq 180°): 104544
+  Junction angles (type 2, eq 109.47°): 100488
+  Bottom support: 235422 (spacing: 0.20)
+  Top piston: 235422 (spacing: 0.20)
+  Solvent beads: 2865589 (density: 1.00)
+  Total atoms: 3459476
+  Total bonds: 139392
+  Total angles: 205032
+  Output: ../../lammps_data_files_local/slab_support_tall_angle_4.data
+
+
+
+Generated tetrahedral gel slab with piston:
+  Unit cells: 9 x 9 x 16
+  Beads per chain: 5
+  Gel dimensions: 72.00 x 72.00 x 128.00
+  Box dimensions: 104.40 x 104.40 x 160.00
+  Side padding (x/y): 16.20
+  Top padding (z):    30.00
+  Crosslinks: 11141
+  Chains: 20736
+  Polymer beads: 73349
+  Intra-chain angles (type 1, eq 180°): 62208
+  Junction angles (type 2, eq 109.47°): 59324
+  Bottom support: 157946 (spacing: 0.20)
+  Top piston: 157946 (spacing: 0.20)
+  Solvent beads: 1743897 (density: 1.00)
+  Total atoms: 2133138
+  Total bonds: 82944
+  Total angles: 121532
+  Output: ../../lammps_data_files_local/slab_support_tall_angle_5.data
+
+
+Generated tetrahedral gel slab with piston:
+  Unit cells: 8 x 8 x 15
+  Beads per chain: 5
+  Gel dimensions: 64.00 x 64.00 x 120.00
+  Box dimensions: 92.80 x 92.80 x 152.00
+  Side padding (x/y): 14.40
+  Top padding (z):    30.00
+  Crosslinks: 8320
+  Chains: 15360
+  Polymer beads: 54400
+  Intra-chain angles (type 1, eq 180°): 46080
+  Junction angles (type 2, eq 109.47°): 43710
+  Bottom support: 124352 (spacing: 0.20)
+  Top piston: 124352 (spacing: 0.20)
+  Solvent beads: 1308999 (density: 1.00)
+  Total atoms: 1612103
+  Total bonds: 61440
+  Total angles: 89790
+  Output: ../../lammps_data_files_local/slab_support_tall_angle_6.data
+
+
+Generated tetrahedral gel slab with piston:
+  Unit cells: 8 x 8 x 15
+  Beads per chain: 5
+  Gel dimensions: 64.00 x 64.00 x 120.00
+  Box dimensions: 89.60 x 89.60 x 147.00
+  Side padding (x/y): 12.80
+  Top padding (z):    25.00
+  Crosslinks: 8320
+  Chains: 15360
+  Polymer beads: 54400
+  Intra-chain angles (type 1, eq 180°): 46080
+  Junction angles (type 2, eq 109.47°): 43710
+  Bottom support: 116032 (spacing: 0.20)
+  Top piston: 116032 (spacing: 0.20)
+  Solvent beads: 1180139 (density: 1.00)
+  Total atoms: 1466603
+  Total bonds: 61440
+  Total angles: 89790
+  Output: ../../lammps_data_files_local/slab_support_tall_angle_7.data
+

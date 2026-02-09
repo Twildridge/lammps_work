@@ -200,3 +200,76 @@ Per MPI rank memory allocation (min/avg/max) = 11.19 | 13.18 | 20.17 Mbytes
     100000   0.86180321     6.8810562      1.2927027      8.1737589      1.0049837      628027.74      76.661677      76.661677      106.86173    
     200000   0.87379789     6.8564715      1.3106947      8.1671663      1.0002877      628867.1       76.695814      76.695814      106.90932    
     300000   0.88134414     6.8382356      1.3220141      8.1602497      0.99962355     628591.74      76.684618      76.684618      106.89371    
+    400000   0.88491212     6.8240397      1.3273661      8.1514057      0.99372285     628154.65      76.66684       76.66684       106.86893    
+    500000   0.88599983     6.8190596      1.3289976      8.1480572      0.99172239     628612.04      76.685444      76.685444      106.89486    
+    600000   0.88731973     6.806739       1.3309775      8.1377165      1.0010375      627570.98      76.643087      76.643087      106.83582    
+    700000   0.89093265     6.8068717      1.3363968      8.1432686      0.99658534     628107.87      76.664937      76.664937      106.86628    
+    800000   0.89053201     6.8069281      1.3357959      8.142724       0.97382934     628682.19      76.688296      76.688296      106.89884    
+    900000   0.89251829     6.8025703      1.3387753      8.1413456      1.0105639      627879.79      76.655656      76.655656      106.85334    
+   1000000   0.89088263     6.803592       1.3363218      8.1399138      0.99653893     628360.39      76.675209      76.675209      106.88059    
+   1100000   0.89362812     6.8041171      1.34044        8.1445572      1.0156959      628725.51      76.690057      76.690057      106.90129    
+   1200000   0.89172086     6.8022872      1.3375792      8.1398663      1.0120199      628605.66      76.685184      76.685184      106.8945     
+   1300000   0.89403444     6.8000884      1.3410495      8.1411379      1.014602       628248.48      76.670657      76.670657      106.87425    
+   1400000   0.89468473     6.8000191      1.3420249      8.1420441      1.0163889      628360.95      76.675232      76.675232      106.88063    
+   1500000   0.89178378     6.7997892      1.3376735      8.1374628      0.99483185     628903.48      76.697293      76.697293      106.91138    
+   1600000   0.89189824     6.8025708      1.3378452      8.140416       0.99681506     628756.15      76.691303      76.691303      106.90303    
+   1700000   0.89209753     6.8044767      1.3381442      8.1426209      0.98876602     629195.75      76.709172      76.709172      106.92794    
+   1800000   0.89178455     6.8005566      1.3376747      8.1382313      1.010338       628610.32      76.685374      76.685374      106.89476    
+   1900000   0.89195677     6.8022609      1.337933       8.1401939      0.9831685      628998.94      76.701173      76.701173      106.91679    
+   2000000   0.89446381     6.8004293      1.3416936      8.1421228      1.0005832      628697.88      76.688934      76.688934      106.89973    
+   2001000   0.89149495     6.8014888      1.3372403      8.138729       1.0067162      628731.45      76.690299      76.690299      106.90163    
+Loop time of 5736.75 on 600 procs for 2000000 steps with 623312 atoms
+
+Performance: 150607.846 tau/day, 348.629 timesteps/s, 217.305 Matom-step/s
+99.3% CPU use with 600 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 672.88     | 745.97     | 830.49     | 109.7 | 13.00
+Bond    | 23.23      | 46.722     | 75.038     | 146.5 |  0.81
+Neigh   | 2461       | 2583.7     | 2722.1     | 125.0 | 45.04
+Comm    | 1118.1     | 1466.1     | 1901.3     | 553.3 | 25.56
+Output  | 0.090049   | 0.31913    | 0.60729    |  28.5 |  0.01
+Modify  | 539.05     | 830.95     | 1099.8     | 535.1 | 14.48
+Other   |            | 62.94      |            |       |  1.10
+
+Nlocal:        1038.85 ave        1922 max         798 min
+Histogram: 480 0 0 0 0 0 0 0 0 120
+Nghost:        7275.46 ave       13453 max        5671 min
+Histogram: 480 0 0 0 0 0 0 0 0 120
+Neighs:        29328.6 ave       31883 max       27141 min
+Histogram: 2 29 64 115 147 133 69 28 11 2
+
+Total # of neighbors = 17597169
+Ave neighs/atom = 28.231719
+Ave special neighs/atom = 0.34910286
+Neighbor list builds = 344024
+Dangerous builds = 0
+System init for write_restart ...
+Generated 0 of 10 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is angle_style harmonic
+System init for write_data ...
+Generated 0 of 10 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is angle_style harmonic
+WARNING: Not all mixed pair coeffs generated from mixing. Use write_data with 'pair ij' option to store all pair coeffs. (src/write_data.cpp:364)
+Total wall time: 1:36:00
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+Plot saved to ./output_plots/convergence_plots/slab_support_tall_angle_2_1.0_1.4_2000000_convergence.png
+Generating stress profiles...
+No stress data found for slab_support_tall_angle_2_1.0_1.4_2000000, skipping stress plots
+No volume data found for slab_support_tall_angle_2_1.0_1.4_2000000, skipping volume fraction plots
+Generating piston plots...
+Error: Piston position file not found: ./output_files/piston_data/piston_position_slab_support_tall_angle_2_1.0_1.4_2000000.dat
+Generating computational efficiency plot...
+Found data file: ./data_files/slab_support_tall_angle_2.data
+Mobile atoms: 496866
+Tracking info written to /jet/home/dpollard/Documents/lammps_work/tracking.txt
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_atoms.png
+Saved /jet/home/dpollard/Documents/lammps_work/time_vs_timesteps.png
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/slab_with_support_slab_support_tall_angle_2_1.0_1.4_20260203_133122
+======================================

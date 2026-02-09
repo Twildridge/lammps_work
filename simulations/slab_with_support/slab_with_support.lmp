@@ -28,7 +28,7 @@ variable nfreq_avg_vol equal 100000
 
 # Output frequencies
 variable thermo_freq equal 100000
-variable dump_freq equal 200000
+variable dump_freq equal 100000
 variable volume_freq equal 100000
 
 # Equilibration parameters
@@ -112,12 +112,12 @@ angle_style hybrid cosine harmonic
 # Type 1: intra-chain backbone (eq 180°)
 #   cosine: E = K(1 + cos(theta)), minimum at 180°
 #   K = 10–20 is typical for bead-spring chain stiffness
-angle_coeff 1 cosine 15.0
+angle_coeff 1 cosine 10.0
 
 # Type 2: crosslink tetrahedral junctions (eq 109.47°)
 #   harmonic: E = K(theta - theta0)^2
 #   K = 20–50 gives meaningful compression resistance; start around 30
-angle_coeff 2 harmonic 30.0 109.47
+angle_coeff 2 harmonic 20.0 109.47
 
 
 
