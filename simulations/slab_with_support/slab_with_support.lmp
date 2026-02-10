@@ -111,13 +111,13 @@ angle_style hybrid cosine harmonic
 
 # Type 1: intra-chain backbone (eq 180°)
 #   cosine: E = K(1 + cos(theta)), minimum at 180°
-#   K = 10–20 is typical for bead-spring chain stiffness
-angle_coeff 1 cosine 10.0
+#   K = 0–2 is typical for PEG-like hydrogels
+angle_coeff 1 cosine 1.0
 
 # Type 2: crosslink tetrahedral junctions (eq 109.47°)
 #   harmonic: E = K(theta - theta0)^2
-#   K = 20–50 gives meaningful compression resistance; start around 30
-angle_coeff 2 harmonic 20.0 109.47
+#   K = 30–50 gives meaningful compression resistance
+angle_coeff 2 harmonic 40.0 109.47
 
 
 
