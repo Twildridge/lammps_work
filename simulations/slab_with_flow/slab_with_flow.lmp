@@ -30,7 +30,7 @@ variable soft_prefactor_max equal 50.0
 # ----- Output Frequencies -----
 variable thermo_freq equal 10000
 variable dump_freq_setup equal 1000        # Frequent dumps during setup (Phases 1-2)
-variable dump_freq_prod equal 5000        # Sparse dumps during production (Phase 3)
+variable dump_freq_prod equal 10000        # Sparse dumps during production (Phase 3)
 variable stress_freq equal 5000
 variable volume_freq equal 5000
 
@@ -367,7 +367,7 @@ compute chunk_z_solvent solvent chunk/atom bin/1d z lower ${binWidth} region reg
 
 
 # ==========================================================================
-#                    ANALYSIS: VIRIAL STRESS
+#                    ANALYSIS: PARTIAL STRESSES
 # ==========================================================================
 
 compute stress_polymer polymer stress/atom NULL
@@ -434,7 +434,7 @@ fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &
 
 
 # ==========================================================================
-#                    OUTPUT: STRESS PROFILES (time-averaged)
+#                    OUTPUT: PARTIAL STRESS PROFILES (time-averaged)
 # ==========================================================================
 
 fix avg_stress_x_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
