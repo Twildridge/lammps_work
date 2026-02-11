@@ -126,9 +126,22 @@ pair_coeff 1 6 soft 0.0 ${sigma}               # polymer-wall
 pair_coeff 2 6 soft 0.0 ${sigma}               # crosslinker-wall
 pair_coeff 3 6 soft 0.0 ${sigma}               # solvent-wall
 
-# ----- Bonds -----
+# ----- Bonds and Angles -----
 bond_coeff * 120.0 2.0 1.0 1.0
 special_bonds fene
+
+# Angle style — hybrid because the two types need different potentials
+angle_style hybrid cosine harmonic
+
+# Type 1: intra-chain backbone (eq 180°)
+#   cosine: E = K(1 + cos(theta)), minimum at 180°
+#   K = 0–2 is typical for PEG-like hydrogels
+angle_coeff 1 cosine 1.0
+
+# Type 2: crosslink tetrahedral junctions (eq 109.47°)
+#   harmonic: E = K(theta - theta0)^2
+#   K = 30–50 gives meaningful compression resistance
+angle_coeff 2 harmonic 40.0 109.47
 
 # ----- Neighbor List Exclusions -----
 neigh_modify exclude type 4 4   # support-support

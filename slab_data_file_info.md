@@ -289,18 +289,18 @@ Generated tetrahedral gel slab with piston:
   Unit cells: 10 x 10 x 18
   Beads per chain: 5
   Gel dimensions: 48.00 x 48.00 x 86.40
-  Box dimensions: 70.00 x 70.00 x 113.40
-  Side padding (x/y): 11.00
+  Box dimensions: 66.00 x 66.00 x 113.40
+  Side padding (x/y): 9.00
   Top padding (z):    25.00
   Crosslinks: 15359
   Chains: 28800
   Polymer beads: 101759
   Intra-chain angles (type 1, eq 180°): 86400
   Junction angles (type 2, eq 109.47°): 82796
-  Bottom support: 71078 (spacing: 0.20)
-  Top piston: 71078 (spacing: 0.20)
-  Solvent beads: 555660 (density: 1.00)
-  Total atoms: 799575
+  Bottom support: 63221 (spacing: 0.20)
+  Top piston: 63221 (spacing: 0.20)
+  Solvent beads: 493970 (density: 1.00)
+  Total atoms: 722171
   Total bonds: 115200
   Total angles: 169196
   Output: ../../lammps_data_files_local/slab_support_tall_angle_8.data
