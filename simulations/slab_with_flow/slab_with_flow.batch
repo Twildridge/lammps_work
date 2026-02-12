@@ -2,7 +2,7 @@
 #SBATCH --job-name=solv_flow
 #SBATCH --output=slurm_%j.out
 #SBATCH --error=slurm_%j.err
-#SBATCH --nodes=5
+#SBATCH --nodes=3
 #SBATCH --ntasks-per-node=120
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=RM

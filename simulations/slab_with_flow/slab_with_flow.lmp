@@ -25,7 +25,7 @@ variable timestep_prod equal 0.005
 # ----- Piston Parameters -----
 variable piston_force equal -0.001           # Negative = push down (-z)
 variable nsteps_softpush equal 1000
-variable soft_prefactor_max equal 50.0
+variable soft_prefactor_max equal 50
 
 # ----- Output Frequencies -----
 variable thermo_freq equal 10000
@@ -174,7 +174,8 @@ fix rigid_walls walls rigid single force * off off off torque * off off off
 #                           THERMO OUTPUT
 # ==========================================================================
 
-thermo_style custom step temp pe ke etotal press vol lx ly lz
+compute mobile_temp mobile temp
+thermo_style custom step c_mobile_temp pe ke etotal press vol lx ly lz
 thermo_modify lost warn
 thermo ${thermo_freq}
 
@@ -255,7 +256,7 @@ pair_coeff 5 5 0.0 ${sigma} 0.0
 pair_coeff 5 6 0.0 ${sigma} 0.0
 pair_coeff 6 6 0.0 ${sigma} 0.0
 
-# Minimize + brief equilibration
+# Aggresively minimize + brief equilibration
 minimize 1.0e-4 1.0e-6 1000 10000
 
 fix nvt_equil mobile nvt temp ${temp_target} ${temp_target} 1.0
