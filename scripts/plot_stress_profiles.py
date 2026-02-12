@@ -55,7 +55,8 @@ def get_box_dims(folder, dataname):
     # Try multiple possible locations for the data file
     possible_paths = [
         os.path.join(folder, 'data_files', f'{base_name}.data'),  # Original input file (symlink)
-        os.path.join(folder, f'final_config_{dataname}.data'),    # Final output from LAMMPS
+        os.path.join(folder, f'final_config_{dataname}.data'),    # Final output from slab_with_support
+        os.path.join(folder, f'final_flow_{dataname}.data'),    # Final output from slab_with_flow
         os.path.join(folder, 'data_files', f'{dataname}.data'),   # Full name fallback
     ]
     

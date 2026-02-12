@@ -31,14 +31,27 @@ variable soft_prefactor_max equal 50
 variable thermo_freq equal 10000
 variable dump_freq_setup equal 1000        # Frequent dumps during setup (Phases 1-2)
 variable dump_freq_prod equal 10000        # Sparse dumps during production (Phase 3)
-variable stress_freq equal 5000
 variable volume_freq equal 5000
 
 # ----- Time Averaging (stress) -----
-# nfreq = nevery * nrepeat
-variable nevery_stress equal 20
-variable nrepeat_stress equal 50
-variable nfreq_stress equal 10000
+# nfreq = nevery * nrepeat (LAMMPS constraint)
+variable num_stress_curves equal 10    # target output frames (increase to 20–50 for more temporal resolution)
+variable nevery_target equal 100       # ~0.5 tau — near stress decorrelation time
+variable nrepeat_max equal 2000        # cap to preserve transient resolution (decrease to 500–1000 for faster flow)
+variable nrepeat_min equal 50          # floor for adequate noise reduction
+
+variable nfreq_raw equal floor(${nsteps}/v_num_stress_curves)
+variable nrepeat_raw equal floor(v_nfreq_raw/v_nevery_target)
+
+# Clamp nrepeat to [min, max]
+variable nr_lo equal (v_nrepeat_raw>v_nrepeat_min)*v_nrepeat_raw+(v_nrepeat_raw<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepeat_max)*v_nrepeat_max
+
+# Derive nevery and enforce exact constraint
+variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
+variable nfreq_stress equal v_nevery_stress*v_nrepeat_stress
+
+print ">>> Stress: nevery=${nevery_stress} nrepeat=${nrepeat_stress} nfreq=${nfreq_stress}"
 
 # ----- Spatial Binning -----
 variable binWidth equal 2.0
@@ -193,7 +206,7 @@ timestep ${timestep_prod}
 
 # Trajectory dump for setup phases (frequent sampling)
 dump traj_setup gel_system custom ${dump_freq_setup} &
-    traj_files/gel_setup_${dataname}_${nsteps}.lammpstrj &
+    traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
     id type mol x y z
 
 fix nvt_push mobile nvt temp ${temp_target} ${temp_target} 1.0
@@ -292,7 +305,7 @@ fix piston_drag piston viscous 0.1
 
 # ----- Production Trajectory (sparse sampling) -----
 dump traj_flow gel_system custom ${dump_freq_prod} &
-    traj_files/gel_flow_${dataname}_${nsteps}.lammpstrj &
+    traj_files/gel_flow_${dataname}_${interaction}_${nsteps}.lammpstrj &
     id type mol x y z
 
 
@@ -428,10 +441,10 @@ compute piston_z piston reduce ave z
 compute piston_vz piston reduce ave vz
 
 fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_z)" &
-    file output_files/piston_data/piston_position_${dataname}_${nsteps}.dat screen no
+    file output_files/piston_data/piston_position_${dataname}_${interaction}_${nsteps}.dat screen no
 
 fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &
-    file output_files/piston_data/piston_velocity_${dataname}_${nsteps}.dat screen no
+    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${nsteps}.dat screen no
 
 
 # ==========================================================================
@@ -439,22 +452,22 @@ fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &
 # ==========================================================================
 
 fix avg_stress_x_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_x_polymer mode vector file output_files/stress_data/stress_x_polymer_${dataname}_${nsteps}.dat
+    c_press_x_polymer mode vector file output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${nsteps}.dat
 
 fix avg_stress_y_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_y_polymer mode vector file output_files/stress_data/stress_y_polymer_${dataname}_${nsteps}.dat
+    c_press_y_polymer mode vector file output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${nsteps}.dat
 
 fix avg_stress_z_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_z_polymer mode vector file output_files/stress_data/stress_z_polymer_${dataname}_${nsteps}.dat
+    c_press_z_polymer mode vector file output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${nsteps}.dat
 
 fix avg_stress_x_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_x_solvent mode vector file output_files/stress_data/stress_x_solvent_${dataname}_${nsteps}.dat
+    c_press_x_solvent mode vector file output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${nsteps}.dat
 
 fix avg_stress_y_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_y_solvent mode vector file output_files/stress_data/stress_y_solvent_${dataname}_${nsteps}.dat
+    c_press_y_solvent mode vector file output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${nsteps}.dat
 
 fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${nsteps}.dat
+    c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${nsteps}.dat
 
 
 
@@ -463,19 +476,19 @@ fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_st
 # ==========================================================================
 
 fix out_gel_vol all print ${volume_freq} "$(step) ${gel_vol_box}" &
-    file output_files/volume_data/gel_volume_bb_${dataname}_${nsteps}.dat screen no
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
 
 fix out_gel_rg all print ${volume_freq} "$(step) $(c_rg_tensor[1]) ${rg_vol}" &
-    file output_files/volume_data/gel_volume_rg_${dataname}_${nsteps}.dat screen no
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
 
 fix out_gel_dims all print ${volume_freq} "$(step) ${gel_lx} ${gel_ly} ${gel_lz}" &
-    file output_files/volume_data/gel_dimensions_${dataname}_${nsteps}.dat screen no
+    file output_files/volume_data/gel_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
 
 fix out_box_dims all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_lz}" &
-    file output_files/volume_data/box_dimensions_${dataname}_${nsteps}.dat screen no
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
 
 fix out_polymer_com all print ${volume_freq} "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
-    file output_files/volume_data/polymer_com_${dataname}_${nsteps}.dat screen no
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}.dat screen no
 
 
 # ==========================================================================
@@ -493,4 +506,4 @@ print "========================================"
 print "Flow simulation complete"
 print "========================================"
 
-write_data final_flow_${dataname}_${nsteps}.data
+write_data final_flow_${dataname}_${interaction}_${nsteps}.data
