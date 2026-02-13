@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=120
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=RM
-#SBATCH --time=48:00:00 # shortening this will reduce queue time but might risk killing job
+#SBATCH --time=24:00:00 # shortening this will reduce queue time but might risk killing job
 
 # note that Bridges-2 has 128 cores per node
 # 120 tasks per node is the most efficient
@@ -34,9 +34,9 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 
 # Set simulation parameters
 FOLDER="slab_with_support"
-DATANAME="slab_support_tall_angle_8"
-INTERACTION="1.0_1.0"
-NSTEPS=10000000
+DATANAME="slab_support_5beads_tall_4"
+INTERACTION="1.0_1.05"
+NSTEPS=15000000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 

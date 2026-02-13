@@ -27,9 +27,9 @@ variable nrepeat_avg_vol equal 1
 variable nfreq_avg_vol equal 100000
 
 # Output frequencies
-variable thermo_freq equal 500000
-variable dump_freq equal 500000
-variable volume_freq equal 500000
+variable thermo_freq equal 1000000
+variable dump_freq equal 1000000
+variable volume_freq equal 1000000
 
 # Equilibration parameters
 variable temp_target equal 1.0
@@ -102,22 +102,22 @@ pair_coeff 4 5 0.0 ${sigma} 0.0       # support-piston (no interaction)
 pair_coeff 5 5 0.0 ${sigma} 0.0       # piston-piston (moving together)
 
 bond_style fene
-bond_coeff * 120.0 2.0 1.0 1.0
+bond_coeff * 30.0 2.5 1.0 1.0
 special_bonds fene
 
 
 # Angle style — hybrid because the two types need different potentials
-angle_style hybrid cosine harmonic
+#angle_style hybrid cosine harmonic
 
 # Type 1: intra-chain backbone (eq 180°)
 #   cosine: E = K(1 + cos(theta)), minimum at 180°
 #   K = 0–2 is typical for PEG-like hydrogels
-angle_coeff 1 cosine 1.0
+#angle_coeff 1 cosine 1.0
 
 # Type 2: crosslink tetrahedral junctions (eq 109.47°)
 #   harmonic: E = K(theta - theta0)^2
 #   K = 30–50 gives meaningful compression resistance
-angle_coeff 2 harmonic 40.0 109.47
+#angle_coeff 2 harmonic 40.0 109.47
 
 
 
@@ -149,68 +149,10 @@ if "${is_restart} == 0" then "run ${nsteps_gentle}"
 if "${is_restart} == 0" then "unfix 1"
 
 
-
-# ========== Cylindrical Chunk Definitions ==========
 # Box centers
 variable xcen equal lx/2
 variable ycen equal ly/2
 variable zcen equal lz/2
-
-# Disk radii (1/2 cross-sectional area)
-#variable disk_radius_x equal sqrt((${ycen}*${ycen} + ${zcen}*${zcen})/2.0)
-#variable disk_radius_y equal sqrt((${xcen}*${xcen} + ${zcen}*${zcen})/2.0)
-#variable disk_radius_z equal sqrt((${xcen}*${xcen} + ${ycen}*${ycen})/2.0)
-
-# Cylindrical chunks for polymer
-#compute chunk_x_polymer polymer chunk/atom bin/cylinder x lower ${binWidth} ${ycen} ${zcen} 0.0 ${disk_radius_x} 1
-#compute chunk_y_polymer polymer chunk/atom bin/cylinder y lower ${binWidth} ${xcen} ${zcen} 0.0 ${disk_radius_y} 1
-#compute chunk_z_polymer polymer chunk/atom bin/cylinder z lower ${binWidth} ${xcen} ${ycen} 0.0 ${disk_radius_z} 1
-
-# Cylindrical chunks for solvent
-#compute chunk_x_solvent solvent chunk/atom bin/cylinder x lower ${binWidth} ${ycen} ${zcen} 0.0 ${disk_radius_x} 1
-#compute chunk_y_solvent solvent chunk/atom bin/cylinder y lower ${binWidth} ${xcen} ${zcen} 0.0 ${disk_radius_y} 1
-#compute chunk_z_solvent solvent chunk/atom bin/cylinder z lower ${binWidth} ${xcen} ${ycen} 0.0 ${disk_radius_z} 1
-
-
-
-# ========== Partial Stress Calculations ==========
-#compute stress_polymer polymer stress/atom NULL
-#compute stress_solvent solvent stress/atom NULL
-
-# Partial stress for each atom: P = -(σxx + σyy + σzz)/(3*vol)
-#variable press_polymer_x atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*${binWidth}*ly*lz)
-#variable press_polymer_y atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*lx*${binWidth}*lz)
-#variable press_polymer_z atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*lx*ly*${binWidth})
-
-#variable press_solvent_x atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*${binWidth}*ly*lz)
-#variable press_solvent_y atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*lx*${binWidth}*lz)
-#variable press_solvent_z atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*lx*ly*${binWidth})
-
-# Sum pre-divided per-atom contributions over chunks → pressure per bin
-#compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer_x
-#compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer_y
-#compute press_z_polymer polymer reduce/chunk chunk_z_polymer sum v_press_polymer_z
-
-#compute press_x_solvent solvent reduce/chunk chunk_x_solvent sum v_press_solvent_x
-#compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent_y
-#compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent_z
-
-
-
-# ========== Voronoi Volume Calculations ==========
-# Compute Voronoi volumes for polymer/solvent
-#compute voronoi_polymer polymer voronoi/atom
-#compute voronoi_solvent solvent voronoi/atom
-#variable voronoi_vol_polymer atom c_voronoi_polymer[1]
-#variable voronoi_vol_solvent atom c_voronoi_solvent[1]
-#
-# Sum Voronoi volumes over chunks
-#compute vol_x_polymer polymer reduce/chunk chunk_x_polymer sum v_voronoi_vol_polymer
-#compute vol_y_polymer polymer reduce/chunk chunk_y_polymer sum v_voronoi_vol_polymer
-#compute vol_z_polymer polymer reduce/chunk chunk_z_polymer sum v_voronoi_vol_polymer
-#compute vol_x_solvent solvent reduce/chunk chunk_x_solvent sum v_voronoi_vol_solvent
-#compute vol_y_solvent solvent reduce/chunk chunk_y_solvent sum v_voronoi_vol_solvent
-#compute vol_z_solvent solvent reduce/chunk chunk_z_solvent sum v_voronoi_vol_solvent
 
 
 
@@ -267,34 +209,7 @@ fix gel_dims_output all print ${volume_freq} "$(step) ${gel_lx} ${gel_ly} ${gel_
 fix box_dims_output all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_lz}" &
     ${restartFlag} output_files/volume_data/box_dimensions_${dataname}_${interaction}_${totsteps}.dat screen no
 
-# Stress profile time averaging
-#fix avg_x_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_x_polymer &
-#    mode vector ${restartFlag} output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${totsteps}.dat
-#fix avg_y_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_y_polymer &
-#    mode vector ${restartFlag} output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${totsteps}.dat
-#fix avg_z_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_z_polymer &
-#    mode vector ${restartFlag} output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${totsteps}.dat
 
-#fix avg_x_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_x_solvent &
-#    mode vector ${restartFlag} output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${totsteps}.dat
-#fix avg_y_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_y_solvent &
-#    mode vector ${restartFlag} output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${totsteps}.dat
-#fix avg_z_solvent all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} c_press_z_solvent &
-#    mode vector ${restartFlag} output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${totsteps}.dat
-
-# Voronoi volume time averaging (commented out - uncomment if needed)
-#fix avg_vol_x_polymer all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_x_polymer &
-#    mode vector ${restartFlag} output_files/volume_data/vol_x_polymer_${dataname}_${interaction}_${totsteps}.dat
-#fix avg_vol_y_polymer all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_y_polymer &
-#    mode vector ${restartFlag} output_files/volume_data/vol_y_polymer_${dataname}_${interaction}_${totsteps}.dat
-#fix avg_vol_z_polymer all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_z_polymer &
-#    mode vector ${restartFlag} output_files/volume_data/vol_z_polymer_${dataname}_${interaction}_${totsteps}.dat
-#fix avg_vol_x_solvent all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_x_solvent &
-#    mode vector ${restartFlag} output_files/volume_data/vol_x_solvent_${dataname}_${interaction}_${totsteps}.dat
-#fix avg_vol_y_solvent all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_y_solvent &
-#    mode vector ${restartFlag} output_files/volume_data/vol_y_solvent_${dataname}_${interaction}_${totsteps}.dat
-#fix avg_vol_z_solvent all ave/time ${nevery_avg_vol} ${nrepeat_avg_vol} ${nfreq_avg_vol} c_vol_z_solvent &
-#    mode vector ${restartFlag} output_files/volume_data/vol_z_solvent_${dataname}_${interaction}_${totsteps}.dat
 
 # Production run
 run ${nsteps}
