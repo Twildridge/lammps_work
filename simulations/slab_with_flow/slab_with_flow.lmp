@@ -351,21 +351,50 @@ dump traj_flow gel_system custom ${dump_freq_prod} &
 #                    ANALYSIS: POLYMER TRACKING
 # ==========================================================================
 
-# Center of mass for region positioning
 compute polymer_com polymer com
 
-# Gyration tensor for polymer extent
-compute rg_tensor polymer gyration
-run 0
+# ----- Bounding Box (BB) — gel dimensions from min/max coordinates -----
+# Sensitive to outlier beads; kept for diagnostics and gel dimension output.
+compute minx polymer reduce min x
+compute maxx polymer reduce max x
+compute miny polymer reduce min y
+compute maxy polymer reduce max y
+compute minz polymer reduce min z
+compute maxz polymer reduce max z
 
+variable gel_lx_bb equal c_maxx-c_minx
+variable gel_ly_bb equal c_maxy-c_miny
+variable gel_lz_bb equal c_maxz-c_minz
+variable gel_vol_bb equal v_gel_lx_bb*v_gel_ly_bb*v_gel_lz_bb
+
+# ----- Radius of Gyration (Rg) — robust gel dimensions -----
+# For a uniform rectangular prism: Rg_ii² = L_i²/12  →  L_i = 2√3·√(Rg_ii²)
+# c_rg_tensor[i] returns Rg_ii² (diagonal component of gyration tensor).
+compute rg_tensor polymer gyration
+
+variable gel_lx_rg equal 2.0*sqrt(3.0*c_rg_tensor[1])
+variable gel_ly_rg equal 2.0*sqrt(3.0*c_rg_tensor[2])
+variable gel_lz_rg equal 2.0*sqrt(3.0*c_rg_tensor[3])
+variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
+
+# ----- Box dimensions -----
+variable box_lx equal lx
+variable box_ly equal ly
+variable box_lz equal lz
+
+run 0   # initializes ALL computes above in one pass
+
+# Snapshot Rg tensor for diagnostics and analysis region sizing
 variable Rg_xx equal c_rg_tensor[1]
 variable Rg_yy equal c_rg_tensor[2]
 variable Rg_zz equal c_rg_tensor[3]
 
-print "Rg_xx = ${Rg_xx}"
-print "Rg_yy = ${Rg_yy}"
-print "Rg_zz = ${Rg_zz}"
+print "Rg_xx = ${Rg_xx}  →  Lx_rg = $(v_gel_lx_rg)"
+print "Rg_yy = ${Rg_yy}  →  Ly_rg = $(v_gel_ly_rg)"
+print "Rg_zz = ${Rg_zz}  →  Lz_rg = $(v_gel_lz_rg)"
+print "BB:  Lx=$(v_gel_lx_bb) Ly=$(v_gel_ly_bb) Lz=$(v_gel_lz_bb)"
 
+# Analysis region half-widths (still use rg_scale for ~90% coverage)
 variable eps equal 1.0e-12
 variable hw_x equal v_region_frac*v_rg_scale*sqrt(v_Rg_xx + v_eps)
 variable hw_y equal v_region_frac*v_rg_scale*sqrt(v_Rg_yy + v_eps)
@@ -374,6 +403,15 @@ variable hw_z equal v_region_frac*v_rg_scale*sqrt(v_Rg_zz + v_eps)
 print "hw_x = ${hw_x}"
 print "hw_y = ${hw_y}"
 print "hw_z = ${hw_z}"
+
+# ----- Gel strain (Rg-based) -----
+# $(v_gel_lz_rg) — parentheses force immediate numeric evaluation right now,
+# storing a constant. ${gel_lz_rg} would store the expression string instead.
+variable gel_lz_initial equal $(v_gel_lz_rg)
+print ">>> Initial gel thickness (Rg): L0 = ${gel_lz_initial}"
+print ">>> Initial gel thickness (BB): L0 = $(v_gel_lz_bb)"
+
+variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
 
 
 # ==========================================================================
@@ -443,42 +481,6 @@ compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent
 
 
 # ==========================================================================
-#                    ANALYSIS: GEL VOLUME METRICS
-# ==========================================================================
-
-# Bounding-box method
-compute minx polymer reduce min x
-compute maxx polymer reduce max x
-compute miny polymer reduce min y
-compute maxy polymer reduce max y
-compute minz polymer reduce min z
-compute maxz polymer reduce max z
-
-variable gel_lx equal c_maxx-c_minx
-variable gel_ly equal c_maxy-c_miny
-variable gel_lz equal c_maxz-c_minz
-variable gel_vol_box equal v_gel_lx*v_gel_ly*v_gel_lz
-
-# Rg-based volume (using tensor components)
-variable rg_vol equal 8.0*v_rg_scale^3*sqrt(c_rg_tensor[1]*c_rg_tensor[2]*c_rg_tensor[3])
-
-# Box dimensions
-variable box_lx equal lx
-variable box_ly equal ly
-variable box_lz equal lz
-
-# ----- Snapshot initial gel thickness (after computes are up-to-date) -----
-# gel_lz is the bounding-box z-extent of polymer (already computed above).
-# We store the current value as a constant for later strain calculation.
-# gel_lz_initial is used as L in M = L * σ'_zz / ΔL.
-variable gel_lz_initial equal ${gel_lz}
-print ">>> Initial gel thickness L = ${gel_lz_initial}"
-
-# Dynamic strain fraction: positive = compression
-variable gel_strain equal (v_gel_lz_initial - v_gel_lz) / v_gel_lz_initial
-
-
-# ==========================================================================
 #                         OUTPUT: PISTON DATA
 # ==========================================================================
 
@@ -518,12 +520,13 @@ fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_st
 # ==========================================================================
 #                    OUTPUT: GEL STRAIN (for longitudinal modulus)
 # ==========================================================================
-# Columns: timestep | L_initial (constant) | L_current (dynamic)
+# Columns: timestep | L_initial_rg (constant) | L_current_rg (dynamic)
 # ΔL = L_initial - L_current;  ε = ΔL / L_initial
+# Gel thickness from Rg: L = 2√3·√(Rg_zz²)  (uniform rectangular prism)
 # This file is read by longitudinal_modulus_analysis.ipynb.
 
 fix out_strain_zz all print ${volume_freq} &
-    "$(step) ${gel_lz_initial} $(v_gel_lz)" &
+    "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
     file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}.dat screen no
 
 # Echo current strain to thermo log as well
@@ -537,15 +540,21 @@ fix out_gel_strain_thermo all print ${thermo_freq} &
 #                    OUTPUT: GEL DIMENSIONS
 # ==========================================================================
 
-fix out_gel_vol all print ${volume_freq} "$(step) $(v_gel_vol_box)" &
+# Bounding-box volume and dimensions (for comparison/diagnostics)
+fix out_gel_vol_bb all print ${volume_freq} "$(step) $(v_gel_vol_bb)" &
     file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
 
-fix out_gel_rg all print ${volume_freq} "$(step) $(c_rg_tensor[1]) $(v_rg_vol)" &
+fix out_gel_dims_bb all print ${volume_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
+    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${nsteps}.dat screen no
+
+# Rg-based volume and dimensions (rectangular prism: L_i = 2√3·√Rg_ii²)
+fix out_gel_vol_rg all print ${volume_freq} "$(step) $(v_gel_vol_rg)" &
     file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
 
-fix out_gel_dims all print ${volume_freq} "$(step) $(v_gel_lx) $(v_gel_ly) $(v_gel_lz)" &
-    file output_files/volume_data/gel_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+fix out_gel_dims_rg all print ${volume_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
 
+# Box dimensions
 fix out_box_dims all print ${volume_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
     file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
 
@@ -555,14 +564,14 @@ fix out_polymer_com all print ${volume_freq} &
 
 
 # ==========================================================================
-#         COMPRESSION MODE: HALT AT 10% STRAIN
+#         COMPRESSION MODE: HALT AT 12% STRAIN
 # ==========================================================================
 # fix halt stops the current run command (error continue = no abort).
 # After the run exits the script continues to the relaxation block below.
 # In permeation mode this fix is not created, so the run simply goes to nsteps.
 
 if "${compression_mode} == 1" then &
-    "fix halt_compress all halt ${volume_freq} v_gel_strain >= 0.10 error continue"
+    "fix halt_compress all halt ${volume_freq} v_gel_strain >= 0.12 error continue"
 
 print ">>> Starting Phase 3 production run (nsteps = ${nsteps})"
 print ">>> compression_mode = ${compression_mode}"
