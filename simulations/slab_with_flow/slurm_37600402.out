@@ -1,0 +1,470 @@
+======================================
+Working directory: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_20260216_225723
+Trajectory directory (scratch): /ocean/projects/chm250028p/dpollard/lammps_trajectories/slab_with_flow_walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_20260216_225723
+======================================
+Running LAMMPS in slab_with_flow with:
+  dataname=walled_slab_support_5beads_tall_4_1.0_1.05_15000000
+  epsSS=1.0, epsSP=1.05
+  nsteps=1000000, oldsteps=0, totsteps=1000000
+SLURM tasks per node: 120
+SLURM CPUs per task: 1
+SLURM_GPUS_ON_NODE: 
+GPUs allocated: 
+Running CPU-only with 600 tasks
+LAMMPS (22 Jul 2025)
+  using 1 OpenMP thread(s) per MPI task
+using multi-threaded neighbor list subroutines
+>>> Stress: nevery=100 nrepeat=1000 nfreq=100000
+>>> Mode: compression_mode=1  (0=permeation, 1=compression)
+Reading data file ...
+  orthogonal box = (-5.6347822 -5.6347822 -9.6815804) to (71.634782 71.634782 123.08158)
+  5 by 8 by 15 MPI processor grid
+  reading atoms ...
+  1278442 atoms
+  scanning bonds ...
+  3 = max bonds/atom
+  orthogonal box = (-5.6347822 -5.6347822 -9.6815804) to (71.634782 71.634782 123.08158)
+  5 by 8 by 15 MPI processor grid
+  reading bonds ...
+  114808 bonds
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        0        0       
+  special bond factors coul:  0        0        0       
+     4 = max # of 1-2 neighbors
+     4 = max # of 1-3 neighbors
+     8 = max # of 1-4 neighbors
+    12 = max # of special neighbors
+  special bonds CPU = 0.152 seconds
+  read_data CPU = 8.415 seconds
+========================================
+Flow/Compression simulation: walled_slab_support_5beads_tall_4_1.0_1.05_15000000
+Interaction: epsSS=1.0, epsSP=1.05
+Production steps: 1000000
+Piston force: -0.01 -> -0.05 (ramp)
+========================================
+101482 atoms in group polymer
+197612 atoms in group solvent
+63221 atoms in group support
+63221 atoms in group piston
+852906 atoms in group walls
+299094 atoms in group mobile
+425536 atoms in group gel_system
+Finding 1-2 1-3 1-4 neighbors ...
+  special bond factors lj:    0        1        1       
+  special bond factors coul:  0        1        1       
+     4 = max # of 1-2 neighbors
+    12 = max # of special neighbors
+  special bonds CPU = 0.057 seconds
+  1 rigid bodies with 63221 atoms
+  1 rigid bodies with 852906 atoms
+  1 rigid bodies with 63221 atoms
+========================================
+Phase 1: Compression equilibration (20000 steps)
+========================================
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 2.8
+  ghost atom cutoff = 5
+  binsize = 1.4, bins = 56 56 95
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair lj/cut/omp, perpetual
+      attributes: half, newton on, omp
+      pair build: half/bin/newton/omp
+      stencil: half/bin/3d
+      bin: standard
+Setting up cg style minimization ...
+  Unit style    : lj
+  Current step  : 0
+Per MPI rank memory allocation (min/avg/max) = 17.06 | 21.67 | 40.91 Mbytes
+   Step     c_mobile_temp      PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+         0   0              3.4381667e+14  0              3.4381667e+14  2.2180608e+15  792673.82      77.269564      77.269564      132.76316    
+      1000   0             -0.2632358      0             -0.2632358     -1.0191728      792673.82      77.269564      77.269564      132.76316    
+Loop time of 12.2461 on 600 procs for 1000 steps with 1278442 atoms
+
+99.3% CPU use with 600 MPI tasks x 1 OpenMP threads
+
+Minimization stats:
+  Stopping criterion = max iterations
+  Energy initial, next-to-last, final = 
+       343816671169424 -0.263019699659449 -0.263235800791819
+  Force two-norm initial, final = 3.3345164e+23 789.67934
+  Force max component initial, final = 1.6399789e+23 380.96413
+  Final line search alpha, max atom move = 0.00070791339 0.26968961
+  Iterations, force evaluations = 1000 1091
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.0011432  | 0.44605    | 1.5276     |  55.7 |  3.64
+Bond    | 0.00083935 | 0.01012    | 0.03316    |  10.7 |  0.08
+Neigh   | 8.2114     | 8.4264     | 8.5792     |   3.0 | 68.81
+Comm    | 0.66731    | 1.7496     | 3.0892     |  42.5 | 14.29
+Output  | 0.0030685  | 0.0030845  | 0.0031083  |   0.0 |  0.03
+Modify  | 0.0075298  | 0.027896   | 0.096505   |   9.8 |  0.23
+Other   |            | 1.583      |            |       | 12.93
+
+Nlocal:        2130.74 ave        6213 max           0 min
+Histogram: 130 155 21 24 105 38 29 80 6 12
+Nghost:        12756.7 ave       29003 max        5580 min
+Histogram: 143 26 143 105 97 29 32 17 4 4
+Neighs:        19628.3 ave       51328 max           0 min
+Histogram: 152 96 79 5 23 32 60 47 89 17
+
+Total # of neighbors = 11776988
+Ave neighs/atom = 9.2119846
+Ave special neighs/atom = 0.17960611
+Neighbor list builds = 164
+Dangerous builds = 0
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 1000
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 15.93 | 20.13 | 37.54 Mbytes
+   Step     c_mobile_temp      PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+      1000   0             -0.2632358      0             -0.2632358     -0.53839673     792673.82      77.269564      77.269564      132.76316    
+     21000   1.000473       0.042965885    0.35109274     0.39405863     0.34086529     792673.82      77.269564      77.269564      132.76316    
+Loop time of 236.291 on 600 procs for 20000 steps with 1278442 atoms
+
+Performance: 36565.045 tau/day, 84.641 timesteps/s, 108.209 Matom-step/s
+99.4% CPU use with 600 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.015852   | 4.8862     | 11.353     | 180.4 |  2.07
+Bond    | 0.012358   | 0.068388   | 0.19424    |  24.4 |  0.03
+Neigh   | 163.83     | 168.05     | 171.05     |  13.2 | 71.12
+Comm    | 12.449     | 31.088     | 50.542     | 165.7 | 13.16
+Output  | 0.073403   | 0.77288    | 1.2423     |  44.2 |  0.33
+Modify  | 14.898     | 28.3       | 48.171     | 174.1 | 11.98
+Other   |            | 3.129      |            |       |  1.32
+
+Nlocal:        2130.74 ave        6362 max           0 min
+Histogram: 130 156 20 20 120 27 29 80 6 12
+Nghost:        12743.9 ave       29568 max        5391 min
+Histogram: 130 44 138 107 97 37 20 13 10 4
+Neighs:        19350.8 ave       41771 max           0 min
+Histogram: 150 3 115 60 2 9 51 48 31 131
+
+Total # of neighbors = 11610467
+Ave neighs/atom = 9.0817315
+Ave special neighs/atom = 0.17960611
+Neighbor list builds = 3215
+Dangerous builds = 0
+>>> Post-equilibration T = 1.0004729970844872255
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 21000
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 15.93 | 20.28 | 37.58 Mbytes
+   Step     c_mobile_temp      PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+     21000   1.000473       0.042965885    0.35109274     0.39405863     0.33948008     792673.82      77.269564      77.269564      132.76316    
+Loop time of 1.21506e-05 on 600 procs for 0 steps with 1278442 atoms
+
+113.4% CPU use with 600 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0          | 0          | 0          |   0.0 |  0.00
+Bond    | 0          | 0          | 0          |   0.0 |  0.00
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 0          | 0          | 0          |   0.0 |  0.00
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0          | 0          | 0          |   0.0 |  0.00
+Other   |            | 1.215e-05  |            |       |100.00
+
+Nlocal:        2130.74 ave        6362 max           0 min
+Histogram: 130 156 20 20 120 27 29 80 6 12
+Nghost:        12743.9 ave       29568 max        5391 min
+Histogram: 130 44 138 107 97 37 20 13 10 4
+Neighs:        19350.8 ave       41771 max           0 min
+Histogram: 150 3 115 60 2 9 51 48 31 131
+
+Total # of neighbors = 11610467
+Ave neighs/atom = 9.0817315
+Ave special neighs/atom = 0.17960611
+Neighbor list builds = 0
+Dangerous builds = 0
+WARNING: Detected non-ASCII characters in input. Will try to continue by replacing with ASCII equivalents where known. (src/input.cpp:478)
+Rg_xx = 225.704183525211  †’  Lx_rg = 52.042772815276997278
+Rg_yy = 222.555910507645  †’  Ly_rg = 51.678534480882298396
+Rg_zz = 765.213267122411  †’  Lz_rg = 95.825670910612103626
+BB:  Lx=54.540188439434402312 Ly=52.680834549163300551 Lz=100.87558438050500342
+hw_x = 27.0422180048473
+hw_y = 26.8529542144765
+hw_z = 49.7924792059666
+>>> Initial gel thickness (Rg): L0 = 95.8256709106121
+>>> Initial gel thickness (BB): L0 = 100.87558438050500342
+========================================
+Phase 2: Production €” piston forcing
+========================================
+  1 rigid bodies with 63221 atoms
+WARNING: Temperature for fix modify is not for group all (src/fix_nh.cpp:1402)
+>>> Starting Phase 2 production run (nsteps = 1000000)
+>>> compression_mode = 1
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 21000
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 18.95 | 24.45 | 46.59 Mbytes
+   Step     c_mobile_temp      PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+     21000   1.000473       0.042965885    0.35109274     0.39405863     0.33948008     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = -0.52643455438007902281 %
+     25000   1.0001631      0.049025178    0.3518098      0.40083498     0.084641686    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 0.089786105239437294379 %
+     50000   1.0003047      0.044037374    0.35103384     0.39507122     0.19505544     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 0.27431863398807598831 %
+     75000   1.0002995      0.044527182    0.351033       0.39556018    -0.022088256    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 0.51750117370561399266 %
+    100000   1.0004401      0.045115318    0.35108121     0.39619653     0.01050842     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 0.83080600122741699032 %
+    125000   0.99723796     0.046698754    0.34995845     0.3966572      0.082408959    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 1.3197443310955800921 %
+    150000   1.0013119      0.043454766    0.35138776     0.39484252     0.03117587     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 1.5572772434686299459 %
+    175000   0.99938694     0.043542075    0.35071396     0.39425603     0.070038248    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 1.9956714522028100589 %
+    200000   1.0017646      0.043110998    0.35154785     0.39465885     0.078575295    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 2.3860357281840798294 %
+    225000   1.0005209      0.043226886    0.35110961     0.39433649     0.13920995     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 2.7897369293863798489 %
+    250000   0.99983412     0.039664098    0.35086857     0.39053267     0.089285782    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 3.2156017903040399197 %
+    275000   1.0018644      0.040898978    0.35158492     0.3924839     -0.086324562    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 3.7571591012349299099 %
+    300000   1.0000601      0.042016031    0.35094791     0.39296394     0.18806066     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 4.2326601698979899879 %
+    325000   1.0033403      0.039144473    0.35209895     0.39124342    -0.01964854     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 4.8017751537865098754 %
+    350000   1.0010042      0.034649418    0.35128142     0.38593084     0.10591234     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 5.1323420036472198191 %
+    375000   1.0019798      0.037200105    0.35162173     0.38882184     0.068397107    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 5.7190930055605697646 %
+    400000   1.0005988      0.035312796    0.35113771     0.38645051     0.2433402      792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 6.1248944877077100557 %
+    425000   1.0007972      0.035346557    0.35120989     0.38655645     0.14992867     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 6.5577261060861502528 %
+    450000   0.9983418      0.03690947     0.35034599     0.38725546     0.14869492     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 7.0704759388863100966 %
+    475000   1.001454       0.032772822    0.35143739     0.38421021    -0.014411048    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 7.587642561486200421 %
+    500000   0.99749026     0.034081771    0.35004832     0.38413009     0.23275329     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 8.0078600585250896415 %
+    525000   1.0008824      0.02754986     0.35123656     0.37878642     0.1674844      792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 8.5700793672788506683 %
+    550000   1.0037577      0.028714592    0.35224696     0.38096155     0.17202647     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 9.0954826948839802014 %
+    575000   0.99859793     0.027159766    0.35043477     0.37759454     0.10413997     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 9.4719558431334007764 %
+    600000   1.001715       0.029193416    0.35152905     0.38072247    -0.062317702    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 9.9592862909723898213 %
+    625000   0.99933905     0.025606942    0.3506958      0.37630275     0.083671512    792673.82      77.269564      77.269564      132.76316    
+Fix halt condition for fix-id halt_compress met on step 630000 with value 0.10055494988961673
+Loop time of 8064.42 on 600 procs for 609000 steps with 1278442 atoms
+
+Performance: 32623.290 tau/day, 75.517 timesteps/s, 96.544 Matom-step/s
+99.3% CPU use with 600 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 34.651     | 562.99     | 1448.3     |1464.1 |  6.98
+Bond    | 11.337     | 93.669     | 390.03     | 618.1 |  1.16
+Neigh   | 3984.8     | 4116.4     | 4230.7     |  88.7 | 51.04
+Comm    | 458.38     | 1380.3     | 2748.2     |1496.1 | 17.12
+Output  | 0.13504    | 0.59779    | 1.0219     |  41.8 |  0.01
+Modify  | 660.47     | 1674.9     | 3000.6     |1613.7 | 20.77
+Other   |            | 235.6      |            |       |  2.92
+
+Nlocal:        2130.74 ave        6487 max           0 min
+Histogram: 130 156 20 12 129 28 42 68 3 12
+Nghost:        12744.3 ave       26445 max        5212 min
+Histogram: 99 33 160 39 128 63 35 29 9 5
+Neighs:        19649.3 ave       46701 max           0 min
+Histogram: 150 30 104 46 13 79 18 25 30 105
+
+Total # of neighbors = 11789552
+Ave neighs/atom = 9.2218122
+Ave special neighs/atom = 0.17960611
+Neighbor list builds = 101250
+Dangerous builds = 0
+>>> Compression halted (or nsteps exhausted)
+>>> Freezing piston and starting stress relaxation
+  1 rigid bodies with 63221 atoms
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+Setting up Verlet run ...
+  Unit style    : lj
+  Current step  : 630000
+  Time step     : 0.005
+Per MPI rank memory allocation (min/avg/max) = 21.73 | 31.94 | 55.44 Mbytes
+   Step     c_mobile_temp      PotEng         KinEng         TotEng         Press          Volume           Lx             Ly             Lz      
+    630000   1.0007675      0.025381012    0.3511961      0.37657712     0.0045897845   792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 10.099440510231300294 %
+    650000   0.99762702     0.028578434    0.35009401     0.37867244     0.061738329    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 10.188358902858800192 %
+    675000   1.0012952      0.030129565    0.35138127     0.38151083     0.087655745    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 10.280774220561399446 %
+    700000   1.0003014      0.03252569     0.35103253     0.38355822     0.12066999     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 10.331798653196999638 %
+    725000   1.0019221      0.031770061    0.35160126     0.38337132    -0.02605621     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 10.421552234836999773 %
+    750000   1.0005943      0.032230733    0.35113532     0.38336605    -0.14914195     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 10.586613365536200249 %
+    775000   1.0021321      0.037732053    0.35167496     0.38940701     0.087016173    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 10.777851773615500619 %
+    800000   1.0000419      0.03766504     0.35094145     0.38860649     0.046941526    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 10.817566885181300051 %
+    825000   1.0012921      0.036791419    0.35138018     0.3881716      0.12434574     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 10.983618807417599328 %
+    850000   1.001272       0.037059829    0.35137314     0.38843297    -0.035872832    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 11.052147368438600239 %
+    875000   1.0006733      0.037787902    0.35116303     0.38895093    -0.0032116674   792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 11.203049187844600354 %
+    900000   1.0020177      0.037180602    0.35163483     0.38881543    -0.00069515462  792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 11.176316951301700442 %
+    925000   1.0010199      0.040350528    0.35128467     0.39163519     0.064810269    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 11.354756977198100287 %
+    950000   1.0015207      0.040629217    0.3514604      0.39208962     0.16182961     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 11.466073569140100119 %
+    975000   1.0008008      0.038115564    0.35120776     0.38932333     0.0035485349   792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 11.569932058608900505 %
+   1000000   1.0009932      0.040431016    0.35127529     0.39170631     0.0067580571   792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 11.696507747920700027 %
+   1025000   1.0017304      0.042802071    0.35153399     0.39433606     0.12102123     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 11.880548879320700806 %
+   1050000   0.99959035     0.042231734    0.350783       0.39301473     0.073629517    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 11.976788211843999221 %
+   1075000   0.99996136     0.040748436    0.35091319     0.39166163    -0.13824675     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 12.052095537783900525 %
+   1100000   0.99932704     0.044347179    0.35069059     0.39503777     0.036861865    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 12.241853232164899623 %
+   1125000   1.0002389      0.043425687    0.3510106      0.39443628     0.096529906    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 12.317011007110300724 %
+   1150000   0.99714425     0.043887806    0.34992459     0.3938124      0.089240301    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 12.427485573543000541 %
+   1175000   1.0011813      0.041803782    0.35134131     0.3931451     -0.0078145707   792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 12.550856795941200517 %
+   1200000   0.99993954     0.042738347    0.35090554     0.39364388     0.12201304     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 12.621339716540399323 %
+   1225000   0.99695963     0.041265709    0.34985981     0.39112552    -0.0046396347   792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 12.753562057810199803 %
+   1250000   1.0009785      0.040809749    0.35127014     0.39207989     0.056440135    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 12.812256611588699329 %
+   1275000   0.99904842     0.043763212    0.35059282     0.39435603     0.12240361     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 12.88873233942489982 %
+   1300000   0.9996632      0.044706659    0.35080856     0.39551522     0.055862153    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 12.903710752713800858 %
+   1325000   0.99893596     0.04232584     0.35055335     0.39287919     0.086921161    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 13.098381318878100643 %
+   1350000   1.0013797      0.04169392     0.35141094     0.39310486     0.095179498    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 13.178187645304999975 %
+   1375000   0.99910452     0.04300721     0.35061251     0.39361972     0.08538879     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 13.212425832758599498 %
+   1400000   0.99901301     0.045652176    0.35058039     0.39623257    -8.1850644e-05  792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 13.370232005074500492 %
+   1425000   0.99860988     0.044709977    0.35043892     0.3951489     -0.23155979     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 13.408371179378500315 %
+   1450000   1.0012892      0.044385002    0.35137915     0.39576415     0.068117872    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 13.545964515949899365 %
+   1475000   1.0003448      0.045644909    0.35104776     0.39669267     0.13667589     792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 13.620507592497499871 %
+   1500000   1.0012196      0.046195239    0.35135474     0.39754998     0.007434954    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 13.740319439231599929 %
+   1525000   1.0003         0.045788415    0.35103204     0.39682045     0.044840711    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 13.8050784154593007 %
+   1550000   0.99892336     0.046593391    0.35054893     0.39714232     0.0085257991   792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 13.901999686619500807 %
+   1575000   1.0006881      0.045674105    0.35116824     0.39684234    -0.038776025    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 14.016972203510100314 %
+   1600000   1.0012063      0.047327671    0.35135007     0.39867774    -0.087010215    792673.82      77.269564      77.269564      132.76316    
+>>> gel_strain = 14.056483185262200308 %
+   1625000   1.0001901      0.043252039    0.35099345     0.39424549     0.0371709      792673.82      77.269564      77.269564      132.76316    
+   1630000   1.0015122      0.047021807    0.35145744     0.39847924    -0.035007626    792673.82      77.269564      77.269564      132.76316    
+Loop time of 10142.6 on 600 procs for 1000000 steps with 1278442 atoms
+
+Performance: 42592.823 tau/day, 98.594 timesteps/s, 126.047 Matom-step/s
+99.3% CPU use with 600 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 2.5801     | 249.56     | 559.08     |1212.8 |  2.46
+Bond    | 1.0371     | 5.8779     | 16.317     | 149.8 |  0.06
+Neigh   | 6518.8     | 6723.9     | 6890.7     | 104.3 | 66.29
+Comm    | 638.24     | 1558.7     | 2556.4     |1138.9 | 15.37
+Output  | 0.25191    | 0.67656    | 1.1535     |  35.2 |  0.01
+Modify  | 772.66     | 1446.3     | 2413.9     |1194.7 | 14.26
+Other   |            | 157.5      |            |       |  1.55
+
+Nlocal:        2130.74 ave        6467 max           0 min
+Histogram: 130 156 20 12 129 26 31 81 3 12
+Nghost:        12746.3 ave       26324 max        5474 min
+Histogram: 110 22 162 47 108 73 34 30 8 6
+Neighs:        19443.1 ave       43852 max           0 min
+Histogram: 150 7 123 50 0 17 81 37 28 107
+
+Total # of neighbors = 11665889
+Ave neighs/atom = 9.1250827
+Ave special neighs/atom = 0.17960611
+Neighbor list builds = 166287
+Dangerous builds = 0
+========================================
+Simulation complete
+========================================
+System init for write_data ...
+Generated 0 of 15 mixed pair_coeff terms from geometric mixing rule
+Last active /omp style is bond_style fene/omp
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: More than one fix rigid (src/RIGID/fix_rigid.cpp:712)
+WARNING: Not all mixed pair coeffs generated from mixing. Use write_data with 'pair ij' option to store all pair coeffs. (src/write_data.cpp:364)
+Total wall time: 5:07:47
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+Generating stress profiles...
+Found data file: ./final_flow_walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_1000000.data
+Stress profile saved to ./output_plots/walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_1000000_stress.png
+No volume data found for walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_1000000, skipping volume fraction plots
+Generating piston plots...
+Read 323 position points, 323 velocity points
+Piston plot saved to ./output_plots/walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_1000000_piston.png
+
+=== Piston Summary ===
+Initial position: 120.0280
+Final position:   72.6325
+Total displacement: -47.3956
+Steady-state velocity: 0.00e+00 Â± 0.00e+00
+Generating computational efficiency plot...
+Found data file: ./data_files/walled_slab_support_5beads_tall_4_1.0_1.05_15000000.data
+Mobile atoms: 1152000
+======================================
+Done! Results are in: /jet/home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_20260216_225723
+======================================

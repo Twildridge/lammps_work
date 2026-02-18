@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
 import sys
 import os
 import re
+
+# HOW TO RUN BY ITSELF
+# cd ~/Documents/lammps_runs/slab_with_flow_walled.....
+#
+# python ~/Documents/lammps_work/scripts/plot_stress_profiles.py . \ 
+# walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_1000000 0
+
+
 
 def read_ave_time_file(filepath):
     """Read LAMMPS ave/time output file with format: timestep nrows, then row pressure."""
@@ -39,8 +49,6 @@ def read_ave_time_file(filepath):
 def get_box_dims(folder, dataname):
     """Extract box dimensions from data file in the working directory."""
     # Extract base dataname without interaction and timesteps
-    # Format: slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_40000
-    # Need to strip: _1.5_1.4_40000
     parts = dataname.split('_')
     
     # Find where interaction starts (format: number.number)
@@ -54,10 +62,10 @@ def get_box_dims(folder, dataname):
     
     # Try multiple possible locations for the data file
     possible_paths = [
-        os.path.join(folder, 'data_files', f'{base_name}.data'),  # Original input file (symlink)
-        os.path.join(folder, f'final_config_{dataname}.data'),    # Final output from slab_with_support
-        os.path.join(folder, f'final_flow_{dataname}.data'),    # Final output from slab_with_flow
-        os.path.join(folder, 'data_files', f'{dataname}.data'),   # Full name fallback
+        os.path.join(folder, 'data_files', f'{base_name}.data'),
+        os.path.join(folder, f'final_config_{dataname}.data'),
+        os.path.join(folder, f'final_flow_{dataname}.data'),
+        os.path.join(folder, 'data_files', f'{dataname}.data'),
     ]
     
     data_file = None
@@ -68,8 +76,7 @@ def get_box_dims(folder, dataname):
             break
     
     if not data_file:
-        # Fallback: extract from dataname (assumes format includes dimensions)
-        print(f"Warning: Could not find data file (tried {base_name}.data and {dataname}.data), using default box dimensions")
+        print(f"Warning: Could not find data file, using default box dimensions")
         return {'x': 100.0, 'y': 100.0, 'z': 50.0}
     
     box_dims = {}
@@ -99,23 +106,11 @@ def check_stress_data_exists(folder, dataname):
             return True
     return False
 
-def check_volume_data_exists(folder, dataname):
-    """Check if any volume data files exist."""
-    data_dir = os.path.join(folder, 'output_files', 'volume_data')
-    dims = ['x', 'y', 'z']
-    
-    for dim in dims:
-        poly_file = os.path.join(data_dir, f'vol_{dim}_polymer_{dataname}.dat')
-        solv_file = os.path.join(data_dir, f'vol_{dim}_solvent_{dataname}.dat')
-        if os.path.exists(poly_file) or os.path.exists(solv_file):
-            return True
-    return False
-
 def plot_stress_profiles(folder, dataname, oldsteps):
     """Plot pressure profiles for polymer (left), solvent (middle), and total (right)."""
     box_dims = get_box_dims(folder, dataname)
     
-    fig, axes = plt.subplots(3, 3, figsize=(18, 10))
+    fig, axes = plt.subplots(3, 3, figsize=(20, 10))
     if oldsteps > 0:
         fig.suptitle(f'{dataname} (continuing from {oldsteps} steps)', fontsize=14, fontweight='bold')
     else:
@@ -123,7 +118,6 @@ def plot_stress_profiles(folder, dataname, oldsteps):
     
     labels = ['X', 'Y', 'Z']
     dims = ['x', 'y', 'z']
-    colors = plt.cm.viridis(np.linspace(0, 1, 10))
     binWidth = 2
     
     data_dir = os.path.join(folder, 'output_files', 'stress_data')
@@ -131,6 +125,21 @@ def plot_stress_profiles(folder, dataname, oldsteps):
     polymer_ylims = [float('inf'), float('-inf')]
     solvent_ylims = [float('inf'), float('-inf')]
     total_ylims = [float('inf'), float('-inf')]
+    
+    # First pass: collect all timesteps to set up colormap
+    all_timesteps = []
+    poly_file = os.path.join(data_dir, f'stress_x_polymer_{dataname}.dat')
+    if os.path.exists(poly_file):
+        poly_data = read_ave_time_file(poly_file)
+        plot_interval = max(1, len(poly_data) // 10)
+        all_timesteps = [t for i, (t, _, _) in enumerate(poly_data) if i % plot_interval == 0]
+    
+    # Set up colormap normalized to timestep range
+    if all_timesteps:
+        cmap = plt.cm.viridis
+        norm = Normalize(vmin=min(all_timesteps), vmax=max(all_timesteps))
+        sm = ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
     
     for row, (label, dim) in enumerate(zip(labels, dims)):
         poly_file = os.path.join(data_dir, f'stress_{dim}_polymer_{dataname}.dat')
@@ -149,16 +158,34 @@ def plot_stress_profiles(folder, dataname, oldsteps):
                 polymer_ylims[0] = min(polymer_ylims[0], P.min())
                 polymer_ylims[1] = max(polymer_ylims[1], P.max())
                 
-                axes[row, 0].plot(coords_norm, P, linewidth=1.5, alpha=0.7,
-                                 color=colors[(i // plot_interval) % len(colors)],
-                                 label=f't={t}' if row == 0 else None)
+                # Use continuous colormap based on timestep
+                color = cmap(norm(t))
+                alpha = 0.6 + 0.4 * (t - min(all_timesteps)) / (max(all_timesteps) - min(all_timesteps))
+                
+                axes[row, 0].plot(coords_norm, P, linewidth=2.0, alpha=alpha,
+                                 color=color, label=f't={t}' if i // plot_interval < 3 else None)
+            
+            # Annotate first and last curves
+            if len(poly_data) > 0:
+                t_first, rows_first, P_first = poly_data[0]
+                coords_first = (rows_first * binWidth - binWidth/2) / box_dims[dim]
+                axes[row, 0].text(0.02, 0.98, f'First: t={t_first}', 
+                                 transform=axes[row, 0].transAxes,
+                                 fontsize=9, va='top', ha='left',
+                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+                
+                t_last = poly_data[-1][0]
+                axes[row, 0].text(0.98, 0.98, f'Last: t={t_last}', 
+                                 transform=axes[row, 0].transAxes,
+                                 fontsize=9, va='top', ha='right',
+                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
         
-        axes[row, 0].set_ylabel(f'Partial stress ({label})')
-        axes[row, 0].set_xlabel(f'{label}/L{label}')
+        axes[row, 0].set_ylabel(f'Partial stress ({label})', fontsize=11)
+        axes[row, 0].set_xlabel(f'{label}/L{label}', fontsize=11)
+        axes[row, 0].set_xlim(0, 1)
         axes[row, 0].grid(alpha=0.3)
         if row == 0:
-            axes[row, 0].legend(loc='best', fontsize=7, ncol=2)
-            axes[row, 0].set_title('Polymer', fontweight='bold')
+            axes[row, 0].set_title('Polymer', fontweight='bold', fontsize=12)
         
         if solv_data:
             plot_interval = max(1, len(solv_data) // 10)
@@ -170,15 +197,30 @@ def plot_stress_profiles(folder, dataname, oldsteps):
                 solvent_ylims[0] = min(solvent_ylims[0], P.min())
                 solvent_ylims[1] = max(solvent_ylims[1], P.max())
                 
-                axes[row, 1].plot(coords_norm, P, linewidth=1.5, alpha=0.7,
-                                 color=colors[(i // plot_interval) % len(colors)])
+                color = cmap(norm(t))
+                alpha = 0.6 + 0.4 * (t - min(all_timesteps)) / (max(all_timesteps) - min(all_timesteps))
+                
+                axes[row, 1].plot(coords_norm, P, linewidth=2.0, alpha=alpha, color=color)
+            
+            # Annotate first and last
+            if len(solv_data) > 0:
+                t_first = solv_data[0][0]
+                t_last = solv_data[-1][0]
+                axes[row, 1].text(0.02, 0.98, f'First: t={t_first}', 
+                                 transform=axes[row, 1].transAxes,
+                                 fontsize=9, va='top', ha='left',
+                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+                axes[row, 1].text(0.98, 0.98, f'Last: t={t_last}', 
+                                 transform=axes[row, 1].transAxes,
+                                 fontsize=9, va='top', ha='right',
+                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
         
-        axes[row, 1].set_ylabel(f'Partial stress ({label})')
-        axes[row, 1].set_xlabel(f'{label}/L{label}')
+        axes[row, 1].set_ylabel(f'Partial stress ({label})', fontsize=11)
+        axes[row, 1].set_xlabel(f'{label}/L{label}', fontsize=11)
         axes[row, 1].set_xlim(0, 1)
         axes[row, 1].grid(alpha=0.3)
         if row == 0:
-            axes[row, 1].set_title('Solvent', fontweight='bold')
+            axes[row, 1].set_title('Solvent', fontweight='bold', fontsize=12)
         
         # Total stress (interpolate and sum)
         if poly_data and solv_data:
@@ -200,16 +242,32 @@ def plot_stress_profiles(folder, dataname, oldsteps):
                 total_ylims[0] = min(total_ylims[0], P_total.min())
                 total_ylims[1] = max(total_ylims[1], P_total.max())
                 
-                axes[row, 2].plot(coords_common, P_total, linewidth=1.5, alpha=0.7,
-                                 color=colors[(i // plot_interval) % len(colors)])
+                color = cmap(norm(t_p))
+                alpha = 0.6 + 0.4 * (t_p - min(all_timesteps)) / (max(all_timesteps) - min(all_timesteps))
+                
+                axes[row, 2].plot(coords_common, P_total, linewidth=2.0, alpha=alpha, color=color)
+            
+            # Annotate first and last
+            if len(poly_data) > 0:
+                t_first = poly_data[0][0]
+                t_last = poly_data[-1][0]
+                axes[row, 2].text(0.02, 0.98, f'First: t={t_first}', 
+                                 transform=axes[row, 2].transAxes,
+                                 fontsize=9, va='top', ha='left',
+                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+                axes[row, 2].text(0.98, 0.98, f'Last: t={t_last}', 
+                                 transform=axes[row, 2].transAxes,
+                                 fontsize=9, va='top', ha='right',
+                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
         
-        axes[row, 2].set_ylabel(f'Total stress ({label})')
-        axes[row, 2].set_xlabel(f'{label}/L{label}')
+        axes[row, 2].set_ylabel(f'Total stress ({label})', fontsize=11)
+        axes[row, 2].set_xlabel(f'{label}/L{label}', fontsize=11)
         axes[row, 2].set_xlim(0, 1)
         axes[row, 2].grid(alpha=0.3)
         if row == 0:
-            axes[row, 2].set_title('Total', fontweight='bold')
+            axes[row, 2].set_title('Total', fontweight='bold', fontsize=12)
     
+    # Set shared y-limits
     if polymer_ylims[0] != float('inf'):
         for row in range(3):
             axes[row, 0].set_ylim(polymer_ylims)
@@ -220,139 +278,17 @@ def plot_stress_profiles(folder, dataname, oldsteps):
         for row in range(3):
             axes[row, 2].set_ylim(total_ylims)
     
-    plt.tight_layout()
+    # Add colorbar for timestep progression
+    if all_timesteps:
+        cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
+        cbar = fig.colorbar(sm, cax=cbar_ax)
+        cbar.set_label('Timestep', rotation=270, labelpad=20, fontsize=12)
+    
+    plt.tight_layout(rect=[0, 0, 0.9, 1])
     output_dir = os.path.join(folder, 'output_plots')
     os.makedirs(output_dir, exist_ok=True)
-    plt.savefig(os.path.join(output_dir, f'{dataname}_stress.png'), dpi=150)
+    plt.savefig(os.path.join(output_dir, f'{dataname}_stress.png'), dpi=150, bbox_inches='tight')
     print(f"Stress profile saved to {os.path.join(output_dir, f'{dataname}_stress.png')}")
-    plt.close()
-
-def plot_volume_fraction_profiles(folder, dataname, oldsteps):
-    """Plot volume fraction profiles for polymer (left), solvent (middle), and total (right)."""
-    box_dims = get_box_dims(folder, dataname)
-    
-    fig, axes = plt.subplots(3, 3, figsize=(18, 10))
-    if oldsteps > 0:
-        fig.suptitle(f'{dataname} Volume Fractions (continuing from {oldsteps} steps)', fontsize=14, fontweight='bold')
-    else:
-        fig.suptitle(f'{dataname} Volume Fractions (fresh run)', fontsize=14, fontweight='bold')
-    
-    labels = ['X', 'Y', 'Z']
-    dims = ['x', 'y', 'z']
-    colors = plt.cm.viridis(np.linspace(0, 1, 10))
-    binWidth = 0.5
-    
-    data_dir = os.path.join(folder, 'output_files', 'volume_data')
-    
-    polymer_ylims = [float('inf'), float('-inf')]
-    solvent_ylims = [float('inf'), float('-inf')]
-    total_ylims = [float('inf'), float('-inf')]
-    
-    for row, (label, dim) in enumerate(zip(labels, dims)):
-        # Calculate bin volume for this direction
-        if dim == 'x':
-            bin_volume = binWidth * box_dims['y'] * box_dims['z']
-        elif dim == 'y':
-            bin_volume = box_dims['x'] * binWidth * box_dims['z']
-        else:  # z
-            bin_volume = box_dims['x'] * box_dims['y'] * binWidth
-        
-        poly_file = os.path.join(data_dir, f'vol_{dim}_polymer_{dataname}.dat')
-        solv_file = os.path.join(data_dir, f'vol_{dim}_solvent_{dataname}.dat')
-        
-        poly_data = read_ave_time_file(poly_file) if os.path.exists(poly_file) else []
-        solv_data = read_ave_time_file(solv_file) if os.path.exists(solv_file) else []
-        
-        if poly_data:
-            plot_interval = max(1, len(poly_data) // 10)
-            
-            for i, (t, rows, V) in enumerate(poly_data):
-                if i % plot_interval != 0:
-                    continue
-                coords_norm = (rows * binWidth - binWidth/2) / box_dims[dim]
-                phi = V / bin_volume
-                polymer_ylims[0] = min(polymer_ylims[0], phi.min())
-                polymer_ylims[1] = max(polymer_ylims[1], phi.max())
-                
-                axes[row, 0].plot(coords_norm, phi, linewidth=1.5, alpha=0.7,
-                                 color=colors[(i // plot_interval) % len(colors)],
-                                 label=f't={t}' if row == 0 else None)
-        
-        axes[row, 0].set_ylabel(f'Volume fraction ({label})')
-        axes[row, 0].set_xlabel(f'{label}/L{label}')
-        axes[row, 0].grid(alpha=0.3)
-        if row == 0:
-            axes[row, 0].legend(loc='best', fontsize=7, ncol=2)
-            axes[row, 0].set_title('Polymer', fontweight='bold')
-        
-        if solv_data:
-            plot_interval = max(1, len(solv_data) // 10)
-            
-            for i, (t, rows, V) in enumerate(solv_data):
-                if i % plot_interval != 0:
-                    continue
-                coords_norm = (rows * binWidth - binWidth/2) / box_dims[dim]
-                phi = V / bin_volume
-                solvent_ylims[0] = min(solvent_ylims[0], phi.min())
-                solvent_ylims[1] = max(solvent_ylims[1], phi.max())
-                
-                axes[row, 1].plot(coords_norm, phi, linewidth=1.5, alpha=0.7,
-                                 color=colors[(i // plot_interval) % len(colors)])
-        
-        axes[row, 1].set_ylabel(f'Volume fraction ({label})')
-        axes[row, 1].set_xlabel(f'{label}/L{label}')
-        axes[row, 1].set_xlim(0, 1)
-        axes[row, 1].grid(alpha=0.3)
-        if row == 0:
-            axes[row, 1].set_title('Solvent', fontweight='bold')
-        
-        # Total volume fraction (interpolate and sum)
-        if poly_data and solv_data:
-            plot_interval = max(1, len(poly_data) // 10)
-            
-            for i, ((t_p, rows_p, V_p), (t_s, rows_s, V_s)) in enumerate(zip(poly_data, solv_data)):
-                if i % plot_interval != 0:
-                    continue
-                
-                coords_p = (rows_p * binWidth - binWidth/2) / box_dims[dim]
-                coords_s = (rows_s * binWidth - binWidth/2) / box_dims[dim]
-                phi_p = V_p / bin_volume
-                phi_s = V_s / bin_volume
-                
-                # Create common grid
-                coords_common = np.linspace(0, 1, 200)
-                phi_p_interp = np.interp(coords_common, coords_p, phi_p, left=0, right=0)
-                phi_s_interp = np.interp(coords_common, coords_s, phi_s, left=0, right=0)
-                phi_total = phi_p_interp + phi_s_interp
-                
-                total_ylims[0] = min(total_ylims[0], phi_total.min())
-                total_ylims[1] = max(total_ylims[1], phi_total.max())
-                
-                axes[row, 2].plot(coords_common, phi_total, linewidth=1.5, alpha=0.7,
-                                 color=colors[(i // plot_interval) % len(colors)])
-        
-        axes[row, 2].set_ylabel(f'Total volume fraction ({label})')
-        axes[row, 2].set_xlabel(f'{label}/L{label}')
-        axes[row, 2].set_xlim(0, 1)
-        axes[row, 2].grid(alpha=0.3)
-        if row == 0:
-            axes[row, 2].set_title('Total', fontweight='bold')
-    
-    if polymer_ylims[0] != float('inf'):
-        for row in range(3):
-            axes[row, 0].set_ylim(polymer_ylims)
-    if solvent_ylims[0] != float('inf'):
-        for row in range(3):
-            axes[row, 1].set_ylim(solvent_ylims)
-    if total_ylims[0] != float('inf'):
-        for row in range(3):
-            axes[row, 2].set_ylim(total_ylims)
-    
-    plt.tight_layout()
-    output_dir = os.path.join(folder, 'output_plots')
-    os.makedirs(output_dir, exist_ok=True)
-    plt.savefig(os.path.join(output_dir, f'{dataname}_volume.png'), dpi=150)
-    print(f"Volume fraction profile saved to {os.path.join(output_dir, f'{dataname}_volume.png')}")
     plt.close()
 
 if __name__ == "__main__":
@@ -364,16 +300,7 @@ if __name__ == "__main__":
     dataname = sys.argv[2]
     oldsteps = int(sys.argv[3]) if len(sys.argv) > 3 else 0
     
-    # Check if data exists before creating plots
-    stress_exists = check_stress_data_exists(folder, dataname)
-    volume_exists = check_volume_data_exists(folder, dataname)
-    
-    if stress_exists:
+    if check_stress_data_exists(folder, dataname):
         plot_stress_profiles(folder, dataname, oldsteps)
     else:
         print(f"No stress data found for {dataname}, skipping stress plots")
-    
-    if volume_exists:
-        plot_volume_fraction_profiles(folder, dataname, oldsteps)
-    else:
-        print(f"No volume data found for {dataname}, skipping volume fraction plots")

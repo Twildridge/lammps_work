@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/plot_lammps_log.py", line 212, in <module>
+    data = parse_lammps_log(filepath)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/plot_lammps_log.py", line 41, in parse_lammps_log
+    for line in f:
+                ^
+  File "<frozen codecs>", line 322, in decode
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0x86 in position 6395: invalid start byte
+Traceback (most recent call last):
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/write_tracking.py", line 420, in <module>
+    wall_time = parse_lammps_log(logfile)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/jet/home/dpollard/Documents/lammps_work/scripts/write_tracking.py", line 125, in parse_lammps_log
+    for line in f:
+                ^
+  File "<frozen codecs>", line 322, in decode
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0x86 in position 6395: invalid start byte

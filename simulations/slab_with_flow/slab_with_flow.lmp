@@ -1,5 +1,5 @@
 # ========== Slab Flow / Compression Simulation with Piston Forcing ==========
-# Starting from equilibrated configuration
+# Starting from equilibrated configuration (solvent near walls already removed)
 # Variables from bash script: dataname, interaction, epsSS, epsSP, nsteps
 #
 # Atom types: 1=polymer, 2=crosslinker, 3=solvent, 4=support, 5=piston, 6=walls
@@ -13,15 +13,16 @@
 #   compression_mode = 1 : COMPRESSION — piston passes through solvent (no 3-5
 #                          interaction); piston contacts gel directly, squeezes
 #                          solvent out the support bottom.  Piston is frozen once
-#                          10% linear strain is reached; stresses then relax at
+#                          comp_percent strain is reached; stresses then relax at
 #                          fixed deformation for another nsteps.
 #
 # Phases:
-#   1. Soft push (nsteps_softpush) — resolve polymer/solvent-wall overlaps with
-#      ramped soft potential; solvent-piston soft push only in permeation mode.
-#   2. Switch to full LJ + minimize + brief equilibration (5000 steps).
-#   3. Production — piston force ramps from piston_force_start to piston_force_end.
-#      Compression mode: halts at 10% strain, then relaxes for nsteps more.
+#   1. Mode-dependent equilibration (full 3D NVT, full LJ from the start).
+#        PERMEATION:  perm_setup_freq steps, piston z-free (settles onto solvent).
+#        COMPRESSION: comp_setup_freq steps, piston fully frozen, solvent-piston OFF.
+#      Brief minimize at the start to resolve any residual overlaps.
+#   2. Production — piston force ramps from piston_force_start to piston_force_end.
+#      Compression mode: halts at comp_percent strain, then relaxes for nsteps more.
 #      Permeation  mode: runs nsteps with ramped force, no halt.
 
 
@@ -31,7 +32,7 @@
 
 # ----- Mode Selection -----
 # 0 = permeation (solvent-piston WCA, piston pushes fluid through gel)
-# 1 = compression (solvent-piston OFF, piston loads gel directly; stops at 10%)
+# 1 = compression (solvent-piston OFF, piston loads gel directly)
 variable compression_mode equal 1
 
 # ----- Physical Parameters -----
@@ -42,18 +43,19 @@ variable timestep_prod equal 0.005
 # ----- Piston Force Ramp -----
 # Force ramps linearly from start to end over each production run segment.
 # Negative = pushing in -z direction.
-variable piston_force_start equal -0.001
-variable piston_force_end   equal -0.01
+variable piston_force_start equal -0.01
+variable piston_force_end   equal -0.05
 
-# ----- Soft Push Parameters -----
-variable nsteps_softpush    equal 1000
-variable soft_prefactor_max equal 50
+# ----- Phase 1: Mode-Dependent Setup -----
+variable perm_setup_freq equal 10000    # permeation equilibration steps
+variable comp_setup_freq equal 20000    # compression equilibration steps
+variable comp_percent    equal 0.1      # strain threshold for compression halt
 
 # ----- Output Frequencies -----
-variable thermo_freq     equal 10000
-variable dump_freq_setup equal 1000    # frequent dumps during setup (Phases 1-2)
-variable dump_freq_prod  equal 10000   # sparse dumps during production (Phase 3)
-variable volume_freq     equal 5000
+variable thermo_freq     equal 100000
+variable dump_freq_setup equal 1000      # frequent dumps during Phase 1
+variable dump_freq_prod  equal 100000     # sparse dumps during Phase 2
+variable volume_freq     equal 10000
 
 # ----- Time Averaging (stress) -----
 # nfreq = nevery * nrepeat  (LAMMPS constraint)
@@ -92,8 +94,7 @@ boundary p p p
 atom_style molecular
 atom_modify map array
 
-# Define styles before read_data (nocoeff skips coefficient sections)
-pair_style hybrid/overlay lj/cut 2.5 soft 2.5
+pair_style lj/cut 2.5
 bond_style fene
 
 read_data data_files/${dataname}.data nocoeff
@@ -104,7 +105,7 @@ print "========================================"
 print "Flow/Compression simulation: ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
 print "Production steps: ${nsteps}"
-print "Piston force: ${piston_force_start} → ${piston_force_end} (ramp)"
+print "Piston force: ${piston_force_start} -> ${piston_force_end} (ramp)"
 print "========================================"
 
 
@@ -125,49 +126,40 @@ group gel_system type 1 2 3 4 5
 #                       INTERATOMIC POTENTIALS
 # ==========================================================================
 
-# ----- LJ Interactions (hybrid/overlay active during soft-push phase) -----
-pair_coeff * * lj/cut 1.0 ${sigma} 2.5
+# Default: full LJ for all pairs
+pair_coeff * * 1.0 ${sigma} 2.5
 
 # Polymer-solvent & solvent-solvent (tunable)
-pair_coeff 1 3 lj/cut ${epsSP} ${sigma} 2.5    # polymer-solvent
-pair_coeff 2 3 lj/cut ${epsSP} ${sigma} 2.5    # crosslinker-solvent
-pair_coeff 3 3 lj/cut ${epsSS} ${sigma} 2.5    # solvent-solvent
+pair_coeff 1 3 ${epsSP} ${sigma} 2.5    # polymer-solvent
+pair_coeff 2 3 ${epsSP} ${sigma} 2.5    # crosslinker-solvent
+pair_coeff 3 3 ${epsSS} ${sigma} 2.5    # solvent-solvent
 
-# Polymer/crosslinker with support (WCA repulsive)
-pair_coeff 1 4 lj/cut 1.0 ${sigma} 1.22
-pair_coeff 2 4 lj/cut 1.0 ${sigma} 1.22
+# Polymer/crosslinker with support and piston (WCA repulsive)
+pair_coeff 1 4 1.0 ${sigma} 1.22
+pair_coeff 2 4 1.0 ${sigma} 1.22
+pair_coeff 1 5 1.0 ${sigma} 1.22
+pair_coeff 2 5 1.0 ${sigma} 1.22
 
-# Polymer/crosslinker with piston (WCA repulsive — both modes)
-pair_coeff 1 5 lj/cut 1.0 ${sigma} 1.22
-pair_coeff 2 5 lj/cut 1.0 ${sigma} 1.22
+# Solvent-piston: mode-dependent from the start
+#   permeation  (0) → WCA: piston pushes fluid as a plug
+#   compression (1) → OFF: piston passes through solvent freely
+pair_coeff 3 5 0.0 ${sigma} 0.0                 # default: OFF (compression)
+if "${compression_mode} == 0" then &
+    "pair_coeff 3 5 1.0 ${sigma} 1.22"          # permeation: WCA
 
-# Solvent-piston: OFF during initial setup for both modes.
-# In permeation mode this is turned on to WCA after Phase 1.
-# In compression mode it stays OFF throughout.
-pair_coeff 3 5 lj/cut 0.0 ${sigma} 0.0         # solvent-piston (OFF initially)
+# Wall interactions (WCA)
+pair_coeff 1 6 1.0 ${sigma} 1.22
+pair_coeff 2 6 1.0 ${sigma} 1.22
+pair_coeff 3 6 1.0 ${sigma} 1.22
 
-# Non-interacting pairs (OFF)
-pair_coeff 3 4 lj/cut 0.0 ${sigma} 0.0         # solvent-support
-pair_coeff 4 4 lj/cut 0.0 ${sigma} 0.0         # support-support
-pair_coeff 4 5 lj/cut 0.0 ${sigma} 0.0         # support-piston
-pair_coeff 5 5 lj/cut 0.0 ${sigma} 0.0         # piston-piston
-
-# Wall interactions (OFF for LJ — soft only initially)
-pair_coeff 1 6 lj/cut 0.0 ${sigma} 0.0         # polymer-wall
-pair_coeff 2 6 lj/cut 0.0 ${sigma} 0.0         # crosslinker-wall
-pair_coeff 3 6 lj/cut 0.0 ${sigma} 0.0         # solvent-wall
-pair_coeff 4 6 lj/cut 0.0 ${sigma} 0.0         # support-wall
-pair_coeff 5 6 lj/cut 0.0 ${sigma} 0.0         # piston-wall
-pair_coeff 6 6 lj/cut 0.0 ${sigma} 0.0         # wall-wall
-
-# ----- Soft Potentials (start at zero; ramped in Phase 1) -----
-# Solvent-piston soft: only needed for permeation mode (piston must push solvent
-# away from its initial overlapping position).  In compression mode the piston
-# passes right through solvent, so no overlap resolution is required.
-pair_coeff 3 5 soft 0.0 ${sigma}               # solvent-piston (conditional)
-pair_coeff 1 6 soft 0.0 ${sigma}               # polymer-wall
-pair_coeff 2 6 soft 0.0 ${sigma}               # crosslinker-wall
-pair_coeff 3 6 soft 0.0 ${sigma}               # solvent-wall
+# Non-interacting pairs
+pair_coeff 3 4 0.0 ${sigma} 0.0         # solvent-support
+pair_coeff 4 4 0.0 ${sigma} 0.0         # support-support
+pair_coeff 4 5 0.0 ${sigma} 0.0         # support-piston
+pair_coeff 4 6 0.0 ${sigma} 0.0         # support-wall
+pair_coeff 5 5 0.0 ${sigma} 0.0         # piston-piston
+pair_coeff 5 6 0.0 ${sigma} 0.0         # piston-wall
+pair_coeff 6 6 0.0 ${sigma} 0.0         # wall-wall
 
 # ----- Bonds and Angles -----
 bond_coeff * 30.0 2.5 1.0 1.0
@@ -195,14 +187,21 @@ neigh_modify exclude type 5 6   # piston-wall
 velocity support set 0.0 0.0 0.0
 fix rigid_support support rigid single force * off off off torque * off off off
 
-# Piston: frozen during setup; z-motion enabled in Phase 3
-velocity piston set 0.0 0.0 0.0
-fix rigid_piston  piston rigid single force * off off off torque * off off off
-fix freeze_piston piston setforce 0.0 0.0 0.0
-
 # Walls: completely frozen
 velocity walls set 0.0 0.0 0.0
 fix rigid_walls walls rigid single force * off off off torque * off off off
+
+# Piston: mode-dependent from the start
+#   Compression: fully frozen during Phase 1 (z-motion enabled in Phase 2)
+#   Permeation:  z-motion enabled immediately (settles onto solvent surface)
+velocity piston set 0.0 0.0 0.0
+
+if "${compression_mode} == 1" then &
+    "fix rigid_piston piston rigid single force * off off off torque * off off off" &
+    "fix freeze_piston piston setforce 0.0 0.0 0.0"
+
+if "${compression_mode} == 0" then &
+    "fix rigid_piston piston rigid single force * off off on torque * off off off"
 
 
 # ==========================================================================
@@ -216,135 +215,41 @@ thermo ${thermo_freq}
 
 
 # ==========================================================================
-#              PHASE 1: SOFT PUSH (Resolve Overlaps)
+#              PHASE 1: MODE-DEPENDENT EQUILIBRATION
 # ==========================================================================
+# Full LJ from the start (no soft push needed — data file is pre-cleaned).
+# Brief minimize to resolve any residual overlaps, then full 3D NVT.
+#   PERMEATION:  perm_setup_freq steps, piston z-free (settles onto solvent).
+#   COMPRESSION: comp_setup_freq steps, piston frozen, solvent-piston OFF.
 
 print "========================================"
-print "Phase 1: Soft push to resolve overlaps"
+if "${compression_mode} == 0" then &
+    "print 'Phase 1: Permeation equilibration (${perm_setup_freq} steps)'"
+if "${compression_mode} == 1" then &
+    "print 'Phase 1: Compression equilibration (${comp_setup_freq} steps)'"
 print "========================================"
 
 reset_timestep 0
 timestep ${timestep_prod}
 
-# Trajectory dump for setup phases (frequent sampling)
+# Brief minimize to clean up any residual overlaps
+minimize 1.0e-4 1.0e-6 1000 10000
+
+# Setup trajectory (both modes)
 dump traj_setup gel_system custom ${dump_freq_setup} &
     traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
     id type mol x y z
 
-fix nvt_push mobile nvt temp ${temp_target} ${temp_target} 1.0
-
-# Ramp soft potential from 0 to max
-variable soft_ramp equal ramp(0,${soft_prefactor_max})
-
-# Solvent-piston soft push: PERMEATION MODE ONLY.
-# In compression mode (compression_mode=1) solvent and piston do not interact,
-# so there are no overlaps to resolve between them.
-if "${compression_mode} == 0" then &
-    "fix adapt_soft_3_5 all adapt 1 pair soft a 3 5 v_soft_ramp"
-
-# Wall soft pushes: needed in both modes
-fix adapt_soft_1_6 all adapt 1 pair soft a 1 6 v_soft_ramp
-fix adapt_soft_2_6 all adapt 1 pair soft a 2 6 v_soft_ramp
-fix adapt_soft_3_6 all adapt 1 pair soft a 3 6 v_soft_ramp
-
-run ${nsteps_softpush}
-
-minimize 1.0e-4 1.0e-6 1000 10000
-
-if "${compression_mode} == 0" then "unfix adapt_soft_3_5"
-unfix adapt_soft_1_6
-unfix adapt_soft_2_6
-unfix adapt_soft_3_6
-unfix nvt_push
-
-print "Soft push complete"
-
-
-# ==========================================================================
-#              PHASE 2: SWITCH TO FULL LJ
-# ==========================================================================
-
-print "========================================"
-print "Phase 2: Switching to full LJ interactions"
-print "========================================"
-
-pair_style lj/cut 2.5
-
-pair_coeff * * 1.0 ${sigma} 2.5
-
-# Polymer-solvent & solvent-solvent
-pair_coeff 1 3 ${epsSP} ${sigma} 2.5
-pair_coeff 2 3 ${epsSP} ${sigma} 2.5
-pair_coeff 3 3 ${epsSS} ${sigma} 2.5
-
-# Polymer/crosslinker with support and piston (WCA — both modes)
-pair_coeff 1 4 1.0 ${sigma} 1.22
-pair_coeff 2 4 1.0 ${sigma} 1.22
-pair_coeff 1 5 1.0 ${sigma} 1.22
-pair_coeff 2 5 1.0 ${sigma} 1.22
-
-# Solvent-piston:
-#   permeation mode  (0) → WCA: piston pushes fluid as a plug
-#   compression mode (1) → OFF: piston passes through solvent freely
-pair_coeff 3 5 0.0 ${sigma} 0.0                 # default: OFF (compression mode)
-if "${compression_mode} == 0" then &
-    "pair_coeff 3 5 1.0 ${sigma} 1.22"          # permeation mode: WCA
-
-# Wall interactions (WCA — both modes)
-pair_coeff 1 6 1.0 ${sigma} 1.22
-pair_coeff 2 6 1.0 ${sigma} 1.22
-pair_coeff 3 6 1.0 ${sigma} 1.22
-
-# Non-interacting
-pair_coeff 3 4 0.0 ${sigma} 0.0
-pair_coeff 4 4 0.0 ${sigma} 0.0
-pair_coeff 4 5 0.0 ${sigma} 0.0
-pair_coeff 4 6 0.0 ${sigma} 0.0
-pair_coeff 5 5 0.0 ${sigma} 0.0
-pair_coeff 5 6 0.0 ${sigma} 0.0
-pair_coeff 6 6 0.0 ${sigma} 0.0
-
-# Aggressively minimize + brief equilibration
-minimize 1.0e-4 1.0e-6 1000 10000
-
+# Full 3D NVT equilibration
 fix nvt_equil mobile nvt temp ${temp_target} ${temp_target} 1.0
-run 5000
+
+if "${compression_mode} == 0" then "run ${perm_setup_freq}"
+if "${compression_mode} == 1" then "run ${comp_setup_freq}"
+
+print ">>> Post-equilibration T = $(c_mobile_temp)"
+
 unfix nvt_equil
-
-# End setup trajectory, start production trajectory
 undump traj_setup
-
-
-# ==========================================================================
-#              PHASE 3: PRODUCTION
-# ==========================================================================
-
-print "========================================"
-print "Phase 3: Production — piston forcing"
-print "========================================"
-
-# ----- Enable Piston z-Motion -----
-unfix freeze_piston
-unfix rigid_piston
-fix rigid_piston piston rigid single force * off off on torque * off off off
-
-# ----- Thermostat (x,y only — z is flow/compression direction) -----
-compute myTemp mobile temp/partial 1 1 0
-fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix_modify nvt_prod temp myTemp
-
-# ----- Piston Force (linear ramp over each run segment) -----
-# ramp(lo,hi) evaluates to lo at step 0 of the run and hi at the final step.
-# In compression mode the run may halt early, so the force won't reach
-# piston_force_end — but it ramps as far as the run goes.
-variable piston_force_ramp equal ramp(${piston_force_start},${piston_force_end})
-fix push_piston  piston addforce 0.0 0.0 v_piston_force_ramp
-fix piston_drag  piston viscous 0.1
-
-# ----- Production Trajectory (sparse sampling) -----
-dump traj_flow gel_system custom ${dump_freq_prod} &
-    traj_files/gel_flow_${dataname}_${interaction}_${nsteps}.lammpstrj &
-    id type mol x y z
 
 
 # ==========================================================================
@@ -382,9 +287,9 @@ variable box_lx equal lx
 variable box_ly equal ly
 variable box_lz equal lz
 
-run 0   # initializes ALL computes above in one pass
+run 0   # initializes ALL computes in one pass
 
-# Snapshot Rg tensor for diagnostics and analysis region sizing
+# ----- Snapshot Rg tensor for diagnostics and analysis region sizing -----
 variable Rg_xx equal c_rg_tensor[1]
 variable Rg_yy equal c_rg_tensor[2]
 variable Rg_zz equal c_rg_tensor[3]
@@ -394,7 +299,7 @@ print "Rg_yy = ${Rg_yy}  →  Ly_rg = $(v_gel_ly_rg)"
 print "Rg_zz = ${Rg_zz}  →  Lz_rg = $(v_gel_lz_rg)"
 print "BB:  Lx=$(v_gel_lx_bb) Ly=$(v_gel_ly_bb) Lz=$(v_gel_lz_bb)"
 
-# Analysis region half-widths (still use rg_scale for ~90% coverage)
+# Analysis region half-widths (use rg_scale for ~90% coverage)
 variable eps equal 1.0e-12
 variable hw_x equal v_region_frac*v_rg_scale*sqrt(v_Rg_xx + v_eps)
 variable hw_y equal v_region_frac*v_rg_scale*sqrt(v_Rg_yy + v_eps)
@@ -412,6 +317,39 @@ print ">>> Initial gel thickness (Rg): L0 = ${gel_lz_initial}"
 print ">>> Initial gel thickness (BB): L0 = $(v_gel_lz_bb)"
 
 variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
+
+
+# ==========================================================================
+#              PHASE 2: PRODUCTION — piston forcing
+# ==========================================================================
+
+print "========================================"
+print "Phase 2: Production — piston forcing"
+print "========================================"
+
+# ----- Enable Piston z-Motion (compression mode only — permeation already has it) -----
+if "${compression_mode} == 1" then "unfix freeze_piston"
+if "${compression_mode} == 1" then "unfix rigid_piston"
+if "${compression_mode} == 1" then &
+    "fix rigid_piston piston rigid single force * off off on torque * off off off"
+
+# ----- Thermostat (x,y only — z is flow/compression direction) -----
+compute myTemp mobile temp/partial 1 1 0
+fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix_modify nvt_prod temp myTemp
+
+# ----- Piston Force (linear ramp over each run segment) -----
+# ramp(lo,hi) evaluates to lo at step 0 of the run and hi at the final step.
+# In compression mode the run may halt early, so the force won't reach
+# piston_force_end — but it ramps as far as the run goes.
+variable piston_force_ramp equal ramp(${piston_force_start},${piston_force_end})
+fix push_piston  piston addforce 0.0 0.0 v_piston_force_ramp
+fix piston_drag  piston viscous 0.01
+
+# ----- Production Trajectory (sparse sampling) -----
+dump traj_flow gel_system custom ${dump_freq_prod} &
+    traj_files/gel_flow_${dataname}_${interaction}_${nsteps}.lammpstrj &
+    id type mol x y z
 
 
 # ==========================================================================
@@ -564,40 +502,40 @@ fix out_polymer_com all print ${volume_freq} &
 
 
 # ==========================================================================
-#         COMPRESSION MODE: HALT AT 12% STRAIN
+#         COMPRESSION MODE: HALT AT comp_percent STRAIN
 # ==========================================================================
 # fix halt stops the current run command (error continue = no abort).
 # After the run exits the script continues to the relaxation block below.
 # In permeation mode this fix is not created, so the run simply goes to nsteps.
 
 if "${compression_mode} == 1" then &
-    "fix halt_compress all halt ${volume_freq} v_gel_strain >= 0.12 error continue"
+    "fix halt_compress all halt ${volume_freq} v_gel_strain >= ${comp_percent} error continue"
 
-print ">>> Starting Phase 3 production run (nsteps = ${nsteps})"
+print ">>> Starting Phase 2 production run (nsteps = ${nsteps})"
 print ">>> compression_mode = ${compression_mode}"
 
 
 # ==========================================================================
-#                         PRODUCTION RUN — PHASE 3a
+#                         PRODUCTION RUN
 # ==========================================================================
-# Compression mode: this run halts early when gel_strain >= 0.10.
+# Compression mode: this run halts early when gel_strain >= comp_percent.
 # Permeation mode:  this run runs to completion (nsteps).
 
 run ${nsteps}
 
 
 # ==========================================================================
-#              COMPRESSION MODE — FREEZE PISTON + PHASE 3b RELAX
+#              COMPRESSION MODE — FREEZE PISTON + STRESS RELAXATION
 # ==========================================================================
 # These commands only execute when compression_mode == 1.
-# After the halt the gel is at ~10% strain.  We freeze the piston in place
-# and run another nsteps so the partial stresses can relax to equilibrium
-# at fixed deformation.  All output fixes remain active during Phase 3b.
+# After the halt the gel is at ~comp_percent strain.  We freeze the piston
+# in place and run another nsteps so the partial stresses can relax to
+# equilibrium at fixed deformation.  All output fixes remain active.
 # NOTE: ave/time accumulators continue from where they left off — the output
 # files will contain entries spanning both the compression and relaxation phases.
 
 if "${compression_mode} == 1" then "unfix halt_compress"
-if "${compression_mode} == 1" then "print '>>> 10% compression reached (or nsteps exhausted)'"
+if "${compression_mode} == 1" then "print '>>> Compression halted (or nsteps exhausted)'"
 if "${compression_mode} == 1" then "print '>>> Freezing piston and starting stress relaxation'"
 
 # Disable piston force and motion
@@ -607,10 +545,6 @@ if "${compression_mode} == 1" then "unfix rigid_piston"
 if "${compression_mode} == 1" then "velocity piston set 0.0 0.0 0.0"
 if "${compression_mode} == 1" then &
     "fix rigid_piston piston rigid single force * off off off torque * off off off"
-
-# Redefine piston force ramp for Phase 3b (will be zero since piston is frozen,
-# but the variable must exist for the ramp not to error if referenced elsewhere).
-# Nothing applies it since push_piston is unfixed.
 
 if "${compression_mode} == 1" then "run ${nsteps}"
 
