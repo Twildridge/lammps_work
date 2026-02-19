@@ -44,7 +44,7 @@ variable timestep_prod equal 0.005
 # Force ramps linearly from start to end over each production run segment.
 # Negative = pushing in -z direction.
 variable piston_force_start equal -0.01
-variable piston_force_end   equal -0.05
+variable piston_force_end   equal -0.04
 
 # ----- Phase 1: Mode-Dependent Setup -----
 variable perm_setup_freq equal 10000    # permeation equilibration steps
@@ -52,14 +52,14 @@ variable comp_setup_freq equal 20000    # compression equilibration steps
 variable comp_percent    equal 0.1      # strain threshold for compression halt
 
 # ----- Output Frequencies -----
-variable thermo_freq     equal 100000
+variable thermo_freq     equal 1000000
 variable dump_freq_setup equal 1000      # frequent dumps during Phase 1
-variable dump_freq_prod  equal 100000     # sparse dumps during Phase 2
+variable dump_freq_prod  equal 1000000     # sparse dumps during Phase 2
 variable volume_freq     equal 10000
 
 # ----- Time Averaging (stress) -----
 # nfreq = nevery * nrepeat  (LAMMPS constraint)
-variable num_stress_curves equal 10    # target output frames
+variable num_stress_curves equal 20    # target output frames
 variable nevery_target     equal 100   # ~0.5 tau — near stress decorrelation time
 variable nrepeat_max       equal 2000  # cap to preserve transient resolution
 variable nrepeat_min       equal 50    # floor for adequate noise reduction
