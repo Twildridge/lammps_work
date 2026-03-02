@@ -156,3 +156,92 @@ find /cm/shared/apps/spack/ -name "CMakeCache.txt" -path "*lammps*" 2>/dev/null 
 grep "PKG_.*:BOOL=ON" /path/to/CMakeCache.txt | sed 's/PKG_//; s/:BOOL.*//'      # 5b. list packages
 sinfo -p gpu --format="%N %G %m"                   # 6. check GPU hardware
 ```
+
+---
+
+## GitHub Setup and Basic Workflow
+
+GitHub no longer accepts passwords for Git operations — you need a **Personal Access Token (PAT)** instead.
+
+### Generating a Personal Access Token
+
+1. Go to [github.com](https://github.com) and log in
+2. Click your profile picture → **Settings**
+3. Scroll down to **Developer settings** (bottom of left sidebar)
+4. Click **Personal access tokens** → **Tokens (classic)**
+5. Click **Generate new token** → **Generate new token (classic)**
+6. Give it a descriptive name (e.g. `expanse-token`)
+7. Set an expiration (90 days is reasonable)
+8. Check the **repo** scope (this gives full access to your repositories)
+9. Click **Generate token** at the bottom
+10. **Copy the token immediately** — GitHub will never show it again
+
+### Configuring Git on Expanse
+
+Set your identity to match your GitHub account:
+
+```bash
+git config --global user.name "Twildridge"
+git config --global user.email "semiinfiniteslab@icloud.com"
+```
+
+Save your credentials so you don't have to re-enter the token every time:
+
+```bash
+git config --global credential.helper store
+```
+
+### Cloning the Repository
+
+```bash
+cd ~/Documents   # or wherever you want the repo to live
+git clone https://github.com/Twildridge/lammps_work.git
+cd lammps_work
+```
+
+When prompted for a password, **paste your Personal Access Token** (not your GitHub password). With `credential.helper store` set, this is only needed once.
+
+---
+
+### Basic Git Workflow
+
+The typical day-to-day cycle is: pull → make changes → add → commit → push.
+
+**1. Before starting work, pull any changes from GitHub:**
+```bash
+git pull
+```
+
+**2. After making changes, check what has been modified:**
+```bash
+git status
+```
+
+**3. Stage the files you want to commit:**
+```bash
+git add filename.txt          # stage a specific file
+git add .                     # stage all changed files
+```
+
+**4. Commit with a descriptive message:**
+```bash
+git commit -m "Brief description of what you changed"
+```
+
+**5. Push to GitHub:**
+```bash
+git push
+```
+
+---
+
+### Other Useful Commands
+
+```bash
+git log --oneline             # see recent commit history
+git diff filename.txt         # see what changed in a file before staging
+git restore filename.txt      # discard uncommitted changes to a file
+git branch                    # see which branch you're on
+```
+
+> **Important:** Always `git pull` before starting new work, especially if multiple people are using the same repository. This avoids merge conflicts.
