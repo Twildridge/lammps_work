@@ -66,27 +66,11 @@ It will likely be just `lmp` or `lmp_kokkos`.
 
 **Do NOT run `lmp -h` on the login node.** If it is a GPU/Kokkos build, it will hang indefinitely trying to initialize GPUs — login nodes have none.
 
-Instead, read the CMakeCache from the build directory directly.
-
-### 6a. Find the CMakeCache
+Instead, read the CMakeCache from the build directory directly:
 
 ```bash
-find /cm/shared/apps/spack/ -name "CMakeCache.txt" -path "*lammps*" 2>/dev/null
+grep "PKG_.*:BOOL=ON" $(find $(dirname $(which lmp))/../ -name "CMakeCache.txt" 2>/dev/null) | sed 's/PKG_//; s/:BOOL.*//'
 ```
-
-This returns a path like:
-
-```
-/cm/shared/apps/spack/0.17.3/gpu/b/opt/spack/.../lammps-XXXXXXX/.spack/archived-files/spack-build-XXXXXXX/CMakeCache.txt
-```
-
-### 6b. List Installed Packages
-
-```bash
-grep "PKG_.*:BOOL=ON" /path/to/CMakeCache.txt | sed 's/PKG_//; s/:BOOL.*//'
-```
-
-This prints a clean list of every LAMMPS package compiled into the build.
 
 ---
 

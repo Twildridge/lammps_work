@@ -17,7 +17,7 @@ OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
 TOTSTEPS=$((OLDSTEPS + NSTEPS))
 
 # Scratch directory for trajectories
-SCRATCH_DIR="/expanse/lustre/scratch/$USER/temp_project"
+SCRATCH_DIR="/ocean/projects/chm250028p/$USER"
 
 # Get the directory where this script lives (should be lammps_work/scripts/)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -88,18 +88,36 @@ NGPUS=${SLURM_GPUS_ON_NODE:-0}
 echo "SLURM_GPUS_ON_NODE: $SLURM_GPUS_ON_NODE"
 echo "GPUs allocated: $SLURM_GPUS"
 
-# CPU-only mode (NOT USING OMP FOR NOW (not on Expanse 2021 version)
-echo "Running CPU-only with $SLURM_NTASKS tasks"
-mpirun -n $SLURM_NTASKS \
-    lmp \
-    -var dataname $DATANAME \
-    -var interaction $INTERACTION \
-    -var epsSS $EPSSS \
-    -var epsSP $EPSSP \
-    -var nsteps $NSTEPS \
-    -var oldsteps $OLDSTEPS \
-    -var totsteps $TOTSTEPS \
-    -in $LAMMPS_FILE
+if [ $NGPUS -gt 0 ]; then
+    # GPU mode with Kokkos
+    echo "Running with $NGPUS GPU(s) and $SLURM_CPUS_PER_TASK threads per GPU"
+    mpirun -n $SLURM_NTASKS \
+        /opt/packages/LAMMPS/lammps-22Jul2025/build-V100-gcc13.3.1/lmp \
+        -k on g $NGPUS t $SLURM_CPUS_PER_TASK -sf kk -pk kokkos newton on neigh half comm device \
+        -var dataname $DATANAME \
+        -var interaction $INTERACTION \
+        -var epsSS $EPSSS \
+        -var epsSP $EPSSP \
+        -var nsteps $NSTEPS \
+        -var oldsteps $OLDSTEPS \
+        -var totsteps $TOTSTEPS \
+        -in $LAMMPS_FILE
+else
+    # CPU-only mode
+    echo "Running CPU-only with $SLURM_NTASKS tasks"
+    mpirun -n $SLURM_NTASKS \
+        /opt/packages/LAMMPS/lammps-22Jul2025/build-RM-gcc13.3.1/lmp \
+        -sf omp -pk omp $SLURM_CPUS_PER_TASK  \
+        -var dataname $DATANAME \
+        -var interaction $INTERACTION \
+        -var epsSS $EPSSS \
+        -var epsSP $EPSSP \
+        -var nsteps $NSTEPS \
+        -var oldsteps $OLDSTEPS \
+        -var totsteps $TOTSTEPS \
+        -in $LAMMPS_FILE
+fi
+
 
 
 # Determine suffix based on 6th argument (type) - moved from 7th position
@@ -125,9 +143,7 @@ echo "======================================"
 
 cd "$WORK_DIR" || exit 1
 
-source /etc/profile.d/modules.sh
-module load anaconda3/2021.05/q4munrg
-python -c "import numpy; print(numpy.__version__)"
+module load anaconda3/2024.10-1
 
 echo "Generating convergence plot..."
 python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
