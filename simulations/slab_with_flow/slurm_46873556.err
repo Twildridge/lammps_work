@@ -1,0 +1,17 @@
+./run_lammps.sh: line 119: 2308631 Illegal instruction     (core dumped) mpirun -n $SLURM_NTASKS /opt/packages/LAMMPS/lammps-22Jul2025/build-RM-gcc13.3.1/lmp -sf omp -pk omp $SLURM_CPUS_PER_TASK -var dataname $DATANAME -var interaction $INTERACTION -var epsSS $EPSSS -var epsSP $EPSSP -var nsteps $NSTEPS -var oldsteps $OLDSTEPS -var totsteps $TOTSTEPS -in $LAMMPS_FILE
+Traceback (most recent call last):
+  File "/home/dpollard/Documents/lammps_work/scripts/plot_lammps_log.py", line 2, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'
+Traceback (most recent call last):
+  File "/home/dpollard/Documents/lammps_work/scripts/plot_stress_profiles.py", line 2, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'
+Traceback (most recent call last):
+  File "/home/dpollard/Documents/lammps_work/scripts/plot_piston_data.py", line 6, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'
+Traceback (most recent call last):
+  File "/home/dpollard/Documents/lammps_work/scripts/write_tracking.py", line 7, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'

@@ -1,0 +1,27 @@
+======================================
+Working directory: /home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_20260302_164557
+Trajectory directory (scratch): /expanse/lustre/scratch/dpollard/temp_project/lammps_trajectories/slab_with_flow_walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_20260302_164557
+======================================
+Running LAMMPS in slab_with_flow with:
+  dataname=walled_slab_support_5beads_tall_4_1.0_1.05_15000000
+  epsSS=1.0, epsSP=1.05
+  nsteps=50001, oldsteps=0, totsteps=50001
+SLURM tasks per node: 120
+SLURM CPUs per task: 1
+SLURM_GPUS_ON_NODE: 
+GPUs allocated: 
+Running CPU-only with 120 tasks
+LAMMPS (10 Mar 2021)
+  using 1 OpenMP thread(s) per MPI task
+ERROR: Using suffix omp without USER-OMP package installed (src/src/lammps.cpp:843)
+Last command: (unknown)
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+Generating stress profiles...
+Generating piston plots...
+Generating computational efficiency plot...
+======================================
+Done! Results are in: /home/dpollard/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_20260302_164557
+======================================
