@@ -27,9 +27,9 @@ variable nrepeat_avg_vol equal 1
 variable nfreq_avg_vol equal 100000
 
 # Output frequencies
-variable thermo_freq equal 1000000
-variable dump_freq equal 1000000
-variable volume_freq equal 1000000
+variable thermo_freq equal 10000
+variable dump_freq equal 10000
+variable volume_freq equal 10000
 
 # Equilibration parameters
 variable temp_target equal 1.0

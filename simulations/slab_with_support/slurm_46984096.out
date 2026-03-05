@@ -1,0 +1,27 @@
+======================================
+Working directory: /home/dpollard/Documents/lammps_runs/slab_with_support_slab_support_5beads_tall_4_1.0_1.05_20260304_173234
+Trajectory directory (scratch): /expanse/lustre/scratch/dpollard/temp_project/lammps_trajectories/slab_with_support_slab_support_5beads_tall_4_1.0_1.05_20260304_173234
+======================================
+Running LAMMPS in slab_with_support with:
+  dataname=slab_support_5beads_tall_4
+  epsSS=1.0, epsSP=1.05
+  nsteps=150000, oldsteps=0, totsteps=150000
+SLURM tasks per node: 120
+SLURM CPUs per task: 1
+SLURM_GPUS_ON_NODE: 
+GPUs allocated: 
+Running CPU-only with 600 tasks
+LAMMPS (22 Jul 2025 - Update 3)
+  using 1 OpenMP thread(s) per MPI task
+ERROR: Package omp command without OPENMP package installed (src/input.cpp:1721)
+Last input line: package omp 1
+======================================
+Running post-processing...
+======================================
+Generating convergence plot...
+Generating stress profiles...
+Generating piston plots...
+Generating computational efficiency plot...
+======================================
+Done! Results are in: /home/dpollard/Documents/lammps_runs/slab_with_support_slab_support_5beads_tall_4_1.0_1.05_20260304_173234
+======================================

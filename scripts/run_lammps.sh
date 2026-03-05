@@ -91,7 +91,8 @@ echo "GPUs allocated: $SLURM_GPUS"
 # CPU-only mode (NOT USING OMP FOR NOW (not on Expanse 2021 version)
 echo "Running CPU-only with $SLURM_NTASKS tasks"
 mpirun -n $SLURM_NTASKS \
-    lmp \
+    /home/dpollard/software/lammps/22Jul2025_update3/mpi-omp/gcc/10.2.0/openmpi/4.1.3/lammps-22Jul2025/build/lmp \
+    -sf omp -pk omp $SLURM_CPUS_PER_TASK \
     -var dataname $DATANAME \
     -var interaction $INTERACTION \
     -var epsSS $EPSSS \
