@@ -1,23 +1,20 @@
 #!/usr/bin/env bash
 
 #SBATCH --job-name=slab_flow
-#SBATCH --partition=compute
-#SBATCH --account=csb197
-#SBATCH --nodes=5
-#SBATCH --ntasks-per-node=128 # was 32
-#SBATCH --cpus-per-task=1     # was 4
-#SBATCH --mem=0
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=40
+#SBATCH --cpus-per-task=1
 #SBATCH --time=6:00:00
 #SBATCH --output=%x.o%j.%N
 #SBATCH --error=%x.e%j.%N
 
 # Set environment variables
 declare -xr OMPI_UNIT='core'
-declare -xr OMPI_MCA_btl='self,vader'
+#declare -xr OMPI_MCA_btl='self,vader'
 
 declare -xr UCX_LOG_LEVEL='ERROR'
-declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
-declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xr UCX_TLS='self,cma,shm,dc'
+declare -xr UCX_NET_DEVICES='hfi1_0:1'
 declare -xir UCX_MAX_RNDV_RAILS=1
 
 declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
