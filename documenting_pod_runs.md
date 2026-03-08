@@ -162,3 +162,10 @@ SLAB WITH FLOW (1.0_1.5 interactions, 50,000 timesteps):
 
 
 
+    Configuration                           steps/s
+Bridges-2   600 MPI × 1 OMP     (5 nodes)   178.9
+Expanse     640 MPI × 1 OMP     (5 nodes)   73.1
+Expanse     160 MPI × 4 OMP     (5 nodes)   64.7
+Expanse     192 MPI × 4 OMP     (6 nodes)   72.4
+Expanse     896 MPI × 1 OMP     (7 nodes)   79.0
+

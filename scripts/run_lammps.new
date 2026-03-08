@@ -74,9 +74,6 @@ echo "  epsSS=$EPSSS, epsSP=$EPSSP"
 echo "  nsteps=$NSTEPS, oldsteps=$OLDSTEPS, totsteps=$TOTSTEPS"
 echo "SLURM tasks per node: $SLURM_NTASKS_PER_NODE"
 echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
-echo "DEBUG: SLURM_NTASKS_PER_NODE: $SLURM_NTASKS_PER_NODE"
-echo "       SLURM_NTASKS: $SLURM_NTASKS"
-echo "       SLURM_NNODES: $SLURM_NNODES"
 
 # Run LAMMPS-22Jul2025 — has these installed packages:
 # ASPHERE COLVARS DIELECTRIC DIPOLE DRUDE EFF EXTRA-FIX EXTRA-PAIR FEP GRANULAR 
