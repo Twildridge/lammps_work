@@ -1,1 +1,27 @@
+# ── Trajectory & restart files (can be enormous) ──
+*.lammpstrj
+*.restart
+*.restart.*
+
+# ── LAMMPS logs ──
+log.lammps
+*.log
+
+# ── All output subdirectories ──
+output_files/
+traj_files/
+
+# ── Final config data files written by LAMMPS ──
+final_config_*.data
+final_flow_*.data
+
+# ── Scratch symlink (points to Expanse-specific Lustre path) ──
+# (traj_files is already covered above, but this catches any other symlinks)
+
+# ── Python/Jupyter cruft ──
+__pycache__/
+*.pyc
 .ipynb_checkpoints/
+
+# ── OS clutter ──
+.DS_Store
