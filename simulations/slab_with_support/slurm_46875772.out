@@ -1,6 +1,0 @@
-======================================
-Working directory: /home/dpollard/Documents/lammps_runs/slab_with_support_slab_support_5beads_tall_4_1.0_1.05_20260302_180009
-Trajectory directory (scratch): /expanse/lustre/scratch/dpollard/temp_project/lammps_trajectories/slab_with_support_slab_support_5beads_tall_4_1.0_1.05_20260302_180009
-======================================
-Error: Data file /home/dpollard/Documents/lammps_data/input_data/slab_support_5beads_tall_4.data not found
-Please ensure your .data file is in ~/Documents/lammps_data/input_data/
