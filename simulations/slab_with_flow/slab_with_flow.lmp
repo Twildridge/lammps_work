@@ -377,6 +377,13 @@ variable reg_z_ylo equal c_polymer_com[2]-v_hw_y
 variable reg_z_yhi equal c_polymer_com[2]+v_hw_y
 region reg_z block v_reg_z_xlo v_reg_z_xhi v_reg_z_ylo v_reg_z_yhi EDGE EDGE side in
 
+# Full-Z variants for piston/support X-Y profiles:
+# reg_x/reg_y restrict z to the polymer extent, so piston and support (which
+# lie outside that z-range) would contribute zero atoms to those bins.
+# These variants keep the same lateral (Y or X) restriction but remove the z cap.
+region reg_x_full block EDGE EDGE v_reg_x_ylo v_reg_x_yhi EDGE EDGE side in
+region reg_y_full block v_reg_y_xlo v_reg_y_xhi EDGE EDGE EDGE EDGE side in
+
 
 # ==========================================================================
 #                    ANALYSIS: CHUNK DEFINITIONS
@@ -390,6 +397,17 @@ compute chunk_z_polymer polymer chunk/atom bin/1d z lower ${binWidth} region reg
 compute chunk_x_solvent solvent chunk/atom bin/1d x lower ${binWidth} region reg_x
 compute chunk_y_solvent solvent chunk/atom bin/1d y lower ${binWidth} region reg_y
 compute chunk_z_solvent solvent chunk/atom bin/1d z lower ${binWidth} region reg_z
+
+# Piston and support: planar structures whose atoms sit outside the polymer z-range,
+# so reg_x_full / reg_y_full (no z cap) are used for x/y profiles.  reg_z (x-y
+# restricted, full z) correctly captures the planar layer for z profiles.
+compute chunk_x_piston  piston  chunk/atom bin/1d x lower ${binWidth} region reg_x_full
+compute chunk_y_piston  piston  chunk/atom bin/1d y lower ${binWidth} region reg_y_full
+compute chunk_z_piston  piston  chunk/atom bin/1d z lower ${binWidth} region reg_z
+
+compute chunk_x_support support chunk/atom bin/1d x lower ${binWidth} region reg_x_full
+compute chunk_y_support support chunk/atom bin/1d y lower ${binWidth} region reg_y_full
+compute chunk_z_support support chunk/atom bin/1d z lower ${binWidth} region reg_z
 
 
 # ==========================================================================
@@ -416,6 +434,77 @@ compute press_z_polymer polymer reduce/chunk chunk_z_polymer sum v_press_polymer
 compute press_x_solvent solvent reduce/chunk chunk_x_solvent sum v_press_solvent_x
 compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent_y
 compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent_z
+
+# Piston and support partial stresses — same methodology as above.
+# stress/atom NULL captures pairwise virial only (no kinetic term), which is
+# correct for rigid bodies; internal constraint forces are excluded.
+compute stress_piston  piston  stress/atom NULL
+compute stress_support support stress/atom NULL
+
+variable press_piston_x  atom -(c_stress_piston[1]+c_stress_piston[2]+c_stress_piston[3])/(3.0*${binWidth}*ly*lz)
+variable press_piston_y  atom -(c_stress_piston[1]+c_stress_piston[2]+c_stress_piston[3])/(3.0*lx*${binWidth}*lz)
+variable press_piston_z  atom -(c_stress_piston[1]+c_stress_piston[2]+c_stress_piston[3])/(3.0*lx*ly*${binWidth})
+
+variable press_support_x atom -(c_stress_support[1]+c_stress_support[2]+c_stress_support[3])/(3.0*${binWidth}*ly*lz)
+variable press_support_y atom -(c_stress_support[1]+c_stress_support[2]+c_stress_support[3])/(3.0*lx*${binWidth}*lz)
+variable press_support_z atom -(c_stress_support[1]+c_stress_support[2]+c_stress_support[3])/(3.0*lx*ly*${binWidth})
+
+compute press_x_piston  piston  reduce/chunk chunk_x_piston  sum v_press_piston_x
+compute press_y_piston  piston  reduce/chunk chunk_y_piston  sum v_press_piston_y
+compute press_z_piston  piston  reduce/chunk chunk_z_piston  sum v_press_piston_z
+
+compute press_x_support support reduce/chunk chunk_x_support sum v_press_support_x
+compute press_y_support support reduce/chunk chunk_y_support sum v_press_support_y
+compute press_z_support support reduce/chunk chunk_z_support sum v_press_support_z
+
+
+# ==========================================================================
+#                  ANALYSIS: RESERVOIR PRESSURES
+# ==========================================================================
+# Feed reservoir:     solvent above the gel (between gel top and box top).
+# Permeate reservoir: solvent below the gel (between box bottom and gel bottom).
+#
+# Boundaries track the polymer COM ± hw_z, the same half-width used for the
+# stress profile regions.  The geometric volumes lx·ly·h_res are used for
+# normalization; support/piston atoms are type 4/5, not solvent, so they do
+# not contribute to the pressure sums despite lying in the same z-slabs.
+#
+# In permeation mode the piston sits above the gel and pushes the feed; in
+# compression mode the piston passes through solvent.  In both cases the
+# feed reservoir is taken as everything above the gel top — the piston atoms
+# are excluded since we reduce only over the `solvent` group.
+#
+# P_res = sum_{i in res}[-( σxx + σyy + σzz )_i / 3] / V_res
+# where the numerator sum is over atoms whose per-atom stress is from
+# c_stress_solvent (already computed above), and V_res = lx · ly · h_res.
+
+variable res_feed_zlo  equal c_polymer_com[3]+v_hw_z
+variable res_perm_zhi  equal c_polymer_com[3]-v_hw_z
+
+# Dynamic regions (variable bounds are re-evaluated every timestep)
+region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo EDGE side in
+region reg_perm_res block EDGE EDGE EDGE EDGE EDGE v_res_perm_zhi  side in
+
+# Dynamic solvent groups — membership refreshed every stress sampling interval
+group g_solvent_feed dynamic solvent region reg_feed_res every ${nevery_stress}
+group g_solvent_perm dynamic solvent region reg_perm_res every ${nevery_stress}
+
+# Per-atom pressure·volume (energy units = pressure·σ³ in LJ).
+# Reuses c_stress_solvent; defined over all solvent atoms, evaluated for the
+# subgroup atoms by the reduce computes below.
+variable pv_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
+
+compute pv_feed g_solvent_feed reduce sum v_pv_solvent
+compute pv_perm g_solvent_perm reduce sum v_pv_solvent
+
+# Geometric reservoir volumes; max() guards against zero height
+# (e.g., if piston has compressed gel to the box boundary)
+variable vol_feed equal lx*ly*(lz-(c_polymer_com[3]+v_hw_z))
+variable vol_perm equal lx*ly*(c_polymer_com[3]-v_hw_z)
+
+# Instantaneous reservoir pressures (equal-style; time-averaged below)
+variable P_res_feed equal c_pv_feed/v_vol_feed
+variable P_res_perm equal c_pv_perm/v_vol_perm
 
 
 # ==========================================================================
@@ -453,6 +542,41 @@ fix avg_stress_y_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_st
 
 fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_x_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_x_piston mode vector file output_files/stress_data/stress_x_piston_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_y_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_y_piston mode vector file output_files/stress_data/stress_y_piston_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_z_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_piston mode vector file output_files/stress_data/stress_z_piston_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_x_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_x_support mode vector file output_files/stress_data/stress_x_support_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_y_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_y_support mode vector file output_files/stress_data/stress_y_support_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_support mode vector file output_files/stress_data/stress_z_support_${dataname}_${interaction}_${nsteps}.dat
+
+
+# ==========================================================================
+#                  OUTPUT: RESERVOIR PRESSURES (scalar, time-averaged)
+# ==========================================================================
+# Columns: timestep | P_reservoir
+# Feed is the solvent above the gel; permeate is below.
+# Both are time-averaged with the same nevery/nrepeat/nfreq as stress profiles
+# for direct comparison.
+
+fix avg_P_feed all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_P_res_feed &
+    file output_files/stress_data/pressure_feed_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_P_perm all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_P_res_perm &
+    file output_files/stress_data/pressure_permeate_${dataname}_${interaction}_${nsteps}.dat
 
 
 # ==========================================================================

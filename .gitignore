@@ -25,3 +25,7 @@ __pycache__/
 
 # ── OS clutter ──
 .DS_Store
+
+# SLURM stdout/stderr logs
+*.e*.*
+*.o*.*
