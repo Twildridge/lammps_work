@@ -17,7 +17,7 @@ OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
 TOTSTEPS=$((OLDSTEPS + NSTEPS))
 
 # Scratch directory for trajectories
-SCRATCH_DIR="/expanse/lustre/scratch/$USER/temp_project"
+SCRATCH_DIR="/scratch/$USER"
 
 # Get the directory where this script lives (should be lammps_work/scripts/)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -42,7 +42,7 @@ fi
 
 # Create a working directory for this run in home (for small files)
 WORK_DIR="$HOME/Documents/lammps_runs/${FOLDER}_${DATANAME}_${INTERACTION}_$(date +%Y%m%d_%H%M%S)"
-mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data,piston_data},output_plots}
+mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data},output_plots}
 
 # Create trajectory directory in scratch and symlink to it
 TRAJ_DIR="$SCRATCH_DIR/lammps_trajectories/${FOLDER}_${DATANAME}_${INTERACTION}_$(date +%Y%m%d_%H%M%S)"
@@ -74,28 +74,16 @@ echo "  epsSS=$EPSSS, epsSP=$EPSSP"
 echo "  nsteps=$NSTEPS, oldsteps=$OLDSTEPS, totsteps=$TOTSTEPS"
 echo "SLURM tasks per node: $SLURM_NTASKS_PER_NODE"
 echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
-echo "DEBUG: SLURM_NTASKS_PER_NODE: $SLURM_NTASKS_PER_NODE"
-echo "       SLURM_NTASKS: $SLURM_NTASKS"
-echo "       SLURM_NNODES: $SLURM_NNODES"
 
-# Run LAMMPS-22Jul2025 — has these installed packages:
+# Run LAMMPS — has these installed packages:
 # ASPHERE COLVARS DIELECTRIC DIPOLE DRUDE EFF EXTRA-FIX EXTRA-PAIR FEP GRANULAR 
 # INTERLAYER KOKKOS KSPACE MACHDYN MANYBODY MC MEAM MISC ML-SNAP MOLECULE OPENMP 
 # OPT PHONON PYTHON QEQ REAXFF REPLICA RIGID
 
-# check within lammps build directory with: 
-# grep "PKG_.*:BOOL=\(yes\|ON\)$" CMakeCache.txt | sed 's/PKG_//; s/:BOOL.*//'
 
-# Check if GPUs are allocated
-NGPUS=${SLURM_GPUS_ON_NODE:-0}
-echo "SLURM_GPUS_ON_NODE: $SLURM_GPUS_ON_NODE"
-echo "GPUs allocated: $SLURM_GPUS"
-
-# CPU-only mode (NOT USING OMP FOR NOW (not on Expanse 2021 version)
-echo "Running CPU-only with $SLURM_NTASKS tasks"
-mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM_THREADS}" \
+srun --mpi=pmix \
     ~/MD/lammps/lammps-22Jul2025/build/lmp \
-    -sf omp -pk omp $SLURM_CPUS_PER_TASK \
+    -sf omp -pk omp $SLURM_CPUS_PER_TASK  \
     -var dataname $DATANAME \
     -var interaction $INTERACTION \
     -var epsSS $EPSSS \
@@ -104,7 +92,6 @@ mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM
     -var oldsteps $OLDSTEPS \
     -var totsteps $TOTSTEPS \
     -in $LAMMPS_FILE
-
 
 # Determine suffix based on 6th argument (type) - moved from 7th position
 SUFFIX=""
@@ -129,18 +116,15 @@ echo "======================================"
 
 cd "$WORK_DIR" || exit 1
 
-source /etc/profile.d/modules.sh
-module load anaconda3/2021.05/q4munrg
-python -c "import numpy; print(numpy.__version__)"
+module load miniconda
+source $(conda info --base)/etc/profile.d/conda.sh # loads Conda's shell functions into bash session
+conda activate lammps_analysis
 
 echo "Generating convergence plot..."
 python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
 
 echo "Generating stress profiles..."
 python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
-
-echo "Generating piston plots..."
-python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
 
 echo "Generating computational efficiency plot..."
 python "$SCRIPT_DIR/write_tracking.py" "." "${DATANAME}${SUFFIX}_${INTERACTION}_${TOTSTEPS}" "$SUFFIX"

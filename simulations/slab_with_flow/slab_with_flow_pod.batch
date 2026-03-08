@@ -1,26 +1,38 @@
-#!/bin/bash -l
-#SBATCH --job-name=slab_flow_pod
-#SBATCH --output=slurm_%j.out
-#SBATCH --error=slurm_%j.err
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=40
-#SBATCH --cpus-per-task=1
-#SBATCH --time=60:00:00 # shortening this will reduce queue time but might risk killing job
+#!/usr/bin/env bash
 
-# note that Pod has 40 cores per node
+#SBATCH --job-name=slab_flow
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=5
+#SBATCH --ntasks-per-node=128 # was 32
+#SBATCH --cpus-per-task=1     # was 4
+#SBATCH --mem=0
+#SBATCH --time=6:00:00
+#SBATCH --output=%x.o%j.%N
+#SBATCH --error=%x.e%j.%N
 
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
 # Load required modules for LAMMPS on Pod
+module reset
 module load gnu14
 module load openmpi5
 
-ulimit -n 2048 # gives more headroom for number of open file descriptors
 
 # Set simulation parameters
 FOLDER="slab_with_flow"
-DATANAME="walled_slab_support_5beads_tall_3_1.5_1.4_20000000"
-INTERACTION="1.0_1.4"
-NSTEPS=50000
+DATANAME="walled_slab_support_5beads_tall_4_1.0_1.05_15000000"
+INTERACTION="1.0_1.05" # first number is solvent–solvent; second is polymer–solvent
+NSTEPS=20001
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
@@ -29,7 +41,7 @@ cd ~/Documents/lammps_work/scripts || exit 1
 
 # Run the simulation
 if [ -z "$TYPE" ]; then
-    ./run_lammps_pod.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS"
+    ./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS"
 else
-    ./run_lammps_pod.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$TYPE"
+    ./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$TYPE"
 fi
