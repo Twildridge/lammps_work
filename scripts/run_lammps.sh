@@ -130,6 +130,7 @@ echo "======================================"
 cd "$WORK_DIR" || exit 1
 
 source /etc/profile.d/modules.sh
+module unload python/3.8.12
 module load anaconda3/2021.05/q4munrg
 python -c "import numpy; print(numpy.__version__)"
 

@@ -29,3 +29,5 @@ __pycache__/
 # SLURM stdout/stderr logs
 *.e*.*
 *.o*.*
+slurm_*.out
+slurm_*.err

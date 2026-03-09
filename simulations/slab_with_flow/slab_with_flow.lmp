@@ -52,10 +52,10 @@ variable comp_setup_freq equal 20000    # compression equilibration steps
 variable comp_percent    equal 0.1      # strain threshold for compression halt
 
 # ----- Output Frequencies -----
-variable thermo_freq     equal 250000
+variable thermo_freq     equal 2000 # 2000  # 250000
 variable dump_freq_setup equal 1000      # frequent dumps during Phase 1
-variable dump_freq_prod  equal 100000     # sparse dumps during Phase 2
-variable volume_freq     equal 5000
+variable dump_freq_prod  equal 5000 # 5000 # 100000     # sparse dumps during Phase 2
+variable volume_freq     equal 1000 # 1000 # 5000
 
 # ----- Time Averaging (stress) -----
 # nfreq = nevery * nrepeat  (LAMMPS constraint)
@@ -434,60 +434,55 @@ compute press_z_support support reduce/chunk chunk_z_support sum v_press_support
 
 
 # ==========================================================================
-#                  ANALYSIS: RESERVOIR PRESSURES
+#                  ANALYSIS: RESERVOIR PRESSURES (permeation mode only)
 # ==========================================================================
-# Feed reservoir:     solvent above the gel (between gel top and box top).
-# Permeate reservoir: solvent below the gel (between box bottom and gel bottom).
+# Reservoir pressures are only meaningful in permeation mode:
+#   Feed reservoir:     solvent between gel top and piston bottom.
+#   Permeate reservoir: solvent above piston to box top; solvent that has
+#                       permeated through gel + support wraps via PBC here.
 #
-# Boundaries track the polymer COM ± hw_z, the same half-width used for the
-# stress profile regions.  The geometric volumes lx·ly·h_res are used for
-# normalization; support/piston atoms are type 4/5, not solvent, so they do
-# not contribute to the pressure sums despite lying in the same z-slabs.
+# Skipped entirely in compression mode — the support sits at the box bottom,
+# leaving only a 1-2 bead sliver of solvent beneath the gel, and the
+# variable-bound regions can go negative (causing LAMMPS errors).
 #
-# In permeation mode the piston sits above the gel and pushes the feed; in
-# compression mode the piston passes through solvent.  In both cases the
-# feed reservoir is taken as everything above the gel top — the piston atoms
-# are excluded since we reduce only over the `solvent` group.
-#
-# P_res = sum_{i in res}[-( σxx + σyy + σzz )_i / 3] / V_res
-# where the numerator sum is over atoms whose per-atom stress is from
-# c_stress_solvent (already computed above), and V_res = lx · ly · h_res.
+# P_res = sum[-( σxx+σyy+σzz )_i / 3] / V_res,   V_res = lx·ly·h_res
 
-variable res_feed_zlo  equal c_polymer_com[3]+v_hw_z
-variable res_perm_zhi  equal c_polymer_com[3]-v_hw_z
+# Piston position/velocity computes (used here and for piston output below)
+compute piston_z  piston reduce ave z
+compute piston_vz piston reduce ave vz
 
-# Dynamic regions (variable bounds are re-evaluated every timestep)
-region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo EDGE side in
-region reg_perm_res block EDGE EDGE EDGE EDGE EDGE v_res_perm_zhi  side in
+# c_piston_z is needed as a region bound — wrap in equal-style variable
+if "${compression_mode} == 0" then "variable piston_z_mean equal c_piston_z"
+
+# Feed: gel top → piston bottom
+if "${compression_mode} == 0" then "variable res_feed_zlo equal c_polymer_com[3]+v_hw_z"
+if "${compression_mode} == 0" then "region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo v_piston_z_mean side in"
+
+# Permeate: piston top → box top (permeated solvent collects here via PBC)
+if "${compression_mode} == 0" then "region reg_perm_res block EDGE EDGE EDGE EDGE v_piston_z_mean EDGE side in"
 
 # Dynamic solvent groups — membership refreshed every stress sampling interval
-group g_solvent_feed dynamic solvent region reg_feed_res every ${nevery_stress}
-group g_solvent_perm dynamic solvent region reg_perm_res every ${nevery_stress}
+if "${compression_mode} == 0" then "group g_solvent_feed dynamic solvent region reg_feed_res every ${nevery_stress}"
+if "${compression_mode} == 0" then "group g_solvent_perm dynamic solvent region reg_perm_res every ${nevery_stress}"
 
-# Per-atom pressure·volume (energy units = pressure·σ³ in LJ).
-# Reuses c_stress_solvent; defined over all solvent atoms, evaluated for the
-# subgroup atoms by the reduce computes below.
-variable pv_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
+# Per-atom pressure·volume; reuses c_stress_solvent
+if "${compression_mode} == 0" then "variable pv_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0"
 
-compute pv_feed g_solvent_feed reduce sum v_pv_solvent
-compute pv_perm g_solvent_perm reduce sum v_pv_solvent
+if "${compression_mode} == 0" then "compute pv_feed g_solvent_feed reduce sum v_pv_solvent"
+if "${compression_mode} == 0" then "compute pv_perm g_solvent_perm reduce sum v_pv_solvent"
 
-# Geometric reservoir volumes; max() guards against zero height
-# (e.g., if piston has compressed gel to the box boundary)
-variable vol_feed equal lx*ly*(lz-(c_polymer_com[3]+v_hw_z))
-variable vol_perm equal lx*ly*(c_polymer_com[3]-v_hw_z)
+# Reservoir volumes
+if "${compression_mode} == 0" then "variable vol_feed equal lx*ly*(v_piston_z_mean-(c_polymer_com[3]+v_hw_z))"
+if "${compression_mode} == 0" then "variable vol_perm equal lx*ly*(lz-v_piston_z_mean)"
 
-# Instantaneous reservoir pressures (equal-style; time-averaged below)
-variable P_res_feed equal c_pv_feed/v_vol_feed
-variable P_res_perm equal c_pv_perm/v_vol_perm
+# Instantaneous reservoir pressures
+if "${compression_mode} == 0" then "variable P_res_feed equal c_pv_feed/v_vol_feed"
+if "${compression_mode} == 0" then "variable P_res_perm equal c_pv_perm/v_vol_perm"
 
 
 # ==========================================================================
 #                         OUTPUT: PISTON DATA
 # ==========================================================================
-
-compute piston_z  piston reduce ave z
-compute piston_vz piston reduce ave vz
 
 fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_z)" &
     file output_files/piston_data/piston_position_${dataname}_${interaction}_${nsteps}.dat screen no
@@ -526,20 +521,13 @@ fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_st
 
 
 # ==========================================================================
-#                  OUTPUT: RESERVOIR PRESSURES (scalar, time-averaged)
+#                  OUTPUT: RESERVOIR PRESSURES (permeation mode only)
 # ==========================================================================
-# Columns: timestep | P_reservoir
-# Feed is the solvent above the gel; permeate is below.
-# Both are time-averaged with the same nevery/nrepeat/nfreq as stress profiles
-# for direct comparison.
+if "${compression_mode} == 0" then &
+    "fix avg_P_feed all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} v_P_res_feed file output_files/stress_data/pressure_feed_${dataname}_${interaction}_${nsteps}.dat"
 
-fix avg_P_feed all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    v_P_res_feed &
-    file output_files/stress_data/pressure_feed_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_P_perm all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    v_P_res_perm &
-    file output_files/stress_data/pressure_permeate_${dataname}_${interaction}_${nsteps}.dat
+if "${compression_mode} == 0" then &
+    "fix avg_P_perm all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} v_P_res_perm file output_files/stress_data/pressure_permeate_${dataname}_${interaction}_${nsteps}.dat"
 
 
 # ==========================================================================
@@ -624,6 +612,33 @@ run ${nsteps}
 if "${compression_mode} == 1" then "unfix halt_compress"
 if "${compression_mode} == 1" then "print '>>> Compression halted (or nsteps exhausted)'"
 if "${compression_mode} == 1" then "print '>>> Freezing piston and starting stress relaxation'"
+
+# Snapshot hw values as constants before destroying rg_tensor
+# (reg_x and reg_y use these as dynamic bounds; gel is frozen so values won't change)
+if "${compression_mode} == 1" then "variable hw_x equal $(v_hw_x)"
+if "${compression_mode} == 1" then "variable hw_y equal $(v_hw_y)"
+if "${compression_mode} == 1" then "variable hw_z equal $(v_hw_z)"
+
+# Stop all volume/strain/dim output — everything is constant after piston freeze
+if "${compression_mode} == 1" then "unfix out_piston_pos"
+if "${compression_mode} == 1" then "unfix out_piston_vel"
+if "${compression_mode} == 1" then "unfix out_strain_zz"
+if "${compression_mode} == 1" then "unfix out_gel_strain_thermo"
+if "${compression_mode} == 1" then "unfix out_gel_vol_bb"
+if "${compression_mode} == 1" then "unfix out_gel_dims_bb"
+if "${compression_mode} == 1" then "unfix out_gel_vol_rg"
+if "${compression_mode} == 1" then "unfix out_gel_dims_rg"
+if "${compression_mode} == 1" then "unfix out_box_dims"
+if "${compression_mode} == 1" then "unfix out_polymer_com"
+
+# Free the expensive computes (polymer_com must stay for dynamic region bounds)
+if "${compression_mode} == 1" then "uncompute rg_tensor"
+if "${compression_mode} == 1" then "uncompute minx"
+if "${compression_mode} == 1" then "uncompute maxx"
+if "${compression_mode} == 1" then "uncompute miny"
+if "${compression_mode} == 1" then "uncompute maxy"
+if "${compression_mode} == 1" then "uncompute minz"
+if "${compression_mode} == 1" then "uncompute maxz"
 
 # Disable piston force and motion
 if "${compression_mode} == 1" then "unfix push_piston"
