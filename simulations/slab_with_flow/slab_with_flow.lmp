@@ -52,9 +52,9 @@ variable comp_setup_freq equal 20000    # compression equilibration steps
 variable comp_percent    equal 0.1      # strain threshold for compression halt
 
 # ----- Output Frequencies -----
-variable thermo_freq     equal 10000
+variable thermo_freq     equal 250000
 variable dump_freq_setup equal 1000      # frequent dumps during Phase 1
-variable dump_freq_prod  equal 10000     # sparse dumps during Phase 2
+variable dump_freq_prod  equal 100000     # sparse dumps during Phase 2
 variable volume_freq     equal 5000
 
 # ----- Time Averaging (stress) -----
@@ -370,19 +370,10 @@ variable reg_y_zlo equal c_polymer_com[3]-v_hw_z
 variable reg_y_zhi equal c_polymer_com[3]+v_hw_z
 region reg_y block v_reg_y_xlo v_reg_y_xhi EDGE EDGE v_reg_y_zlo v_reg_y_zhi side in
 
-# Region for Z-direction binning: restricted in X-Y, full extent in Z
-variable reg_z_xlo equal c_polymer_com[1]-v_hw_x
-variable reg_z_xhi equal c_polymer_com[1]+v_hw_x
-variable reg_z_ylo equal c_polymer_com[2]-v_hw_y
-variable reg_z_yhi equal c_polymer_com[2]+v_hw_y
-region reg_z block v_reg_z_xlo v_reg_z_xhi v_reg_z_ylo v_reg_z_yhi EDGE EDGE side in
-
-# Full-Z variants for piston/support X-Y profiles:
-# reg_x/reg_y restrict z to the polymer extent, so piston and support (which
-# lie outside that z-range) would contribute zero atoms to those bins.
-# These variants keep the same lateral (Y or X) restriction but remove the z cap.
-region reg_x_full block EDGE EDGE v_reg_x_ylo v_reg_x_yhi EDGE EDGE side in
-region reg_y_full block v_reg_y_xlo v_reg_y_xhi EDGE EDGE EDGE EDGE side in
+# NOTE: Z-direction binning uses the full simulation box (no region restriction).
+# This allows piston position to be visualized in permeation mode, and ensures
+# support stress appears at its true z-location. X and Y profiles retain the
+# polymer-COM-tracked lateral restriction above.
 
 
 # ==========================================================================
@@ -392,22 +383,16 @@ region reg_y_full block v_reg_y_xlo v_reg_y_xhi EDGE EDGE EDGE EDGE side in
 # 1D binning with dynamic rectangular regions
 compute chunk_x_polymer polymer chunk/atom bin/1d x lower ${binWidth} region reg_x
 compute chunk_y_polymer polymer chunk/atom bin/1d y lower ${binWidth} region reg_y
-compute chunk_z_polymer polymer chunk/atom bin/1d z lower ${binWidth} region reg_z
+compute chunk_z_polymer polymer chunk/atom bin/1d z lower ${binWidth}
 
 compute chunk_x_solvent solvent chunk/atom bin/1d x lower ${binWidth} region reg_x
 compute chunk_y_solvent solvent chunk/atom bin/1d y lower ${binWidth} region reg_y
-compute chunk_z_solvent solvent chunk/atom bin/1d z lower ${binWidth} region reg_z
+compute chunk_z_solvent solvent chunk/atom bin/1d z lower ${binWidth}
 
-# Piston and support: planar structures whose atoms sit outside the polymer z-range,
-# so reg_x_full / reg_y_full (no z cap) are used for x/y profiles.  reg_z (x-y
-# restricted, full z) correctly captures the planar layer for z profiles.
-compute chunk_x_piston  piston  chunk/atom bin/1d x lower ${binWidth} region reg_x_full
-compute chunk_y_piston  piston  chunk/atom bin/1d y lower ${binWidth} region reg_y_full
-compute chunk_z_piston  piston  chunk/atom bin/1d z lower ${binWidth} region reg_z
-
-compute chunk_x_support support chunk/atom bin/1d x lower ${binWidth} region reg_x_full
-compute chunk_y_support support chunk/atom bin/1d y lower ${binWidth} region reg_y_full
-compute chunk_z_support support chunk/atom bin/1d z lower ${binWidth} region reg_z
+# Z profiles use the full box for all components (no region) — this lets the
+# piston location be visualized directly in the z-stress profiles.
+compute chunk_z_piston  piston  chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_support support chunk/atom bin/1d z lower ${binWidth}
 
 
 # ==========================================================================
@@ -441,20 +426,10 @@ compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent
 compute stress_piston  piston  stress/atom NULL
 compute stress_support support stress/atom NULL
 
-variable press_piston_x  atom -(c_stress_piston[1]+c_stress_piston[2]+c_stress_piston[3])/(3.0*${binWidth}*ly*lz)
-variable press_piston_y  atom -(c_stress_piston[1]+c_stress_piston[2]+c_stress_piston[3])/(3.0*lx*${binWidth}*lz)
 variable press_piston_z  atom -(c_stress_piston[1]+c_stress_piston[2]+c_stress_piston[3])/(3.0*lx*ly*${binWidth})
-
-variable press_support_x atom -(c_stress_support[1]+c_stress_support[2]+c_stress_support[3])/(3.0*${binWidth}*ly*lz)
-variable press_support_y atom -(c_stress_support[1]+c_stress_support[2]+c_stress_support[3])/(3.0*lx*${binWidth}*lz)
 variable press_support_z atom -(c_stress_support[1]+c_stress_support[2]+c_stress_support[3])/(3.0*lx*ly*${binWidth})
 
-compute press_x_piston  piston  reduce/chunk chunk_x_piston  sum v_press_piston_x
-compute press_y_piston  piston  reduce/chunk chunk_y_piston  sum v_press_piston_y
 compute press_z_piston  piston  reduce/chunk chunk_z_piston  sum v_press_piston_z
-
-compute press_x_support support reduce/chunk chunk_x_support sum v_press_support_x
-compute press_y_support support reduce/chunk chunk_y_support sum v_press_support_y
 compute press_z_support support reduce/chunk chunk_z_support sum v_press_support_z
 
 
@@ -543,20 +518,8 @@ fix avg_stress_y_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_st
 fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${nsteps}.dat
 
-fix avg_stress_x_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_x_piston mode vector file output_files/stress_data/stress_x_piston_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_y_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_y_piston mode vector file output_files/stress_data/stress_y_piston_${dataname}_${interaction}_${nsteps}.dat
-
 fix avg_stress_z_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_press_z_piston mode vector file output_files/stress_data/stress_z_piston_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_x_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_x_support mode vector file output_files/stress_data/stress_x_support_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_y_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_y_support mode vector file output_files/stress_data/stress_y_support_${dataname}_${interaction}_${nsteps}.dat
 
 fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_press_z_support mode vector file output_files/stress_data/stress_z_support_${dataname}_${interaction}_${nsteps}.dat
@@ -687,4 +650,5 @@ print "========================================"
 print "Simulation complete"
 print "========================================"
 
-write_data final_flow_${dataname}_${interaction}_${nsteps}.data
+variable outfile string "final_flow_${dataname}_${interaction}_${nsteps}"
+write_data ${outfile}.data
