@@ -17,7 +17,7 @@ OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
 TOTSTEPS=$((OLDSTEPS + NSTEPS))
 
 # Scratch directory for trajectories
-SCRATCH_DIR="/expanse/lustre/scratch/$USER/temp_project"
+SCRATCH_DIR="/scratch/$USER"
 
 # Get the directory where this script lives (should be lammps_work/scripts/)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -129,9 +129,9 @@ echo "======================================"
 
 cd "$WORK_DIR" || exit 1
 
-source /etc/profile.d/modules.sh
-module load anaconda3/2021.05/q4munrg
-python -c "import numpy; print(numpy.__version__)"
+module load miniconda
+source $(conda info --base)/etc/profile.d/conda.sh # loads Conda's shell functions into bash session
+conda activate lammps_analysis
 
 echo "Generating convergence plot..."
 python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
