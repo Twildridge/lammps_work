@@ -294,8 +294,8 @@ variable box_lz equal lz
 # Defined here (before run 0) so they are initialized alongside polymer/rg computes.
 # Used unconditionally in piston output fixes, and in permeation-mode reservoir
 # regions where LAMMPS evaluates variable bounds at region creation time.
-compute piston_z  piston reduce ave z
-compute piston_vz piston reduce ave vz
+compute piston_com piston com          # PBC-aware COM; use [3] for z
+compute piston_vz piston reduce ave vz  # velocities do not wrap
 
 run 0   # initializes ALL computes in one pass
 
@@ -325,6 +325,7 @@ print "hw_z = ${hw_z}"
 variable gel_lz_initial equal $(v_gel_lz_rg)
 print ">>> Initial gel thickness (Rg): L0 = ${gel_lz_initial}"
 print ">>> Initial gel thickness (BB): L0 = $(v_gel_lz_bb)"
+print ">>> Gel top (c_maxz) = $(c_maxz)   Piston z = $(c_piston_com[3])   Gap = $(c_piston_com[3]-c_maxz)"
 
 variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
 
@@ -451,9 +452,9 @@ compute press_z_support support reduce/chunk chunk_z_support sum v_press_support
 #   Permeate reservoir: solvent above piston top face to box top; solvent that
 #                       has permeated through gel + support wraps via PBC here.
 #
-# Piston is 1 sigma thick; its center of mass is c_piston_z, so:
-#   bottom face = c_piston_z - sigma
-#   top face    = c_piston_z + sigma
+# Piston is 1 sigma thick; its center of mass is c_piston_com[3], so:
+#   bottom face = c_piston_com[3] - 0.5*sigma
+#   top face    = c_piston_com[3] + 0.5*sigma
 # Using the actual faces (rather than the COM) keeps solvent that is between
 # the gel top and piston bottom correctly in the feed reservoir, and avoids
 # counting any piston volume in either reservoir.
@@ -465,13 +466,18 @@ compute press_z_support support reduce/chunk chunk_z_support sum v_press_support
 # P_res = sum[-( σxx+σyy+σzz )_i / 3] / V_res,   V_res = lx·ly·h_res
 
 # Piston face positions (permeation mode only)
-if "${compression_mode} == 0" then "variable piston_z_bot equal c_piston_z-${sigma}"
-if "${compression_mode} == 0" then "variable piston_z_top equal c_piston_z+${sigma}"
+if "${compression_mode} == 0" then "variable piston_z_bot equal c_piston_com[3]-0.5*${sigma}"
+if "${compression_mode} == 0" then "variable piston_z_top equal c_piston_com[3]+0.5*${sigma}"
 
-# Feed: gel top (c_maxz) → piston bottom face
-# c_maxz is the true top surface of the polymer gel — more reliable than the
-# Rg-scaled estimate (v_hw_z) which can overshoot and cause lo >= hi errors.
-if "${compression_mode} == 0" then "variable res_feed_zlo equal c_maxz"
+# Feed: gel top → piston bottom face
+# Desired lower bound is c_maxz (true polymer top surface), but if the piston
+# has settled very close to the gel (gap < sigma), c_maxz >= piston_z_bot and
+# LAMMPS throws a "bad value" error at region creation.  Guard against this by
+# clamping res_feed_zlo to at most (piston_z_bot - sigma), giving a region that
+# is always at least 1 sigma tall.  The conditional below evaluates to c_maxz
+# when there is enough clearance, and falls back to the clamped value otherwise.
+if "${compression_mode} == 0" then &
+    "variable res_feed_zlo equal (c_maxz<(c_piston_com[3]-1.5*${sigma}))*c_maxz+(c_maxz>=(c_piston_com[3]-1.5*${sigma}))*(c_piston_com[3]-1.5*${sigma})"
 if "${compression_mode} == 0" then "region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo v_piston_z_bot side in"
 
 # Permeate: piston top face → box top (permeated solvent collects here via PBC)
@@ -500,7 +506,7 @@ if "${compression_mode} == 0" then "variable P_res_perm equal c_pv_perm/v_vol_pe
 #                         OUTPUT: PISTON DATA
 # ==========================================================================
 
-fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_z)" &
+fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_com[3])" &
     file output_files/piston_data/piston_position_${dataname}_${interaction}_${nsteps}.dat screen no
 
 fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &

@@ -22,10 +22,6 @@ variable nevery_avg_stress equal 100
 variable nrepeat_avg_stress equal 1000 # 625 or 50
 variable nfreq_avg_stress equal 10000 # 125000 or 10000
 
-variable nevery_avg_vol equal 100000
-variable nrepeat_avg_vol equal 1
-variable nfreq_avg_vol equal 100000
-
 # Output frequencies
 variable thermo_freq equal 10000
 variable dump_freq equal 10000
@@ -97,13 +93,18 @@ pair_coeff 3 4 0.0 ${sigma} 0.0       # solvent-support (no interaction)
 pair_coeff 4 4 0.0 ${sigma} 0.0       # support-support (frozen)
 pair_coeff 1 5 1.0 ${sigma} 1.22      # polymer-piston (repulsive WCA)
 pair_coeff 2 5 1.0 ${sigma} 1.22      # crosslinker-piston (repulsive WCA)
-pair_coeff 3 5 0.0 ${sigma} 0.0       # solvent-piston (no interaction)
+pair_coeff 3 5 1.0 ${sigma} 1.22      # solvent-piston (WCA — piston now sits in solvent bath)
 pair_coeff 4 5 0.0 ${sigma} 0.0       # support-piston (no interaction)
 pair_coeff 5 5 0.0 ${sigma} 0.0       # piston-piston (moving together)
 
 bond_style fene
 bond_coeff * 30.0 2.5 1.0 1.0
 special_bonds fene
+
+# Neighbor list exclusions for rigid/frozen layers (avoid redundant self-pair work)
+neigh_modify exclude type 4 4   # support-support
+neigh_modify exclude type 5 5   # piston-piston
+neigh_modify exclude type 4 5   # support-piston
 
 
 # Angle style — hybrid because the two types need different potentials
@@ -124,6 +125,11 @@ special_bonds fene
 # Freeze support atoms
 velocity support set 0.0 0.0 0.0
 fix freeze_support support setforce 0.0 0.0 0.0
+
+# Piston: rigid body, free in z so it can settle to its equilibrium position
+# against the solvent below it.  x/y motion and all torques are locked.
+velocity piston set 0.0 0.0 0.0
+fix rigid_piston piston rigid single force * off off on torque * off off off
 
 
 
