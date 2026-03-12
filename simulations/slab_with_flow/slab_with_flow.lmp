@@ -14,15 +14,16 @@
 #                          interaction); piston contacts gel directly, squeezes
 #                          solvent out the support bottom.  Piston is frozen once
 #                          comp_percent strain is reached; stresses then relax at
-#                          fixed deformation for another nsteps.
+#                          fixed deformation for the remainder of nsteps.
 #
 # Phases:
 #   1. Mode-dependent equilibration (full 3D NVT, full LJ from the start).
 #        PERMEATION:  perm_setup_freq steps, piston z-free (settles onto solvent).
 #        COMPRESSION: comp_setup_freq steps, piston fully frozen, solvent-piston OFF.
 #      Brief minimize at the start to resolve any residual overlaps.
-#   2. Production — piston force ramps from piston_force_start to piston_force_end.
-#      Compression mode: halts at comp_percent strain, then relaxes for nsteps more.
+#   2. Production — nsteps total (compression + relaxation combined).
+#      Compression mode: halts at comp_percent strain, then relaxes for the
+#                        remaining (nsteps - steps_used_compressing) steps.
 #      Permeation  mode: runs nsteps with ramped force, no halt.
 
 
@@ -33,7 +34,7 @@
 # ----- Mode Selection -----
 # 0 = permeation (solvent-piston WCA, piston pushes fluid through gel)
 # 1 = compression (solvent-piston OFF, piston loads gel directly)
-variable compression_mode equal 1
+variable compression_mode equal 0
 
 # ----- Physical Parameters -----
 variable sigma         equal 1.0
@@ -44,18 +45,20 @@ variable timestep_prod equal 0.005
 # Force ramps linearly from start to end over each production run segment.
 # Negative = pushing in -z direction.
 variable piston_force_start equal -0.01
-variable piston_force_end   equal -0.04
+variable piston_force_end   equal -0.07
 
 # ----- Phase 1: Mode-Dependent Setup -----
-variable perm_setup_freq equal 10000    # permeation equilibration steps
-variable comp_setup_freq equal 20000    # compression equilibration steps
+variable perm_setup_freq equal 20000    # permeation equilibration steps
+variable comp_setup_freq equal 50000    # compression equilibration steps
 variable comp_percent    equal 0.1      # strain threshold for compression halt
 
 # ----- Output Frequencies -----
-variable thermo_freq     equal 2000 # 2000  # 250000
+variable thermo_freq     equal 5000 # 2000  # 250000
 variable dump_freq_setup equal 1000      # frequent dumps during Phase 1
 variable dump_freq_prod  equal 5000 # 5000 # 100000     # sparse dumps during Phase 2
-variable volume_freq     equal 1000 # 1000 # 5000
+variable volume_freq     equal 5000 # 1000 # 5000
+
+# ======================================================================
 
 # ----- Time Averaging (stress) -----
 # nfreq = nevery * nrepeat  (LAMMPS constraint)
@@ -235,10 +238,10 @@ timestep ${timestep_prod}
 # Brief minimize to clean up any residual overlaps
 minimize 1.0e-4 1.0e-6 1000 10000
 
-# Setup trajectory (both modes)
-dump traj_setup gel_system custom ${dump_freq_setup} &
-    traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
-    id type mol x y z
+# Setup trajectory (both modes) (don't forget to uncomment "undump")
+# dump traj_setup gel_system custom ${dump_freq_setup} &
+#    traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
+#    id type mol x y z
 
 # Full 3D NVT equilibration
 fix nvt_equil mobile nvt temp ${temp_target} ${temp_target} 1.0
@@ -249,7 +252,7 @@ if "${compression_mode} == 1" then "run ${comp_setup_freq}"
 print ">>> Post-equilibration T = $(c_mobile_temp)"
 
 unfix nvt_equil
-undump traj_setup
+# undump traj_setup
 
 
 # ==========================================================================
@@ -286,6 +289,13 @@ variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
 variable box_lx equal lx
 variable box_ly equal ly
 variable box_lz equal lz
+
+# ----- Piston position/velocity computes -----
+# Defined here (before run 0) so they are initialized alongside polymer/rg computes.
+# Used unconditionally in piston output fixes, and in permeation-mode reservoir
+# regions where LAMMPS evaluates variable bounds at region creation time.
+compute piston_z  piston reduce ave z
+compute piston_vz piston reduce ave vz
 
 run 0   # initializes ALL computes in one pass
 
@@ -437,9 +447,16 @@ compute press_z_support support reduce/chunk chunk_z_support sum v_press_support
 #                  ANALYSIS: RESERVOIR PRESSURES (permeation mode only)
 # ==========================================================================
 # Reservoir pressures are only meaningful in permeation mode:
-#   Feed reservoir:     solvent between gel top and piston bottom.
-#   Permeate reservoir: solvent above piston to box top; solvent that has
-#                       permeated through gel + support wraps via PBC here.
+#   Feed reservoir:     solvent between gel top (c_maxz) and piston bottom face.
+#   Permeate reservoir: solvent above piston top face to box top; solvent that
+#                       has permeated through gel + support wraps via PBC here.
+#
+# Piston is 1 sigma thick; its center of mass is c_piston_z, so:
+#   bottom face = c_piston_z - sigma
+#   top face    = c_piston_z + sigma
+# Using the actual faces (rather than the COM) keeps solvent that is between
+# the gel top and piston bottom correctly in the feed reservoir, and avoids
+# counting any piston volume in either reservoir.
 #
 # Skipped entirely in compression mode — the support sits at the box bottom,
 # leaving only a 1-2 bead sliver of solvent beneath the gel, and the
@@ -447,19 +464,18 @@ compute press_z_support support reduce/chunk chunk_z_support sum v_press_support
 #
 # P_res = sum[-( σxx+σyy+σzz )_i / 3] / V_res,   V_res = lx·ly·h_res
 
-# Piston position/velocity computes (used here and for piston output below)
-compute piston_z  piston reduce ave z
-compute piston_vz piston reduce ave vz
+# Piston face positions (permeation mode only)
+if "${compression_mode} == 0" then "variable piston_z_bot equal c_piston_z-${sigma}"
+if "${compression_mode} == 0" then "variable piston_z_top equal c_piston_z+${sigma}"
 
-# c_piston_z is needed as a region bound — wrap in equal-style variable
-if "${compression_mode} == 0" then "variable piston_z_mean equal c_piston_z"
+# Feed: gel top (c_maxz) → piston bottom face
+# c_maxz is the true top surface of the polymer gel — more reliable than the
+# Rg-scaled estimate (v_hw_z) which can overshoot and cause lo >= hi errors.
+if "${compression_mode} == 0" then "variable res_feed_zlo equal c_maxz"
+if "${compression_mode} == 0" then "region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo v_piston_z_bot side in"
 
-# Feed: gel top → piston bottom
-if "${compression_mode} == 0" then "variable res_feed_zlo equal c_polymer_com[3]+v_hw_z"
-if "${compression_mode} == 0" then "region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo v_piston_z_mean side in"
-
-# Permeate: piston top → box top (permeated solvent collects here via PBC)
-if "${compression_mode} == 0" then "region reg_perm_res block EDGE EDGE EDGE EDGE v_piston_z_mean EDGE side in"
+# Permeate: piston top face → box top (permeated solvent collects here via PBC)
+if "${compression_mode} == 0" then "region reg_perm_res block EDGE EDGE EDGE EDGE v_piston_z_top EDGE side in"
 
 # Dynamic solvent groups — membership refreshed every stress sampling interval
 if "${compression_mode} == 0" then "group g_solvent_feed dynamic solvent region reg_feed_res every ${nevery_stress}"
@@ -471,9 +487,9 @@ if "${compression_mode} == 0" then "variable pv_solvent atom -(c_stress_solvent[
 if "${compression_mode} == 0" then "compute pv_feed g_solvent_feed reduce sum v_pv_solvent"
 if "${compression_mode} == 0" then "compute pv_perm g_solvent_perm reduce sum v_pv_solvent"
 
-# Reservoir volumes
-if "${compression_mode} == 0" then "variable vol_feed equal lx*ly*(v_piston_z_mean-(c_polymer_com[3]+v_hw_z))"
-if "${compression_mode} == 0" then "variable vol_perm equal lx*ly*(lz-v_piston_z_mean)"
+# Reservoir volumes (height = distance between region faces, not piston COM)
+if "${compression_mode} == 0" then "variable vol_feed equal lx*ly*(v_piston_z_bot-v_res_feed_zlo)"
+if "${compression_mode} == 0" then "variable vol_perm equal lx*ly*(lz-v_piston_z_top)"
 
 # Instantaneous reservoir pressures
 if "${compression_mode} == 0" then "variable P_res_feed equal c_pv_feed/v_vol_feed"
@@ -589,6 +605,7 @@ if "${compression_mode} == 1" then &
 print ">>> Starting Phase 2 production run (nsteps = ${nsteps})"
 print ">>> compression_mode = ${compression_mode}"
 
+variable phase2_start equal $(step)
 
 # ==========================================================================
 #                         PRODUCTION RUN
@@ -604,13 +621,18 @@ run ${nsteps}
 # ==========================================================================
 # These commands only execute when compression_mode == 1.
 # After the halt the gel is at ~comp_percent strain.  We freeze the piston
-# in place and run another nsteps so the partial stresses can relax to
-# equilibrium at fixed deformation.  All output fixes remain active.
+# in place and run for the remaining steps so that compression + relaxation
+# = exactly nsteps total.  If comp_percent was never reached, relax_steps
+# will be 0 and the run below is a no-op (and a warning is printed).
 # NOTE: ave/time accumulators continue from where they left off — the output
 # files will contain entries spanning both the compression and relaxation phases.
 
 if "${compression_mode} == 1" then "unfix halt_compress"
-if "${compression_mode} == 1" then "print '>>> Compression halted (or nsteps exhausted)'"
+variable phase2_end   equal $(step)
+variable relax_steps  equal ${nsteps}-(${phase2_end}-${phase2_start})
+if "${compression_mode} == 1 && ${relax_steps} <= 0" then &
+    "print 'WARNING: COMPRESSION TARGET NOT REACHED WITHIN nsteps — NO RELAXATION STEPS REMAINING'"
+if "${compression_mode} == 1" then "print '>>> Compression halted — relaxation steps remaining: ${relax_steps}'"
 if "${compression_mode} == 1" then "print '>>> Freezing piston and starting stress relaxation'"
 
 # Snapshot hw values as constants before destroying rg_tensor
@@ -648,7 +670,7 @@ if "${compression_mode} == 1" then "velocity piston set 0.0 0.0 0.0"
 if "${compression_mode} == 1" then &
     "fix rigid_piston piston rigid single force * off off off torque * off off off"
 
-if "${compression_mode} == 1" then "run ${nsteps}"
+if "${compression_mode} == 1" then "run ${relax_steps}"
 
 
 # ==========================================================================
