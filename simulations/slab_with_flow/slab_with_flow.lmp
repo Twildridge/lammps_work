@@ -34,7 +34,7 @@
 # ----- Mode Selection -----
 # 0 = permeation (solvent-piston WCA, piston pushes fluid through gel)
 # 1 = compression (solvent-piston OFF, piston loads gel directly)
-variable compression_mode equal 0
+variable compression_mode equal 1
 
 # ----- Physical Parameters -----
 variable sigma         equal 1.0
@@ -44,8 +44,8 @@ variable timestep_prod equal 0.005
 # ----- Piston Force Ramp -----
 # Force ramps linearly from start to end over each production run segment.
 # Negative = pushing in -z direction.
-variable piston_force_start equal -0.01
-variable piston_force_end   equal -0.07
+variable piston_force_start equal -0.05
+variable piston_force_end   equal -0.1
 
 # ----- Phase 1: Mode-Dependent Setup -----
 variable perm_setup_freq equal 20000    # permeation equilibration steps
@@ -53,9 +53,9 @@ variable comp_setup_freq equal 50000    # compression equilibration steps
 variable comp_percent    equal 0.1      # strain threshold for compression halt
 
 # ----- Output Frequencies -----
-variable thermo_freq     equal 5000 # 2000  # 250000
+variable thermo_freq     equal 10000 # 2000  # 250000
 variable dump_freq_setup equal 1000      # frequent dumps during Phase 1
-variable dump_freq_prod  equal 5000 # 5000 # 100000     # sparse dumps during Phase 2
+variable dump_freq_prod  equal 10000 # 5000 # 100000     # sparse dumps during Phase 2
 variable volume_freq     equal 5000 # 1000 # 5000
 
 # ======================================================================
@@ -165,7 +165,7 @@ pair_coeff 5 6 0.0 ${sigma} 0.0         # piston-wall
 pair_coeff 6 6 0.0 ${sigma} 0.0         # wall-wall
 
 # ----- Bonds and Angles -----
-bond_coeff * 30.0 2.5 1.0 1.0
+bond_coeff * 30.0 1.5 1.0 1.0
 special_bonds fene
 
 # Angle style — hybrid (uncomment if angles are present in data file)
