@@ -23,9 +23,9 @@ variable nrepeat_avg_stress equal 1000 # 625 or 50
 variable nfreq_avg_stress equal 10000 # 125000 or 10000
 
 # Output frequencies
-variable thermo_freq equal 5000
-variable dump_freq equal 5000
-variable volume_freq equal 5000
+variable thermo_freq equal 25000
+variable dump_freq equal 10000
+variable volume_freq equal 10000
 
 # Equilibration parameters
 variable temp_target equal 1.0
@@ -175,6 +175,8 @@ fix rigid_piston piston rigid single force * off off on torque * off off off
 thermo_style custom step temp pe ke etotal press vol lx ly lz
 thermo ${thermo_freq}
 
+# Trajectory output
+dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
 
 # =====================================================================
 #   PHASE 3: GENTLE NVT THERMALIZATION
@@ -217,17 +219,14 @@ variable box_lz equal lz
 
 
 # ========== NPT Equilibration ==========
-if "${is_restart} == 0" then "reset_timestep 0"
-fix 1 mobile npt temp ${temp_target} ${temp_target} ${tdamp} iso ${press_target} ${press_target} ${pdamp}
+#if "${is_restart} == 0" then "reset_timestep 0"
+fix 1 mobile npt temp ${temp_target} ${temp_target} ${tdamp} iso ${press_target} ${press_target} ${pdamp} # dilate mobile fixedpoint $(lx/2) $(ly/2) 0
 timestep ${timestep_prod}
 if "${is_restart} == 0" then "run ${nsteps_gentle}"
 
 
 
 # ========== Production Run with Time Averaging ==========
-
-# Trajectory output
-dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${dataname}_${interaction}_${totsteps}.lammpstrj id type mol x y z
 
 # Volume and dimension output
 fix gel_vol_bb_output all print ${volume_freq} "${gel_vol_box}" &
@@ -245,12 +244,14 @@ fix box_dims_output all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_
 
 
 # Production run
+fix remove_drift mobile momentum 1000 linear 1 1 1
 run ${nsteps}
 
 
 
 # ========== Cleanup ==========
 unfix 1
+unfix remove_drift
 undump poly_traj
 
 
