@@ -67,7 +67,8 @@ def parse_lammps_log(filepath='log.lammps'):
     return data
 
 def plot_convergence(data, foldername, dataname, output='convergence.png'):
-    """Plot temperature, pressure, normalized box volume, and gel volumes."""
+    """Plot temperature, pressure, normalized box volume, gel volumes,
+    and solvent number density (beads/sigma^3)."""
     
     # Try to read volume files
     box_vol_file = os.path.join(foldername, 'output_files/volume_data', 
@@ -76,18 +77,19 @@ def plot_convergence(data, foldername, dataname, output='convergence.png'):
                                 f'gel_volume_bb_{dataname}.dat')
     gel_rg_file = os.path.join(foldername, 'output_files/volume_data', 
                                 f'gel_volume_rg_{dataname}.dat')
+    num_density_file = os.path.join(foldername, 'output_files/volume_data',
+                                     f'num_density_{dataname}.dat')
     
-    has_box = os.path.exists(box_vol_file)
-    has_gel_bb = os.path.exists(gel_bb_file)
-    has_gel_rg = os.path.exists(gel_rg_file)
+    has_box        = os.path.exists(box_vol_file)
+    has_gel_bb     = os.path.exists(gel_bb_file)
+    has_gel_rg     = os.path.exists(gel_rg_file)
+    has_num_density = os.path.exists(num_density_file)
     
     num_plots = 2  # temp + pressure always
-    if has_box:
-        num_plots += 1
-    if has_gel_bb:
-        num_plots += 1
-    if has_gel_rg:
-        num_plots += 1
+    if has_box:        num_plots += 1
+    if has_gel_bb:     num_plots += 1
+    if has_gel_rg:     num_plots += 1
+    if has_num_density: num_plots += 1
     
     fig, axes = plt.subplots(num_plots, 1, figsize=(10, 3*num_plots))
     if num_plots == 1:
@@ -97,7 +99,7 @@ def plot_convergence(data, foldername, dataname, output='convergence.png'):
     
     plot_idx = 0
     
-    # Temperature
+    # ── Temperature ──────────────────────────────────────────────────
     if 'Temp' in data:
         axes[plot_idx].plot(data['Step'], data['Temp'], 'b-', linewidth=2.0)
         axes[plot_idx].set_ylabel('Temperature')
@@ -105,13 +107,13 @@ def plot_convergence(data, foldername, dataname, output='convergence.png'):
         n_last = int(len(data['Temp']) * 0.3)
         if n_last > 10:
             last_mean = data['Temp'][-n_last:].mean()
-            last_std = data['Temp'][-n_last:].std()
+            last_std  = data['Temp'][-n_last:].std()
             axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--', 
                                    label=f'Last 30%: {last_mean:.3f} ± {last_std:.3f}')
             axes[plot_idx].legend()
         plot_idx += 1
     
-    # Pressure
+    # ── Pressure ──────────────────────────────────────────────────────
     if 'Press' in data:
         axes[plot_idx].plot(data['Step'], data['Press'], 'g-', linewidth=2.0)
         axes[plot_idx].set_ylabel('Pressure')
@@ -119,26 +121,26 @@ def plot_convergence(data, foldername, dataname, output='convergence.png'):
         n_last = int(len(data['Press']) * 0.3)
         if n_last > 10:
             last_mean = data['Press'][-n_last:].mean()
-            last_std = data['Press'][-n_last:].std()
+            last_std  = data['Press'][-n_last:].std()
             axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--',
                                    label=f'Last 30%: {last_mean:.3f} ± {last_std:.3f}')
             axes[plot_idx].legend()
         plot_idx += 1
     
-    # Box Volume (normalized)
+    # ── Box Volume (normalized) ───────────────────────────────────────
     if has_box:
-        timesteps, box_dims = read_timestep_volume_file(box_vol_file)
-        # Compute volume from dimensions (assuming format: timestep Lx Ly Lz)
-        # Actually file has: timestep Lx Ly Lz
-        box_vols = []
+        timesteps = []
+        box_vols  = []
         with open(box_vol_file, 'r') as f:
             for line in f:
                 if line.strip() and not line.startswith('#'):
                     parts = line.split()
                     if len(parts) == 4:
+                        timesteps.append(float(parts[0]))
                         lx, ly, lz = float(parts[1]), float(parts[2]), float(parts[3])
                         box_vols.append(lx * ly * lz)
-        box_vols = np.array(box_vols)
+        timesteps = np.array(timesteps)
+        box_vols  = np.array(box_vols)
         
         if len(box_vols) > 0:
             vol_normalized = box_vols / box_vols[0]
@@ -149,13 +151,30 @@ def plot_convergence(data, foldername, dataname, output='convergence.png'):
             n_last = int(len(vol_normalized) * 0.3)
             if n_last > 10:
                 last_mean = vol_normalized[-n_last:].mean()
-                last_std = vol_normalized[-n_last:].std()
+                last_std  = vol_normalized[-n_last:].std()
                 axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--',
                                        label=f'Last 30%: {last_mean:.3f} ± {last_std:.3f}')
                 axes[plot_idx].legend()
         plot_idx += 1
     
-    # Gel Volume - Bounding Box (normalized)
+    # ── Number Density (beads/sigma^3) ───────────────────────────────
+    if has_num_density:
+        ts_nd, num_dens = read_timestep_volume_file(num_density_file)
+        if len(num_dens) > 0:
+            axes[plot_idx].plot(ts_nd, num_dens, color='darkorange', linewidth=2.0)
+            axes[plot_idx].set_ylabel('Number Density (σ⁻³)')
+            axes[plot_idx].grid(alpha=0.3)
+            
+            n_last = int(len(num_dens) * 0.3)
+            if n_last > 10:
+                last_mean = num_dens[-n_last:].mean()
+                last_std  = num_dens[-n_last:].std()
+                axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--',
+                                       label=f'Last 30%: {last_mean:.4f} ± {last_std:.4f}')
+                axes[plot_idx].legend()
+        plot_idx += 1
+    
+    # ── Gel Volume – Bounding Box (normalized) ───────────────────────
     if has_gel_bb:
         gel_bb_vols = read_volume_file(gel_bb_file)
         if len(gel_bb_vols) > 0:
@@ -169,13 +188,13 @@ def plot_convergence(data, foldername, dataname, output='convergence.png'):
             n_last = int(len(gel_bb_normalized) * 0.3)
             if n_last > 10:
                 last_mean = gel_bb_normalized[-n_last:].mean()
-                last_std = gel_bb_normalized[-n_last:].std()
+                last_std  = gel_bb_normalized[-n_last:].std()
                 axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--',
                                        label=f'Last 30%: {last_mean:.3f} ± {last_std:.3f}')
                 axes[plot_idx].legend()
         plot_idx += 1
     
-    # Gel Volume - Radius of Gyration (normalized)
+    # ── Gel Volume – Radius of Gyration (normalized) ─────────────────
     if has_gel_rg:
         timesteps_rg, gel_rg_vols = read_timestep_volume_file(gel_rg_file)
         if len(gel_rg_vols) > 0:
@@ -188,7 +207,7 @@ def plot_convergence(data, foldername, dataname, output='convergence.png'):
             n_last = int(len(gel_rg_normalized) * 0.3)
             if n_last > 10:
                 last_mean = gel_rg_normalized[-n_last:].mean()
-                last_std = gel_rg_normalized[-n_last:].std()
+                last_std  = gel_rg_normalized[-n_last:].std()
                 axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--',
                                        label=f'Last 30%: {last_mean:.3f} ± {last_std:.3f}')
                 axes[plot_idx].legend()
@@ -206,7 +225,7 @@ if __name__ == "__main__":
         sys.exit(1)
     
     foldername = sys.argv[1]
-    dataname = sys.argv[2]
+    dataname   = sys.argv[2]
     
     filepath = os.path.join(foldername, 'log.lammps')
     data = parse_lammps_log(filepath)
@@ -219,5 +238,3 @@ if __name__ == "__main__":
     os.makedirs(os.path.join(foldername, 'output_plots/convergence_plots'), exist_ok=True)
     
     plot_convergence(data, foldername, dataname, output)
-
-

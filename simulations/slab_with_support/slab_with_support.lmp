@@ -24,8 +24,8 @@ variable nfreq_avg_stress equal 10000 # 125000 or 10000
 
 # Output frequencies
 variable thermo_freq equal 25000
-variable dump_freq equal 10000
-variable volume_freq equal 10000
+variable dump_freq equal 25000
+variable volume_freq equal 25000
 
 # Equilibration parameters
 variable temp_target equal 1.0
@@ -244,7 +244,7 @@ fix box_dims_output all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_
 
 
 # Production run
-fix remove_drift mobile momentum 1000 linear 1 1 1
+fix remove_drift mobile momentum 1000 linear 1 1 1 angular
 run ${nsteps}
 
 
