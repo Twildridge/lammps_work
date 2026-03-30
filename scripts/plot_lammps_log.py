@@ -127,7 +127,7 @@ def plot_convergence(data, foldername, dataname, output='convergence.png'):
             axes[plot_idx].legend()
         plot_idx += 1
     
-    # ── Box Volume (normalized) ───────────────────────────────────────
+    # ── Box Volume (raw for pure-component runs, normalized otherwise) ──
     if has_box:
         timesteps = []
         box_vols  = []
@@ -141,19 +141,28 @@ def plot_convergence(data, foldername, dataname, output='convergence.png'):
                         box_vols.append(lx * ly * lz)
         timesteps = np.array(timesteps)
         box_vols  = np.array(box_vols)
-        
+
         if len(box_vols) > 0:
-            vol_normalized = box_vols / box_vols[0]
-            axes[plot_idx].plot(timesteps, vol_normalized, 'm-', linewidth=2.0)
-            axes[plot_idx].set_ylabel('Box Volume / Initial')
+            is_pure = 'pure' in dataname.lower()
+            if is_pure:
+                plot_vols = box_vols
+                ylabel    = 'Box Volume (σ³)'
+                fmt       = '.3g'
+            else:
+                plot_vols = box_vols / box_vols[0]
+                ylabel    = 'Box Volume / Initial'
+                fmt       = '.3f'
+
+            axes[plot_idx].plot(timesteps, plot_vols, 'm-', linewidth=2.0)
+            axes[plot_idx].set_ylabel(ylabel)
             axes[plot_idx].grid(alpha=0.3)
-            
-            n_last = int(len(vol_normalized) * 0.3)
+
+            n_last = int(len(plot_vols) * 0.3)
             if n_last > 10:
-                last_mean = vol_normalized[-n_last:].mean()
-                last_std  = vol_normalized[-n_last:].std()
+                last_mean = plot_vols[-n_last:].mean()
+                last_std  = plot_vols[-n_last:].std()
                 axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--',
-                                       label=f'Last 30%: {last_mean:.3f} ± {last_std:.3f}')
+                                       label=f'Last 30%: {last_mean:{fmt}} ± {last_std:{fmt}}')
                 axes[plot_idx].legend()
         plot_idx += 1
     

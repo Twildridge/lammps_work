@@ -3,7 +3,8 @@ if [ $# -lt 4 ]; then
     echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [oldsteps] [type]"
     echo "Example (fresh run):  ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000"
     echo "Example (continuation): ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000 20000"
-    echo "  interaction format: epsSS_epsSP (e.g., 1.5_0.4)"
+    echo "Example (pure solvent P-sweep): ./run_lammps.sh pure_solvent pure_solvent_1000 1p0 0"
+    echo "  interaction format: epsSS_epsSP (e.g., 1.5_0.4), or epsSS only for pure_solvent (e.g., 1p0)"
     echo "  oldsteps: total timesteps from previous run (defaults to 0 for fresh runs)"
     echo "  type: optional, 'stress' (adds 1), 'volume' (adds 2), or 'stressvol' (adds 3) to dataname"
     exit 1
@@ -15,6 +16,10 @@ INTERACTION=$3
 NSTEPS=$4
 OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
 TOTSTEPS=$((OLDSTEPS + NSTEPS))
+
+# P-sweep parameters (only used for pure_solvent; ignored by other scripts)
+NSTEPS_EQ=200000    # equilibration steps per state point
+NSTEPS_PROD=100000  # production/averaging steps per state point (must be divisible by 100)
 
 # Scratch directory for trajectories
 SCRATCH_DIR="/expanse/lustre/scratch/$USER/temp_project"
@@ -103,6 +108,8 @@ mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM
     -var nsteps $NSTEPS \
     -var oldsteps $OLDSTEPS \
     -var totsteps $TOTSTEPS \
+    -var nsteps_eq $NSTEPS_EQ \
+    -var nsteps_prod $NSTEPS_PROD \
     -in $LAMMPS_FILE
 
 
@@ -136,6 +143,26 @@ python -c "import numpy; print(numpy.__version__)"
 
 echo "Generating convergence plot..."
 python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
+
+# Pure solvent P-sweep: run EOS plot instead of stress/piston/tracking scripts
+if [ "$FOLDER" = "solvent_phase" ]; then
+    echo "Solvent phase-sweep run detected — generating EOS plot..."
+    python "$SCRIPT_DIR/plot_eos.py" "." "$DATANAME" "$INTERACTION"
+    echo "======================================"
+    echo "Done! Results are in: $WORK_DIR"
+    echo "======================================"
+    exit 0
+fi
+
+# Pure polymer P-sweep: run EOS plot instead of stress/piston/tracking scripts
+if [ "$FOLDER" = "polymer_phase" ]; then
+    echo "Polymer phase-sweep run detected — generating EOS plot..."
+    python "$SCRIPT_DIR/plot_eos.py" "." "$DATANAME" "$INTERACTION"
+    echo "======================================"
+    echo "Done! Results are in: $WORK_DIR"
+    echo "======================================"
+    exit 0
+fi
 
 echo "Generating stress profiles..."
 python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"

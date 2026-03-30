@@ -1,0 +1,149 @@
+# ========== Pure Polymer Single-Pressure NPT Equilibration ==========
+# Equilibrates a pure polymer melt at a single target pressure P* for
+# use in computing the volume of mixing:
+#
+#   ΔV_mix = V_mixture − V_pure_polymer − V_pure_solvent
+#
+# Structure:
+#   Stage 0 — Harmonic pre-relaxation (WCA + harmonic bonds, NVE/limit)
+#   Stage 1 — Gentle Langevin NVT     (full LJ + FENE, NVE/limit)
+#   Stage 2 — NPT production          (single run, block-averaged output)
+#
+# Atom types:  1 = Crosslink,  2 = Chain bead
+#
+# Outputs:
+#   vol_pure_polymer_${dataname}_${interaction}.dat
+#     → columns: step  press_mean  vol_mean  rho_mean  (one row per block)
+#   output_files/volume_data/box_dimensions_${dataname}.dat
+#     → columns: step  lx  ly  lz  (for plot_lammps_log.py)
+#
+# Variables passed from bash:
+#   dataname     — data file name (no extension)
+#   interaction  — epsilon label (e.g. "1p0")
+#   epsSS        — polymer-polymer LJ epsilon
+#   nsteps       — NPT run length (divisible by n_blocks * 100)
+#   n_blocks     — number of block-average windows (recommend 10)
+
+
+
+# ========== Parameters ==========
+variable sigma        equal 1.0
+variable temp_target  equal 1.0
+variable press_target equal 1.0
+variable tdamp        equal 1.0
+variable pdamp        equal 1.0
+variable n_blocks     equal 10
+
+variable timestep_gentle equal 0.001
+variable timestep_prod   equal 0.005
+variable nsteps_gentle   equal 1000
+
+variable thermo_freq   equal 25000
+variable volume_freq   equal 25000
+
+variable block_steps   equal ${nsteps}/${n_blocks}
+variable nrepeat_block equal ${block_steps}/100
+
+
+
+# ========== Initialization ==========
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+read_data data_files/${dataname}.data
+
+print ">>> polymer_pure: T*=${temp_target} P*=${press_target} epsPP=${epsSS} nsteps=${nsteps}"
+
+comm_modify cutoff 5.0
+
+group polymer type 1 2
+
+thermo_style custom step temp pe ke etotal press vol lx ly lz
+thermo ${thermo_freq}
+
+
+
+# =====================================================================
+#   STAGE 0 — Harmonic pre-relaxation
+#
+#   The diamond lattice places chain beads by linear interpolation,
+#   giving bond lengths of bead_spacing*sqrt(3)/4 (~0.52σ at
+#   bead_spacing=1.2) — well below the FENE equilibrium of ~0.96σ.
+#   A harmonic spring (r0=0.96σ) under WCA-only non-bonded interactions
+#   expands them safely before FENE is activated.
+# =====================================================================
+pair_style lj/cut 1.1225
+pair_coeff * * ${epsSS} ${sigma} 1.1225
+
+bond_style harmonic
+bond_coeff 1 30.0 0.96
+
+special_bonds lj 0.0 1.0 1.0
+
+reset_timestep 0
+velocity polymer create 0.01 12345 mom yes rot no
+fix pre  polymer nve/limit 0.05
+fix lang polymer langevin 0.01 0.01 ${tdamp} 904297
+timestep ${timestep_gentle}
+run 10000
+unfix pre
+unfix lang
+
+pair_style lj/cut 2.5
+pair_coeff * * ${epsSS} ${sigma} 2.5
+
+bond_style fene
+bond_coeff 1 30.0 1.5 1.0 1.0
+
+
+
+# =====================================================================
+#   STAGE 1 — Gentle Langevin NVT (ramp T from 0.01 → temp_target)
+# =====================================================================
+reset_timestep 0
+fix gentle polymer nve/limit 0.01
+fix lang   polymer langevin 0.01 ${temp_target} ${tdamp} 904297
+timestep ${timestep_gentle}
+run ${nsteps_gentle}
+unfix gentle
+unfix lang
+
+
+
+# =====================================================================
+#   STAGE 2 — NPT production with block averaging
+# =====================================================================
+variable N_polymer   equal count(polymer)
+variable box_vol     equal lx*ly*lz
+variable num_density equal v_N_polymer/v_box_vol
+variable inst_press  equal press
+
+reset_timestep 0
+fix 1 polymer npt temp ${temp_target} ${temp_target} ${tdamp} &
+    iso ${press_target} ${press_target} ${pdamp}
+timestep ${timestep_prod}
+
+fix box_out all print ${volume_freq} "$(step) $(lx) $(ly) $(lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${totsteps}.dat &
+    screen no title "# step lx ly lz"
+
+fix block_avg all ave/time 100 ${nrepeat_block} ${block_steps} &
+    v_inst_press v_box_vol v_num_density &
+    ave one &
+    file vol_pure_polymer_${dataname}_${interaction}.dat &
+    title1 "# one row per ${block_steps}-step block" &
+    title2 "# step  press_mean  vol_mean  rho_mean"
+
+run ${nsteps}
+
+unfix block_avg
+unfix box_out
+unfix 1
+
+
+
+write_data final_config_pure_polymer_${dataname}_${interaction}.data
+print ">>> Done. Output: vol_pure_polymer_${dataname}_${interaction}.dat"

@@ -1,0 +1,208 @@
+# ========== Pure Polymer P-sweep: Equation of State ==========
+# Maps the liquid/melt branch of the polymer LJ phase diagram at T* = 1.0
+# by sweeping P* HIGH → LOW.
+#
+# Coarse sweep: P* = 1.0, 0.9, ..., 0.1   (10 points, j=1..10)
+# Fine   sweep: P* = 0.050, 0.045, ..., 0.005  (10 points, i=1..10)
+#
+# Atom types in data file:
+#   1 - Crosslink bead
+#   2 - Chain bead
+#
+# Primary output:
+#   eos_${dataname}_${interaction}.dat  →  columns: P_target  rho_mean
+#
+# Diagnostic output (density trace per state point):
+#   output_files/volume_data/rho_trace_${dataname}_${interaction}.dat
+#   → columns: j_or_i  step  rho  (append across all state points)
+#
+# Variables loaded via bash script:
+# - dataname:    data file name
+# - interaction: epsPP label (e.g. "1p0")
+# - epsPP:       polymer-polymer interaction strength (all pairs)
+# - nsteps_eq:   equilibration steps per state point  (recommend 200000)
+# - nsteps_prod: production/averaging steps per point (recommend 100000)
+#                NOTE: must be divisible by 100 for ave/time to work cleanly
+
+
+
+# ========== Simulation Parameters ==========
+variable sigma       equal 1.0
+variable temp_target equal 1.0
+variable tdamp       equal 1.0
+variable pdamp       equal 1.0
+
+variable timestep_gentle equal 0.001
+variable timestep_prod   equal 0.005
+variable nsteps_gentle   equal 1000
+
+variable thermo_freq equal 5000
+variable volume_freq equal 2000        # density trace cadence (within each window)
+
+# ave/time parameters: sample every 100 steps, nrepeat×nevery = nsteps_prod
+variable nevery_rho  equal 100
+variable nrepeat_rho equal ${nsteps_prod}/100   # e.g. 100000/100 = 1000
+variable nfreq_rho   equal ${nsteps_prod}
+
+
+
+# ========== Initialization ==========
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+read_data data_files/${dataname}.data
+
+print ">>> P-sweep EOS run (pure polymer)"
+print ">>> T*    = ${temp_target}"
+print ">>> epsPP = ${epsSS}"
+print ">>> nsteps_eq   = ${nsteps_eq}"
+print ">>> nsteps_prod = ${nsteps_prod}"
+
+comm_modify cutoff 5.0
+
+
+
+# ========== Group Definitions ==========
+group polymer type 1 2
+
+
+
+# ========== Potentials ==========
+# All polymer pairs use the same epsilon (theta-condition baseline)
+pair_style lj/cut 2.5
+pair_coeff * * ${epsSS} ${sigma} 2.5
+
+# FENE bond: standard Kremer-Grest parameters
+# k=30, R0=1.5, epsilon=1.0, sigma=1.0
+bond_style fene
+bond_coeff 1 30.0 1.5 1.0 1.0
+
+# Exclude 1-2 bonded LJ (handled by FENE); include 1-3 and beyond
+special_bonds lj 0.0 1.0 1.0
+
+
+
+# =====================================================================
+#   INITIAL PREP: Minimization + Gentle NVT (once, from initial config)
+# =====================================================================
+#minimize 1.0e-4 1.0e-6 10000 100000
+
+thermo_style custom step temp pe ke etotal press vol lx ly lz
+thermo ${thermo_freq}
+
+reset_timestep 0
+velocity polymer create 0.1 12345 mom yes rot no
+fix gentle polymer nve/limit 0.01
+fix lang   polymer langevin ${temp_target} ${temp_target} ${tdamp} 904297
+timestep ${timestep_gentle}
+run ${nsteps_gentle}
+unfix gentle
+unfix lang
+
+
+
+# ========== Number Density Variable ==========
+variable N_polymer   equal count(polymer)
+variable box_vol     equal lx*ly*lz
+variable num_density equal v_N_polymer/v_box_vol
+
+
+
+# ========== EOS Output File Header ==========
+print "# P_target   rho_mean" &
+    file eos_${dataname}_${interaction}.dat
+
+
+
+# =====================================================================
+#   LOOP 1 — COARSE:  P* = 1.0, 0.9, 0.8, ..., 0.1
+#            j = 1..10  →  P = (11 - j) * 0.1
+# =====================================================================
+variable j loop 10
+label loop1_start
+
+    variable press_target equal (11-${j})*0.1
+
+    print ">>> [Loop1 j=${j}] P* = ${press_target}"
+
+    # NPT equilibration at this pressure
+    reset_timestep 0
+    fix 1 polymer npt temp ${temp_target} ${temp_target} ${tdamp} &
+        iso ${press_target} ${press_target} ${pdamp}
+    timestep ${timestep_prod}
+    run ${nsteps_eq}
+
+    # Production: time-average density
+    fix rho_avg all ave/time ${nevery_rho} ${nrepeat_rho} ${nfreq_rho} &
+        v_num_density
+
+    # Density trace for this window (for convergence checking)
+    fix rho_trace_out all print ${volume_freq} "1_${j} $(step) ${num_density}" &
+        append output_files/volume_data/rho_trace_${dataname}_${interaction}.dat &
+        screen no
+
+    run ${nsteps_prod}
+
+    # Write averaged density to EOS file
+    variable rho_mean equal f_rho_avg
+    print "${press_target}   ${rho_mean}" &
+        append eos_${dataname}_${interaction}.dat
+
+    unfix rho_trace_out
+    unfix rho_avg
+    unfix 1
+
+next j
+jump SELF loop1_start
+
+
+
+# =====================================================================
+#   LOOP 2 — FINE:  P* = 0.050, 0.045, ..., 0.005
+#            i = 1..10  →  P = (11 - i) * 0.005
+# =====================================================================
+variable i loop 10
+label loop2_start
+
+    variable press_target equal (11-${i})*0.005
+
+    print ">>> [Loop2 i=${i}] P* = ${press_target}"
+
+    # NPT equilibration
+    reset_timestep 0
+    fix 1 polymer npt temp ${temp_target} ${temp_target} ${tdamp} &
+        iso ${press_target} ${press_target} ${pdamp}
+    timestep ${timestep_prod}
+    run ${nsteps_eq}
+
+    # Production: time-average density
+    fix rho_avg all ave/time ${nevery_rho} ${nrepeat_rho} ${nfreq_rho} &
+        v_num_density
+
+    # Density trace
+    fix rho_trace_out all print ${volume_freq} "2_${i} $(step) ${num_density}" &
+        append output_files/volume_data/rho_trace_${dataname}_${interaction}.dat &
+        screen no
+
+    run ${nsteps_prod}
+
+    variable rho_mean equal f_rho_avg
+    print "${press_target}   ${rho_mean}" &
+        append eos_${dataname}_${interaction}.dat
+
+    unfix rho_trace_out
+    unfix rho_avg
+    unfix 1
+
+next i
+jump SELF loop2_start
+
+
+
+# ========== Save Final Configuration ==========
+write_data final_config_${dataname}_${interaction}_psweep.data
+
+print ">>> P-sweep complete. EOS written to eos_${dataname}_${interaction}.dat"

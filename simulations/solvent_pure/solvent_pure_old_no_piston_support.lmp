@@ -1,0 +1,122 @@
+# ========== Pure Solvent Single-Pressure NPT Equilibration ==========
+# Equilibrates a pure LJ solvent at a single target pressure P* for
+# use in computing the volume of mixing:
+#
+#   ΔV_mix = V_mixture − V_pure_polymer − V_pure_solvent
+#
+# Structure:
+#   Stage 0 — Minimize + Gentle Langevin NVT
+#   Stage 1 — NPT production  (single run, block-averaged output)
+#
+# Atom types:  1 = Solvent
+#
+# Outputs:
+#   vol_pure_solvent_${dataname}_${interaction}.dat
+#     → columns: step  press_mean  vol_mean  rho_mean  (one row per block)
+#   output_files/volume_data/box_dimensions_${dataname}.dat
+#     → columns: step  lx  ly  lz  (for plot_lammps_log.py)
+#
+# Variables passed from bash:
+#   dataname     — data file name (no extension)
+#   interaction  — epsilon label (e.g. "1p0")
+#   epsSS        — solvent-solvent LJ epsilon
+#   nsteps       — NPT run length (divisible by n_blocks * 100)
+#   n_blocks     — number of block-average windows (recommend 10)
+
+
+
+# ========== Parameters ==========
+variable sigma        equal 1.0
+variable temp_target  equal 1.0
+variable press_target equal 1.0
+variable tdamp        equal 1.0
+variable pdamp        equal 1.0
+variable n_blocks     equal 10
+
+variable timestep_gentle equal 0.001
+variable timestep_prod   equal 0.005
+variable nsteps_gentle   equal 1000
+
+variable thermo_freq   equal 5000
+variable volume_freq   equal 2000
+
+variable block_steps   equal ${nsteps}/${n_blocks}
+variable nrepeat_block equal ${block_steps}/100
+
+
+
+# ========== Initialization ==========
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+read_data data_files/${dataname}.data
+
+print ">>> solvent_pure: T*=${temp_target} P*=${press_target} epsSS=${epsSS} nsteps=${nsteps}"
+
+comm_modify cutoff 5.0
+
+group solvent type 1
+
+pair_style lj/cut 2.5
+pair_coeff 1 1 ${epsSS} ${sigma} 2.5
+bond_style none
+special_bonds lj 0.0 0.0 0.0
+
+thermo_style custom step temp pe ke etotal press vol lx ly lz
+thermo ${thermo_freq}
+
+
+
+# =====================================================================
+#   STAGE 0 — Minimize + Gentle Langevin NVT
+# =====================================================================
+minimize 1.0e-4 1.0e-6 10000 100000
+
+reset_timestep 0
+velocity solvent create 0.1 12345 mom yes rot no
+fix gentle solvent nve/limit 0.01
+fix lang   solvent langevin ${temp_target} ${temp_target} ${tdamp} 904297
+timestep ${timestep_gentle}
+run ${nsteps_gentle}
+unfix gentle
+unfix lang
+
+
+
+# =====================================================================
+#   STAGE 1 — NPT production with block averaging
+# =====================================================================
+variable N_solvent   equal count(solvent)
+variable box_vol     equal lx*ly*lz
+variable num_density equal v_N_solvent/v_box_vol
+variable inst_press  equal press
+
+reset_timestep 0
+fix 1 solvent npt temp ${temp_target} ${temp_target} ${tdamp} &
+    iso ${press_target} ${press_target} ${pdamp}
+timestep ${timestep_prod}
+
+fix box_out all print ${volume_freq} "$(step) $(lx) $(ly) $(lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${totsteps}.dat &
+    screen no title "# step lx ly lz"
+
+fix block_avg all ave/time 100 ${nrepeat_block} ${block_steps} &
+    v_inst_press v_box_vol v_num_density &
+    ave one &
+    file vol_pure_solvent_${dataname}_${interaction}.dat &
+    title1 "# one row per ${block_steps}-step block" &
+    title2 "# step  press_mean  vol_mean  rho_mean"
+
+run ${nsteps}
+
+unfix block_avg
+unfix box_out
+unfix 1
+
+
+
+write_data final_config_pure_solvent_${dataname}_${interaction}.data
+print ">>> Done. Output: vol_pure_solvent_${dataname}_${interaction}.dat"

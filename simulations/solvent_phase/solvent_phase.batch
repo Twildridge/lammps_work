@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 
-#SBATCH --job-name=slab_support
+#SBATCH --job-name=solvent_phase
 #SBATCH --partition=compute
 #SBATCH --account=csb197
-#SBATCH --nodes=5
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=128 # was 32, 128
 #SBATCH --cpus-per-task=1     # was 4, 1
 #SBATCH --mem=0
-#SBATCH --time=7:00:00
+#SBATCH --time=6:00:00
 #SBATCH --output=%x.o%j.%N
-# #SBATCH --error=%x.e%j.%N
+#SBATCH --error=%x.e%j.%N
 
 # Set environment variables
 declare -xr OMPI_UNIT='core'
@@ -29,10 +29,10 @@ module load openmpi/4.1.3
 module load python/3.8.12
 
 # Set simulation parameters
-FOLDER="slab_with_support"
-DATANAME="slab_support_5beads_tall_rho08"
-INTERACTION="1.0_1.0"
-NSTEPS=100000
+FOLDER="solvent_phase"
+DATANAME="solvent_box_rho04_01"
+INTERACTION="1.0_0.0"
+NSTEPS=0            # steps are in run_lammps.sh
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
