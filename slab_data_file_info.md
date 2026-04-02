@@ -366,3 +366,66 @@ Generated tetrahedral gel slab with piston:
   Total bonds: 98496
   Output: ../../lammps_data_files_local/slab_support_5beads_tall_7.data
 
+Generated tetrahedral gel slab with piston:
+  Unit cells: 9 x 9 x 21
+  Beads per chain: 5
+  Gel dimensions: 43.20 x 43.20 x 100.80
+  Box dimensions: 61.20 x 61.20 x 131.80
+  Side padding (x/y): 9.00
+  Top padding (z):    29.00
+  Gel top z:          104.8000
+  Piston z:           119.4830  (midpoint between gel top and box top)
+  Piston exclusion:   +/-0.10 sigma around piston plane
+  Crosslinks: 14566
+  Chains: 27216
+  Polymer beads: 96214
+  Bottom support: 54162 (spacing: 0.20)
+  Top piston: 54162 (spacing: 0.20)
+  Solvent beads: 394919 (density: 0.80)
+  Total atoms: 599457
+  Total bonds: 108864
+  Output: ../../lammps_data_files_local/slab_support_5beads_tall_rho08.data
+  
+  Generated tetrahedral gel slab with piston:
+  Unit cells: 9 x 9 x 21
+  Beads per chain: 5
+  Gel dimensions: 43.20 x 43.20 x 100.80
+  Box dimensions: 61.20 x 61.20 x 131.80
+  Side padding (x/y): 9.00
+  Top padding (z):    29.00
+  Gel top z:          104.8000
+  Piston z:           119.4830  (midpoint between gel top and box top)
+  Piston exclusion:   +/-0.10 sigma around piston plane
+  Crosslinks: 14566
+  Chains: 27216
+  Polymer beads: 96214
+  Bottom support: 54162 (spacing: 0.20)
+  Top piston: 54162 (spacing: 0.20)
+  Solvent beads: 197459 (density: 0.40)
+  Total atoms: 401997
+  Total bonds: 108864
+  Output: ../../lammps_data_files_local/slab_support_5beads_tall_rho04.data
+  
+  
+  Generated tetrahedral gel slab with piston:
+  Unit cells: 9 x 9 x 21
+  Beads per chain: 5
+  Gel dimensions: 43.20 x 43.20 x 100.80
+  Box dimensions: 61.20 x 61.20 x 131.80
+  Side padding (x/y): 9.00
+  Top padding (z):    29.00
+  Gel top z:          104.8000
+  Piston z:           119.4830  (midpoint between gel top and box top)
+  Piston exclusion:   +/-0.10 sigma around piston plane
+  Crosslinks: 14566
+  Chains: 27216
+  Polymer beads: 96214
+  Bottom support: 54162 (spacing: 0.20)
+  Top piston: 54162 (spacing: 0.20)
+  Solvent beads: 148094 (density: 0.30)
+  Total atoms: 352632
+  Total bonds: 108864
+  Output: ../../lammps_data_files_local/slab_support_5beads_tall_rho03.data
+  
+  
+  

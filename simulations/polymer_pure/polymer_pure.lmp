@@ -29,7 +29,7 @@
 # ========== Parameters ==========
 variable sigma        equal 1.0
 variable temp_target  equal 1.0
-variable press_target equal 1.0
+variable press_target equal 0.1
 variable tdamp        equal 1.0
 variable pdamp        equal 1.0
 variable n_blocks     equal 10
@@ -38,8 +38,8 @@ variable timestep_gentle equal 0.001
 variable timestep_prod   equal 0.005
 variable nsteps_gentle   equal 1000
 
-variable thermo_freq   equal 25000
-variable volume_freq   equal 25000
+variable thermo_freq   equal 10000
+variable volume_freq   equal 10000
 
 variable block_steps   equal ${nsteps}/${n_blocks}
 variable nrepeat_block equal ${block_steps}/100
