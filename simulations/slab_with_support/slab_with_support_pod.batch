@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 #SBATCH --job-name=slab_support
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=40
 #SBATCH --cpus-per-task=1
 #SBATCH --time=6:00:00 # shortening this will reduce queue time but might risk killing job
 #SBATCH --output=%x.o%j.%N
-#SBATCH --error=%x.e%j.%N
+# #SBATCH --error=%x.e%j.%N
 
 # note that Pod has 40 cores per node
 
@@ -26,9 +26,9 @@ module load openmpi5
 
 # Set simulation parameters
 FOLDER="slab_with_support"
-DATANAME="slab_support_5beads_tall_rho02"
-INTERACTION="1.0_1.0"
-NSTEPS=50000
+DATANAME="slab_support_5beads_tall_rho02_1"
+INTERACTION="1.0_1.2"
+NSTEPS=70000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
