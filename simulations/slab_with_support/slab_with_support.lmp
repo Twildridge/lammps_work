@@ -29,7 +29,7 @@ variable volume_freq equal 10000
 
 # Equilibration parameters
 variable temp_target equal 1.0
-variable press_target equal 0.1 # APPROPRIATE VALUE IMPORTANT
+variable press_target equal 1.0 # APPROPRIATE VALUE IMPORTANT
 variable tdamp equal 1.0
 variable pdamp equal 1.0
 variable timestep_gentle equal 0.001
@@ -88,7 +88,7 @@ group polymer_and_support type 1 2 4 5
 # Soft pairs prevent pair overlaps with finite, bounded forces
 
 if "${is_restart} == 0" then &
-    "pair_style soft 1.12"              &
+    "pair_style soft 1.122"              &
     "pair_coeff * * 50.0"              &
     "pair_coeff 4 4 0.0"              &
     "pair_coeff 5 5 0.0"              &
@@ -127,18 +127,18 @@ if "${is_restart} == 0" then &
 # restart paths — on restart, read_restart restores styles, but we
 # redefine them here for clarity and safety.
 
-pair_style lj/cut 1.22                  # WAS 2.5
-pair_coeff * * 1.0 ${sigma} 1.22        # WAS 2.5
-pair_coeff 1 3 ${epsSP} ${sigma} 1.22 # WAS 2.5   # polymer-solvent
-pair_coeff 2 3 ${epsSP} ${sigma} 1.22 # WAS 2.5   # crosslinker-solvent
-pair_coeff 3 3 ${epsSS} ${sigma} 1.22 # WAS 2.5   # solvent-solvent
-pair_coeff 1 4 1.0 ${sigma} 1.22       # polymer-support (WCA)
-pair_coeff 2 4 1.0 ${sigma} 1.22       # crosslinker-support (WCA)
+pair_style lj/cut 1.122                  # WAS 2.5
+pair_coeff * * 1.0 ${sigma} 1.122        # WAS 2.5
+pair_coeff 1 3 ${epsSP} ${sigma} 1.122 # WAS 2.5   # polymer-solvent
+pair_coeff 2 3 ${epsSP} ${sigma} 1.122 # WAS 2.5   # crosslinker-solvent
+pair_coeff 3 3 ${epsSS} ${sigma} 1.122 # WAS 2.5   # solvent-solvent
+pair_coeff 1 4 1.0 ${sigma} 1.122       # polymer-support (WCA)
+pair_coeff 2 4 1.0 ${sigma} 1.122       # crosslinker-support (WCA)
 pair_coeff 3 4 0.0 ${sigma} 0.0        # solvent-support (off)
 pair_coeff 4 4 0.0 ${sigma} 0.0        # support-support (off)
-pair_coeff 1 5 1.0 ${sigma} 1.22       # polymer-piston (WCA)
-pair_coeff 2 5 1.0 ${sigma} 1.22       # crosslinker-piston (WCA)
-pair_coeff 3 5 1.0 ${sigma} 1.22       # solvent-piston (WCA)
+pair_coeff 1 5 1.0 ${sigma} 1.122       # polymer-piston (WCA)
+pair_coeff 2 5 1.0 ${sigma} 1.122       # crosslinker-piston (WCA)
+pair_coeff 3 5 1.0 ${sigma} 1.122       # solvent-piston (WCA)
 pair_coeff 4 5 0.0 ${sigma} 0.0        # support-piston (off)
 pair_coeff 5 5 0.0 ${sigma} 0.0        # piston-piston (off)
 

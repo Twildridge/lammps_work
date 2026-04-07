@@ -68,8 +68,8 @@ group solvent type 1
 
 
 # ========== Potentials ==========
-pair_style lj/cut 2.5
-pair_coeff 1 1 ${epsSS} ${sigma} 2.5
+pair_style lj/cut 1.122                     # WAS 2.5
+pair_coeff 1 1 ${epsSS} ${sigma} 1.122      # WAS 2.5
 bond_style none
 special_bonds lj 0.0 0.0 0.0
 

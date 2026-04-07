@@ -30,7 +30,7 @@ module load python/3.8.12
 
 # Set simulation parameters
 FOLDER="solvent_pure"
-DATANAME="final_config_slab_support_5beads_tall_rho08_1.0_1.2_2000000_solvent_only"
+DATANAME="final_config_slab_support_5beads_tall_rho04_1.0_1.0_500000_solvent_only"
 INTERACTION="1.0_0.0"
 NSTEPS=100000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation

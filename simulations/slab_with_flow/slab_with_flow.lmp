@@ -44,8 +44,8 @@ variable timestep_prod equal 0.005
 # ----- Piston Force Ramp -----
 # Force ramps linearly from start to end over each production run segment.
 # Negative = pushing in -z direction.
-variable piston_force_start equal -0.05
-variable piston_force_end   equal -0.1
+variable piston_force_start equal -0.02
+variable piston_force_end   equal -0.08
 
 # ----- Phase 1: Mode-Dependent Setup -----
 variable perm_setup_freq equal 20000    # permeation equilibration steps
@@ -97,7 +97,7 @@ boundary p p p
 atom_style molecular
 atom_modify map array
 
-pair_style lj/cut 2.5
+pair_style lj/cut 1.122
 bond_style fene
 
 read_data data_files/${dataname}.data nocoeff
@@ -130,30 +130,30 @@ group gel_system type 1 2 3 4 5
 # ==========================================================================
 
 # Default: full LJ for all pairs
-pair_coeff * * 1.0 ${sigma} 2.5
+pair_coeff * * 1.0 ${sigma} 1.122
 
 # Polymer-solvent & solvent-solvent (tunable)
-pair_coeff 1 3 ${epsSP} ${sigma} 2.5    # polymer-solvent
-pair_coeff 2 3 ${epsSP} ${sigma} 2.5    # crosslinker-solvent
-pair_coeff 3 3 ${epsSS} ${sigma} 2.5    # solvent-solvent
+pair_coeff 1 3 ${epsSP} ${sigma} 1.122    # polymer-solvent
+pair_coeff 2 3 ${epsSP} ${sigma} 1.122    # crosslinker-solvent
+pair_coeff 3 3 ${epsSS} ${sigma} 1.122    # solvent-solvent
 
 # Polymer/crosslinker with support and piston (WCA repulsive)
-pair_coeff 1 4 1.0 ${sigma} 1.22
-pair_coeff 2 4 1.0 ${sigma} 1.22
-pair_coeff 1 5 1.0 ${sigma} 1.22
-pair_coeff 2 5 1.0 ${sigma} 1.22
+pair_coeff 1 4 1.0 ${sigma} 1.122
+pair_coeff 2 4 1.0 ${sigma} 1.122
+pair_coeff 1 5 1.0 ${sigma} 1.122
+pair_coeff 2 5 1.0 ${sigma} 1.122
 
 # Solvent-piston: mode-dependent from the start
 #   permeation  (0) → WCA: piston pushes fluid as a plug
 #   compression (1) → OFF: piston passes through solvent freely
 pair_coeff 3 5 0.0 ${sigma} 0.0                 # default: OFF (compression)
 if "${compression_mode} == 0" then &
-    "pair_coeff 3 5 1.0 ${sigma} 1.22"          # permeation: WCA
+    "pair_coeff 3 5 1.0 ${sigma} 1.122"          # permeation: WCA
 
 # Wall interactions (WCA)
-pair_coeff 1 6 1.0 ${sigma} 1.22
-pair_coeff 2 6 1.0 ${sigma} 1.22
-pair_coeff 3 6 1.0 ${sigma} 1.22
+pair_coeff 1 6 1.0 ${sigma} 1.122
+pair_coeff 2 6 1.0 ${sigma} 1.122
+pair_coeff 3 6 1.0 ${sigma} 1.122
 
 # Non-interacting pairs
 pair_coeff 3 4 0.0 ${sigma} 0.0         # solvent-support

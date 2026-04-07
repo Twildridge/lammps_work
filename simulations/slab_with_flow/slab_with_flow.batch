@@ -3,7 +3,7 @@
 #SBATCH --job-name=slab_flow
 #SBATCH --partition=compute
 #SBATCH --account=csb197
-#SBATCH --nodes=6
+#SBATCH --nodes=5
 #SBATCH --ntasks-per-node=32 # was 32
 #SBATCH --cpus-per-task=4     # was 4
 #SBATCH --mem=0
@@ -30,9 +30,9 @@ module load python/3.8.12
 
 # Set simulation parameters
 FOLDER="slab_with_flow"
-DATANAME="walled_slab_support_5beads_tall_4_1.0_1.05_15000000"
+DATANAME="walled_slab_support_5beads_tall_rho04_1.0_1.0_500000"
 INTERACTION="1.0_1.0" # first number is solvent–solvent; second is polymer–solvent
-NSTEPS=80001
+NSTEPS=200000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
