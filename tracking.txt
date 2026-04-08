@@ -111,4 +111,5 @@ slab_support_5beads_10x10x5_rho6_extra_padding431_1.5_1.4_20000        87.00    
 walled_slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_10000000_1.5_1.4_100000 100.74     100.74     64.27      1768802    N/A
 walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_40000       81.46      81.46      117.98     1575670    N/A
 pure_polymer_5beads_8x8x8_1.0_0.0_0                                    38.40      38.40      38.40      28668      N/A
-isolated_slab_support_5beads_tall_rho04_1.0_1.0_500000_solvent_only_1.0_0.0_100000 52.76      51.21      116.56     58884      N/A            
+isolated_slab_support_5beads_tall_rho04_1.0_1.0_500000_solvent_only_1.0_0.0_100000 52.76      51.21      116.56     58884      N/A
+isolated_slab_support_5beads_tall_rho04_1.0_1.0_500000_solvent_only_1.0_1.0_100000 52.76      51.21      116.56     58884      N/A

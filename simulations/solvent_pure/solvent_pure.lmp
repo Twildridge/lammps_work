@@ -89,19 +89,14 @@ group walls   type 2 3    # combined frozen group
 # Full pair_style with all 3 possible types.
 # Interactions reproduce the slab_with_support.lmp conventions after
 # the 3→1, 4→2, 5→3 type remapping performed by split_gel_data.py.
-pair_style lj/cut 1.122              # WAS 2.5
-pair_coeff * * 0.0 ${sigma} 0.0        # default: all off
-pair_coeff 1 1 ${epsSS} ${sigma} 1.122   # WAS 2.5   # solvent–solvent
-pair_coeff 1 2 0.0 ${sigma} 0.0        # solvent–support  (off)
-pair_coeff 1 3 1.0 ${sigma} 1.122     # solvent–piston   (WCA)
-pair_coeff 2 2 0.0 ${sigma} 0.0        # support–support  (off)
-pair_coeff 2 3 0.0 ${sigma} 0.0        # support–piston   (off)
-pair_coeff 3 3 0.0 ${sigma} 0.0        # piston–piston    (off)
+pair_style lj/cut 1.122
+pair_coeff * * 0.0 ${sigma} 0.0       # default: all off
+pair_coeff 1 1 ${epsSS} ${sigma} 1.122  # solvent–solvent
 
 # Skip neighbour-list build for purely zero-interaction pairs
-neigh_modify exclude type 2 2
-neigh_modify exclude type 3 3
-neigh_modify exclude type 2 3
+# neigh_modify exclude type 2 2
+# neigh_modify exclude type 3 3
+# neigh_modify exclude type 2 3
 
 bond_style none
 special_bonds lj 0.0 0.0 0.0
