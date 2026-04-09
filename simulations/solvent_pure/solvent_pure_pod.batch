@@ -1,28 +1,36 @@
-#!/bin/bash -l
+#!/usr/bin/env bash
+
 #SBATCH --job-name=pure_solv
 #SBATCH --output=slurm_%j.out
 #SBATCH --error=slurm_%j.err
-#SBATCH --nodes=2
-#SBATCH --ntasks-per-node=35
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=40
 #SBATCH --cpus-per-task=1
-#SBATCH --time=1:00:00 # shortening this will reduce queue time but might risk killing job
+#SBATCH --time=2:00:00 # shortening this will reduce queue time but might risk killing job
 
 # note that Pod has 40 cores per node
+
+# MPI settings for Intel Omni-Path (Pod)
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_pml='cm'
+declare -xr OMPI_MCA_mtl='psm2'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
 
 # Load required modules for LAMMPS on Pod
 module load gnu14
 module load openmpi5
 
-ulimit -n 2048 # gives more headroom for number of open file descriptors
 
 # Set simulation parameters
-FOLDER="pure_solvent"
-DATANAME="solvent_box_rho6_02"
-INTERACTION="1.5_1.4"
-NSTEPS=20000
+FOLDER="solvent_pure"
+DATANAME="isolated_slab_support_5beads_tall_rho04_1.0_1.0_500000_solvent_only"
+INTERACTION="1.0_1.0"
+NSTEPS=100000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
-TYPE="stress"             # Options: stress, volume, stressvol, or leave empty (just type "")
+TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1
