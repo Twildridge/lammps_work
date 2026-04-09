@@ -1,12 +1,12 @@
 #!/bin/bash -l
 #SBATCH --job-name=solv_flow
 #SBATCH --output=slurm_%j.out
-#SBATCH --error=slurm_%j.err
+# #SBATCH --error=slurm_%j.err
 #SBATCH --nodes=5
 #SBATCH --ntasks-per-node=120
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=RM
-#SBATCH --time=48:00:00
+#SBATCH --time=16:00:00
 
 # note that Bridges-2 has 128 cores per node
 # 120 tasks per node is the most efficient
@@ -39,9 +39,9 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 
 # Set simulation parameters
 FOLDER="slab_with_flow"
-DATANAME="walled_slab_support_5beads_tall_4_1.0_1.05_15000000"
-INTERACTION="1.0_1.05" # first number is solvent–solvent; second is polymer–solvent
-NSTEPS=10000000
+DATANAME="walled_slab_support_5beads_tall_rho04_1.0_1.0_500000"
+INTERACTION="1.0_1.0" # first number is solvent–solvent; second is polymer–solvent
+NSTEPS=2000000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
@@ -50,7 +50,7 @@ cd ~/Documents/lammps_work/scripts || exit 1
 
 # Run the simulation
 if [ -z "$TYPE" ]; then
-    ./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS"
+    ./run_lammps_bridges.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS"
 else
-    ./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$TYPE"
+    ./run_lammps_bridges.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$TYPE"
 fi
