@@ -416,6 +416,70 @@ Clusters also pull automatically at the start of every job (built into `run_lamm
 cd ~/Documents/lammps_work && git pull
 ```
 
+### Handling merge conflicts
+
+If you edited the same file on two machines without syncing between them, `git pull --rebase` will stop with a conflict error. Fix it like this:
+
+```bash
+git status                  # identify the conflicting file(s)
+# Open each conflicting file — look for markers like:
+#   <<<<<<< HEAD
+#   (your local version)
+#   =======
+#   (incoming version from GitHub)
+#   >>>>>>> origin/main
+# Edit the file to keep what you want, removing all the marker lines.
+git add <filename>
+git rebase --continue
+git push
+```
+
+The simplest way to avoid conflicts: always run `lsync` (or `git pull`) before you start editing on any machine.
+
+---
+
+### SSH key setup (if `git push` gives a login error)
+
+This is needed once per cluster the first time you try to push. The error usually looks like `Permission denied (publickey)` or `fatal: Authentication failed`.
+
+**1. Generate an SSH key on the cluster:**
+```bash
+ssh-keygen -t ed25519 -C "pollard@ucsb.edu"
+# Press Enter for all prompts (default location, no passphrase needed)
+```
+
+**2. Print your public key:**
+```bash
+cat ~/.ssh/id_ed25519.pub
+# Copy the entire line of output
+```
+
+**3. Add the key to GitHub:**
+- Go to [github.com/settings/ssh/new](https://github.com/settings/ssh/new)
+- Title: something descriptive like `"Bridges-2 cluster"` or `"Expanse cluster"`
+- Key: paste the full line from step 2
+- Click **Add SSH key**
+
+**4. Test the connection:**
+```bash
+ssh -T git@github.com
+# Expected: "Hi Twildridge! You've successfully authenticated..."
+```
+
+**5. Switch your repo remote to SSH:**
+```bash
+git remote set-url origin git@github.com:Twildridge/lammps_work.git
+```
+
+**6. Try pushing again:**
+```bash
+git push
+```
+
+Repeat steps 1–6 for each cluster (Expanse, Bridges-2, Pod) — each needs its own key added to GitHub. On your MacBook, this is usually handled automatically by the macOS keychain, so you shouldn't need to do it there.
+
+---
+
 ### What is and isn't tracked by git
 
 The `.gitignore` excludes large files so the repo stays fast:
@@ -495,6 +559,8 @@ module load LAMMPS/22Jul25-gcc
 | Cores/node | 40 (optimal) |
 | Internode bandwidth | 100 Gb/s (half of Bridges-2's 200 Gb/s — avoid multi-node for large systems) |
 | Note | GPUs available (L40S); check `documenting_pod_runs.md` for benchmarks |
+
+> **Pod requires the UCSB campus VPN.** You must be connected before you can SSH in. Download and install Ivanti Secure Access from [it.ucsb.edu/ivanti-secure-access-campus-vpn/get-connected-campus-vpn](https://it.ucsb.edu/ivanti-secure-access-campus-vpn/get-connected-campus-vpn), then connect to the UCSB VPN before running `ssh pod-login1.cnsi.ucsb.edu`. Expanse and Bridges-2 do not require a VPN.
 
 ---
 
