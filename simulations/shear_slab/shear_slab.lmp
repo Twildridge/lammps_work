@@ -1,0 +1,486 @@
+# ========== Shear Modulus Simulation ==========
+# Starting from isolated swollen gel configuration (snug box, no piston/support/walls)
+# Variables from bash script: dataname, interaction, epsSS, epsSP, nsteps
+#
+# Atom types: 1=polymer, 2=crosslinker, 3=solvent (if swollen gel)
+#
+# Reduced LJ units: tau = sigma*sqrt(m/epsilon)
+# dt = 0.005 → 1e6 steps ≈ 4.1e3 tau
+#
+# Simple shear in the xz plane:
+#   - Box tilts via fix deform xz (remap x) to maintain PBC consistency
+#   - Opposing ±x forces on top/bottom shear_frac of polymer reinforce the gradient
+#   - Shear strain γ = xz_tilt / lz
+#   - G = σ_xz / γ  (measured in Phase 3 at equilibrium)
+#
+# Phases:
+#   1. Brief NPT equilibration (undeformed, isotropic)
+#   2. Shear application: fix deform xz + ±x forces on top/bottom polymer layers
+#   3. NVT production at fixed deformed geometry → time-averaged stresses → G
+#
+# Outputs (all in the timestamped lammps_runs/ working directory):
+#   log.lammps                                    bulk pressure: pxx pyy pzz pxy pxz pyz
+#   stress_data/stress_tensor_polymer_*.dat        box-integrated 6-component stress (time-avg)
+#   stress_data/stress_tensor_solvent_*.dat        same for solvent
+#   stress_data/stress_profile_z_polymer_*.dat     z-binned 6-component stress profile (time-avg)
+#   stress_data/stress_profile_z_solvent_*.dat     same for solvent
+#   stress_data/shear_strain_*.dat                 xz tilt and γ vs step (Phase 2 + 3)
+#   volume_data/gel_dimensions_rg_*.dat            Rg-based gel dimensions
+#   volume_data/box_dimensions_*.dat               lx ly lz xy xz yz vs step
+#   volume_data/polymer_com_*.dat                  polymer centre of mass vs step
+#   traj_files/prod_*.lammpstrj                    sparse trajectory (for vol fraction analysis)
+
+
+# ==========================================================================
+#                              PARAMETERS
+# ==========================================================================
+
+# ----- Physical Parameters -----
+variable sigma          equal 1.0
+variable temp_target    equal 1.0
+variable P_target       equal 1.5
+variable timestep_prod  equal 0.005
+
+# ----- Shear Parameters -----
+# Keep target_strain_xz <= 0.10 to remain in the linear (elastic) regime
+variable target_strain_xz equal 0.10
+# Fraction of gel z-height defining the top/bottom driven layers
+variable shear_frac        equal 0.05
+# Force magnitude applied to top (+x) and bottom (-x) polymer layers [LJ units]
+# Set shear_force = 0.0 to drive shear via box deformation only (no explicit force)
+variable shear_force       equal 0.05
+
+# ----- Phase Lengths -----
+variable nsteps_equil  equal 50000    # Phase 1: NPT equilibration steps
+variable nsteps_shear  equal 200000   # Phase 2: shear application steps
+# nsteps (Phase 3 production) comes from bash via -var nsteps
+
+# ----- Derived Shear Rate -----
+# d(xz)/dt = erate × lz  →  γ = erate × nsteps_shear × dt = target_strain_xz
+# (independent of lz — no need to wait for post-equil box dimensions)
+variable erate equal ${target_strain_xz}/(${nsteps_shear}*${timestep_prod})
+
+# ----- Output Frequencies -----
+variable thermo_freq     equal 10000
+variable dump_freq_setup equal 1000
+variable dump_freq_prod  equal 10000
+variable stress_freq     equal 5000
+
+# ----- Time Averaging (stress) -----
+# Adaptive: targets num_stress_curves output frames, with bounded nrepeat
+# nfreq = nevery × nrepeat  (LAMMPS constraint)
+variable num_stress_curves equal 10
+variable nevery_target     equal 100    # ~0.5 τ — near stress decorrelation time
+variable nrepeat_max       equal 2000   # cap to preserve transient resolution
+variable nrepeat_min       equal 50     # floor for adequate noise reduction
+
+variable nfreq_raw    equal floor(${nsteps}/v_num_stress_curves)
+variable nrepeat_raw  equal floor(v_nfreq_raw/v_nevery_target)
+
+variable nr_lo equal (v_nrepeat_raw>v_nrepeat_min)*v_nrepeat_raw+(v_nrepeat_raw<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepeat_max)*v_nrepeat_max
+variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
+variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
+
+print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
+print ">>> Shear: γ_target=${target_strain_xz}  erate=${erate}  nsteps_shear=${nsteps_shear}"
+
+# ----- Spatial Binning -----
+variable binWidth    equal 2.0
+variable rg_scale    equal 1.8    # Rg multiplier for analysis region sizing (~90% coverage)
+variable region_frac equal 1
+
+
+# ==========================================================================
+#                           INITIALIZATION
+# ==========================================================================
+
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+# WCA (purely repulsive, rc = 2^(1/6) σ ≈ 1.122) — consistent with slab_with_flow.
+# NOTE: slab_elongation.lmp used lj/cut 2.5 (full LJ). Switch to 2.5 only if running
+# a dry polymer-only gel where surface evaporation is a concern.
+pair_style lj/cut 1.122
+bond_style fene
+
+read_data data_files/${dataname}.data nocoeff
+
+comm_modify cutoff 5.0
+
+print "========================================"
+print "Shear slab simulation: ${dataname}"
+print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
+print "Production steps: ${nsteps}"
+print "Target shear strain: ${target_strain_xz}"
+print "Shear erate: ${erate}"
+print "Shear force: +-${shear_force}"
+print "========================================"
+
+
+# ==========================================================================
+#                          GROUP DEFINITIONS
+# ==========================================================================
+
+group polymer    type 1 2
+group solvent    type 3
+group all_mobile type 1 2 3
+
+
+# ==========================================================================
+#                       INTERATOMIC POTENTIALS
+# ==========================================================================
+
+# WCA for all pairs by default
+pair_coeff * * 1.0 ${sigma} 1.122
+
+# Tunable polymer-solvent and solvent-solvent interactions
+pair_coeff 1 3 ${epsSP} ${sigma} 1.122    # polymer-solvent
+pair_coeff 2 3 ${epsSP} ${sigma} 1.122    # crosslinker-solvent
+pair_coeff 3 3 ${epsSS} ${sigma} 1.122    # solvent-solvent
+
+# FENE bonds (Kremer-Grest): K=30, R0=1.5, epsilon=1, sigma=1
+bond_coeff * 30.0 1.5 1.0 1.0
+special_bonds fene
+
+# Uncomment if data file includes angle interactions:
+# angle_style hybrid cosine harmonic
+# angle_coeff 1 cosine 1.0           # intra-chain bending (eq 180 deg)
+# angle_coeff 2 harmonic 40.0 109.47 # junction tetrahedral angle
+
+neigh_modify delay 0 every 1 check yes
+
+
+# ==========================================================================
+#                           THERMO OUTPUT
+# ==========================================================================
+
+# Mobile temperature and pressure computed explicitly (matches slab_with_flow convention)
+compute mobile_temp all_mobile temp
+compute mobile_press all pressure mobile_temp pair bond
+
+# All 6 pressure tensor components + tilt factors in thermo for bulk pressure comparison
+thermo_style custom step c_mobile_temp pe ke etotal press c_mobile_press &
+    pxx pyy pzz pxy pxz pyz vol lx ly lz xy xz yz
+thermo_modify lost warn
+thermo ${thermo_freq}
+
+
+# ==========================================================================
+#              PHASE 1: NPT EQUILIBRATION (Undeformed)
+# ==========================================================================
+# Isotropic NPT relaxes any residual pressure from the isolated-gel data file.
+# Box starts orthogonal; xz tilt = 0 throughout.
+
+print "========================================"
+print "Phase 1: NPT equilibration (${nsteps_equil} steps)"
+print "========================================"
+
+reset_timestep 0
+timestep ${timestep_prod}
+
+# Setup trajectory (captures Phase 1 and Phase 2 for visual inspection)
+dump traj_setup all_mobile custom ${dump_freq_setup} &
+    traj_files/setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
+    id type mol x y z
+
+# Brief energy minimisation to resolve any residual overlaps in the data file
+minimize 1.0e-4 1.0e-6 500 5000
+
+fix npt_equil all_mobile npt temp ${temp_target} ${temp_target} 1.0 &
+    iso ${P_target} ${P_target} 10.0
+run ${nsteps_equil}
+unfix npt_equil
+
+print ">>> Post-equilibration T = $(c_mobile_temp)  P = $(press)"
+print ">>> Box after Phase 1: $(lx) x $(ly) x $(lz)"
+
+
+# ==========================================================================
+#                  GEL CHARACTERIZATION (post-equilibration)
+# ==========================================================================
+# Snapshot gel extent → define shear-driven layers.
+# Rg tensor → analysis region sizing (consistent with slab_with_flow convention).
+
+compute polymer_com polymer com
+
+# z-extent only (minz/maxz) — used to define shear-driven top/bottom layers
+compute minz polymer reduce min z
+compute maxz polymer reduce max z
+
+# Radius of gyration tensor: c_rg_tensor[i] = Rg_ii^2 (diagonal)
+# For a uniform rectangular prism: L_i = 2*sqrt(3) * sqrt(Rg_ii^2)
+compute rg_tensor polymer gyration
+
+variable gel_lx_rg equal 2.0*sqrt(3.0*c_rg_tensor[1])
+variable gel_ly_rg equal 2.0*sqrt(3.0*c_rg_tensor[2])
+variable gel_lz_rg equal 2.0*sqrt(3.0*c_rg_tensor[3])
+variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
+
+run 0   # initialise ALL computes in one pass before snapshotting
+
+# ----- Snapshot gel z-extent as constants (evaluated NOW via $()) -----
+variable gel_zlo   equal $(c_minz)
+variable gel_zhi   equal $(c_maxz)
+variable gel_thick equal $(c_maxz - c_minz)
+
+# Top/bottom driven layer z-boundaries (shear_frac fraction of gel height)
+variable top_zlo equal $(c_maxz - ${shear_frac}*(c_maxz - c_minz))
+variable bot_zhi equal $(c_minz + ${shear_frac}*(c_maxz - c_minz))
+
+print ">>> Gel z-extent: ${gel_zlo} to ${gel_zhi}  (thickness ${gel_thick})"
+print ">>> Top driven layer:    z > ${top_zlo}  (top ${shear_frac} of gel)"
+print ">>> Bottom driven layer: z < ${bot_zhi}  (bottom ${shear_frac} of gel)"
+
+# Rg snapshot for analysis region sizing (slab_with_flow convention)
+variable Rg_xx equal c_rg_tensor[1]
+variable Rg_yy equal c_rg_tensor[2]
+variable Rg_zz equal c_rg_tensor[3]
+
+print "Rg  gel: $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
+
+variable eps equal 1.0e-12
+variable hw_x equal v_region_frac*v_rg_scale*sqrt(v_Rg_xx + v_eps)
+variable hw_y equal v_region_frac*v_rg_scale*sqrt(v_Rg_yy + v_eps)
+variable hw_z equal v_region_frac*v_rg_scale*sqrt(v_Rg_zz + v_eps)
+
+# Initial gel thickness (Rg-based z) — stored as constant for shear strain tracking
+variable gel_lz_initial equal $(v_gel_lz_rg)
+print ">>> Initial gel thickness (Rg): ${gel_lz_initial}"
+
+# ----- Shear-driven regions (fixed z-boundaries; gel barely moves in z under xz shear) -----
+region reg_driven_top block EDGE EDGE EDGE EDGE ${top_zlo} EDGE side in
+region reg_driven_bot block EDGE EDGE EDGE EDGE EDGE ${bot_zhi} side in
+
+# Dynamic groups refreshed every stress_freq steps to handle thermal fluctuations
+group polymer_top dynamic polymer region reg_driven_top every ${stress_freq}
+group polymer_bot dynamic polymer region reg_driven_bot every ${stress_freq}
+
+# ----- Shear strain variable (tracks xz tilt throughout simulation) -----
+# xztilt is the LAMMPS thermo keyword for the xz tilt factor (equals "xz" in thermo_style)
+variable shear_strain_current equal xztilt/v_gel_lz_initial
+
+
+# ==========================================================================
+#              PHASE 2: SHEAR APPLICATION
+# ==========================================================================
+# fix deform xz tilts the box at erate (remap x applies affine transformation
+# to all atom positions each step). Simultaneous ±x forces on polymer_top/bot
+# reinforce the shear gradient in the network.
+# Standard NVT thermostat is appropriate here (not SLLOD), since this is a
+# solid-like elastic deformation test rather than viscous flow measurement.
+
+print "========================================"
+print "Phase 2: Shear application (${nsteps_shear} steps)"
+print "  box deform: xz erate=${erate}  target γ=${target_strain_xz}"
+print "  forces: +${shear_force} (top polymer) / -${shear_force} (bottom polymer)"
+print "========================================"
+
+fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
+
+# Box shear: xz tilt increases at erate [1/time]; remap x → affine remapping of atoms
+fix deform_xz all deform 1 xz erate ${erate} remap x
+
+# Opposing forces on top/bottom polymer layers
+variable neg_shear_force equal -v_shear_force
+fix drive_top polymer_top addforce v_shear_force     0.0 0.0
+fix drive_bot polymer_bot addforce v_neg_shear_force 0.0 0.0
+
+# Track shear strain evolution during Phase 2 (file also continues into Phase 3)
+# Columns: step  gel_lz_initial  xz_tilt  shear_strain
+fix out_shear_strain all print ${stress_freq} &
+    "$(step) ${gel_lz_initial} $(xztilt) $(v_shear_strain_current)" &
+    file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
+
+run ${nsteps_shear}
+
+unfix deform_xz
+unfix drive_top
+unfix drive_bot
+unfix nvt_shear
+undump traj_setup
+
+print ">>> Post-shear xz_tilt = $(xztilt)"
+print ">>> Achieved shear strain γ = $(v_shear_strain_current)"
+print ">>> Post-shear box: $(lx) x $(ly) x $(lz)  xz=$(xztilt)"
+print ">>> Post-shear gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
+
+# Freeze Rg-based region half-widths as constants (gel geometry now fixed)
+variable hw_x equal $(v_hw_x)
+variable hw_y equal $(v_hw_y)
+variable hw_z equal $(v_hw_z)
+
+print ">>> hw_x=${hw_x}  hw_y=${hw_y}  hw_z=${hw_z}"
+
+
+# ==========================================================================
+#                    ANALYSIS: PARTIAL STRESSES
+# ==========================================================================
+# stress/atom gives per-atom virial in units of [pressure × volume].
+# Two output forms:
+#   (a) Box-integrated 6-component tensor: sum over all atoms / total volume
+#       → directly comparable to thermo bulk pressure (pxx pyy pzz pxy pxz pyz)
+#   (b) z-binned 6-component profile: per-atom virial / bin_volume, summed per bin
+#       → local stress as a function of z position
+
+compute stress_polymer polymer stress/atom NULL
+compute stress_solvent  solvent  stress/atom NULL
+
+# ----- (a) Box-integrated polymer stress tensor -----
+compute sig_p_xx polymer reduce sum c_stress_polymer[1]
+compute sig_p_yy polymer reduce sum c_stress_polymer[2]
+compute sig_p_zz polymer reduce sum c_stress_polymer[3]
+compute sig_p_xy polymer reduce sum c_stress_polymer[4]
+compute sig_p_xz polymer reduce sum c_stress_polymer[5]
+compute sig_p_yz polymer reduce sum c_stress_polymer[6]
+
+variable stress_p_xx equal c_sig_p_xx/vol
+variable stress_p_yy equal c_sig_p_yy/vol
+variable stress_p_zz equal c_sig_p_zz/vol
+variable stress_p_xy equal c_sig_p_xy/vol
+variable stress_p_xz equal c_sig_p_xz/vol
+variable stress_p_yz equal c_sig_p_yz/vol
+
+# ----- (a) Box-integrated solvent stress tensor -----
+compute sig_s_xx solvent reduce sum c_stress_solvent[1]
+compute sig_s_yy solvent reduce sum c_stress_solvent[2]
+compute sig_s_zz solvent reduce sum c_stress_solvent[3]
+compute sig_s_xy solvent reduce sum c_stress_solvent[4]
+compute sig_s_xz solvent reduce sum c_stress_solvent[5]
+compute sig_s_yz solvent reduce sum c_stress_solvent[6]
+
+variable stress_s_xx equal c_sig_s_xx/vol
+variable stress_s_yy equal c_sig_s_yy/vol
+variable stress_s_zz equal c_sig_s_zz/vol
+variable stress_s_xy equal c_sig_s_xy/vol
+variable stress_s_xz equal c_sig_s_xz/vol
+variable stress_s_yz equal c_sig_s_yz/vol
+
+# ----- (b) Per-atom z-bin stress variables (pre-divided by bin volume lx*ly*binWidth) -----
+# Summed over each z-bin by fix ave/chunk (norm none) → local stress per bin volume
+variable s_p_xx atom c_stress_polymer[1]/(lx*ly*${binWidth})
+variable s_p_yy atom c_stress_polymer[2]/(lx*ly*${binWidth})
+variable s_p_zz atom c_stress_polymer[3]/(lx*ly*${binWidth})
+variable s_p_xy atom c_stress_polymer[4]/(lx*ly*${binWidth})
+variable s_p_xz atom c_stress_polymer[5]/(lx*ly*${binWidth})
+variable s_p_yz atom c_stress_polymer[6]/(lx*ly*${binWidth})
+
+variable s_s_xx atom c_stress_solvent[1]/(lx*ly*${binWidth})
+variable s_s_yy atom c_stress_solvent[2]/(lx*ly*${binWidth})
+variable s_s_zz atom c_stress_solvent[3]/(lx*ly*${binWidth})
+variable s_s_xy atom c_stress_solvent[4]/(lx*ly*${binWidth})
+variable s_s_xz atom c_stress_solvent[5]/(lx*ly*${binWidth})
+variable s_s_yz atom c_stress_solvent[6]/(lx*ly*${binWidth})
+
+
+# ==========================================================================
+#                    ANALYSIS: SPATIAL CHUNKS (z-binning)
+# ==========================================================================
+
+# Full-box z-binning (no lateral region restriction — full gel profile)
+compute chunk_z_polymer polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solvent  solvent  chunk/atom bin/1d z lower ${binWidth}
+
+
+# ==========================================================================
+#              PHASE 3: NVT PRODUCTION (Fixed Deformed Geometry)
+# ==========================================================================
+# Box held at post-shear geometry (no fix deform active). Shear forces removed.
+# Stress relaxes toward equilibrium: G = σ_xz / γ in the long-time limit.
+# All 6 components time-averaged for the shear_modulus_analysis notebook.
+
+print "========================================"
+print "Phase 3: NVT production (${nsteps} steps)"
+print "  Fixed shear strain: $(v_shear_strain_current)"
+print "========================================"
+
+fix nvt_prod all_mobile nvt temp ${temp_target} ${temp_target} 1.0
+
+# Production trajectory — sparse, all mobile atoms (for volume fraction extraction)
+dump traj_prod all_mobile custom ${dump_freq_prod} &
+    traj_files/prod_${dataname}_${interaction}_${nsteps}.lammpstrj &
+    id type mol x y z
+
+
+# ==========================================================================
+#    OUTPUT: BOX-INTEGRATED STRESS TENSOR (time-averaged scalars)
+# ==========================================================================
+# Columns: step  sigma_xx  sigma_yy  sigma_zz  sigma_xy  sigma_xz  sigma_yz
+# KEY OUTPUT for G: sigma_xz / shear_strain_current → shear modulus G
+
+fix avg_stress_polymer all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz &
+    v_stress_p_xy v_stress_p_xz v_stress_p_yz &
+    file output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_stress_s_xx v_stress_s_yy v_stress_s_zz &
+    v_stress_s_xy v_stress_s_xz v_stress_s_yz &
+    file output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+
+# ==========================================================================
+#    OUTPUT: Z-PROFILE STRESS TENSOR (time-averaged per z-bin)
+# ==========================================================================
+# fix ave/chunk with norm none: sums pre-normalized per-atom virial over each bin,
+# then time-averages → local stress component in that z-slice.
+# File columns: chunk_id  z_coord  count  s_xx  s_yy  s_zz  s_xy  s_xz  s_yz
+
+fix prof_z_polymer polymer ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_polymer &
+    v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_xz v_s_p_yz &
+    norm none &
+    file output_files/stress_data/stress_profile_z_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix prof_z_solvent solvent ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_solvent &
+    v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_xz v_s_s_yz &
+    norm none &
+    file output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+
+# ==========================================================================
+#    OUTPUT: GEL AND BOX DIMENSIONS
+# ==========================================================================
+
+# Gel dimensions — Rg-based (robust estimate; matches slab_with_flow convention)
+fix out_gel_dims_rg all print ${stress_freq} &
+    "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+
+# Box dimensions including tilt factors (xy, xz, yz) — xz should be constant in Phase 3
+fix out_box_dims all print ${stress_freq} &
+    "$(step) $(lx) $(ly) $(lz) $(xy) $(xztilt) $(yztilt)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+
+# Polymer centre of mass
+fix out_polymer_com all print ${stress_freq} &
+    "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}.dat screen no
+
+
+# ==========================================================================
+#                         PRODUCTION RUN
+# ==========================================================================
+
+run ${nsteps}
+
+
+# ==========================================================================
+#                            CLEANUP
+# ==========================================================================
+
+undump traj_prod
+
+print "========================================"
+print "Shear slab simulation complete"
+print "Final shear strain: $(v_shear_strain_current)"
+print "Final xz_tilt: $(xztilt)   gel_lz_initial: ${gel_lz_initial}"
+print "Final box: $(lx) x $(ly) x $(lz)   xz=$(xztilt)"
+print "========================================"
+
+variable outfile string "final_shear_${dataname}_${interaction}_${nsteps}"
+write_data ${outfile}.data

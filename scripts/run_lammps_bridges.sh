@@ -88,6 +88,10 @@ NGPUS=${SLURM_GPUS_ON_NODE:-0}
 echo "SLURM_GPUS_ON_NODE: $SLURM_GPUS_ON_NODE"
 echo "GPUs allocated: $SLURM_GPUS"
 
+# Pull latest scripts from GitHub before running (safe: skips if no network/conflict)
+echo ">>> Syncing lammps_work from GitHub..."
+git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+
 if [ $NGPUS -gt 0 ]; then
     # GPU mode with Kokkos
     echo "Running with $NGPUS GPU(s) and $SLURM_CPUS_PER_TASK threads per GPU"
