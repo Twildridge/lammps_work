@@ -578,8 +578,8 @@ This is a cluster-side issue. Contact PSC support.
 **Simulation diverged ("gel evaporated")**
 Check that `epsSP` and `epsSS` are physically reasonable. Verify you're reading the correct data file. Ensure `timestep = 0.005` (larger timesteps can cause FENE bond divergence).
 
-**`xztilt` variable parse error in `shear_slab.lmp`**
-If LAMMPS reports an unknown keyword, replace `xztilt` with `xz` in the `variable shear_strain_current` definition (older LAMMPS versions use `xz` rather than `xztilt` in variable expressions).
+**`Invalid syntax in variable formula` on first run of `shear_slab.lmp`**
+This was caused by `xztilt`/`yztilt` not being valid LAMMPS thermo keywords — the correct keywords are `xz` and `yz`. Already fixed in the current script.
 
 **`fix ave/chunk norm none` error**
 `norm none` requires LAMMPS ≥ March 2020. On older builds, replace the `prof_z_polymer/solvent` fixes with the reduce/chunk + ave/time approach used in `slab_with_flow.lmp`.

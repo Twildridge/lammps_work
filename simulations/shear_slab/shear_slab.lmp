@@ -260,8 +260,8 @@ group polymer_top dynamic polymer region reg_driven_top every ${stress_freq}
 group polymer_bot dynamic polymer region reg_driven_bot every ${stress_freq}
 
 # ----- Shear strain variable (tracks xz tilt throughout simulation) -----
-# xztilt is the LAMMPS thermo keyword for the xz tilt factor (equals "xz" in thermo_style)
-variable shear_strain_current equal xztilt/v_gel_lz_initial
+# xz is the LAMMPS thermo keyword for the xz tilt factor (equals "xz" in thermo_style)
+variable shear_strain_current equal xz/v_gel_lz_initial
 
 
 # ==========================================================================
@@ -292,7 +292,7 @@ fix drive_bot polymer_bot addforce v_neg_shear_force 0.0 0.0
 # Track shear strain evolution during Phase 2 (file also continues into Phase 3)
 # Columns: step  gel_lz_initial  xz_tilt  shear_strain
 fix out_shear_strain all print ${stress_freq} &
-    "$(step) ${gel_lz_initial} $(xztilt) $(v_shear_strain_current)" &
+    "$(step) ${gel_lz_initial} $(xz) $(v_shear_strain_current)" &
     file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
 
 run ${nsteps_shear}
@@ -303,9 +303,9 @@ unfix drive_bot
 unfix nvt_shear
 undump traj_setup
 
-print ">>> Post-shear xz_tilt = $(xztilt)"
+print ">>> Post-shear xz_tilt = $(xz)"
 print ">>> Achieved shear strain γ = $(v_shear_strain_current)"
-print ">>> Post-shear box: $(lx) x $(ly) x $(lz)  xz=$(xztilt)"
+print ">>> Post-shear box: $(lx) x $(ly) x $(lz)  xz=$(xz)"
 print ">>> Post-shear gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
 
 # Freeze Rg-based region half-widths as constants (gel geometry now fixed)
@@ -453,7 +453,7 @@ fix out_gel_dims_rg all print ${stress_freq} &
 
 # Box dimensions including tilt factors (xy, xz, yz) — xz should be constant in Phase 3
 fix out_box_dims all print ${stress_freq} &
-    "$(step) $(lx) $(ly) $(lz) $(xy) $(xztilt) $(yztilt)" &
+    "$(step) $(lx) $(ly) $(lz) $(xy) $(xz) $(yz)" &
     file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
 
 # Polymer centre of mass
@@ -478,8 +478,8 @@ undump traj_prod
 print "========================================"
 print "Shear slab simulation complete"
 print "Final shear strain: $(v_shear_strain_current)"
-print "Final xz_tilt: $(xztilt)   gel_lz_initial: ${gel_lz_initial}"
-print "Final box: $(lx) x $(ly) x $(lz)   xz=$(xztilt)"
+print "Final xz_tilt: $(xz)   gel_lz_initial: ${gel_lz_initial}"
+print "Final box: $(lx) x $(ly) x $(lz)   xz=$(xz)"
 print "========================================"
 
 variable outfile string "final_shear_${dataname}_${interaction}_${nsteps}"
