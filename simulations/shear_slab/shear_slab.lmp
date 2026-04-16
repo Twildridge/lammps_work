@@ -360,7 +360,7 @@ variable s_s_yz atom c_stress_solvent[6]/(lx*ly*${binWidth})
 # Snapshot binWidth as a fraction of lz NOW (lz is fixed post-Phase 2).
 # Physical bin thickness = binWidth_reduced × lz = binWidth, so per-atom
 # normalisation (÷ lx·ly·binWidth) in the stress variables remains correct.
-variable binWidth_reduced equal $(${binWidth}/lz)
+variable binWidth_reduced equal $(v_binWidth/lz)
 compute chunk_z_polymer polymer chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
 compute chunk_z_solvent  solvent  chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
 
