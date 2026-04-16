@@ -43,6 +43,13 @@ variable timestep_prod  equal 0.005
 # ----- Shear Parameters -----
 # Keep target_strain_xz <= 0.10 to remain in the linear (elastic) regime
 variable target_strain_xz equal 0.10
+# Fraction of gel z-height defining the top/bottom driven layers (Phase 2 only)
+variable shear_frac  equal 0.05
+# Force on top (+x) and bottom (-x) polymer layers during Phase 2.
+# Must be large enough to prevent rigid-body rotation of the isolated gel.
+# compute stress/atom NULL excludes external fix forces → Phase 3 G measurement uncontaminated.
+# Rule of thumb: thermal force ~ 1 LJ; shear_force should be >> thermal noise on a single atom.
+variable shear_force equal 0.05
 
 # ----- Phase Lengths -----
 variable nsteps_equil  equal 50000    # Phase 1: NPT equilibration steps
@@ -225,7 +232,12 @@ variable gel_zlo   equal $(c_minz)
 variable gel_zhi   equal $(c_maxz)
 variable gel_thick equal $(c_maxz - c_minz)
 
+# Top/bottom driven layer boundaries (shear_frac of gel height from each face)
+variable top_zlo equal $(v_gel_zhi - v_shear_frac*v_gel_thick)
+variable bot_zhi equal $(v_gel_zlo + v_shear_frac*v_gel_thick)
+
 print ">>> Gel z-extent: ${gel_zlo} to ${gel_zhi}  (thickness ${gel_thick})"
+print ">>> Driven layers: top z > ${top_zlo}  |  bottom z < ${bot_zhi}"
 
 # Rg snapshot for analysis region sizing (slab_with_flow convention)
 variable Rg_xx equal c_rg_tensor[1]
@@ -246,25 +258,42 @@ print ">>> Initial gel thickness (Rg): ${gel_lz_initial}"
 # Shear strain γ = xz_tilt / gel_lz_initial — computed in analysis notebook from shear_strain_*.dat
 # (xz is not valid in LAMMPS equal-style variable formulas; use $(xz) in print context only)
 
+# ----- Driven layer regions and groups (Phase 2 only) -----
+# Gel surfaces must track the box faces during shear; without constraint,
+# the isolated gel rotates as a rigid body instead of shearing internally.
+# fix addforce on top/bottom layers acts as rheometer plates.
+# Note: compute stress/atom NULL computes internal virial only (pair + bond),
+# NOT external fix forces — so the addforce does NOT contaminate Phase 3 G = σ_xz/γ.
+region reg_driven_top block EDGE EDGE EDGE EDGE ${top_zlo} EDGE side in
+region reg_driven_bot block EDGE EDGE EDGE EDGE EDGE ${bot_zhi} side in
+group polymer_top dynamic polymer region reg_driven_top every ${stress_freq}
+group polymer_bot dynamic polymer region reg_driven_bot every ${stress_freq}
+
 
 # ==========================================================================
 #              PHASE 2: SHEAR APPLICATION
 # ==========================================================================
-# fix deform xz tilts the box at erate (remap x applies affine transformation
-# to all atom positions each step). Simultaneous ±x forces on polymer_top/bot
-# reinforce the shear gradient in the network.
-# Standard NVT thermostat is appropriate here (not SLLOD), since this is a
-# solid-like elastic deformation test rather than viscous flow measurement.
+# fix deform xz tilts the box at erate (remap x: affine remapping of all atoms
+# each step, maintaining PBC consistency). fix addforce on top/bottom polymer
+# layers enforces the Couette boundary condition, preventing rigid-body rotation
+# of the isolated gel. Standard NVT (not SLLOD) — elastic solid, not viscous flow.
 
 print "========================================"
 print "Phase 2: Shear application (${nsteps_shear} steps)"
 print "  box deform: xz erate=${erate}  target γ=${target_strain_xz}"
+print "  addforce: ±${shear_force} on top/bottom polymer layers"
 print "========================================"
 
 fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 
 # Box shear: xz tilt increases at erate [1/time]; remap x → affine remapping of atoms
 fix deform_xz all deform 1 xz erate ${erate} remap x
+
+# Rheometer-plate forces: prevent rigid-body rotation of the isolated gel.
+# Removed in Phase 3 — PBCs at fixed xz tilt enforce the shear strain without them.
+variable neg_shear_force equal -v_shear_force
+fix drive_top polymer_top addforce ${shear_force}      0.0 0.0
+fix drive_bot polymer_bot addforce ${neg_shear_force}  0.0 0.0
 
 # Track xz tilt during Phase 2 (file continues into Phase 3)
 # Columns: step  gel_lz_initial(const)  xz_tilt
@@ -275,6 +304,8 @@ fix out_shear_strain all print ${stress_freq} &
 
 run ${nsteps_shear}
 
+unfix drive_top
+unfix drive_bot
 unfix deform_xz
 unfix nvt_shear
 undump traj_setup
