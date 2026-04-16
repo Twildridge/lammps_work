@@ -228,8 +228,10 @@ variable gel_zhi   equal $(c_maxz)
 variable gel_thick equal $(c_maxz - c_minz)
 
 # Top/bottom driven layer z-boundaries (shear_frac fraction of gel height)
-variable top_zlo equal $(c_maxz - ${shear_frac}*(c_maxz - c_minz))
-variable bot_zhi equal $(c_minz + ${shear_frac}*(c_maxz - c_minz))
+# Use already-snapshotted constants (v_gel_zhi/zlo/thick) rather than raw compute
+# references inside complex $() expressions, which LAMMPS cannot parse.
+variable top_zlo equal $(v_gel_zhi - v_shear_frac*v_gel_thick)
+variable bot_zhi equal $(v_gel_zlo + v_shear_frac*v_gel_thick)
 
 print ">>> Gel z-extent: ${gel_zlo} to ${gel_zhi}  (thickness ${gel_thick})"
 print ">>> Top driven layer:    z > ${top_zlo}  (top ${shear_frac} of gel)"
