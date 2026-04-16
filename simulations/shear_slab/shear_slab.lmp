@@ -310,8 +310,8 @@ fix deform_xz all deform 1 xz erate ${erate} remap x
 # Both fixes removed in Phase 3 — PBCs at fixed xz tilt enforce the shear strain.
 # compute stress/atom NULL uses only internal virial (pair+bond), NOT external
 # fix forces, so the addforce does NOT contaminate the Phase 3 G measurement.
-fix setforce_top polymer_top NULL NULL 0.0
-fix setforce_bot polymer_bot NULL NULL 0.0
+fix setforce_top polymer_top setforce NULL NULL 0.0
+fix setforce_bot polymer_bot setforce NULL NULL 0.0
 variable neg_shear_force equal -v_shear_force
 fix drive_top polymer_top addforce ${shear_force}      0.0 0.0
 fix drive_bot polymer_bot addforce ${neg_shear_force}  0.0 0.0
