@@ -259,9 +259,8 @@ region reg_driven_bot block EDGE EDGE EDGE EDGE EDGE ${bot_zhi} side in
 group polymer_top dynamic polymer region reg_driven_top every ${stress_freq}
 group polymer_bot dynamic polymer region reg_driven_bot every ${stress_freq}
 
-# ----- Shear strain variable (tracks xz tilt throughout simulation) -----
-# xz is the LAMMPS thermo keyword for the xz tilt factor (equals "xz" in thermo_style)
-variable shear_strain_current equal xz/v_gel_lz_initial
+# Shear strain γ = xz_tilt / gel_lz_initial — computed in analysis notebook from shear_strain_*.dat
+# (xz is not valid in LAMMPS equal-style variable formulas; use $(xz) in print context only)
 
 
 # ==========================================================================
@@ -289,10 +288,11 @@ variable neg_shear_force equal -v_shear_force
 fix drive_top polymer_top addforce v_shear_force     0.0 0.0
 fix drive_bot polymer_bot addforce v_neg_shear_force 0.0 0.0
 
-# Track shear strain evolution during Phase 2 (file also continues into Phase 3)
-# Columns: step  gel_lz_initial  xz_tilt  shear_strain
+# Track xz tilt during Phase 2 (file continues into Phase 3)
+# Columns: step  gel_lz_initial(const)  xz_tilt
+# Shear strain γ = col3 / col2 — compute in analysis notebook
 fix out_shear_strain all print ${stress_freq} &
-    "$(step) ${gel_lz_initial} $(xz) $(v_shear_strain_current)" &
+    "$(step) ${gel_lz_initial} $(xz)" &
     file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
 
 run ${nsteps_shear}
@@ -304,7 +304,6 @@ unfix nvt_shear
 undump traj_setup
 
 print ">>> Post-shear xz_tilt = $(xz)"
-print ">>> Achieved shear strain γ = $(v_shear_strain_current)"
 print ">>> Post-shear box: $(lx) x $(ly) x $(lz)  xz=$(xz)"
 print ">>> Post-shear gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
 
@@ -394,7 +393,7 @@ compute chunk_z_solvent  solvent  chunk/atom bin/1d z lower ${binWidth}
 
 print "========================================"
 print "Phase 3: NVT production (${nsteps} steps)"
-print "  Fixed shear strain: $(v_shear_strain_current)"
+print "  Fixed shear geometry: xz_tilt = $(xz)  target_strain = ${target_strain_xz}"
 print "========================================"
 
 fix nvt_prod all_mobile nvt temp ${temp_target} ${temp_target} 1.0
@@ -477,7 +476,6 @@ undump traj_prod
 
 print "========================================"
 print "Shear slab simulation complete"
-print "Final shear strain: $(v_shear_strain_current)"
 print "Final xz_tilt: $(xz)   gel_lz_initial: ${gel_lz_initial}"
 print "Final box: $(lx) x $(ly) x $(lz)   xz=$(xz)"
 print "========================================"
