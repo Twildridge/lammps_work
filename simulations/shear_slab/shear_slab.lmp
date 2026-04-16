@@ -232,6 +232,18 @@ variable gel_zlo   equal $(c_minz)
 variable gel_zhi   equal $(c_maxz)
 variable gel_thick equal $(c_maxz - c_minz)
 
+# Shrink box z to gel extent + 1σ buffer on each side.
+# This ensures exactly one gel per simulation box (prevents seeing neighbouring
+# periodic images in trajectories) and makes the xz tilt geometrically
+# consistent with the gel thickness.
+# Note: only z is resized; x/y already match the periodic gel dimensions.
+# change_box z final is allowed while dumps are active (only ortho/triclinic
+# conversion is restricted).
+variable box_zlo equal $(v_gel_zlo - 1.0)
+variable box_zhi equal $(v_gel_zhi + 1.0)
+change_box all z final ${box_zlo} ${box_zhi} remap
+print ">>> Box z resized to gel extent: ${box_zlo} to ${box_zhi}  (lz = $(lz))"
+
 # Top/bottom driven layer boundaries (shear_frac of gel height from each face)
 variable top_zlo equal $(v_gel_zhi - v_shear_frac*v_gel_thick)
 variable bot_zhi equal $(v_gel_zlo + v_shear_frac*v_gel_thick)
@@ -281,7 +293,8 @@ group polymer_bot dynamic polymer region reg_driven_bot every ${stress_freq}
 print "========================================"
 print "Phase 2: Shear application (${nsteps_shear} steps)"
 print "  box deform: xz erate=${erate}  target γ=${target_strain_xz}"
-print "  addforce: ±${shear_force} on top/bottom polymer layers"
+print "  addforce: ±${shear_force} x on top/bottom polymer layers"
+print "  setforce z=0 on top/bottom: pure horizontal shear, no rotation"
 print "========================================"
 
 fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
@@ -289,8 +302,16 @@ fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 # Box shear: xz tilt increases at erate [1/time]; remap x → affine remapping of atoms
 fix deform_xz all deform 1 xz erate ${erate} remap x
 
-# Rheometer-plate forces: prevent rigid-body rotation of the isolated gel.
-# Removed in Phase 3 — PBCs at fixed xz tilt enforce the shear strain without them.
+# Rheometer-plate boundary conditions (Phase 2 only):
+#   setforce NULL NULL 0.0  → zero z-force on driven layers so surfaces stay
+#                             horizontal; prevents rigid-body rotation of the gel.
+#   addforce ±shear_force   → drive top (+x) and bottom (-x), enforcing the
+#                             Couette velocity gradient at the gel surfaces.
+# Both fixes removed in Phase 3 — PBCs at fixed xz tilt enforce the shear strain.
+# compute stress/atom NULL uses only internal virial (pair+bond), NOT external
+# fix forces, so the addforce does NOT contaminate the Phase 3 G measurement.
+fix setforce_top polymer_top NULL NULL 0.0
+fix setforce_bot polymer_bot NULL NULL 0.0
 variable neg_shear_force equal -v_shear_force
 fix drive_top polymer_top addforce ${shear_force}      0.0 0.0
 fix drive_bot polymer_bot addforce ${neg_shear_force}  0.0 0.0
@@ -304,6 +325,8 @@ fix out_shear_strain all print ${stress_freq} &
 
 run ${nsteps_shear}
 
+unfix setforce_top
+unfix setforce_bot
 unfix drive_top
 unfix drive_bot
 unfix deform_xz
