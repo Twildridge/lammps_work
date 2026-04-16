@@ -121,7 +121,7 @@ def parse_data_file(foldername, dataname, suffix=""):
 def parse_lammps_log(filepath):
     """Extract wall time from LAMMPS log file."""
     wall_time = None
-    with open(filepath, 'r') as f:
+    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         for line in f:
             if 'Loop time of' in line:
                 try:

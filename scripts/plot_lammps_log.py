@@ -107,7 +107,7 @@ def parse_lammps_log(filepath):
     reading = False
     headers = []
 
-    with open(filepath) as f:
+    with open(filepath, encoding='utf-8', errors='ignore') as f:
         for line in f:
             line = line.strip()
             if line.startswith('Step'):
