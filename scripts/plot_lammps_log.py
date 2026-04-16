@@ -317,7 +317,6 @@ def plot_shear_diagnostics(data, folder, run_id, output):
             ax.plot(steps, data['Xz'], color='darkgreen', lw=1.5, marker='o', markersize=3)
             ax.set_ylabel('xz tilt (box)')
             # Expect: ~0 in Phase 1, linear ramp in Phase 2, flat in Phase 3
-            _annotate_last30(ax, data['Xz'], fmt='.4f')
 
         # ── Polymer σ_p_xz (Phase 3 time-averaged, from fix ave/time) ────
         elif panel == 'sigma_p_xz':
