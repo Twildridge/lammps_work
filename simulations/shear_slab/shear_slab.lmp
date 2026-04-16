@@ -182,6 +182,11 @@ print "========================================"
 reset_timestep 0
 timestep ${timestep_prod}
 
+# Convert orthogonal box → triclinic (xz=0 initially) so fix deform can tilt it in Phase 2.
+# Must be done before any dump is defined (LAMMPS restriction).
+# NPT iso works fine on triclinic boxes.
+change_box all triclinic
+
 # Setup trajectory (captures Phase 1 and Phase 2 for visual inspection)
 dump traj_setup all_mobile custom ${dump_freq_setup} &
     traj_files/setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
@@ -281,9 +286,6 @@ print "  forces: +${shear_force} (top polymer) / -${shear_force} (bottom polymer
 print "========================================"
 
 fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
-
-# Convert orthogonal box → triclinic (xz=0 initially) so fix deform can tilt it
-change_box all triclinic
 
 # Box shear: xz tilt increases at erate [1/time]; remap x → affine remapping of atoms
 fix deform_xz all deform 1 xz erate ${erate} remap x
