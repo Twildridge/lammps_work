@@ -282,6 +282,9 @@ print "========================================"
 
 fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 
+# Convert orthogonal box → triclinic (xz=0 initially) so fix deform can tilt it
+change_box all triclinic
+
 # Box shear: xz tilt increases at erate [1/time]; remap x → affine remapping of atoms
 fix deform_xz all deform 1 xz erate ${erate} remap x
 
