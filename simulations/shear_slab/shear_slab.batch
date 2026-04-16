@@ -3,7 +3,7 @@
 #SBATCH --job-name=shear_slab
 #SBATCH --partition=compute
 #SBATCH --account=csb197
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=128 # was 32, 128
 #SBATCH --cpus-per-task=1     # was 4, 1
 #SBATCH --mem=0
