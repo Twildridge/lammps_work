@@ -294,7 +294,7 @@ print "========================================"
 print "Phase 2: Shear application (${nsteps_shear} steps)"
 print "  box deform: xz erate=${erate}  target γ=${target_strain_xz}"
 print "  addforce: ±${shear_force} x on top/bottom polymer layers"
-print "  setforce z=0 on top/bottom: pure horizontal shear, no rotation"
+print "  z-momentum removal on driven layers: prevents rotation without touching bonds"
 print "========================================"
 
 fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
@@ -303,18 +303,26 @@ fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 fix deform_xz all deform 1 xz erate ${erate} remap x
 
 # Rheometer-plate boundary conditions (Phase 2 only):
-#   setforce NULL NULL 0.0  → zero z-force on driven layers so surfaces stay
-#                             horizontal; prevents rigid-body rotation of the gel.
+#
 #   addforce ±shear_force   → drive top (+x) and bottom (-x), enforcing the
 #                             Couette velocity gradient at the gel surfaces.
+#
+#   momentum linear 0 0 1   → remove z-momentum from each driven layer's
+#                             centre of mass every 50 steps. This prevents the
+#                             layer CM from drifting in z (which causes rigid-body
+#                             rotation) WITHOUT touching individual bond forces.
+#                             fix setforce NULL NULL 0.0 was tried but zeroing
+#                             per-atom z-forces violates Newton's 3rd law across
+#                             the layer boundary → immediate FENE bond failures.
+#
 # Both fixes removed in Phase 3 — PBCs at fixed xz tilt enforce the shear strain.
 # compute stress/atom NULL uses only internal virial (pair+bond), NOT external
-# fix forces, so the addforce does NOT contaminate the Phase 3 G measurement.
-fix setforce_top polymer_top setforce NULL NULL 0.0
-fix setforce_bot polymer_bot setforce NULL NULL 0.0
+# fix forces → the addforce does NOT contaminate the Phase 3 G measurement.
 variable neg_shear_force equal -v_shear_force
 fix drive_top polymer_top addforce ${shear_force}      0.0 0.0
 fix drive_bot polymer_bot addforce ${neg_shear_force}  0.0 0.0
+fix zmom_top  polymer_top momentum 50 linear 0 0 1
+fix zmom_bot  polymer_bot momentum 50 linear 0 0 1
 
 # Track xz tilt during Phase 2 (file continues into Phase 3)
 # Columns: step  gel_lz_initial(const)  xz_tilt
@@ -325,8 +333,8 @@ fix out_shear_strain all print ${stress_freq} &
 
 run ${nsteps_shear}
 
-unfix setforce_top
-unfix setforce_bot
+unfix zmom_top
+unfix zmom_bot
 unfix drive_top
 unfix drive_bot
 unfix deform_xz
