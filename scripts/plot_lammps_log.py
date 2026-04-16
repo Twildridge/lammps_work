@@ -185,7 +185,7 @@ def plot_convergence(data, folder, run_id, output):
     temp_key = _first_key(data, 'Temp', 'c_mobile_temp')
     if temp_key:
         ax = axes[idx]; idx += 1
-        ax.plot(steps, data[temp_key], 'b-', lw=1.5)
+        ax.plot(steps, data[temp_key], 'b-', lw=1.5, marker='o', markersize=3)
         ax.set_ylabel('Temperature')
         ax.grid(alpha=0.3)
         _annotate_last30(ax, data[temp_key])
@@ -194,7 +194,7 @@ def plot_convergence(data, folder, run_id, output):
     press_key = _first_key(data, 'Press', 'c_mobile_press')
     if press_key:
         ax = axes[idx]; idx += 1
-        ax.plot(steps, data[press_key], 'g-', lw=1.5)
+        ax.plot(steps, data[press_key], 'g-', lw=1.5, marker='o', markersize=3)
         ax.set_ylabel('Pressure')
         ax.grid(alpha=0.3)
         _annotate_last30(ax, data[press_key])
@@ -209,7 +209,7 @@ def plot_convergence(data, folder, run_id, output):
             y   = vols if is_pure else vols / vols[0]
             lbl = 'Box Volume (σ³)' if is_pure else 'Box Volume / Initial'
             ax = axes[idx]; idx += 1
-            ax.plot(t, y, 'm-', lw=1.5)
+            ax.plot(t, y, 'm-', lw=1.5, marker='o', markersize=3)
             ax.set_ylabel(lbl)
             ax.grid(alpha=0.3)
             _annotate_last30(ax, y, fmt='.3g' if is_pure else '.4f')
@@ -219,7 +219,7 @@ def plot_convergence(data, folder, run_id, output):
         ts, nd = read_timestep_volume_file(num_dens_file)
         if ts.size:
             ax = axes[idx]; idx += 1
-            ax.plot(ts, nd, color='darkorange', lw=1.5)
+            ax.plot(ts, nd, color='darkorange', lw=1.5, marker='o', markersize=3)
             ax.set_ylabel('Number Density (σ⁻³)')
             ax.grid(alpha=0.3)
             _annotate_last30(ax, nd, fmt='.4f')
@@ -230,7 +230,7 @@ def plot_convergence(data, folder, run_id, output):
         if vols.size:
             y = vols / vols[0]
             ax = axes[idx]; idx += 1
-            ax.plot(np.arange(len(y)), y, color='orange', lw=1.5)
+            ax.plot(np.arange(len(y)), y, color='orange', lw=1.5, marker='o', markersize=3)
             ax.set_ylabel('Gel Vol (BB) / Initial')
             ax.grid(alpha=0.3)
             _annotate_last30(ax, y)
@@ -241,7 +241,7 @@ def plot_convergence(data, folder, run_id, output):
         if ts.size:
             y = vols / vols[0]
             ax = axes[idx]; idx += 1
-            ax.plot(ts, y, color='cyan', lw=1.5)
+            ax.plot(ts, y, color='cyan', lw=1.5, marker='o', markersize=3)
             ax.set_ylabel('Gel Vol (Rg³) / Initial')
             ax.grid(alpha=0.3)
             _annotate_last30(ax, y)
@@ -300,13 +300,13 @@ def plot_shear_diagnostics(data, folder, run_id, output):
 
         # ── Temperature ──────────────────────────────────────────────────────
         if panel == 'temp':
-            ax.plot(steps, data[temp_key], 'b-', lw=1.2)
+            ax.plot(steps, data[temp_key], 'b-', lw=1.2, marker='o', markersize=3)
             ax.set_ylabel('Temperature')
             _annotate_last30(ax, data[temp_key])
 
         # ── Bulk Pxz (all phases) ─────────────────────────────────────────
         elif panel == 'pxz':
-            ax.plot(steps, data['Pxz'], color='steelblue', lw=1.2)
+            ax.plot(steps, data['Pxz'], color='steelblue', lw=1.2, marker='o', markersize=3)
             ax.axhline(0, color='k', ls=':', lw=0.8)
             ax.set_ylabel('Pxz (bulk, thermo)')
             # Last 30% = Phase 3 production → annotate to preview G
@@ -314,7 +314,7 @@ def plot_shear_diagnostics(data, folder, run_id, output):
 
         # ── Box xz tilt (all phases) ──────────────────────────────────────
         elif panel == 'xz_tilt':
-            ax.plot(steps, data['Xz'], color='darkgreen', lw=1.5)
+            ax.plot(steps, data['Xz'], color='darkgreen', lw=1.5, marker='o', markersize=3)
             ax.set_ylabel('xz tilt (box)')
             # Expect: ~0 in Phase 1, linear ramp in Phase 2, flat in Phase 3
             _annotate_last30(ax, data['Xz'], fmt='.4f')
@@ -326,7 +326,7 @@ def plot_shear_diagnostics(data, folder, run_id, output):
             #   index:                                     0  1  2  3  4  5
             if ts.size and arr.shape[1] >= 5:
                 sigma_xz = arr[:, 4]
-                ax.plot(ts, sigma_xz, color='crimson', lw=1.5)
+                ax.plot(ts, sigma_xz, color='crimson', lw=1.5, marker='o', markersize=3)
                 ax.axhline(0, color='k', ls=':', lw=0.8)
                 ax.set_ylabel('σ_p_xz (polymer partial)')
                 _annotate_last30(ax, sigma_xz)
@@ -347,9 +347,9 @@ def plot_shear_diagnostics(data, folder, run_id, output):
             # fix print columns: step  lx_rg  ly_rg  lz_rg
             if arr.size and arr.shape[1] >= 4:
                 t = arr[:, 0]
-                ax.plot(t, arr[:, 1], label='lx_Rg', color='royalblue',  lw=1.5)
-                ax.plot(t, arr[:, 2], label='ly_Rg', color='darkorange', lw=1.5)
-                ax.plot(t, arr[:, 3], label='lz_Rg', color='forestgreen', lw=1.5)
+                ax.plot(t, arr[:, 1], label='lx_Rg', color='royalblue',  lw=1.5, marker='o', markersize=3)
+                ax.plot(t, arr[:, 2], label='ly_Rg', color='darkorange', lw=1.5, marker='o', markersize=3)
+                ax.plot(t, arr[:, 3], label='lz_Rg', color='forestgreen', lw=1.5, marker='o', markersize=3)
                 ax.set_ylabel('Gel Rg dims (σ)')
                 ax.legend(fontsize=8)
                 # Stable Rg → gel not melting or grossly deforming under shear

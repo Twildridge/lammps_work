@@ -341,25 +341,93 @@ rsync -avPz <username>@data.bridges2.psc.edu:\
 
 ### 7a. Python scripts (auto-run after each job)
 
-These scripts are called automatically by `run_lammps.sh` after LAMMPS finishes. You can also run them manually from any `lammps_runs/` working directory.
+These scripts run automatically at the end of every job. If you update a script and want to replot without rerunning the simulation, run them manually from inside the timestamped run directory.
 
-**`plot_lammps_log.py`**
-Reads `log.lammps` and plots temperature, pressure, and volume vs. timestep. Shows mean ± std for the last 30% of the run to verify equilibration.
-```bash
-python ~/Documents/lammps_work/scripts/plot_lammps_log.py . "<dataname>_<interaction>_<totsteps>"
+#### Finding your run directory and run_id
+
+Run directories live at `~/Documents/lammps_runs/` and are named:
+```
+<folder>_<DATANAME>_<INTERACTION>_<TIMESTAMP>/
 ```
 
-**`plot_stress_profiles.py`**
-Reads the binned stress `.dat` files and plots partial stress and volume fraction profiles along x, y, and z.
+The **run_id** used in all output filenames is `<DATANAME>_<INTERACTION>_<TOTSTEPS>`. You can always find it from the output files themselves:
 ```bash
-python ~/Documents/lammps_work/scripts/plot_stress_profiles.py . "<dataname>_<interaction>_<totsteps>" <oldsteps>
+ls ~/Documents/lammps_runs/<run_dir>/output_files/stress_data/
+# e.g.: stress_tensor_polymer_isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000.dat
+#                              └─────────────────────── run_id ───────────────────────────────────────────┘
 ```
 
-**`plot_piston_data.py`**
-Plots piston position and velocity vs. time. Useful for checking that the piston is moving at the right rate during compression/permeation runs.
+`TOTSTEPS = OLDSTEPS + NSTEPS` from the batch file (for a fresh run, `TOTSTEPS = NSTEPS`).
 
-**`write_tracking.py`**
-Appends a row to `tracking.txt` with atoms, runtime, and timesteps, and regenerates the performance scaling plot. This was useful for benchmarking but is no longer actively maintained.
+---
+
+#### Re-running the scripts manually
+
+Navigate into the run directory first — all scripts use `.` as the folder argument:
+
+```bash
+cd ~/Documents/lammps_runs/<run_dir>
+```
+
+---
+
+**`plot_lammps_log.py`** — T, P, volume convergence (all sim types) + shear diagnostics (shear_slab only, auto-detected)
+
+For `slab_with_flow`, `slab_with_support`, etc.:
+```bash
+python ~/Documents/lammps_work/scripts/plot_lammps_log.py \
+    . \
+    isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000
+```
+
+For `shear_slab` — pass only the base `DATANAME` as the title, and the full run_id via `--run-id` for file lookups:
+```bash
+python ~/Documents/lammps_work/scripts/plot_lammps_log.py \
+    . \
+    isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000 \
+    --run-id isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000
+```
+
+Or equivalently (same result as the auto-run call from `run_lammps.sh`):
+```bash
+python ~/Documents/lammps_work/scripts/plot_lammps_log.py \
+    . \
+    isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000
+```
+
+Output plots are saved to `./output_plots/convergence_plots/`.
+
+---
+
+**`plot_stress_profiles.py`** — partial stress and volume fraction profiles (slab_with_flow / slab_with_support)
+```bash
+python ~/Documents/lammps_work/scripts/plot_stress_profiles.py \
+    . \
+    isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000 \
+    0
+# third argument is OLDSTEPS (0 for a fresh run)
+```
+
+---
+
+**`plot_piston_data.py`** — piston position and velocity (slab_with_flow only)
+```bash
+python ~/Documents/lammps_work/scripts/plot_piston_data.py \
+    . \
+    isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000 \
+    0
+```
+
+---
+
+**`write_tracking.py`** — performance log (all sim types; not actively maintained)
+```bash
+python ~/Documents/lammps_work/scripts/write_tracking.py \
+    . \
+    isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000 \
+    ""
+# third argument is the TYPE suffix (stress/volume/stressvol or empty string)
+```
 
 ---
 
