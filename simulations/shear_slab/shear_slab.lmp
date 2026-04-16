@@ -111,7 +111,6 @@ print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
 print "Production steps: ${nsteps}"
 print "Target shear strain: ${target_strain_xz}"
 print "Shear erate: ${erate}"
-print "Shear force: +-${shear_force}"
 print "========================================"
 
 
