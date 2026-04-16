@@ -56,7 +56,7 @@ variable erate equal ${target_strain_xz}/(${nsteps_shear}*${timestep_prod})
 
 # ----- Output Frequencies -----
 variable thermo_freq     equal 10000
-variable dump_freq_setup equal 1000
+variable dump_freq_setup equal 10000
 variable dump_freq_prod  equal 10000
 variable stress_freq     equal 5000
 
