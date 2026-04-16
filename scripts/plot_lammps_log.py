@@ -1,249 +1,405 @@
 #!/usr/bin/env python3
-import numpy as np
-import matplotlib.pyplot as plt
-import sys
+"""
+plot_lammps_log.py  —  Convergence and shear-diagnostics plots for LAMMPS runs.
+
+Usage (general / slab_with_flow / slab_with_support):
+    python plot_lammps_log.py <folder> <dataname>
+
+Usage (shear_slab — output files include interaction + nsteps in suffix):
+    python plot_lammps_log.py <folder> <dataname> \\
+        --run-id <dataname>_<interaction>_<nsteps>
+
+<folder>   : run directory containing log.lammps
+<dataname> : base name used as plot title and for legacy file lookups
+--run-id   : full output-file suffix for shear_slab runs
+             (dataname_interaction_nsteps).  Defaults to <dataname>.
+
+Output (saved inside <folder>/output_plots/convergence_plots/):
+    {run_id}_convergence.png       — T, P, box/gel volume
+    {run_id}_shear_diagnostics.png — shear-specific panels (auto-generated
+                                     when shear output files or Pxz/Xz thermo
+                                     columns are detected)
+"""
+
+import argparse
 import os
+import sys
+
+import matplotlib
+matplotlib.use('Agg')          # headless — safe on HPC clusters
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FILE READERS
+# ─────────────────────────────────────────────────────────────────────────────
 
 def read_volume_file(filepath):
-    """Read single-column volume data."""
+    """Single-column volume data (legacy format)."""
     data = []
-    with open(filepath, 'r') as f:
+    with open(filepath) as f:
         for line in f:
             if line.strip() and not line.startswith('#'):
                 try:
                     data.append(float(line.split()[0]))
                 except (ValueError, IndexError):
-                    continue
+                    pass
     return np.array(data)
 
+
 def read_timestep_volume_file(filepath):
-    """Read two-column timestep + volume data."""
-    timesteps = []
-    volumes = []
-    with open(filepath, 'r') as f:
+    """Two-column step + value file (legacy format). Returns (steps, values)."""
+    steps, vals = [], []
+    with open(filepath) as f:
         for line in f:
             if line.strip() and not line.startswith('#'):
                 try:
-                    parts = line.split()
-                    timesteps.append(float(parts[0]))
-                    volumes.append(float(parts[1]))
+                    p = line.split()
+                    steps.append(float(p[0]))
+                    vals.append(float(p[1]))
                 except (ValueError, IndexError):
-                    continue
-    return np.array(timesteps), np.array(volumes)
+                    pass
+    return np.array(steps), np.array(vals)
 
-def parse_lammps_log(filepath='log.lammps'):
-    """Parse LAMMPS log file and extract thermo data."""
+
+def read_fix_print(filepath):
+    """N-column fix print output (no header). Returns 2-D array (nrows x ncols)."""
+    rows = []
+    with open(filepath) as f:
+        for line in f:
+            if line.strip() and not line.startswith('#'):
+                try:
+                    rows.append([float(x) for x in line.split()])
+                except ValueError:
+                    pass
+    return np.array(rows) if rows else np.empty((0, 0))
+
+
+def read_ave_time(filepath):
+    """fix ave/time output (2-line # header, then data).
+    Returns (timesteps_1d, data_2d) where data_2d has shape (nrows, ncols-1).
+    Column order matches the fix definition: xx yy zz xy xz yz."""
+    rows = []
+    with open(filepath) as f:
+        for line in f:
+            if line.strip() and not line.startswith('#'):
+                try:
+                    rows.append([float(x) for x in line.split()])
+                except ValueError:
+                    pass
+    if not rows:
+        return np.array([]), np.empty((0, 0))
+    arr = np.array(rows)
+    return arr[:, 0], arr[:, 1:]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOG PARSER
+# ─────────────────────────────────────────────────────────────────────────────
+
+def parse_lammps_log(filepath):
+    """Parse all thermo blocks in log.lammps. Returns dict of np.arrays.
+
+    Handles multiple run blocks (Phase 1 / Phase 2 / Phase 3) by appending
+    rows from each block under the same keys."""
     data = {}
-    reading_data = False
+    reading = False
     headers = []
-    
-    with open(filepath, 'r') as f:
+
+    with open(filepath) as f:
         for line in f:
             line = line.strip()
-            
             if line.startswith('Step'):
                 headers = line.split()
-                reading_data = True
+                reading = True
                 for h in headers:
-                    data[h] = []
+                    if h not in data:
+                        data[h] = []
                 continue
-            
-            if reading_data and ('Loop time' in line or line.startswith('WARNING')):
-                reading_data = False
+            if reading and ('Loop time' in line or line.startswith('WARNING')):
+                reading = False
                 continue
-            
-            if reading_data and line and not line.startswith('#'):
+            if reading and line and not line.startswith('#'):
                 try:
-                    values = line.split()
-                    if len(values) == len(headers):
-                        for h, v in zip(headers, values):
+                    vals = line.split()
+                    if len(vals) == len(headers):
+                        for h, v in zip(headers, vals):
                             data[h].append(float(v))
                 except ValueError:
-                    continue
-    
-    for key in data:
-        data[key] = np.array(data[key])
-    
-    return data
+                    pass
 
-def plot_convergence(data, foldername, dataname, output='convergence.png'):
-    """Plot temperature, pressure, normalized box volume, gel volumes,
-    and solvent number density (beads/sigma^3)."""
-    
-    # Try to read volume files
-    box_vol_file = os.path.join(foldername, 'output_files/volume_data', 
-                                 f'box_dimensions_{dataname}.dat')
-    gel_bb_file = os.path.join(foldername, 'output_files/volume_data', 
-                                f'gel_volume_bb_{dataname}.dat')
-    gel_rg_file = os.path.join(foldername, 'output_files/volume_data', 
-                                f'gel_volume_rg_{dataname}.dat')
-    num_density_file = os.path.join(foldername, 'output_files/volume_data',
-                                     f'num_density_{dataname}.dat')
-    
-    has_box        = os.path.exists(box_vol_file)
-    has_gel_bb     = os.path.exists(gel_bb_file)
-    has_gel_rg     = os.path.exists(gel_rg_file)
-    has_num_density = os.path.exists(num_density_file)
-    
-    num_plots = 2  # temp + pressure always
-    if has_box:        num_plots += 1
-    if has_gel_bb:     num_plots += 1
-    if has_gel_rg:     num_plots += 1
-    if has_num_density: num_plots += 1
-    
-    fig, axes = plt.subplots(num_plots, 1, figsize=(10, 3*num_plots))
-    if num_plots == 1:
+    return {k: np.array(v) for k, v in data.items()}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _annotate_last30(ax, y, fmt='.3f', color='r'):
+    """Dashed mean ± std line over the last 30% of y."""
+    n = max(int(len(y) * 0.3), 1)
+    if n < 5:
+        return
+    m, s = y[-n:].mean(), y[-n:].std()
+    ax.axhline(m, color=color, ls='--', lw=1.2,
+               label=f'Last 30%: {m:{fmt}} ± {s:{fmt}}')
+    ax.legend(fontsize=8)
+
+
+def _first_key(d, *keys):
+    """Return the first key from *keys that exists in dict d, or None."""
+    return next((k for k in keys if k in d), None)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONVERGENCE PLOT  (T, P, box/gel volumes)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plot_convergence(data, folder, run_id, output):
+    """Standard convergence figure for any sim type.
+
+    Reads output files using run_id as the filename suffix (= dataname for
+    non-shear sims; = dataname_interaction_nsteps for shear_slab)."""
+    vd = os.path.join(folder, 'output_files', 'volume_data')
+
+    box_file      = os.path.join(vd, f'box_dimensions_{run_id}.dat')
+    gel_bb_file   = os.path.join(vd, f'gel_volume_bb_{run_id}.dat')
+    gel_rg_file   = os.path.join(vd, f'gel_volume_rg_{run_id}.dat')
+    num_dens_file = os.path.join(vd, f'num_density_{run_id}.dat')
+
+    has_box      = os.path.exists(box_file)
+    has_gel_bb   = os.path.exists(gel_bb_file)
+    has_gel_rg   = os.path.exists(gel_rg_file)
+    has_num_dens = os.path.exists(num_dens_file)
+
+    n = 2 + has_box + has_gel_bb + has_gel_rg + has_num_dens
+    fig, axes = plt.subplots(n, 1, figsize=(10, 3 * n), sharex=False)
+    if n == 1:
         axes = [axes]
-    
-    fig.suptitle(dataname, fontsize=14, fontweight='bold')
-    
-    plot_idx = 0
-    
-    # ── Temperature ──────────────────────────────────────────────────
-    if 'Temp' in data:
-        axes[plot_idx].plot(data['Step'], data['Temp'], 'b-', linewidth=2.0)
-        axes[plot_idx].set_ylabel('Temperature')
-        axes[plot_idx].grid(alpha=0.3)
-        n_last = int(len(data['Temp']) * 0.3)
-        if n_last > 10:
-            last_mean = data['Temp'][-n_last:].mean()
-            last_std  = data['Temp'][-n_last:].std()
-            axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--', 
-                                   label=f'Last 30%: {last_mean:.3f} ± {last_std:.3f}')
-            axes[plot_idx].legend()
-        plot_idx += 1
-    
-    # ── Pressure ──────────────────────────────────────────────────────
-    if 'Press' in data:
-        axes[plot_idx].plot(data['Step'], data['Press'], 'g-', linewidth=2.0)
-        axes[plot_idx].set_ylabel('Pressure')
-        axes[plot_idx].grid(alpha=0.3)
-        n_last = int(len(data['Press']) * 0.3)
-        if n_last > 10:
-            last_mean = data['Press'][-n_last:].mean()
-            last_std  = data['Press'][-n_last:].std()
-            axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--',
-                                   label=f'Last 30%: {last_mean:.3f} ± {last_std:.3f}')
-            axes[plot_idx].legend()
-        plot_idx += 1
-    
-    # ── Box Volume (raw for pure-component runs, normalized otherwise) ──
+    fig.suptitle(run_id, fontsize=13, fontweight='bold')
+    idx = 0
+    steps = data.get('Step', np.array([]))
+
+    # ── Temperature (supports both standard 'Temp' and shear_slab 'c_mobile_temp')
+    temp_key = _first_key(data, 'Temp', 'c_mobile_temp')
+    if temp_key:
+        ax = axes[idx]; idx += 1
+        ax.plot(steps, data[temp_key], 'b-', lw=1.5)
+        ax.set_ylabel('Temperature')
+        ax.grid(alpha=0.3)
+        _annotate_last30(ax, data[temp_key])
+
+    # ── Pressure
+    press_key = _first_key(data, 'Press', 'c_mobile_press')
+    if press_key:
+        ax = axes[idx]; idx += 1
+        ax.plot(steps, data[press_key], 'g-', lw=1.5)
+        ax.set_ylabel('Pressure')
+        ax.grid(alpha=0.3)
+        _annotate_last30(ax, data[press_key])
+
+    # ── Box volume (reads 4- or 7-column fix print box_dimensions file)
     if has_box:
-        timesteps = []
-        box_vols  = []
-        with open(box_vol_file, 'r') as f:
-            for line in f:
-                if line.strip() and not line.startswith('#'):
-                    parts = line.split()
-                    if len(parts) == 4:
-                        timesteps.append(float(parts[0]))
-                        lx, ly, lz = float(parts[1]), float(parts[2]), float(parts[3])
-                        box_vols.append(lx * ly * lz)
-        timesteps = np.array(timesteps)
-        box_vols  = np.array(box_vols)
+        arr = read_fix_print(box_file)
+        if arr.size and arr.shape[1] >= 4:
+            t    = arr[:, 0]
+            vols = arr[:, 1] * arr[:, 2] * arr[:, 3]   # lx * ly * lz
+            is_pure = 'pure' in run_id.lower()
+            y   = vols if is_pure else vols / vols[0]
+            lbl = 'Box Volume (σ³)' if is_pure else 'Box Volume / Initial'
+            ax = axes[idx]; idx += 1
+            ax.plot(t, y, 'm-', lw=1.5)
+            ax.set_ylabel(lbl)
+            ax.grid(alpha=0.3)
+            _annotate_last30(ax, y, fmt='.3g' if is_pure else '.4f')
 
-        if len(box_vols) > 0:
-            is_pure = 'pure' in dataname.lower()
-            if is_pure:
-                plot_vols = box_vols
-                ylabel    = 'Box Volume (σ³)'
-                fmt       = '.3g'
-            else:
-                plot_vols = box_vols / box_vols[0]
-                ylabel    = 'Box Volume / Initial'
-                fmt       = '.3f'
+    # ── Number density
+    if has_num_dens:
+        ts, nd = read_timestep_volume_file(num_dens_file)
+        if ts.size:
+            ax = axes[idx]; idx += 1
+            ax.plot(ts, nd, color='darkorange', lw=1.5)
+            ax.set_ylabel('Number Density (σ⁻³)')
+            ax.grid(alpha=0.3)
+            _annotate_last30(ax, nd, fmt='.4f')
 
-            axes[plot_idx].plot(timesteps, plot_vols, 'm-', linewidth=2.0)
-            axes[plot_idx].set_ylabel(ylabel)
-            axes[plot_idx].grid(alpha=0.3)
-
-            n_last = int(len(plot_vols) * 0.3)
-            if n_last > 10:
-                last_mean = plot_vols[-n_last:].mean()
-                last_std  = plot_vols[-n_last:].std()
-                axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--',
-                                       label=f'Last 30%: {last_mean:{fmt}} ± {last_std:{fmt}}')
-                axes[plot_idx].legend()
-        plot_idx += 1
-    
-    # ── Number Density (beads/sigma^3) ───────────────────────────────
-    if has_num_density:
-        ts_nd, num_dens = read_timestep_volume_file(num_density_file)
-        if len(num_dens) > 0:
-            axes[plot_idx].plot(ts_nd, num_dens, color='darkorange', linewidth=2.0)
-            axes[plot_idx].set_ylabel('Number Density (σ⁻³)')
-            axes[plot_idx].grid(alpha=0.3)
-            
-            n_last = int(len(num_dens) * 0.3)
-            if n_last > 10:
-                last_mean = num_dens[-n_last:].mean()
-                last_std  = num_dens[-n_last:].std()
-                axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--',
-                                       label=f'Last 30%: {last_mean:.4f} ± {last_std:.4f}')
-                axes[plot_idx].legend()
-        plot_idx += 1
-    
-    # ── Gel Volume – Bounding Box (normalized) ───────────────────────
+    # ── Gel volume — bounding box (normalized)
     if has_gel_bb:
-        gel_bb_vols = read_volume_file(gel_bb_file)
-        if len(gel_bb_vols) > 0:
-            gel_bb_normalized = gel_bb_vols / gel_bb_vols[0]
-            timesteps_gel = np.arange(len(gel_bb_vols))
-            
-            axes[plot_idx].plot(timesteps_gel, gel_bb_normalized, 'orange', linewidth=2.0)
-            axes[plot_idx].set_ylabel('Gel Volume (BB) / Initial')
-            axes[plot_idx].grid(alpha=0.3)
-            
-            n_last = int(len(gel_bb_normalized) * 0.3)
-            if n_last > 10:
-                last_mean = gel_bb_normalized[-n_last:].mean()
-                last_std  = gel_bb_normalized[-n_last:].std()
-                axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--',
-                                       label=f'Last 30%: {last_mean:.3f} ± {last_std:.3f}')
-                axes[plot_idx].legend()
-        plot_idx += 1
-    
-    # ── Gel Volume – Radius of Gyration (normalized) ─────────────────
+        vols = read_volume_file(gel_bb_file)
+        if vols.size:
+            y = vols / vols[0]
+            ax = axes[idx]; idx += 1
+            ax.plot(np.arange(len(y)), y, color='orange', lw=1.5)
+            ax.set_ylabel('Gel Vol (BB) / Initial')
+            ax.grid(alpha=0.3)
+            _annotate_last30(ax, y)
+
+    # ── Gel volume — Rg-based (normalized)
     if has_gel_rg:
-        timesteps_rg, gel_rg_vols = read_timestep_volume_file(gel_rg_file)
-        if len(gel_rg_vols) > 0:
-            gel_rg_normalized = gel_rg_vols / gel_rg_vols[0]
-            
-            axes[plot_idx].plot(timesteps_rg, gel_rg_normalized, 'cyan', linewidth=2.0)
-            axes[plot_idx].set_ylabel('Gel Volume (Rg³) / Initial')
-            axes[plot_idx].grid(alpha=0.3)
-            
-            n_last = int(len(gel_rg_normalized) * 0.3)
-            if n_last > 10:
-                last_mean = gel_rg_normalized[-n_last:].mean()
-                last_std  = gel_rg_normalized[-n_last:].std()
-                axes[plot_idx].axhline(y=last_mean, color='r', linestyle='--',
-                                       label=f'Last 30%: {last_mean:.3f} ± {last_std:.3f}')
-                axes[plot_idx].legend()
-        plot_idx += 1
-    
+        ts, vols = read_timestep_volume_file(gel_rg_file)
+        if ts.size:
+            y = vols / vols[0]
+            ax = axes[idx]; idx += 1
+            ax.plot(ts, y, color='cyan', lw=1.5)
+            ax.set_ylabel('Gel Vol (Rg³) / Initial')
+            ax.grid(alpha=0.3)
+            _annotate_last30(ax, y)
+
     axes[-1].set_xlabel('Step')
-    
     plt.tight_layout()
     plt.savefig(output, dpi=150)
-    print(f"Plot saved to {output}")
+    print(f"Convergence plot    → {output}")
 
-if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python plot_lammps_log.py <folder> <dataname>")
-        sys.exit(1)
-    
-    foldername = sys.argv[1]
-    dataname   = sys.argv[2]
-    
-    filepath = os.path.join(foldername, 'log.lammps')
-    data = parse_lammps_log(filepath)
-    
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHEAR DIAGNOSTICS PLOT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plot_shear_diagnostics(data, folder, run_id, output):
+    """Shear-specific diagnostic figure.
+
+    Panels (shown when data is available):
+      1. Temperature          — c_mobile_temp from thermo
+      2. Bulk Pxz             — total xz stress component (all 3 phases)
+      3. Box xz tilt          — Xz column from thermo; flat/ramp/flat pattern
+      4. Polymer σ_p_xz       — time-averaged partial xz stress (Phase 3)
+      5. Gel Rg dimensions    — lx_rg, ly_rg, lz_rg vs step
+
+    These collectively answer: Did shear apply cleanly? Is the polymer stress
+    response well-converged? Is the gel stable throughout?"""
+
+    sd = os.path.join(folder, 'output_files', 'stress_data')
+    vd = os.path.join(folder, 'output_files', 'volume_data')
+
+    stress_p_file = os.path.join(sd, f'stress_tensor_polymer_{run_id}.dat')
+    rg_file       = os.path.join(vd, f'gel_dimensions_rg_{run_id}.dat')
+
+    # Decide which panels to draw
+    temp_key = _first_key(data, 'c_mobile_temp', 'Temp')
+    panels = []
+    if temp_key:                          panels.append('temp')
+    if 'Pxz' in data:                     panels.append('pxz')
+    if 'Xz'  in data:                     panels.append('xz_tilt')
+    if os.path.exists(stress_p_file):     panels.append('sigma_p_xz')
+    if os.path.exists(rg_file):           panels.append('rg')
+
+    if not panels:
+        print("No shear diagnostic data found — skipping shear plot.")
+        return
+
+    fig, axes = plt.subplots(len(panels), 1, figsize=(10, 3 * len(panels)))
+    if len(panels) == 1:
+        axes = [axes]
+    fig.suptitle(f'{run_id}  —  shear diagnostics', fontsize=12, fontweight='bold')
+    steps = data.get('Step', np.array([]))
+
+    for i, panel in enumerate(panels):
+        ax = axes[i]
+        ax.grid(alpha=0.3)
+
+        # ── Temperature ──────────────────────────────────────────────────────
+        if panel == 'temp':
+            ax.plot(steps, data[temp_key], 'b-', lw=1.2)
+            ax.set_ylabel('Temperature')
+            _annotate_last30(ax, data[temp_key])
+
+        # ── Bulk Pxz (all phases) ─────────────────────────────────────────
+        elif panel == 'pxz':
+            ax.plot(steps, data['Pxz'], color='steelblue', lw=1.2)
+            ax.axhline(0, color='k', ls=':', lw=0.8)
+            ax.set_ylabel('Pxz (bulk, thermo)')
+            # Last 30% = Phase 3 production → annotate to preview G
+            _annotate_last30(ax, data['Pxz'])
+
+        # ── Box xz tilt (all phases) ──────────────────────────────────────
+        elif panel == 'xz_tilt':
+            ax.plot(steps, data['Xz'], color='darkgreen', lw=1.5)
+            ax.set_ylabel('xz tilt (box)')
+            # Expect: ~0 in Phase 1, linear ramp in Phase 2, flat in Phase 3
+            _annotate_last30(ax, data['Xz'], fmt='.4f')
+
+        # ── Polymer σ_p_xz (Phase 3 time-averaged, from fix ave/time) ────
+        elif panel == 'sigma_p_xz':
+            ts, arr = read_ave_time(stress_p_file)
+            # ave/time columns (matching fix definition): xx yy zz xy xz yz
+            #   index:                                     0  1  2  3  4  5
+            if ts.size and arr.shape[1] >= 5:
+                sigma_xz = arr[:, 4]
+                ax.plot(ts, sigma_xz, color='crimson', lw=1.5)
+                ax.axhline(0, color='k', ls=':', lw=0.8)
+                ax.set_ylabel('σ_p_xz (polymer partial)')
+                _annotate_last30(ax, sigma_xz)
+                # Annotate plateau mean prominently — this feeds directly into G
+                n = max(int(len(sigma_xz) * 0.3), 1)
+                if n >= 5:
+                    plateau = sigma_xz[-n:].mean()
+                    ax.text(0.02, 0.92,
+                            f'Plateau mean: {plateau:.5f}  →  G = σ_p_xz / γ',
+                            transform=ax.transAxes, fontsize=9,
+                            va='top', color='crimson',
+                            bbox=dict(boxstyle='round,pad=0.3',
+                                      facecolor='white', alpha=0.7))
+
+        # ── Gel Rg dimensions ─────────────────────────────────────────────
+        elif panel == 'rg':
+            arr = read_fix_print(rg_file)
+            # fix print columns: step  lx_rg  ly_rg  lz_rg
+            if arr.size and arr.shape[1] >= 4:
+                t = arr[:, 0]
+                ax.plot(t, arr[:, 1], label='lx_Rg', color='royalblue',  lw=1.5)
+                ax.plot(t, arr[:, 2], label='ly_Rg', color='darkorange', lw=1.5)
+                ax.plot(t, arr[:, 3], label='lz_Rg', color='forestgreen', lw=1.5)
+                ax.set_ylabel('Gel Rg dims (σ)')
+                ax.legend(fontsize=8)
+                # Stable Rg → gel not melting or grossly deforming under shear
+
+    axes[-1].set_xlabel('Step')
+    plt.tight_layout()
+    plt.savefig(output, dpi=150)
+    print(f"Shear diagnostics   → {output}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Plot LAMMPS log convergence and (optionally) shear diagnostics.')
+    parser.add_argument('folder',
+                        help='Run directory containing log.lammps')
+    parser.add_argument('dataname',
+                        help='Base data name (plot title; file lookup key for '
+                             'non-shear sims)')
+    parser.add_argument('--run-id', dest='run_id', default=None,
+                        help='Full output-file suffix for shear_slab runs: '
+                             'dataname_interaction_nsteps.  '
+                             'Defaults to <dataname> if omitted.')
+    args = parser.parse_args()
+
+    run_id  = args.run_id or args.dataname
+    logfile = os.path.join(args.folder, 'log.lammps')
+
+    data = parse_lammps_log(logfile)
     if not data:
-        print(f"No thermo data found in {filepath}")
+        print(f'No thermo data found in {logfile}')
         sys.exit(1)
-    
-    output = os.path.join(foldername, 'output_plots/convergence_plots', f'{dataname}_convergence.png')
-    os.makedirs(os.path.join(foldername, 'output_plots/convergence_plots'), exist_ok=True)
-    
-    plot_convergence(data, foldername, dataname, output)
+
+    out_dir = os.path.join(args.folder, 'output_plots', 'convergence_plots')
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Convergence plot (always)
+    plot_convergence(data, args.folder, run_id,
+                     os.path.join(out_dir, f'{run_id}_convergence.png'))
+
+    # Shear diagnostics (auto-triggered by presence of shear output files or
+    # shear-specific thermo columns Pxz / Xz)
+    sd = os.path.join(args.folder, 'output_files', 'stress_data')
+    shear_files_present = (
+        os.path.exists(os.path.join(sd, f'stress_tensor_polymer_{run_id}.dat')) or
+        os.path.exists(os.path.join(sd, f'shear_strain_{run_id}.dat'))
+    )
+    if shear_files_present or 'Pxz' in data or 'Xz' in data:
+        plot_shear_diagnostics(data, args.folder, run_id,
+                               os.path.join(out_dir, f'{run_id}_shear_diagnostics.png'))
