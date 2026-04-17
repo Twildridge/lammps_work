@@ -332,7 +332,7 @@ print "========================================"
 print "Phase 2: Strain-controlled shear (${nsteps_shear} steps)"
 print "  box deform: xz erate=${erate}  remap none"
 print "  top surface: v = ${vshear} (x)  bottom surface: frozen"
-print "  target strain: ${target_strain_xz}  target xz: $(${target_strain_xz}*lz)"
+print "  target strain: ${target_strain_xz}  target xz: $(v_target_strain_xz*lz)"
 print "========================================"
 
 # NVT on interior + solvent only
@@ -369,7 +369,7 @@ unfix nvt_shear
 undump traj_setup
 
 print ">>> Phase 2 complete"
-print ">>>   box xz = $(xz)   (target: $(${target_strain_xz}*lz))"
+print ">>>   box xz = $(xz)   (target: $(v_target_strain_xz*lz))"
 print ">>>   gel_strain = $(v_gel_strain)   (target: ${target_strain_xz})"
 print ">>> Post-shear box: $(lx) x $(ly) x $(lz)  xz=$(xz)"
 print ">>> Post-shear gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"

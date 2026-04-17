@@ -161,8 +161,24 @@ rsync -avP $USER@data.bridges2.psc.edu:<PATH>.lammpstrj.gz ~/Downloads
 
 ## shear_slab.lmp — Design Notes
 
-- **3 phases**: (1) NPT iso equilibration → (2) xz shear via `fix deform xz erate` only → (3) NVT production at fixed deformed box
-- **Shear method**: pure strain-control via `fix deform xz erate` + `remap x` (affine remapping of all atoms). No addforce on polymer layers — redundant with box deform and introduces non-uniform internal stresses.
+- **3 phases**: (1) NPT iso equilibration → (2) xz shear via `fix deform` + `fix move` rheometer → (3) NVT production at fixed deformed box
+- **Shear method** (final, as of 2026-04-17): `fix deform xz erate ${erate} remap none` tilts the box WITHOUT affinely remapping atoms (avoids rotation of gel as a rigid body). Rheometer plates implemented with `fix move linear`:
+  - Bottom driven layer: `fix freeze_bot poly_bot_s move linear 0.0 0.0 0.0` (frozen in x)
+  - Top driven layer: `fix move_top poly_top_s move linear ${vshear} 0.0 0.0`
+  - `vshear = erate × lz` — exactly matches box tilt rate → after `nsteps_shear` steps, top-surface CM displacement equals `target_strain_xz × lz` exactly. No correction needed.
+  - NVT thermostat applied to interior + solvent (`mobile_interior` group) only — not to driven layers.
+  - `fix move` overrides velocity after force integration; FENE forces are still computed normally (Newton's 3rd law preserved). Contrast with `fix setforce` (zeroes forces → FENE failures).
+- **Why NOT `fix addforce`**: addforce applies a constant force per atom → each atom responds independently → jagged top/bottom surfaces, and elastic equilibrium strain ≈ F/(G·A) is uncontrolled → massive over-shearing (hit LAMMPS triclinic limit |xz| ≤ lx/2).
+- **Why NOT `remap x`**: affine remapping of all atoms IS the rigid-body rotation — the gel translates as a unit because the isolated gel has no friction with box walls to create an opposing moment.
+- **Why NOT `fix halt`**: `fix halt` calls `timer->force_timeout()` internally; this flag persists across `run` commands even after `unfix halt_shear`. Phase 3's `run ${nsteps}` exits at 0 steps. Never use `fix halt` in multi-phase scripts with sequential `run` blocks.
+- **Driven layer groups** (static snapshot pattern — required by LAMMPS):
+  ```lammps
+  group poly_top_all region reg_driven_top   # static snapshot, all types
+  group poly_bot_all region reg_driven_bot
+  group poly_top_s intersect polymer poly_top_all  # intersect two static groups
+  group poly_bot_s intersect polymer poly_bot_all
+  ```
+  LAMMPS forbids `group intersect` with a dynamic group. `polymer_top`/`polymer_bot` are dynamic → must create static region snapshots first, then intersect with the static `polymer` type group.
 - **Pair style**: WCA (`lj/cut 1.122`), consistent with slab_with_flow
 - **Bond coeffs**: `30.0 1.5 1.0 1.0` (Kremer-Grest FENE)
 - **Parameters to tune**: `target_strain_xz` (default 0.10), `nsteps_shear` (default 200000)
@@ -173,7 +189,7 @@ rsync -avP $USER@data.bridges2.psc.edu:<PATH>.lammpstrj.gz ~/Downloads
 - **Stress outputs**:
   - `stress_tensor_polymer/solvent_*.dat`: box-integrated 6-component tensor vs time (key for G); fix ave/time columns order: xx yy zz xy **xz** yz (xz is index 4)
   - `stress_profile_z_polymer/solvent_*.dat`: z-binned 6-component profile
-  - `shear_strain_*.dat`: step, gel_lz_initial, xz_tilt (Phases 2+3); γ = col3/col2
+  - `shear_strain_*.dat`: **4 columns**: step, gel_lz_initial, xz_tilt (box), gel_strain (from top/bot CM separation); written only during Phase 2 (unfixed before Phase 3); γ = col4 (direct from CM positions) or col3/col2 (from box tilt)
   - `box_dimensions_*.dat`: step lx ly lz xy xz yz (7 columns)
   - `gel_dimensions_rg_*.dat`: step lx_rg ly_rg lz_rg
 - **G extraction**: G = `stress_p_xz` / γ, where γ = xz_tilt / gel_lz_initial (time-averaged in Phase 3)
@@ -243,3 +259,11 @@ Optionally prepend `git pull` to `run_lammps.sh` / `run_lammps_bridges.sh` so it
 - *2026-04-16*: "Stale file handle" MPI error at Phase 3 start is a transient NFS filesystem issue on the cluster, not a code bug. Rerun the job.
 - *2026-04-15*: Created `scripts/git_sync.sh` — one-command pull/commit/push with auto-generated commit messages. Add `lsync` alias to `~/.zshrc` on MacBook (and `~/.bashrc` on each cluster).
 - *2026-04-15*: Pod VPN (Ivanti Secure Access) troubleshooting — broken install required clearing remnants (`sudo rm -rf` of app + support files) then **rebooting before reinstalling**. Reboot fixed it. Download from https://it.ucsb.edu/ivanti-secure-access-campus-vpn/get-connected-campus-vpn. If it won't open after reinstall: reboot first.
+- *2026-04-17*: **Gel rigid-body rotation** — isolated gel in a snug box has no friction against walls; any shear perturbation allows rigid-body rotation. Attempted fixes in order, each failing: (1) `fix momentum linear 0 0 1` (removes z-drift but not rotation); (2) `fix setforce NULL NULL 0.0` on driven layers (caused FENE cascade — zeroes forces violate Newton's 3rd law); (3) `fix addforce ±x` equal-and-opposite (over-shearing + jagged surfaces — see below); (4) **final solution**: `fix move linear` rheometer — bottom layer frozen at v=(0,0,0), top layer at v=(vshear,0,0). Bottom physically cannot translate → rotation impossible. z=0 on both layers eliminates z-drift. FENE safe (forces computed normally).
+- *2026-04-17*: **`fix addforce` failure modes** — applying a constant force per atom to top/bottom driven layers causes two problems: (1) Each atom responds independently → uneven elastic displacement → jagged surfaces instead of flat rheometer plates. (2) Elastic equilibrium strain ≈ F/(G·A) ≈ 25% for our gel, far exceeding the 10% target. Box tilt reached |xz| > lx/2, violating LAMMPS triclinic stability and causing "Bond atom missing in image check" errors. Solution: replace with `fix move linear` for exact strain control.
+- *2026-04-17*: **`fix halt` timer persistence bug** — `fix halt` internally calls `timer->force_timeout()`, which persists across `run` commands even after `unfix halt_shear`. Result: Phase 3's `run ${nsteps}` exits immediately at 0 steps, producing no thermo output and no trajectory. Rule: **never use `fix halt` in multi-phase scripts with sequential `run` blocks**. Solution: removed `fix halt` entirely; Phase 2 runs full `nsteps_shear` steps.
+- *2026-04-17*: **`group intersect` with dynamic groups** — LAMMPS forbids `group intersect` when either operand is a dynamic group. `polymer_top` / `polymer_bot` (defined by `dynamic/chunk`) are dynamic → error "Cannot intersect groups using a dynamic group". Fix: capture static region snapshots first (`group poly_top_all region reg_driven_top`), then intersect two static groups (`group poly_top_s intersect polymer poly_top_all`). The `polymer` group is always static (defined by atom type).
+- *2026-04-17*: **Nested `${}` inside `$()` is invalid LAMMPS syntax** — `$(${target_strain_xz}*lz)` causes "Invalid syntax in variable formula". Fix: use `v_varname` reference inside the `$()` expression instead: `$(v_target_strain_xz*lz)`. Rule: inside `$()`, reference variables as `v_name`, never as `${name}`.
+- *2026-04-17*: **`fix print append` is not a valid keyword** — LAMMPS `fix print` has no `append` option; the keyword causes "Illegal fix print command" error. To append across phases without re-opening the file, keep the fix running continuously (do not unfix and redefine mid-script). Alternatively, accept that Phase 2 and Phase 3 write separate files.
+- *2026-04-17*: **`shear_strain_*.dat` now has 4 columns** (updated from 3): step, gel_lz_initial, xz_tilt (box tilt from `$(xz)`), gel_strain (computed from top/bot CM separation via `v_gel_strain`). Written during Phase 2 only (fix unfixed at end of Phase 2; Phase 3 does not re-define it). γ = col4 directly, or col3/col2 as cross-check.
+- *2026-04-17*: **`fix move` + `fix deform remap none` synchronization** — set `vshear = erate × lz` (evaluated once at Phase 2 start with `variable vshear equal $(v_erate*lz)`). Both top-surface CM displacement and box xz increase at `erate × lz` per unit time → they are exactly synchronized. After `nsteps_shear` steps both equal `target_strain_xz × lz`. No `change_box` correction needed.
