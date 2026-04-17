@@ -25,7 +25,6 @@ variable timestep       equal 0.005
 variable target_strain_xz equal 0.10
 variable nsteps_equil     equal 50000
 variable nsteps_shear     equal 200000
-variable nsteps_prod      equal ${nsteps}
 
 
 variable erate equal ${target_strain_xz}/(${nsteps_shear}*${timestep})
@@ -157,7 +156,7 @@ fix rm2 all momentum 100 linear 1 1 1 angular
 fix avg_stress all ave/time ${stress_freq} 1000 ${stress_freq} &
     v_sigma_xz file output_files/stress_data/stress_tensor_${dataname}.dat
 
-run ${nsteps_prod}
+run ${nsteps}
 
 
 # ==========================================================================
