@@ -1,21 +1,6 @@
 # ==========================================================================
 #                     SHEAR MODULUS (AFFINE, PERIODIC)
 # ==========================================================================
-# Relaxed equilibrium shear modulus for dense crosslinked gel
-# G = <sigma_xz> / gamma
-# gamma = xz / lz
-#
-# Key choices:
-# - affine shear via fix deform remap x
-# - periodic boundary p p p
-# - polymer-only stress
-# - no plates (avoids overconstraint)
-# ==========================================================================
-
-
-# ==========================================================================
-#                              PARAMETERS
-# ==========================================================================
 
 variable sigma          equal 1.0
 variable temp_target    equal 1.0
@@ -25,7 +10,6 @@ variable timestep       equal 0.005
 variable target_strain_xz equal 0.10
 variable nsteps_equil     equal 50000
 variable nsteps_shear     equal 200000
-
 
 variable erate equal ${target_strain_xz}/(${nsteps_shear}*${timestep})
 
@@ -49,10 +33,6 @@ bond_style fene
 read_data data_files/${dataname}.data nocoeff
 
 comm_modify cutoff 5.0
-
-print "========================================"
-print "Affine shear modulus simulation"
-print "========================================"
 
 
 # ==========================================================================
@@ -95,8 +75,6 @@ thermo ${thermo_freq}
 #                        PHASE 1: EQUILIBRATION
 # ==========================================================================
 
-print "Phase 1: NPT equilibration"
-
 reset_timestep 0
 timestep ${timestep}
 
@@ -111,12 +89,12 @@ unfix npt_equil
 
 fix rm all momentum 100 linear 1 1 1 angular
 
+change_box all triclinic
+
 
 # ==========================================================================
 #                        PHASE 2: AFFINE SHEAR
 # ==========================================================================
-
-print "Phase 2: Affine shear"
 
 fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 
@@ -134,43 +112,25 @@ unfix nvt_shear
 
 
 # ==========================================================================
-#                 STRESS COMPUTATION (POLYMER ONLY)
+#                    PHASE 3: RELAXATION + STRESS
 # ==========================================================================
-
-compute stress_polymer polymer stress/atom NULL
-
-compute sig_p_xz polymer reduce sum c_stress_polymer[5]
-
-variable sigma_xz equal c_sig_p_xz/vol
-
-
-# ==========================================================================
-#                        PHASE 3: RELAXATION
-# ==========================================================================
-
-print "Phase 3: relaxation"
 
 fix nvt_prod all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 fix rm2 all momentum 100 linear 1 1 1 angular
 
+compute stress_polymer polymer stress/atom NULL
+compute sig_p_xz polymer reduce sum c_stress_polymer[5]
+variable sigma_xz equal c_sig_p_xz/vol
+
 fix avg_stress all ave/time ${stress_freq} 1000 ${stress_freq} &
     v_sigma_xz file output_files/stress_data/stress_tensor_${dataname}.dat
 
-run ${nsteps}
-
-
-# ==========================================================================
-#                           CLEANUP
-# ==========================================================================
+run ${nsteps_shear}
 
 unfix avg_stress
 unfix nvt_prod
 unfix rm
 unfix rm2
 
-print "========================================"
-print "DONE"
-print "Final strain = $(xz/lz)"
-print "========================================"
 
 write_data final_shear_${dataname}.data
