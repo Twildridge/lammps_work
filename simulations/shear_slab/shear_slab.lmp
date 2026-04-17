@@ -285,63 +285,74 @@ group polymer_bot dynamic polymer region reg_driven_bot every ${stress_freq}
 # ==========================================================================
 #              PHASE 2: SHEAR APPLICATION
 # ==========================================================================
-# fix deform xz tilts the box at erate (remap x: affine remapping of all atoms
-# each step, maintaining PBC consistency). fix addforce on top/bottom polymer
-# layers enforces the Couette boundary condition, preventing rigid-body rotation
-# of the isolated gel. Standard NVT (not SLLOD) — elastic solid, not viscous flow.
+# Force-controlled Couette shear: equal and opposite ±x forces on the top
+# and bottom polymer surface layers.
+#
+# Two properties are guaranteed by design:
+#
+#   CM stays fixed:    net force on polymer = +F_x − F_x = 0  (Newton, no drift)
+#
+#   Rotation blocked:  the box is snug in z (gel fills the box with 1σ buffer).
+#                      Any rigid-body rotation would push atoms through the z
+#                      periodic boundary into themselves.  The gel is geometrically
+#                      forced to shear internally rather than rotate.
+#
+# Strain is monitored from the x-separation of the top/bottom layer CMs.
+# fix halt stops the run the moment the gel reaches γ = target_strain_xz,
+# so Phase 3 always starts at exactly the target deformation.
+#
+# After Phase 2 the box is updated to the correct triclinic geometry
+# (xz = actual strain × lz, no remap — atoms are at their physical positions).
 
 print "========================================"
-print "Phase 2: Shear application (${nsteps_shear} steps)"
-print "  box deform: xz erate=${erate}  target γ=${target_strain_xz}"
-print "  addforce: ±${shear_force} x on top/bottom polymer layers"
-print "  z-momentum removal on driven layers: prevents rotation without touching bonds"
+print "Phase 2: Force-controlled shear (max ${nsteps_shear} steps)"
+print "  addforce: +${shear_force} x on top,  -${shear_force} x on bottom"
+print "  halts when gel_strain >= ${target_strain_xz}"
 print "========================================"
 
 fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 
-# Box shear: xz tilt increases at erate [1/time]; remap x → affine remapping of atoms
-fix deform_xz all deform 1 xz erate ${erate} remap x
-
-# Rheometer-plate boundary conditions (Phase 2 only):
-#
-#   addforce ±shear_force   → drive top (+x) and bottom (-x), enforcing the
-#                             Couette velocity gradient at the gel surfaces.
-#
-#   momentum linear 0 0 1   → remove z-momentum from each driven layer's
-#                             centre of mass every 50 steps. This prevents the
-#                             layer CM from drifting in z (which causes rigid-body
-#                             rotation) WITHOUT touching individual bond forces.
-#                             fix setforce NULL NULL 0.0 was tried but zeroing
-#                             per-atom z-forces violates Newton's 3rd law across
-#                             the layer boundary → immediate FENE bond failures.
-#
-# Both fixes removed in Phase 3 — PBCs at fixed xz tilt enforce the shear strain.
-# compute stress/atom NULL uses only internal virial (pair+bond), NOT external
-# fix forces → the addforce does NOT contaminate the Phase 3 G measurement.
 variable neg_shear_force equal -v_shear_force
-fix drive_top polymer_top addforce ${shear_force}      0.0 0.0
-fix drive_bot polymer_bot addforce ${neg_shear_force}  0.0 0.0
-fix zmom_top  polymer_top momentum 50 linear 0 0 1
-fix zmom_bot  polymer_bot momentum 50 linear 0 0 1
+fix drive_top polymer_top addforce ${shear_force}     0.0 0.0
+fix drive_bot polymer_bot addforce ${neg_shear_force} 0.0 0.0
 
-# Track xz tilt during Phase 2 (file continues into Phase 3)
-# Columns: step  gel_lz_initial(const)  xz_tilt
-# Shear strain γ = col3 / col2 — compute in analysis notebook
+# Strain monitoring: x-displacement of top vs bottom layer CMs / gel thickness.
+# polymer_top and polymer_bot are dynamic groups (update every stress_freq steps).
+# A run 0 forces their first evaluation so xcm_sep_0 captures the pre-shear
+# x-separation (accounts for any small asymmetry in the relaxed gel).
+compute xcm_top polymer_top com
+compute xcm_bot polymer_bot com
+run 0
+variable xcm_sep_0  equal $(c_xcm_top[1] - c_xcm_bot[1])
+variable gel_strain equal (c_xcm_top[1] - c_xcm_bot[1] - v_xcm_sep_0) / v_gel_thick
+
+# Track strain and xz tilt throughout Phase 2
+# Columns: step  gel_lz_initial  xz_tilt  gel_strain
+# (xz_tilt = 0 during Phase 2 since no fix deform; jumps to actual_xz at end)
 fix out_shear_strain all print ${stress_freq} &
-    "$(step) ${gel_lz_initial} $(xz)" &
+    "$(step) ${gel_lz_initial} $(xz) $(v_gel_strain)" &
     file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
+
+# Stop as soon as the gel reaches the target strain
+fix halt_shear all halt ${stress_freq} v_gel_strain >= ${target_strain_xz}
 
 run ${nsteps_shear}
 
-unfix zmom_top
-unfix zmom_bot
+unfix halt_shear
+unfix out_shear_strain
 unfix drive_top
 unfix drive_bot
-unfix deform_xz
 unfix nvt_shear
 undump traj_setup
 
-print ">>> Post-shear xz_tilt = $(xz)"
+# Snapshot the achieved strain and set the box to the matching triclinic geometry.
+# xz = (x_top_cm − x_bot_cm) / gel_thick × lz  (= γ × lz, since gel_thick ≈ lz)
+# No remap: atoms are already at their physically deformed positions.
+variable actual_xz equal $(c_xcm_top[1] - c_xcm_bot[1]) / v_gel_thick * lz
+change_box all xz final ${actual_xz}
+
+print ">>> Phase 2 complete: gel_strain=$(v_gel_strain)  target=${target_strain_xz}"
+print ">>> actual xz set to: ${actual_xz}"
 print ">>> Post-shear box: $(lx) x $(ly) x $(lz)  xz=$(xz)"
 print ">>> Post-shear gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
 
@@ -441,6 +452,14 @@ print "========================================"
 
 fix nvt_prod all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 
+# Append Phase 3 entries to the same shear_strain file started in Phase 2.
+# In Phase 3 xz is constant (geometry frozen) and gel_strain is fixed.
+# Columns: step  gel_lz_initial  xz_tilt  gel_strain
+# γ = xz / lz = col3 / lz  →  G = sigma_xz / γ  in analysis notebook.
+fix out_shear_strain all print ${stress_freq} &
+    "$(step) ${gel_lz_initial} $(xz) $(v_gel_strain)" &
+    file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no append
+
 # Production trajectory — sparse, all mobile atoms (for volume fraction extraction)
 dump traj_prod all_mobile custom ${dump_freq_prod} &
     traj_files/prod_${dataname}_${interaction}_${nsteps}.lammpstrj &
@@ -515,6 +534,7 @@ run ${nsteps}
 #                            CLEANUP
 # ==========================================================================
 
+unfix out_shear_strain
 undump traj_prod
 
 print "========================================"
