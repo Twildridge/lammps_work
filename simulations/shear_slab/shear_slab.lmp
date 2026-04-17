@@ -49,7 +49,7 @@ variable shear_frac  equal 0.05
 # Must be large enough to prevent rigid-body rotation of the isolated gel.
 # compute stress/atom NULL excludes external fix forces → Phase 3 G measurement uncontaminated.
 # Rule of thumb: thermal force ~ 1 LJ; shear_force should be >> thermal noise on a single atom.
-variable shear_force equal 0.05
+variable shear_force equal 0.01
 
 # ----- Phase Lengths -----
 variable nsteps_equil  equal 50000    # Phase 1: NPT equilibration steps
