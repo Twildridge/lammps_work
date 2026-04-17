@@ -312,6 +312,13 @@ print "========================================"
 
 fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 
+# Box deformation: tilt at erate with remap none.
+# remap none means atom positions are NOT affinely displaced when the box tilts —
+# the gel deforms only under fix addforce, so no affine-induced rotation.
+# The box tracks the TARGET strain profile; change_box after the run corrects it
+# to the ACTUAL measured gel strain.
+fix deform_xz all deform 1 xz erate ${erate} remap none
+
 variable neg_shear_force equal -v_shear_force
 fix drive_top polymer_top addforce ${shear_force}     0.0 0.0
 fix drive_bot polymer_bot addforce ${neg_shear_force} 0.0 0.0
@@ -326,9 +333,12 @@ run 0
 variable xcm_sep_0  equal $(c_xcm_top[1] - c_xcm_bot[1])
 variable gel_strain equal (c_xcm_top[1] - c_xcm_bot[1] - v_xcm_sep_0) / v_gel_thick
 
-# Track strain and xz tilt throughout Phase 2
-# Columns: step  gel_lz_initial  xz_tilt  gel_strain
-# (xz_tilt = 0 during Phase 2 since no fix deform; jumps to actual_xz at end)
+# Track strain and xz tilt continuously from Phase 2 through Phase 3.
+# This fix stays active and keeps the same file open — no append needed.
+# Columns: step  gel_lz_initial  xz_tilt(box)  gel_strain(positions)
+# In Phase 2: xz climbs from 0 (box tracking target); gel_strain also climbs.
+# In Phase 3: both are constant (confirms stable deformed geometry).
+# γ = gel_strain  →  G = sigma_xz / γ  in analysis notebook.
 fix out_shear_strain all print ${stress_freq} &
     "$(step) ${gel_lz_initial} $(xz) $(v_gel_strain)" &
     file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
@@ -339,14 +349,14 @@ fix halt_shear all halt ${stress_freq} v_gel_strain >= ${target_strain_xz}
 run ${nsteps_shear}
 
 unfix halt_shear
-unfix out_shear_strain
+unfix deform_xz
 unfix drive_top
 unfix drive_bot
 unfix nvt_shear
 undump traj_setup
 
-# Snapshot the achieved strain and set the box to the matching triclinic geometry.
-# xz = (x_top_cm − x_bot_cm) / gel_thick × lz  (= γ × lz, since gel_thick ≈ lz)
+# Correct box xz to exactly match the measured gel strain.
+# fix deform tracked the TARGET rate; actual gel response may differ slightly.
 # No remap: atoms are already at their physically deformed positions.
 variable actual_xz equal $(c_xcm_top[1] - c_xcm_bot[1]) / v_gel_thick * lz
 change_box all xz final ${actual_xz}
@@ -452,13 +462,8 @@ print "========================================"
 
 fix nvt_prod all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 
-# Append Phase 3 entries to the same shear_strain file started in Phase 2.
-# In Phase 3 xz is constant (geometry frozen) and gel_strain is fixed.
-# Columns: step  gel_lz_initial  xz_tilt  gel_strain
-# γ = xz / lz = col3 / lz  →  G = sigma_xz / γ  in analysis notebook.
-fix out_shear_strain all print ${stress_freq} &
-    "$(step) ${gel_lz_initial} $(xz) $(v_gel_strain)" &
-    file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no append
+# out_shear_strain is already running from Phase 2 — no re-definition needed.
+# It continues writing to the same open file through Phase 3.
 
 # Production trajectory — sparse, all mobile atoms (for volume fraction extraction)
 dump traj_prod all_mobile custom ${dump_freq_prod} &
