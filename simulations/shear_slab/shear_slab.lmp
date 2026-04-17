@@ -314,9 +314,14 @@ group polymer_bot dynamic polymer region reg_driven_bot every ${stress_freq}
 
 # Static snapshot of driven layer membership (post-Phase1 positions).
 # Static groups prevent velocity jumps from dynamic group membership changes.
-run 0
-group poly_top_s intersect polymer polymer_top
-group poly_bot_s intersect polymer polymer_bot
+#
+# LAMMPS forbids 'group intersect' with a dynamic group, so we first create
+# static region snapshots (all types), then intersect with the static
+# 'polymer' group (defined by type — always static).
+group poly_top_all region reg_driven_top
+group poly_bot_all region reg_driven_bot
+group poly_top_s intersect polymer poly_top_all
+group poly_bot_s intersect polymer poly_bot_all
 group polymer_int subtract polymer poly_top_s poly_bot_s
 group mobile_interior union polymer_int solvent
 
