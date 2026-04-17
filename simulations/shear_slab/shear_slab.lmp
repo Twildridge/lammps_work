@@ -464,6 +464,8 @@ fix nvt_prod all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 
 # out_shear_strain is already running from Phase 2 — no re-definition needed.
 # It continues writing to the same open file through Phase 3.
+unfix out_shear_strain
+
 
 # Production trajectory — sparse, all mobile atoms (for volume fraction extraction)
 dump traj_prod all_mobile custom ${dump_freq_prod} &
@@ -539,7 +541,6 @@ run ${nsteps}
 #                            CLEANUP
 # ==========================================================================
 
-unfix out_shear_strain
 undump traj_prod
 
 print "========================================"
