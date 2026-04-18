@@ -61,7 +61,7 @@ variable target_strain_xz equal 0.10
 
 # ----- Phase Lengths -----
 variable nsteps_equil  equal 50000    # Phase 1: NPT equilibration steps
-variable nsteps_shear  equal 200000   # Phase 2: NVT relaxation at fixed shear geometry
+variable nsteps_shear  equal 285000   # Phase 2: shear steps (~30% slower vshear vs 200k)
 # nsteps (Phase 3 production) comes from bash via -var nsteps
 
 # ----- Output Frequencies -----
@@ -264,7 +264,7 @@ print ">>> Initial gel thickness (Rg): ${gel_lz_initial}"
 # by fix move; in Phase 3 they are held frozen by fix move linear 0 0 0.
 # Cross-linked gels don't diffuse so static group membership stays representative.
 
-variable shear_frac   equal 0.1
+variable shear_frac   equal 0.05
 variable gel_thick    equal $(v_gel_zhi - v_gel_zlo)
 
 # Freeze z-bounds for top/bottom 10% of gel as constants
