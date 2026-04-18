@@ -8,26 +8,28 @@
 # dt = 0.005 → 1e6 steps ≈ 4.1e3 tau
 #
 # Simple shear in the xz plane:
-#   - Box tilts via fix deform xz erate (remap x): all atoms displaced affinely
-#     proportional to z each step.  Δx_i = erate × z_i × dt per step.
-#   - fix momentum removes COM drift (erate × z_COM × dt per step) from all atoms.
-#   - No driven-layer / interior interface → zero risk of FENE bond stretching.
-#   - Shear strain γ = xz_tilt / gel_lz_initial
-#   - G = σ_xz / γ  (measured in Phase 3 at equilibrium)
+#   - Target deformation applied via change_box all xz final <target_xz> remap.
+#     All atoms displaced affinely proportional to z in one instantaneous step.
+#   - Phase 2 then runs NVT at the LOCKED box geometry (no fix deform).
+#     The x-periodic bond topology enforces gel_strain = target_strain_xz:
+#     bonds crossing the x-PBC carry an image offset of xz in x — a topological
+#     constraint NVT cannot relax without an NPT barostat changing the box shape.
+#   - G = σ_xz / γ  (measured in Phase 3 at thermal equilibrium)
 #
-# Why NOT fix move rheometer plates (previous approach):
-#   A FENE bond spanning the driven-layer / interior interface has one end pulled
-#   at vshear by fix move while the other end is thermostated.  The bond length
-#   grows monotonically at ≈ vshear per step regardless of the FENE restoring
-#   force (fix move overrides velocity post-integration).  This caused a steady
-#   1.423 → 1.424 → ... bond extension visible in the log.  remap x avoids this
-#   entirely because all atoms receive the same proportional displacement; adjacent
-#   bonded atoms (Δz ≈ 0.1–0.5σ) accumulate at most 0.05σ total stretch over
-#   Phase 2 — well within FENE R0 = 1.5σ.
+# Why NOT fix deform remap x (previous approach — FAILED for elastic gels):
+#   fix deform remap x displaces atoms affinely every step, but FENE bonds and
+#   crosslinks generate elastic restoring velocities that partially undo each
+#   remap displacement.  For a stiff crosslinked network the gel COM strain
+#   saturates far below target_strain_xz (observed: ~0.045 for γ_target=0.10).
+#   Locking the box at the target geometry avoids this competition entirely.
+#
+# Why NOT fix move rheometer plates (even earlier — also FAILED):
+#   fix move overrides atom velocity post-integration; FENE bonds at the
+#   driven/interior interface stretch monotonically.
 #
 # Phases:
 #   1. Brief NPT equilibration (undeformed, isotropic)
-#   2. Shear application: fix deform xz remap x + fix momentum linear
+#   2. Shear application: change_box xz final + NVT relaxation at fixed geometry
 #   3. NVT production at fixed deformed geometry → time-averaged stresses → G
 #
 # Outputs (all in the timestamped lammps_runs/ working directory):
@@ -59,13 +61,8 @@ variable target_strain_xz equal 0.10
 
 # ----- Phase Lengths -----
 variable nsteps_equil  equal 50000    # Phase 1: NPT equilibration steps
-variable nsteps_shear  equal 200000   # Phase 2: shear application steps
+variable nsteps_shear  equal 200000   # Phase 2: NVT relaxation at fixed shear geometry
 # nsteps (Phase 3 production) comes from bash via -var nsteps
-
-# ----- Derived Shear Rate -----
-# d(xz)/dt = erate × lz  →  γ = erate × nsteps_shear × dt = target_strain_xz
-# (independent of lz — no need to wait for post-equil box dimensions)
-variable erate equal ${target_strain_xz}/(${nsteps_shear}*${timestep_prod})
 
 # ----- Output Frequencies -----
 variable thermo_freq     equal 10000
@@ -90,7 +87,7 @@ variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 
 print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
-print ">>> Shear: γ_target=${target_strain_xz}  erate=${erate}  nsteps_shear=${nsteps_shear}"
+print ">>> Shear: γ_target=${target_strain_xz}  nsteps_shear=${nsteps_shear} (NVT relax at fixed xz)"
 
 # ----- Spatial Binning -----
 variable binWidth    equal 2.0
@@ -312,42 +309,50 @@ print ">>> poly_top_s count: $(count(poly_top_s))  poly_bot_s count: $(count(pol
 # ==========================================================================
 #              PHASE 2: SHEAR APPLICATION
 # ==========================================================================
-# Affine shear via remap x:
+# Why change_box instead of fix deform remap x:
+#   For a CROSSLINKED elastic gel, fix deform remap x fails — the FENE/crosslink
+#   restoring forces generate velocities that oppose each step's remap displacement.
+#   The gel COM strain saturates far below target_strain_xz (~45% observed).
 #
-#   fix deform xz erate remap x
-#       Each step: box tilts by Δxz = erate×lz×dt.  Every atom at position z
-#       is displaced by Δx = erate×z×dt to maintain its fractional x-coordinate.
-#       Adjacent bonded atoms (Δz ≈ 0.1–0.5σ) accumulate at most
-#       target_strain_xz × Δz ≈ 0.05σ of relative stretch over all of Phase 2 —
-#       well within FENE R0 = 1.5σ.  No driven/interior interface → no FENE failures.
+# Strategy: apply the full target deformation in ONE instantaneous affine step
+# via change_box, then hold the box locked and run NVT to redistribute internal
+# stresses (non-affine relaxation) while maintaining the target geometry.
 #
-#   fix momentum linear 1 1 1 (no angular)
-#       The remap displaces the COM by erate × z_COM × dt per step.  fix momentum
-#       removes this translational drift.  The angular keyword is NOT used here:
-#       a shear flow has net angular momentum (L ∝ erate × Rz²), and zeroing it
-#       would remove the shear gradient itself.
+# Why the gel IS actually at target_strain after change_box + NVT:
+#   The gel's polymer network is x-periodic (bonds crossing the x-PBC see a
+#   periodic image offset of xz in x).  This is a topological constraint —
+#   NVT cannot relax the total COM strain without changing the box shape (no
+#   NPT barostat is active in Phase 2).  The non-affine relaxation only
+#   redistributes which bonds are stretched/compressed; the average gel shear
+#   remains enforced at target_strain_xz.
 #
-#   NVT thermostat on all_mobile.
-#       All atoms thermostated uniformly.  fix deform applies the streaming
-#       displacement (affine); fix nvt maintains thermal fluctuations around it.
-#
-# After nsteps_shear steps: box xz = erate × lz × nsteps × dt = target_strain_xz × lz.
-# γ = xz_tilt / gel_lz_initial = target_strain_xz (by construction).
+# FENE safety: 10% strain applied at once, max per-bond extension
+#   = target_xz × Δz_bond / lz ≈ 0.10 × 0.97σ = 0.097σ  (6% of R0=1.5σ — safe)
+
+variable target_xz equal $(v_target_strain_xz * lz)
 
 print "========================================"
-print "Phase 2: Affine shear via remap x (${nsteps_shear} steps)"
-print "  box deform: xz erate=${erate}  remap x"
-print "  all atoms displaced proportional to z — no interface bonds"
-print "  target strain: ${target_strain_xz}  target xz: $(v_target_strain_xz*lz)"
+print "Phase 2: Instantaneous change_box shear + NVT relaxation"
+print "  target_xz = ${target_xz}  (γ = ${target_strain_xz})"
+print "  NVT relaxation: ${nsteps_shear} steps at fixed box geometry"
 print "========================================"
 
-fix nvt_shear  all_mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix deform_xz  all deform 1 xz erate ${erate} remap x
-fix mom_shear  all_mobile momentum 100 linear 1 1 1
+# Apply full affine deformation in one step — atoms displaced ∝ z
+change_box all xz final ${target_xz} remap units box
+run 0   # force re-evaluation of xcm computes after change_box (positions changed)
 
-# Columns: step  gel_lz_initial  xz_tilt  gel_strain_box(=xz/lz)  gel_strain_cm(polymer COM)
-# gel_strain_box and gel_strain_cm should match throughout Phase 2, confirming
-# the gel polymer is sheared by exactly target_strain_xz (not just the box).
+print ">>> Immediately after change_box:"
+print ">>>   box xz = $(xz)  lz = $(lz)  gel_strain_box = $(v_gel_strain)"
+print ">>>   gel_strain_cm (affine, pre-relaxation) = $(v_gel_strain_cm)"
+
+# NVT relaxation at fixed shear geometry.  No fix deform — box is locked.
+fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_shear all_mobile momentum 100 linear 1 1 1
+
+# Log both gel strain measures throughout relaxation.
+# gel_strain_box is constant (= target_strain_xz, box locked).
+# gel_strain_cm should start at target_strain_xz and remain there
+# (periodic topology constraint) with small thermal fluctuations.
 fix out_shear_strain all print ${stress_freq} &
     "$(step) ${gel_lz_initial} $(xz) $(v_gel_strain) $(v_gel_strain_cm)" &
     file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
@@ -355,13 +360,11 @@ fix out_shear_strain all print ${stress_freq} &
 run ${nsteps_shear}
 
 unfix out_shear_strain
-unfix deform_xz
 unfix mom_shear
 unfix nvt_shear
 undump traj_setup
 
 print ">>> Phase 2 complete"
-print ">>>   box xz = $(xz)   (target: $(v_target_strain_xz*lz))"
 print ">>>   gel_strain_box = $(v_gel_strain)   (target: ${target_strain_xz})  [= xz/lz]"
 print ">>>   gel_strain_cm  = $(v_gel_strain_cm)  (target: ${target_strain_xz})  [polymer COM]"
 print ">>> Post-shear box: $(lx) x $(ly) x $(lz)  xz=$(xz)"
