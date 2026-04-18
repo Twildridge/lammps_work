@@ -161,17 +161,14 @@ rsync -avP $USER@data.bridges2.psc.edu:<PATH>.lammpstrj.gz ~/Downloads
 
 ## shear_slab.lmp — Design Notes
 
-- **3 phases**: (1) NPT iso equilibration → (2) xz shear via `fix deform` + `fix move` rheometer → (3) NVT production at fixed deformed box
-- **Shear method** (final, as of 2026-04-17): `fix deform xz erate ${erate} remap none` tilts the box WITHOUT affinely remapping atoms (avoids rotation of gel as a rigid body). Rheometer plates implemented with `fix move linear`:
-  - Bottom driven layer: `fix freeze_bot poly_bot_s move linear 0.0 0.0 0.0` (frozen in x)
-  - Top driven layer: `fix move_top poly_top_s move linear ${vshear} 0.0 0.0`
-  - `vshear = erate × lz` — exactly matches box tilt rate → after `nsteps_shear` steps, top-surface CM displacement equals `target_strain_xz × lz` exactly. No correction needed.
-  - NVT thermostat applied to interior + solvent (`mobile_interior` group) only — not to driven layers.
-  - `fix move` overrides velocity after force integration; FENE forces are still computed normally (Newton's 3rd law preserved). Contrast with `fix setforce` (zeroes forces → FENE failures).
-- **Why NOT `fix addforce`**: addforce applies a constant force per atom → each atom responds independently → jagged top/bottom surfaces, and elastic equilibrium strain ≈ F/(G·A) is uncontrolled → massive over-shearing (hit LAMMPS triclinic limit |xz| ≤ lx/2).
-- **Why NOT `remap x`**: affine remapping of all atoms IS the rigid-body rotation — the gel translates as a unit because the isolated gel has no friction with box walls to create an opposing moment.
+- **3 phases**: (1) NPT iso equilibration → (2) xz shear via `fix deform remap x` + `fix momentum` → (3) NVT production at fixed deformed box
+- **Shear method** (final, as of 2026-04-17): `fix deform xz erate ${erate} remap x` — all atoms displaced affinely proportional to z each step (Δx_i = erate × z_i × dt). `fix momentum linear 1 1 1` on `all_mobile` removes COM drift (erate × z_COM × dt/step). No driven/interior interface.
+- **Why NOT `fix move` rheometer** (tried, caused FENE failure): A FENE bond spanning the driven-layer/interior boundary has one end pulled at `vshear` by `fix move` while the bonded interior atom is only thermostated. `fix move` overrides velocity AFTER force integration — so the FENE restoring force IS computed, but the driven atom's velocity is reset to `vshear` anyway. Bond stretches monotonically at ≈ vshear/step. Observed in log: bond atoms 18841–45089 length 1.423036 → 1.4231 → ... at exactly vshear rate. `remap x` avoids this entirely: adjacent bonded atoms (Δz ≈ 0.1–0.5σ) get nearly identical displacements; total relative stretch ≤ target_strain × Δz ≈ 0.05σ, well within FENE R0 = 1.5σ.
+- **Why NOT `fix momentum angular` in Phase 2**: A shear flow has net angular momentum (L ∝ erate × M × Rz²). `fix momentum angular` cannot distinguish rigid-body rotation from shear-flow angular momentum and would remove the shear gradient itself.
+- **Why `fix momentum angular` IS used in Phase 3**: After Phase 2, the gel may have residual angular momentum. NVT conserves angular momentum. `fix mom_zero all_mobile momentum 100 linear 1 1 1 angular` removes COM drift and residual rotation every 100 steps. Safe: `compute stress/atom NULL` uses the virial (forces), not velocities, so velocity corrections from fix momentum do NOT contaminate σ_xz.
+- **Why NOT `fix addforce`**: addforce applies a constant force per atom → each atom responds independently → jagged surfaces, and elastic equilibrium strain ≈ F/(G·A) is uncontrolled → massive over-shearing (hit LAMMPS triclinic limit |xz| ≤ lx/2).
 - **Why NOT `fix halt`**: `fix halt` calls `timer->force_timeout()` internally; this flag persists across `run` commands even after `unfix halt_shear`. Phase 3's `run ${nsteps}` exits at 0 steps. Never use `fix halt` in multi-phase scripts with sequential `run` blocks.
-- **Driven layer groups** (static snapshot pattern — required by LAMMPS):
+- **Note on old driven-layer group machinery** (removed 2026-04-17):
   ```lammps
   group poly_top_all region reg_driven_top   # static snapshot, all types
   group poly_bot_all region reg_driven_bot
@@ -186,10 +183,11 @@ rsync -avP $USER@data.bridges2.psc.edu:<PATH>.lammpstrj.gz ~/Downloads
 - **z-binning**: `compute chunk/atom bin/1d` requires `units reduced` for triclinic boxes. `binWidth_reduced = $(v_binWidth/lz)` snapshotted post-Phase 2 when lz is frozen. Per-atom normalization (÷ lx·ly·binWidth) remains correct since physical bin thickness is unchanged.
 - **Output frequencies**: `thermo_freq=10000`, `stress_freq=5000`, `num_stress_curves=10` (adaptive averaging targets 10 stress tensor frames in Phase 3)
 - **Thermo columns**: includes `Pxz` and `Xz` (not in other sim types) — used by `plot_lammps_log.py` to auto-detect shear runs
+- **`gel_strain` variable**: `variable gel_strain equal xz/v_gel_lz_initial` — `xz` is a valid thermo keyword inside equal-style variable formulas; re-evaluated at each `fix print` call.
 - **Stress outputs**:
-  - `stress_tensor_polymer/solvent_*.dat`: box-integrated 6-component tensor vs time (key for G); fix ave/time columns order: xx yy zz xy **xz** yz (xz is index 4)
+  - `stress_tensor_polymer/solvent_*.dat`: box-integrated 6-component tensor vs time (key for G); fix ave/time columns order: xx yy zz xy **xz** yz (xz is index 5 in 1-indexed)
   - `stress_profile_z_polymer/solvent_*.dat`: z-binned 6-component profile
-  - `shear_strain_*.dat`: **4 columns**: step, gel_lz_initial, xz_tilt (box), gel_strain (from top/bot CM separation); written only during Phase 2 (unfixed before Phase 3); γ = col4 (direct from CM positions) or col3/col2 (from box tilt)
+  - `shear_strain_*.dat`: **4 columns**: step, gel_lz_initial, xz_tilt (box), gel_strain (= xz/gel_lz_initial); written only during Phase 2; γ = col4 or col3/col2
   - `box_dimensions_*.dat`: step lx ly lz xy xz yz (7 columns)
   - `gel_dimensions_rg_*.dat`: step lx_rg ly_rg lz_rg
 - **G extraction**: G = `stress_p_xz` / γ, where γ = xz_tilt / gel_lz_initial (time-averaged in Phase 3)
@@ -267,3 +265,5 @@ Optionally prepend `git pull` to `run_lammps.sh` / `run_lammps_bridges.sh` so it
 - *2026-04-17*: **`fix print append` is not a valid keyword** — LAMMPS `fix print` has no `append` option; the keyword causes "Illegal fix print command" error. To append across phases without re-opening the file, keep the fix running continuously (do not unfix and redefine mid-script). Alternatively, accept that Phase 2 and Phase 3 write separate files.
 - *2026-04-17*: **`shear_strain_*.dat` now has 4 columns** (updated from 3): step, gel_lz_initial, xz_tilt (box tilt from `$(xz)`), gel_strain (computed from top/bot CM separation via `v_gel_strain`). Written during Phase 2 only (fix unfixed at end of Phase 2; Phase 3 does not re-define it). γ = col4 directly, or col3/col2 as cross-check.
 - *2026-04-17*: **`fix move` + `fix deform remap none` synchronization** — set `vshear = erate × lz` (evaluated once at Phase 2 start with `variable vshear equal $(v_erate*lz)`). Both top-surface CM displacement and box xz increase at `erate × lz` per unit time → they are exactly synchronized. After `nsteps_shear` steps both equal `target_strain_xz × lz`. No `change_box` correction needed.
+- *2026-04-17*: **`fix move` rheometer → FENE bond failure at driven/interior interface** — Observed in log: bond atoms 18841–45089, length growing 1.423036 → 1.4231 → ... monotonically at ≈ vshear/step (0.01138 σ/τ ÷ 0.005 = 0.00569 σ/step × 2 ≈ measured rate). Root cause: `fix move` overrides velocity AFTER force integration; the FENE restoring force is computed correctly but the driven atom's velocity is reset to vshear regardless → bond stretches without bound. Fix: **switch to `fix deform remap x`** (affine remapping of ALL atoms). Adjacent bonded atoms (Δz ≈ 0.1–0.5σ) accumulate at most target_strain_xz × 0.5σ = 0.05σ of relative stretch total — nowhere near FENE R0 = 1.5σ. Driven/interior interface eliminated entirely.
+- *2026-04-17*: **`remap x` + `fix momentum linear`** — With `remap x`, COM drifts in x at erate × z_COM × dt/step; `fix momentum linear 1 1 1` (every 100 steps) removes this. `fix momentum angular` is NOT used in Phase 2 because a shear flow has net angular momentum (L ∝ erate × M × Rz²) — zeroing it would remove the shear gradient itself. In Phase 3, `fix mom_zero all_mobile momentum 100 linear 1 1 1 angular` removes both COM drift and residual angular momentum from Phase 2 without contaminating σ_xz (virial is computed from forces, not velocities).
