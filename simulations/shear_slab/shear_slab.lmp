@@ -118,7 +118,7 @@ print "Shear slab simulation: ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
 print "Production steps: ${nsteps}"
 print "Target shear strain: ${target_strain_xz}"
-print "Shear erate: ${erate}"
+print "Shear method: change_box instantaneous + NVT relax"
 print "========================================"
 
 
