@@ -127,6 +127,8 @@ print "========================================"
 # ==========================================================================
 
 group polymer    type 1 2
+group backbone   type 1      # backbone polymer only (2 FENE bonds each — safe at driven boundary)
+group crosslinks type 2      # crosslinkers (4+ FENE bonds — kept in interior_mobile always)
 group solvent    type 3
 group all_mobile type 1 2 3
 
@@ -275,8 +277,8 @@ region reg_top block EDGE EDGE EDGE EDGE ${top_zlo_val} ${gel_zhi} units box
 region reg_bot block EDGE EDGE EDGE EDGE ${gel_zlo} ${bot_zhi_val} units box
 group top_all    region reg_top
 group bot_all    region reg_bot
-group poly_top_s intersect polymer top_all
-group poly_bot_s intersect polymer bot_all
+group poly_top_s intersect backbone top_all    # backbone only — crosslinkers stay in interior_mobile
+group poly_bot_s intersect backbone bot_all    # backbone only — crosslinkers stay in interior_mobile
 
 compute xcm_top poly_top_s com
 compute xcm_bot poly_bot_s com
