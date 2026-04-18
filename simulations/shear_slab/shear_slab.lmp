@@ -257,10 +257,12 @@ variable hw_z equal v_region_frac*v_rg_scale*sqrt(v_Rg_zz + v_eps)
 variable gel_lz_initial equal $(v_gel_lz_rg)
 print ">>> Initial gel thickness (Rg): ${gel_lz_initial}"
 
-# gel_strain = xz / gel_lz_initial — live variable, re-evaluated each fix print call
-# Both box xz and gel_strain track from 0 → target_strain_xz over Phase 2.
-# xz is a valid thermo keyword inside equal-style variable formulas.
-variable gel_strain equal xz/v_gel_lz_initial
+# gel_strain = xz / lz — exact gel shear strain with remap x.
+# With remap x: xz = erate × lz × t, so xz/lz = erate × t = true gel strain.
+# Using gel_lz_initial (Rg-based, ≈ gel_thick) would give xz/gel_thick ≈ 1.8% too large
+# because lz = gel_thick + 2σ buffer.  xz/lz is exact (lz is constant during xz shear).
+# xz and lz are both valid thermo keywords inside equal-style variable formulas.
+variable gel_strain equal xz/lz
 
 
 # ==========================================================================

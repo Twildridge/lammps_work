@@ -163,17 +163,19 @@ def plot_convergence(data, folder, run_id, output):
     non-shear sims; = dataname_interaction_nsteps for shear_slab)."""
     vd = os.path.join(folder, 'output_files', 'volume_data')
 
-    box_file      = os.path.join(vd, f'box_dimensions_{run_id}.dat')
-    gel_bb_file   = os.path.join(vd, f'gel_volume_bb_{run_id}.dat')
-    gel_rg_file   = os.path.join(vd, f'gel_volume_rg_{run_id}.dat')
-    num_dens_file = os.path.join(vd, f'num_density_{run_id}.dat')
+    box_file         = os.path.join(vd, f'box_dimensions_{run_id}.dat')
+    gel_bb_file      = os.path.join(vd, f'gel_volume_bb_{run_id}.dat')
+    gel_rg_file      = os.path.join(vd, f'gel_volume_rg_{run_id}.dat')
+    gel_dims_rg_file = os.path.join(vd, f'gel_dimensions_rg_{run_id}.dat')
+    num_dens_file    = os.path.join(vd, f'num_density_{run_id}.dat')
 
-    has_box      = os.path.exists(box_file)
-    has_gel_bb   = os.path.exists(gel_bb_file)
-    has_gel_rg   = os.path.exists(gel_rg_file)
-    has_num_dens = os.path.exists(num_dens_file)
+    has_box         = os.path.exists(box_file)
+    has_gel_bb      = os.path.exists(gel_bb_file)
+    has_gel_rg      = os.path.exists(gel_rg_file)
+    has_gel_dims_rg = os.path.exists(gel_dims_rg_file)
+    has_num_dens    = os.path.exists(num_dens_file)
 
-    n = 2 + has_box + has_gel_bb + has_gel_rg + has_num_dens
+    n = 2 + has_box + has_gel_bb + has_gel_rg + has_gel_dims_rg + has_num_dens
     fig, axes = plt.subplots(n, 1, figsize=(10, 3 * n), sharex=False)
     if n == 1:
         axes = [axes]
@@ -235,7 +237,7 @@ def plot_convergence(data, folder, run_id, output):
             ax.grid(alpha=0.3)
             _annotate_last30(ax, y)
 
-    # ── Gel volume — Rg-based (normalized)
+    # ── Gel volume — Rg-based single-value file (non-shear sims)
     if has_gel_rg:
         ts, vols = read_timestep_volume_file(gel_rg_file)
         if ts.size:
@@ -245,6 +247,27 @@ def plot_convergence(data, folder, run_id, output):
             ax.set_ylabel('Gel Vol (Rg³) / Initial')
             ax.grid(alpha=0.3)
             _annotate_last30(ax, y)
+
+    # ── Gel volume — Rg dimensions file (shear_slab: gel_dimensions_rg_*.dat)
+    # Columns: step  lx_rg  ly_rg  lz_rg  →  vol = product of last three
+    if has_gel_dims_rg:
+        arr = read_fix_print(gel_dims_rg_file)
+        if arr.size and arr.shape[1] >= 4:
+            t    = arr[:, 0]
+            vols = arr[:, 1] * arr[:, 2] * arr[:, 3]
+            y    = vols / vols[0]
+            ax   = axes[idx]; idx += 1
+            ax.plot(t, y, color='cyan', lw=1.5, marker='o', markersize=3)
+            ax.axhline(1.0, color='k', ls=':', lw=0.8)
+            ax.set_ylabel('Gel Vol (Rg) / Initial')
+            ax.grid(alpha=0.3)
+            _annotate_last30(ax, y)
+            # Flag deswell: if final vol < 0.97 × initial, annotate warning
+            if y[-1] < 0.97:
+                ax.text(0.02, 0.05, f'⚠ Final vol/vol₀ = {y[-1]:.3f}  (deswell detected)',
+                        transform=ax.transAxes, fontsize=9, color='red',
+                        va='bottom',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
     axes[-1].set_xlabel('Step')
     plt.tight_layout()
