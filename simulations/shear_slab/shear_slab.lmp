@@ -38,7 +38,7 @@
 #   stress_data/stress_tensor_solvent_*.dat        same for solvent
 #   stress_data/stress_profile_z_polymer_*.dat     z-binned 6-component stress profile (time-avg)
 #   stress_data/stress_profile_z_solvent_*.dat     same for solvent
-#   stress_data/shear_strain_*.dat                 5 cols: step  gel_lz_initial  xz_tilt  gel_strain_box(=xz/lz)  gel_strain_cm(polymer COM)
+#   stress_data/shear_strain_*.dat                 4 cols: step  gel_lz_initial  gel_thick  gel_strain_cm(polymer COM)
 #   volume_data/gel_dimensions_rg_*.dat            Rg-based gel dimensions
 #   volume_data/box_dimensions_*.dat               lx ly lz xy xz yz vs step
 #   volume_data/polymer_com_*.dat                  polymer centre of mass vs step
@@ -254,27 +254,15 @@ variable hw_z equal v_region_frac*v_rg_scale*sqrt(v_Rg_zz + v_eps)
 variable gel_lz_initial equal $(v_gel_lz_rg)
 print ">>> Initial gel thickness (Rg): ${gel_lz_initial}"
 
-# gel_strain = xz / lz — exact gel shear strain with remap x.
-# With remap x: xz = erate × lz × t, so xz/lz = erate × t = true gel strain.
-# Using gel_lz_initial (Rg-based, ≈ gel_thick) would give xz/gel_thick ≈ 1.8% too large
-# because lz = gel_thick + 2σ buffer.  xz/lz is exact (lz is constant during xz shear).
-# xz and lz are both valid thermo keywords inside equal-style variable formulas.
-variable gel_strain equal xz/lz
-
-# ----- Direct polymer gel shear tracking (COM method) -----
-# Track the x-displacement of the top vs bottom 10% of the gel polymer separately.
-# This gives gel_strain_cm = Δ(x_COM_top − x_COM_bot) / gel_thick, which should
-# equal target_strain_xz exactly by construction with remap x.
+# ----- Polymer gel shear tracking (COM method) — PRIMARY strain measurement -----
+# Top and bottom 10% of gel polymer tracked separately.
+# gel_strain_cm = (x_COM_top − x_COM_bot − xcm_sep_0) / gel_thick
+# This is THE gel shear strain: the relative x-displacement of driven surfaces
+# normalised by the gel thickness.  Expected to reach target_strain_xz at end of Phase 2.
 #
-# Proof: with remap x, atom at z gets Δx = erate × (z − box_zlo) × dt per step.
-#   Δx_top − Δx_bot = erate × (gel_zhi − gel_zlo) × total_time
-#                   = target_strain_xz × gel_thick
-#   gel_strain_cm = (Δx_top − Δx_bot) / gel_thick = target_strain_xz   ✓
-#
-# If gel_strain_cm ≠ gel_strain (box xz/lz), the gel is slipping or rotating.
-# Groups are STATIC (frozen at post-equilibration z positions) — monitoring ONLY,
-# NOT used for force application.  Cross-linked gels don't diffuse far so the
-# static group membership remains representative throughout.
+# Groups are STATIC (post-equilibration z positions).  In Phase 2 they are DRIVEN
+# by fix move; in Phase 3 they are held frozen by fix move linear 0 0 0.
+# Cross-linked gels don't diffuse so static group membership stays representative.
 
 variable shear_frac   equal 0.1
 variable gel_thick    equal $(v_gel_zhi - v_gel_zlo)
@@ -305,69 +293,70 @@ print ">>> gel_thick (actual z-span):           ${gel_thick}"
 print ">>> xcm_sep_0 (x-COM top-bot, t=0):      ${xcm_sep_0}"
 print ">>> poly_top_s count: $(count(poly_top_s))  poly_bot_s count: $(count(poly_bot_s))"
 
+# ----- Shear velocity: top moves +x, bottom moves -x -----
+# vshear chosen so total relative displacement at end of Phase 2 = target_strain_xz × gel_thick
+#   2 × vshear × nsteps_shear × dt = target_strain_xz × gel_thick
+# For γ=0.10, gel_thick≈13σ, nsteps=200k, dt=0.005: vshear ≈ 0.00065 σ/τ
+# This is ~250× slower than the previous fix deform approach.
+# Steady-state FENE interface bond extension ≈ vshear/K ≈ vshear/30 ≈ 2×10⁻⁵ σ — safe.
+variable vshear     equal $(v_target_strain_xz * v_gel_thick / (2.0 * v_nsteps_shear * v_timestep_prod))
+variable neg_vshear equal -v_vshear
+print ">>> vshear = ${vshear} σ/τ  (total top displacement = $(v_vshear*v_nsteps_shear*v_timestep_prod) σ)"
+
+# Interior mobile: everything except the driven polymer layers.
+# Includes all interior polymer, crosslinkers, and all solvent.
+group interior_mobile subtract all_mobile poly_top_s poly_bot_s
+
 
 # ==========================================================================
-#              PHASE 2: SHEAR APPLICATION
+#              PHASE 2: SHEAR APPLICATION  (rheometer-style)
 # ==========================================================================
-# Why change_box instead of fix deform remap x:
-#   For a CROSSLINKED elastic gel, fix deform remap x fails — the FENE/crosslink
-#   restoring forces generate velocities that oppose each step's remap displacement.
-#   The gel COM strain saturates far below target_strain_xz (~45% observed).
+# Top polymer layer (poly_top_s) driven at +vshear in x.
+# Bottom polymer layer (poly_bot_s) driven at -vshear in x.
+# Interior polymer + all solvent (interior_mobile) thermostated by NVT.
+# Box stays ORTHOGONAL — xz = 0 throughout.
 #
-# Strategy: apply the full target deformation in ONE instantaneous affine step
-# via change_box, then hold the box locked and run NVT to redistribute internal
-# stresses (non-affine relaxation) while maintaining the target geometry.
+# fix move linear overrides atom velocity to the specified value each step.
+# The FENE bonds coupling each driven layer to the interior drag the gel slowly,
+# maintaining steady-state interface bond extension ≈ vshear/K ≈ 2×10⁻⁵ σ (safe).
 #
-# Why the gel IS actually at target_strain after change_box + NVT:
-#   The gel's polymer network is x-periodic (bonds crossing the x-PBC see a
-#   periodic image offset of xz in x).  This is a topological constraint —
-#   NVT cannot relax the total COM strain without changing the box shape (no
-#   NPT barostat is active in Phase 2).  The non-affine relaxation only
-#   redistributes which bonds are stretched/compressed; the average gel shear
-#   remains enforced at target_strain_xz.
+# Shear strain measurement:
+#   gel_strain_cm = (x_COM_top − x_COM_bot − xcm_sep_0) / gel_thick
+#   Rises linearly from 0 → target_strain_xz over Phase 2.
 #
-# FENE safety: 10% strain applied at once, max per-bond extension
-#   = target_xz × Δz_bond / lz ≈ 0.10 × 0.97σ = 0.097σ  (6% of R0=1.5σ — safe)
-
-variable target_xz equal $(v_target_strain_xz * lz)
+# Periodic image note: top/bottom atoms each move ±0.05×gel_thick ≈ ±0.65σ in x,
+# negligible vs lx.  z-profile analysis and Rg-based regions track the primary
+# slab and are unaffected.
 
 print "========================================"
-print "Phase 2: Instantaneous change_box shear + NVT relaxation"
-print "  target_xz = ${target_xz}  (γ = ${target_strain_xz})"
-print "  NVT relaxation: ${nsteps_shear} steps at fixed box geometry"
+print "Phase 2: Rheometer shear (${nsteps_shear} steps)"
+print "  poly_top_s: +x at vshear = ${vshear} σ/τ"
+print "  poly_bot_s: -x at vshear = ${neg_vshear} σ/τ"
+print "  Expected gel_strain_cm at end: ${target_strain_xz}"
 print "========================================"
 
-# Apply full affine deformation in one step — atoms displaced ∝ z
-change_box all xz final ${target_xz} remap units box
-run 0   # force re-evaluation of xcm computes after change_box (positions changed)
+fix nvt_shear  interior_mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_shear  interior_mobile momentum 100 linear 1 1 1
+fix move_top   poly_top_s move linear ${vshear} 0 0
+fix move_bot   poly_bot_s move linear ${neg_vshear} 0 0
 
-print ">>> Immediately after change_box:"
-print ">>>   box xz = $(xz)  lz = $(lz)  gel_strain_box = $(v_gel_strain)"
-print ">>>   gel_strain_cm (affine, pre-relaxation) = $(v_gel_strain_cm)"
-
-# NVT relaxation at fixed shear geometry.  No fix deform — box is locked.
-fix nvt_shear all_mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix mom_shear all_mobile momentum 100 linear 1 1 1
-
-# Log both gel strain measures throughout relaxation.
-# gel_strain_box is constant (= target_strain_xz, box locked).
-# gel_strain_cm should start at target_strain_xz and remain there
-# (periodic topology constraint) with small thermal fluctuations.
+# Columns: step  gel_lz_initial  gel_thick  gel_strain_cm
+# gel_strain_cm rises linearly; any deviation indicates slip or FENE failure.
 fix out_shear_strain all print ${stress_freq} &
-    "$(step) ${gel_lz_initial} $(xz) $(v_gel_strain) $(v_gel_strain_cm)" &
+    "$(step) ${gel_lz_initial} ${gel_thick} $(v_gel_strain_cm)" &
     file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
 
 run ${nsteps_shear}
 
 unfix out_shear_strain
+unfix move_bot
+unfix move_top
 unfix mom_shear
 unfix nvt_shear
 undump traj_setup
 
 print ">>> Phase 2 complete"
-print ">>>   gel_strain_box = $(v_gel_strain)   (target: ${target_strain_xz})  [= xz/lz]"
-print ">>>   gel_strain_cm  = $(v_gel_strain_cm)  (target: ${target_strain_xz})  [polymer COM]"
-print ">>> Post-shear box: $(lx) x $(ly) x $(lz)  xz=$(xz)"
+print ">>>   gel_strain_cm = $(v_gel_strain_cm)  (target: ${target_strain_xz})"
 print ">>> Post-shear gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
 
 # Freeze Rg-based region half-widths as constants (gel geometry now fixed)
@@ -455,24 +444,31 @@ compute chunk_z_solvent  solvent  chunk/atom bin/1d z lower ${binWidth_reduced} 
 # ==========================================================================
 #              PHASE 3: NVT PRODUCTION (Fixed Deformed Geometry)
 # ==========================================================================
-# Box held at post-shear geometry (no fix deform active). Shear forces removed.
-# Stress relaxes toward equilibrium: G = σ_xz / γ in the long-time limit.
-# All 6 components time-averaged for the shear_modulus_analysis notebook.
+# Driven layers held at Phase 2 final positions via fix move linear 0 0 0
+# (velocity = 0 → atoms frozen at their last-step positions).
+# Interior polymer + solvent (interior_mobile) equilibrate freely under NVT.
+# Stress relaxes toward equilibrium: G = σ_xz / gel_strain_cm.
 #
-# fix momentum linear angular:
-#   Removes both COM translational drift and any residual rigid-body angular
-#   momentum left over from the affine shear of Phase 2.  Applied every 100
-#   steps.  Does NOT contaminate the stress tensor: compute stress/atom NULL
-#   uses the virial (pair + bond forces), not velocities, so velocity corrections
-#   from fix momentum do not affect σ_xz.
+# Frozen driven layers are the correct boundary condition for measuring G:
+# they impose a fixed-strain state without any driving force.
+# compute stress/atom NULL uses the virial (forces), not velocities, so the
+# zero velocity of frozen atoms does NOT contaminate σ_xz.
+#
+# fix momentum angular:
+#   Any residual angular momentum from the antisymmetric Phase 2 drive is
+#   removed every 100 steps from interior_mobile.  Safe: virial-based stress
+#   is unaffected by velocity corrections.
 
 print "========================================"
 print "Phase 3: NVT production (${nsteps} steps)"
-print "  Fixed shear geometry: xz_tilt = $(xz)  target_strain = ${target_strain_xz}"
+print "  Gel shear strain: $(v_gel_strain_cm)  (target: ${target_strain_xz})"
+print "  Driven layers frozen; interior_mobile thermostated at T=${temp_target}"
 print "========================================"
 
-fix nvt_prod all_mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix mom_zero all_mobile momentum 100 linear 1 1 1 angular
+fix hold_top  poly_top_s     move linear 0 0 0     # freeze top layer at Phase 2 final x
+fix hold_bot  poly_bot_s     move linear 0 0 0     # freeze bottom layer at Phase 2 final x
+fix nvt_prod  interior_mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_zero  interior_mobile momentum 100 linear 1 1 1 angular
 
 # Production trajectory — sparse, all mobile atoms (for volume fraction extraction)
 dump traj_prod all_mobile custom ${dump_freq_prod} &
@@ -550,11 +546,15 @@ run ${nsteps}
 
 undump traj_prod
 unfix mom_zero
+unfix nvt_prod
+unfix hold_bot
+unfix hold_top
 
 print "========================================"
 print "Shear slab simulation complete"
-print "Final xz_tilt: $(xz)   gel_lz_initial: ${gel_lz_initial}"
-print "Final box: $(lx) x $(ly) x $(lz)   xz=$(xz)"
+print "Final gel_strain_cm: $(v_gel_strain_cm)  (target: ${target_strain_xz})"
+print "Final gel_lz_initial: ${gel_lz_initial}  gel_thick: ${gel_thick}"
+print "Final box: $(lx) x $(ly) x $(lz)  (xz=0, orthogonal throughout)"
 print "========================================"
 
 variable outfile string "final_shear_${dataname}_${interaction}_${nsteps}"

@@ -288,9 +288,9 @@ def plot_shear_diagnostics(data, folder, run_id, output):
       3. Box xz tilt          — Xz column from thermo; flat/ramp/flat pattern
       4. Polymer σ_p_xz       — time-averaged partial xz stress (Phase 3)
       5. Gel Rg dimensions    — lx_rg, ly_rg, lz_rg vs step
-      6. Gel strain compare   — gel_strain_box (xz/lz) vs gel_strain_cm (polymer COM
-                                top/bottom layers); confirms gel is sheared by
-                                target_strain_xz, not just the simulation box
+      6. Gel strain (CM)      — gel_strain_cm from polymer COM (rheometer 4-col format);
+                                or gel_strain_box vs gel_strain_cm comparison (5-col
+                                legacy format)
 
     These collectively answer: Did shear apply cleanly? Is the polymer stress
     response well-converged? Is the gel stable throughout? Is the gel itself
@@ -311,11 +311,15 @@ def plot_shear_diagnostics(data, folder, run_id, output):
     if 'Xz'  in data:                         panels.append('xz_tilt')
     if os.path.exists(stress_p_file):         panels.append('sigma_p_xz')
     if os.path.exists(rg_file):               panels.append('rg')
-    # Gel strain comparison panel — only when file has ≥5 columns (box + CM methods)
+    # Gel strain panel — col 4 = gel_strain_cm (4-col rheometer format)
+    # or gel_strain_compare panel if old 5-col format (box + CM)
     if os.path.exists(shear_str_file):
         _ss = read_fix_print(shear_str_file)
-        if _ss.size and _ss.shape[1] >= 5:
-            panels.append('gel_strain_compare')
+        if _ss.size:
+            if _ss.shape[1] >= 5:
+                panels.append('gel_strain_compare')
+            elif _ss.shape[1] >= 4:
+                panels.append('gel_strain_cm')
 
     if not panels:
         print("No shear diagnostic data found — skipping shear plot.")
@@ -385,6 +389,22 @@ def plot_shear_diagnostics(data, folder, run_id, output):
                 ax.set_ylabel('Gel Rg dims (σ)')
                 ax.legend(fontsize=8)
                 # Stable Rg → gel not melting or grossly deforming under shear
+
+        # ── Gel strain (polymer COM, rheometer) — 4-column shear_strain file ─
+        elif panel == 'gel_strain_cm':
+            arr = read_fix_print(shear_str_file)
+            # cols: step  gel_lz_initial  gel_thick  gel_strain_cm
+            if arr.size and arr.shape[1] >= 4:
+                t       = arr[:, 0]
+                gs_cm   = arr[:, 3]
+                ax.plot(t, gs_cm, color='darkorange', lw=1.5, marker='s', markersize=3,
+                        label='gel_strain_cm  (polymer COM)')
+                ax.axhline(0, color='k', ls=':', lw=0.8)
+                ax.set_ylabel('Gel Shear Strain γ')
+                ax.legend(fontsize=8)
+                ax.text(0.02, 0.92, f'Final: γ_gel = {gs_cm[-1]:.4f}',
+                        transform=ax.transAxes, fontsize=9, va='top',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
         # ── Gel strain comparison: box (xz/lz) vs polymer COM method ─────
         elif panel == 'gel_strain_compare':
