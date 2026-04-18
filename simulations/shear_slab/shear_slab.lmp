@@ -36,7 +36,7 @@
 #   stress_data/stress_tensor_solvent_*.dat        same for solvent
 #   stress_data/stress_profile_z_polymer_*.dat     z-binned 6-component stress profile (time-avg)
 #   stress_data/stress_profile_z_solvent_*.dat     same for solvent
-#   stress_data/shear_strain_*.dat                 3 columns: step  gel_lz_initial  xz_tilt
+#   stress_data/shear_strain_*.dat                 5 cols: step  gel_lz_initial  xz_tilt  gel_strain_box(=xz/lz)  gel_strain_cm(polymer COM)
 #   volume_data/gel_dimensions_rg_*.dat            Rg-based gel dimensions
 #   volume_data/box_dimensions_*.dat               lx ly lz xy xz yz vs step
 #   volume_data/polymer_com_*.dat                  polymer centre of mass vs step
@@ -264,6 +264,48 @@ print ">>> Initial gel thickness (Rg): ${gel_lz_initial}"
 # xz and lz are both valid thermo keywords inside equal-style variable formulas.
 variable gel_strain equal xz/lz
 
+# ----- Direct polymer gel shear tracking (COM method) -----
+# Track the x-displacement of the top vs bottom 10% of the gel polymer separately.
+# This gives gel_strain_cm = Δ(x_COM_top − x_COM_bot) / gel_thick, which should
+# equal target_strain_xz exactly by construction with remap x.
+#
+# Proof: with remap x, atom at z gets Δx = erate × (z − box_zlo) × dt per step.
+#   Δx_top − Δx_bot = erate × (gel_zhi − gel_zlo) × total_time
+#                   = target_strain_xz × gel_thick
+#   gel_strain_cm = (Δx_top − Δx_bot) / gel_thick = target_strain_xz   ✓
+#
+# If gel_strain_cm ≠ gel_strain (box xz/lz), the gel is slipping or rotating.
+# Groups are STATIC (frozen at post-equilibration z positions) — monitoring ONLY,
+# NOT used for force application.  Cross-linked gels don't diffuse far so the
+# static group membership remains representative throughout.
+
+variable shear_frac   equal 0.1
+variable gel_thick    equal $(v_gel_zhi - v_gel_zlo)
+
+# Freeze z-bounds for top/bottom 10% of gel as constants
+variable top_zlo_val  equal $(v_gel_zhi - v_shear_frac*(v_gel_zhi - v_gel_zlo))
+variable bot_zhi_val  equal $(v_gel_zlo + v_shear_frac*(v_gel_zhi - v_gel_zlo))
+
+region reg_top block EDGE EDGE EDGE EDGE ${top_zlo_val} ${gel_zhi} units box
+region reg_bot block EDGE EDGE EDGE EDGE ${gel_zlo} ${bot_zhi_val} units box
+group poly_top_s polymer region reg_top
+group poly_bot_s polymer region reg_bot
+
+compute xcm_top poly_top_s com
+compute xcm_bot poly_bot_s com
+
+run 0   # force xcm compute initialization before snapshotting
+
+# Snapshot x-COM separation as a constant (reference state before shear)
+variable xcm_sep_0     equal $(c_xcm_top[1] - c_xcm_bot[1])
+
+# Direct polymer gel shear strain (live, updates every step as xcm evolves)
+variable gel_strain_cm equal (c_xcm_top[1] - c_xcm_bot[1] - v_xcm_sep_0) / v_gel_thick
+
+print ">>> gel_thick (actual z-span):           ${gel_thick}"
+print ">>> xcm_sep_0 (x-COM top-bot, t=0):      ${xcm_sep_0}"
+print ">>> poly_top_s count: $(count(poly_top_s))  poly_bot_s count: $(count(poly_bot_s))"
+
 
 # ==========================================================================
 #              PHASE 2: SHEAR APPLICATION
@@ -301,11 +343,11 @@ fix nvt_shear  all_mobile nvt temp ${temp_target} ${temp_target} 1.0
 fix deform_xz  all deform 1 xz erate ${erate} remap x
 fix mom_shear  all_mobile momentum 100 linear 1 1 1
 
-# Columns: step  gel_lz_initial  xz_tilt(box)
-# γ = col3 / col2 in the analysis notebook.
-# gel_strain (= xz/gel_lz_initial) is logged for quick on-the-fly sanity checks.
+# Columns: step  gel_lz_initial  xz_tilt  gel_strain_box(=xz/lz)  gel_strain_cm(polymer COM)
+# gel_strain_box and gel_strain_cm should match throughout Phase 2, confirming
+# the gel polymer is sheared by exactly target_strain_xz (not just the box).
 fix out_shear_strain all print ${stress_freq} &
-    "$(step) ${gel_lz_initial} $(xz) $(v_gel_strain)" &
+    "$(step) ${gel_lz_initial} $(xz) $(v_gel_strain) $(v_gel_strain_cm)" &
     file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
 
 run ${nsteps_shear}
@@ -318,7 +360,8 @@ undump traj_setup
 
 print ">>> Phase 2 complete"
 print ">>>   box xz = $(xz)   (target: $(v_target_strain_xz*lz))"
-print ">>>   gel_strain = $(v_gel_strain)   (target: ${target_strain_xz})"
+print ">>>   gel_strain_box = $(v_gel_strain)   (target: ${target_strain_xz})  [= xz/lz]"
+print ">>>   gel_strain_cm  = $(v_gel_strain_cm)  (target: ${target_strain_xz})  [polymer COM]"
 print ">>> Post-shear box: $(lx) x $(ly) x $(lz)  xz=$(xz)"
 print ">>> Post-shear gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
 

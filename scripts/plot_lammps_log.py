@@ -288,24 +288,34 @@ def plot_shear_diagnostics(data, folder, run_id, output):
       3. Box xz tilt          — Xz column from thermo; flat/ramp/flat pattern
       4. Polymer σ_p_xz       — time-averaged partial xz stress (Phase 3)
       5. Gel Rg dimensions    — lx_rg, ly_rg, lz_rg vs step
+      6. Gel strain compare   — gel_strain_box (xz/lz) vs gel_strain_cm (polymer COM
+                                top/bottom layers); confirms gel is sheared by
+                                target_strain_xz, not just the simulation box
 
     These collectively answer: Did shear apply cleanly? Is the polymer stress
-    response well-converged? Is the gel stable throughout?"""
+    response well-converged? Is the gel stable throughout? Is the gel itself
+    sheared by the target strain (not slipping relative to the box)?"""
 
     sd = os.path.join(folder, 'output_files', 'stress_data')
     vd = os.path.join(folder, 'output_files', 'volume_data')
 
-    stress_p_file = os.path.join(sd, f'stress_tensor_polymer_{run_id}.dat')
-    rg_file       = os.path.join(vd, f'gel_dimensions_rg_{run_id}.dat')
+    stress_p_file   = os.path.join(sd, f'stress_tensor_polymer_{run_id}.dat')
+    rg_file         = os.path.join(vd, f'gel_dimensions_rg_{run_id}.dat')
+    shear_str_file  = os.path.join(sd, f'shear_strain_{run_id}.dat')
 
     # Decide which panels to draw
     temp_key = _first_key(data, 'c_mobile_temp', 'Temp')
     panels = []
-    if temp_key:                          panels.append('temp')
-    if 'Pxz' in data:                     panels.append('pxz')
-    if 'Xz'  in data:                     panels.append('xz_tilt')
-    if os.path.exists(stress_p_file):     panels.append('sigma_p_xz')
-    if os.path.exists(rg_file):           panels.append('rg')
+    if temp_key:                              panels.append('temp')
+    if 'Pxz' in data:                         panels.append('pxz')
+    if 'Xz'  in data:                         panels.append('xz_tilt')
+    if os.path.exists(stress_p_file):         panels.append('sigma_p_xz')
+    if os.path.exists(rg_file):               panels.append('rg')
+    # Gel strain comparison panel — only when file has ≥5 columns (box + CM methods)
+    if os.path.exists(shear_str_file):
+        _ss = read_fix_print(shear_str_file)
+        if _ss.size and _ss.shape[1] >= 5:
+            panels.append('gel_strain_compare')
 
     if not panels:
         print("No shear diagnostic data found — skipping shear plot.")
@@ -375,6 +385,32 @@ def plot_shear_diagnostics(data, folder, run_id, output):
                 ax.set_ylabel('Gel Rg dims (σ)')
                 ax.legend(fontsize=8)
                 # Stable Rg → gel not melting or grossly deforming under shear
+
+        # ── Gel strain comparison: box (xz/lz) vs polymer COM method ─────
+        elif panel == 'gel_strain_compare':
+            arr = read_fix_print(shear_str_file)
+            # shear_strain_*.dat cols: step  gel_lz_initial  xz_tilt  gel_strain_box  gel_strain_cm
+            if arr.size and arr.shape[1] >= 5:
+                t        = arr[:, 0]
+                gs_box   = arr[:, 3]   # xz / lz
+                gs_cm    = arr[:, 4]   # polymer COM method
+                ax.plot(t, gs_box, color='steelblue',  lw=1.5, marker='o', markersize=3,
+                        label='gel_strain_box  (xz/lz)')
+                ax.plot(t, gs_cm,  color='darkorange', lw=1.5, marker='s', markersize=3,
+                        label='gel_strain_cm  (polymer COM)')
+                ax.set_ylabel('Gel Shear Strain γ')
+                ax.legend(fontsize=8)
+                # Final values
+                ax.text(0.02, 0.92,
+                        f'Final:  box={gs_box[-1]:.4f}   CM={gs_cm[-1]:.4f}',
+                        transform=ax.transAxes, fontsize=9, va='top',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+                # Flag discrepancy (|box − CM| > 0.01 = 1 percentage point)
+                if abs(gs_box[-1] - gs_cm[-1]) > 0.01:
+                    ax.text(0.02, 0.06,
+                            f'⚠ box/CM mismatch: Δγ={abs(gs_box[-1]-gs_cm[-1]):.4f}',
+                            transform=ax.transAxes, fontsize=9, color='red', va='bottom',
+                            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
     axes[-1].set_xlabel('Step')
     plt.tight_layout()
