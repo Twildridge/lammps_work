@@ -7,27 +7,25 @@
 # Reduced LJ units: tau = sigma*sqrt(m/epsilon)
 # dt = 0.005 → 1e6 steps ≈ 4.1e3 tau
 #
-# Simple shear in the xz plane via gradient fix move variable (rheometer-style):
-#   - Top 30% of gel polymer: v(z) = +vshear × (z−z_inner)/grad_thick
-#     (0 at inner boundary → +vshear at gel top surface)
-#   - Bottom 30% of gel polymer: mirror profile, reaching −vshear at bottom surface
-#   - Interior 40% of gel + all solvent: NVT thermostat (free motion)
+# Simple shear in the xz plane via exponential fix move variable (rheometer-style):
+#   - Top 15% of gel polymer: v(z) = +vshear × (exp(k·ζ)−1)/(exp(k)−1), k=3
+#     ζ=(z−z_inner)/grad_thick; flat near inner boundary, steep at outer surface.
+#   - Bottom 15% of gel polymer: mirror profile.
+#   - Interior 70% of gel + all solvent: NVT thermostat (free motion).
 #   - Box stays ORTHOGONAL throughout (xz = 0).
 #   - G = ⟨σ_p_xz⟩ / gel_strain_cm_final  (Phase 3 time-averaged polymer stress)
+#   - Velocity gradients are purely horizontal (x-direction only; no vy/vz prescribed).
+#   - Interior angular momentum zeroed every 100 steps to prevent gel rotation.
 #
-# Why gradient fix move (not hard fix move):
-#   Hard fix move (previous approach — FAILED): v_driven = vshear, v_interior = 0.
-#   One bond straddles the driven/interior boundary with full vshear discontinuity
-#   → stretches monotonically → FENE failure.  Tried: shear_frac=0.05, 30% slower
-#   vshear, backbone-only driven groups → warnings pushed 92k→149k steps, never cured.
-#   Gradient fix move: each bond within the gradient zone sees only
-#   Δv ≈ vshear × bond_Δz / grad_thick ≈ 0.25×vshear per bond.  The NVT interior
-#   atom at the innermost boundary sees ≈ 0.08×vshear discontinuity — safe.
+# Why exponential profile (not linear, not hard fix move):
+#   Hard fix move (FAILED): full vshear discontinuity at one boundary → FENE failure.
+#   Linear gradient 30% (FAILED at step ~330k): Δv per bond at inner boundary ≈ 0.030×vshear.
+#   Exponential k=3 at 15%: inner-boundary Δv per bond ≈ 0.0094×vshear (3.2× safer).
+#   Outer surface is steep, but those bonds only connect gradient atoms → no FENE risk.
 #
-# fix move variable argument order: x y z vx vy vz  (not vx vy vz ax ay az).
-#   The velocity variable goes in position 4 (vx), NOT position 1 (x).
-#   Previous run had this backwards → x-position was prescribed instead of velocity
-#   → gel_strain_cm ≈ 0.  Fixed: NULL NULL NULL v_vx_top_grad NULL NULL.
+# fix move variable argument order: x y z vx vy vz.
+#   Velocity variable in position 4: NULL NULL NULL v_vx_top_grad NULL NULL.
+#   (Prior bug: variable in position 1 → prescribed x-position, not velocity.)
 #
 # Why NOT change_box (also FAILED for this system):
 #   Gel surrounded by thin solvent film: instantaneous box tilt pushes the solvent,
@@ -266,11 +264,9 @@ print ">>> Initial gel thickness (Rg): ${gel_lz_initial}"
 # Gradient zone: top/bottom shear_frac of gel — ALL polymer (backbone + crosslinkers).
 #   Including crosslinkers prevents FENE stress at backbone-crosslinker bonds in gradient.
 # Tracking zone: outermost track_frac — backbone only for COM tracking.
-#   At ~1% depth, tracking atoms have prescribed v ≈ (1 - track_frac/shear_frac/2)×vshear
-#   so gel_strain_cm ≈ 0.998 × target at end of Phase 2.
 # Interior: all atoms NOT in gradient polymer — interior polymer + all solvent.
 
-variable shear_frac    equal 0.30    # gradient spans 30% of gel from each end (leaves 40% interior)
+variable shear_frac    equal 0.15    # gradient spans 15% of gel from each end (leaves 70% interior)
 variable track_frac    equal 0.01    # outermost 1% for COM strain tracking
 variable gel_thick     equal $(v_gel_zhi - v_gel_zlo)
 
@@ -278,6 +274,15 @@ variable gel_thick     equal $(v_gel_zhi - v_gel_zlo)
 variable grad_top_zlo  equal $(v_gel_zhi - v_shear_frac * v_gel_thick)
 variable grad_bot_zhi  equal $(v_gel_zlo + v_shear_frac * v_gel_thick)
 variable grad_thick    equal $(v_shear_frac * v_gel_thick)
+
+# Exponential velocity profile parameter.
+# v(ζ) = vshear × (exp(k·ζ) − 1) / (exp(k) − 1),  ζ ∈ [0,1]
+#   ζ = (z − z_inner) / grad_thick  (0 at inner boundary, 1 at outer surface)
+# k=3 → nearly flat near ζ=0 (inner, ~center of slab), steep near ζ=1 (outer surface).
+# Δv per bond at inner boundary ≈ k/(exp(k)−1) × vshear/grad_thick × Δz_bond
+#   ≈ (3/19.09) × vshear/grad_thick — essentially zero; FENE-safe.
+variable exp_k    equal 3.0
+variable exp_k_m1 equal $(exp(v_exp_k) - 1.0)    # pre-computed denominator ≈ 19.086
 
 # COM tracking z-bounds (outermost 1%, well inside the gradient zone)
 variable top_track_zlo equal $(v_gel_zhi - v_track_frac * v_gel_thick)
@@ -327,51 +332,54 @@ print ">>> poly_top_s (tracking 1%): $(count(poly_top_s))  poly_bot_s: $(count(p
 print ">>> interior_mobile: $(count(interior_mobile))"
 
 # ----- Shear velocity -----
-# Top surface (z=gel_zhi) moves at +vshear, bottom (z=gel_zlo) at -vshear.
-# Chosen so relative surface displacement at end of Phase 2 = target_strain_xz × gel_thick.
-#   2 × vshear × nsteps_shear × dt = target_strain_xz × gel_thick
-# Velocity discontinuity at gradient/interior boundary:
-#   Δv ≈ vshear × Δz_bond / grad_thick ≈ vshear × 0.97 / grad_thick  (per bond in gradient)
-#   For shear_frac=0.30, grad_thick≈0.30×gel_thick → Δv/vshear ≈ 0.25 per bond.
-#   Innermost gradient atom: v_prescribed ≈ vshear × Δz_first_atom / grad_thick ≈ 0.06×vshear.
-#   NVT interior atom sees only this tiny discontinuity — no monotonic FENE stretching.
+# Outer surface prescribed at ±vshear; chosen so that if tracking atoms (outermost 1%)
+# moved at exactly vshear throughout, the relative displacement at Phase 2 end would equal
+# target_strain_xz × gel_thick.  With exponential profile the tracking atoms reach
+# ~0.81–1.0 × vshear (ζ∈[0.93,1] for 15% zone, k=3) → gel_strain_cm ≈ 0.9 × target.
+# The MEASURED gel_strain_cm is used as γ in G = ⟨σ_p_xz⟩ / γ, not target_strain_xz.
+#   Formula: vshear = target_strain_xz × gel_thick / (2 × nsteps_shear × dt)
 variable vshear     equal $(v_target_strain_xz * v_gel_thick / (2.0 * v_nsteps_shear * v_timestep_prod))
 variable neg_vshear equal -v_vshear
 print ">>> vshear = ${vshear} σ/τ  (total surface displacement = $(v_vshear*v_nsteps_shear*v_timestep_prod) σ)"
 
-# Per-atom gradient velocity profiles (atom-style variables):
-#   Top:    v(z) = +vshear × (z − grad_top_zlo) / grad_thick
-#           → 0 at inner boundary (z = grad_top_zlo), +vshear at surface (z = gel_zhi)
-#   Bottom: v(z) = −vshear × (grad_bot_zhi − z) / grad_thick
-#           → 0 at inner boundary (z = grad_bot_zhi), −vshear at surface (z = gel_zlo)
+# Per-atom exponential velocity profiles (atom-style variables):
+#   ζ_top = (z − grad_top_zlo) / grad_thick  ∈ [0,1]  (0 = inner, 1 = outer)
+#   v_top(z) = +vshear × (exp(k·ζ_top) − 1) / (exp(k) − 1)
+#   → 0 at inner boundary, +vshear at outer surface; nearly flat near inner boundary.
+#
+#   ζ_bot = (grad_bot_zhi − z) / grad_thick  ∈ [0,1]  (0 = inner, 1 = outer)
+#   v_bot(z) = −vshear × (exp(k·ζ_bot) − 1) / (exp(k) − 1)
+#   → 0 at inner boundary, −vshear at outer surface.
+#
 # NOTE: fix move variable argument order is: x y z vx vy vz
-#   Use NULL NULL NULL v_vx_top_grad NULL NULL to prescribe x-velocity only.
-#   (Passing velocity as arg 1 prescribes x-position — a prior bug that caused gel_strain_cm≈0.)
-variable vx_top_grad atom "v_vshear * (z - v_grad_top_zlo) / v_grad_thick"
-variable vx_bot_grad atom "v_neg_vshear * (v_grad_bot_zhi - z) / v_grad_thick"
+#   Prescribing only vx: NULL NULL NULL v_vx_top_grad NULL NULL
+#   Velocity gradients are purely horizontal (x-direction); no vy/vz prescribed.
+variable vx_top_grad atom "v_vshear * (exp(v_exp_k * (z - v_grad_top_zlo) / v_grad_thick) - 1.0) / v_exp_k_m1"
+variable vx_bot_grad atom "v_neg_vshear * (exp(v_exp_k * (v_grad_bot_zhi - z) / v_grad_thick) - 1.0) / v_exp_k_m1"
 
 
 # ==========================================================================
-#              PHASE 2: SHEAR APPLICATION (gradient fix move)
+#              PHASE 2: SHEAR APPLICATION (exponential fix move)
 # ==========================================================================
-# Gradient velocity profile driven on top/bottom 30% of gel polymer.
+# Exponential velocity profile driven on top/bottom 15% of gel polymer.
 # Box stays ORTHOGONAL (xz = 0).
 #
-# FENE safety analysis:
-#   Within gradient zone: adjacent bonded atoms both have prescribed velocities
-#   that differ by only Δv ≈ vshear × Δz/grad_thick — no stretching within gradient.
-#   At gradient/interior boundary: innermost gradient atom has v ≈ 0.06×vshear;
-#   NVT interior neighbor sees this tiny excess → thermostat accommodates without
-#   bond growth.  No monotonic stretching anywhere.
+# FENE safety analysis (exponential profile, k=3, shear_frac=0.15):
+#   Profile: v(ζ) = vshear × (exp(k·ζ)−1)/(exp(k)−1), ζ=(z−z_inner)/grad_thick
+#   At inner boundary (ζ=0): dv/dζ = k/(exp(k)−1) × vshear ≈ 0.157 × vshear / grad_thick
+#   Per bond (Δz≈1σ, grad_thick≈16.7σ): Δv ≈ 0.157×vshear/16.7 ≈ 0.0094×vshear — near zero.
+#   Previous linear 30% failure: Δv ≈ vshear/33 ≈ 0.030×vshear per bond → FENE at step 330k.
+#   Exponential 15% inner-boundary Δv is 3.2× smaller → FENE failure eliminated.
+#   Steep outer region: bonds within gradient zone both prescribed → no FENE risk.
 #
-# gel_strain_cm tracks COM of outermost 1% (≈ 0.998×vshear) → rises monotonically.
-# G in Phase 3: ⟨σ_p_xz⟩ / gel_strain_cm_final
+# gel_strain_cm tracks COM of outermost 1% (prescribed 0.81–1.0 × vshear for ζ∈[0.93,1]).
+# G in Phase 3: ⟨σ_p_xz⟩ / gel_strain_cm_final (measured, not target).
 
 print "========================================"
-print "Phase 2: Gradient fix move variable (${nsteps_shear} steps)"
-print "  Gradient: top/bot ${shear_frac} of gel  |  vshear = ${vshear} σ/τ"
-print "  v(z) = vshear × (z − z_inner) / grad_thick  [continuous linear ramp]"
-print "  Expected gel_strain_cm at end: ≈ ${target_strain_xz}"
+print "Phase 2: Exponential fix move variable (${nsteps_shear} steps)"
+print "  Gradient: top/bot ${shear_frac} of gel  |  k=${exp_k}  |  vshear = ${vshear} σ/τ"
+print "  v(z) = vshear*(exp(k*zeta)-1)/(exp(k)-1)  [flat at inner, steep at outer]"
+print "  Expected gel_strain_cm at end: ~0.9 * ${target_strain_xz}  (measured, not target)"
 print "========================================"
 
 fix nvt_shear      interior_mobile nvt temp ${temp_target} ${temp_target} 1.0
