@@ -352,10 +352,14 @@ print ">>> vshear = ${vshear} σ/τ  (total surface displacement = $(v_vshear*v_
 #   → 0 at inner boundary, −vshear at outer surface.
 #
 # NOTE: fix move variable argument order is: x y z vx vy vz
-#   Prescribing only vx: NULL NULL NULL v_vx_top_grad NULL NULL
-#   Velocity gradients are purely horizontal (x-direction); no vy/vz prescribed.
+#   Prescribing vx (exponential profile) AND vy=0 AND vz=0.
+#   vy=0, vz=0 prevent the gradient zone from rotating or drifting out-of-plane —
+#   exactly what fix move linear achieved with v=(vshear,0,0) on the hard plate.
+#   Without vz=0, FENE z-forces from the sheared interior create a net torque on
+#   the gradient zone (atoms at low x pulled up, high x pushed down).
 variable vx_top_grad atom "v_vshear * (exp(v_exp_k * (z - v_grad_top_zlo) / v_grad_thick) - 1.0) / v_exp_k_m1"
 variable vx_bot_grad atom "v_neg_vshear * (exp(v_exp_k * (v_grad_bot_zhi - z) / v_grad_thick) - 1.0) / v_exp_k_m1"
+variable zero_v atom 0.0   # prescribed vy and vz for gradient zones (no out-of-plane motion)
 
 
 # ==========================================================================
@@ -395,9 +399,13 @@ fix mom_lin        all_mobile      momentum 100 linear 1 1 1
 #   should not develop net rotation; removing it here prevents slow gel spin.
 fix mom_rot        interior_mobile momentum 100 angular
 # fix move variable arg order: x y z vx vy vz  (NULL = not prescribed)
-# Prescribe only vx (arg 4); leave x, y, z, vy, vz as NULL.
-fix move_top_grad  poly_top_grad move variable NULL NULL NULL v_vx_top_grad NULL NULL
-fix move_bot_grad  poly_bot_grad move variable NULL NULL NULL v_vx_bot_grad NULL NULL
+# Prescribe vx (exponential profile) + vy=0 + vz=0.
+# vz=0 is essential: without it, FENE z-forces from the sheared interior torque the
+# gradient zone (rotation in xz plane). vz=0 makes the gradient zone act like a
+# true rheometer plate — slides only horizontally, no tilt. Same physical constraint
+# that fix move linear v=(vshear,0,0) provided on the hard plate.
+fix move_top_grad  poly_top_grad move variable NULL NULL NULL v_vx_top_grad v_zero_v v_zero_v
+fix move_bot_grad  poly_bot_grad move variable NULL NULL NULL v_vx_bot_grad v_zero_v v_zero_v
 
 # Columns: step  gel_lz_initial  gel_thick  gel_strain_cm
 # gel_strain_cm should rise monotonically from 0 → ≈target_strain_xz.
