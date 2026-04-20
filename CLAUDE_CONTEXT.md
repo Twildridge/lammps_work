@@ -161,35 +161,39 @@ rsync -avP $USER@data.bridges2.psc.edu:<PATH>.lammpstrj.gz ~/Downloads
 
 ## shear_slab.lmp — Design Notes
 
-- **3 phases**: (1) NPT iso equilibration → (2) instantaneous `change_box xz final` + NVT relaxation → (3) NVT production at fixed deformed box → G = ⟨σ_p_xz⟩ / target_strain_xz
-- **Shear method** (FINAL, as of 2026-04-18): `change_box all xz final ${target_xz} remap` applies the full target_strain_xz instantaneously (affine remap). NVT then runs at the LOCKED box geometry for `nsteps_shear` steps. No driven/interior interface; no FENE failures possible.
-- **Why this works for elastic gels**: Bonds crossing the x-PBC carry an image offset of xz in x — a topological constraint. NVT at fixed box shape cannot relax this interior strain without an NPT barostat on xz. Surface layers (poly_top_s/poly_bot_s) do partially relax; `gel_strain_cm` tracks this. That is EXPECTED and physically correct — not a sign of failure.
-- **Strain convention**:
-  - `gel_strain_box = xz / lz = target_strain_xz` — box-level, interior network, fixed throughout Phase 2 and 3
-  - `gel_strain_cm = (xcm_top_x − xcm_bot_x − xcm_sep_0) / gel_thick` — surface layers, partially relaxes during NVT
-  - **G uses box strain**: G = ⟨σ_p_xz⟩ / target_strain_xz (NOT gel_strain_cm)
-- **Why NOT `fix deform remap x`** (tried, failed 2026-04-18): NVT propagates FENE/crosslink restoring velocities that oppose each step's affine remap. Elastic gel COM strain saturates at ~45% of target (observed: gel_strain_cm plateaued at 0.045 for γ_target=0.10). Cannot reach target strain with continuous rate-controlled shear of an elastic network.
-- **Why NOT `fix move` rheometer** (tried, failed 2026-04-18): `fix move` overrides atom velocity post-integration every step → hard velocity discontinuity at driven/interior boundary → FENE bond straddling that boundary stretches monotonically. Tried: reducing shear_frac 0.1→0.05, slowing vshear 30%, excluding crosslinkers from driven groups. All iterations pushed warning onset later (step 92k→107k→149k) but never eliminated the failure. Root cause is structural — there will always be exactly one bond pair at the interface.
-- **Why NOT `fix addforce`**: constant force per atom → jagged surfaces, and elastic equilibrium strain ≈ F/(G·A) is uncontrolled → massive over-shearing (hit LAMMPS triclinic limit |xz| ≤ lx/2).
-- **Why NOT `fix halt`**: `fix halt` calls `timer->force_timeout()` internally; this flag persists across `run` commands even after `unfix halt_shear`. Phase 3's `run ${nsteps}` exits at 0 steps.
-- **`poly_top_s` / `poly_bot_s` groups**: top/bottom 5% of gel by z-extent, backbone type 1 only. Used only for COM tracking (xcm_top/xcm_bot computes) — NOT driven in the current implementation. Two-step definition required: `group top_all region reg_top` then `group poly_top_s intersect backbone top_all` (LAMMPS forbids intersect with dynamic groups).
-- **Pair style**: WCA (`lj/cut 1.122`), consistent with slab_with_flow
-- **Bond coeffs**: `30.0 1.5 1.0 1.0` (Kremer-Grest FENE). Max bond extension from change_box at 10% shear ≈ target_strain_xz × Δz_typical ≈ 0.05–0.1σ (well within R0=1.5σ).
-- **Parameters to tune**: `target_strain_xz` (default 0.10), `nsteps_shear` (default 285000 = NVT relaxation steps post-change_box)
-- **Triclinic setup**: `change_box all triclinic` placed before `dump traj_setup` in Phase 1 (LAMMPS restriction: cannot change box topology while dumps are active).
-- **z-binning**: `compute chunk/atom bin/1d` requires `units reduced` for triclinic boxes. `binWidth_reduced = $(v_binWidth/lz)` snapshotted post-Phase 2 when lz is frozen.
+- **3 phases**: (1) NPT iso equilibration → (2) gradient fix move shear (box stays orthogonal) → (3) frozen gradient + interior NVT production → G = ⟨σ_p_xz⟩ / gel_strain_cm_final
+- **Shear method** (CURRENT, as of 2026-04-19): `fix move variable` with a linear velocity gradient across the top/bottom 30% of the gel. Top surface prescribed at +vshear, bottom at −vshear, linear ramp to 0 at inner boundaries. Box stays orthogonal (xz=0). No driven/interior hard boundary anywhere.
+- **Why gradient fix move solves FENE**:
+  - Hard `fix move` (past failure): one bond straddles the driven(vshear)/interior(0) boundary → full vshear velocity discontinuity → bond stretches monotonically → FENE failure.
+  - Gradient: each bond within the gradient zone sees only Δv ≈ vshear × Δz_bond / grad_thick. For shear_frac=0.30, grad_thick≈0.30×gel_thick, Δv/vshear ≈ 0.25 per bond. The innermost gradient atom has v_prescribed ≈ 0.06×vshear — the NVT interior neighbor sees this tiny excess and thermostat accommodates it. No monotonic stretching.
+- **Why NOT `change_box`** (also tried, also failed): the gel is surrounded by a thin solvent film. Instantaneous box tilt pushes the solvent; the gel just translates sideways rather than shearing internally. The solvent decouples the box geometry from the gel network.
+- **Why NOT `fix deform remap x`** (tried, failed): NVT propagates FENE/crosslink restoring velocities that oppose each remap. Elastic gel COM strain saturates at ~45% of target.
+- **Why NOT hard `fix move`** (tried in 3 iterations, failed): shear_frac 0.1→0.05, 30% slower vshear, backbone-only driven groups → warnings pushed 92k→149k steps, never eliminated. Root cause: hard velocity discontinuity at interface is structural.
+- **Why NOT `fix addforce`**: constant force per atom → jagged surfaces, and elastic equilibrium strain ≈ F/(G·A) is uncontrolled → massive over-shearing.
+- **`fix move variable` syntax** (LAMMPS):
+  ```lammps
+  variable vx_top_grad atom "v_vshear * (z - v_grad_top_zlo) / v_grad_thick"
+  fix move_top_grad poly_top_grad move variable v_vx_top_grad NULL NULL NULL NULL NULL
+  ```
+  The atom-style variable evaluates per-atom x-velocity as a function of current z-coordinate. Referenced in fix move with `v_` prefix. 6 args: vx vy vz ax ay az (NULL for unused).
+- **Group structure**:
+  - `poly_top_grad` / `poly_bot_grad`: ALL polymer (type 1+2, backbone+crosslinkers) in top/bottom shear_frac=0.30 of gel. Crosslinkers included to prevent FENE at backbone-crosslinker bonds within gradient. Two-step definition: `group grad_top_all region reg_grad_top` then `group poly_top_grad intersect polymer grad_top_all`.
+  - `poly_top_s` / `poly_bot_s`: backbone only (type 1), outermost track_frac=0.01 of gel — COM tracking.
+  - `interior_mobile`: subtract all_mobile poly_top_grad poly_bot_grad — gets NVT in Phase 2 and 3.
+- **Strain measurement**: `gel_strain_cm = (xcm_top_x − xcm_bot_x − xcm_sep_0) / gel_thick`. Tracking groups (outermost 1%) are prescribed v ≈ 0.998×vshear → gel_strain_cm ≈ 0.998×target at Phase 2 end. **G uses measured gel_strain_cm as γ** (not target_strain_xz) — more accurate.
+- **Phase 3 boundary condition**: `fix move linear 0 0 0` on poly_top_grad and poly_bot_grad freezes the gradient zones at Phase 2 final positions. Interior atoms respond freely to FENE forces → mechanical equilibrium, no monotonic growth.
+- **Pair style**: WCA (`lj/cut 1.122`); **Bond coeffs**: `30.0 1.5 1.0 1.0` (Kremer-Grest FENE)
+- **Parameters to tune**: `target_strain_xz` (0.10), `shear_frac` (0.30), `nsteps_shear` (285000)
+- **Triclinic setup**: `change_box all triclinic` before any dump (LAMMPS restriction). z-binning requires `units reduced`.
 - **Output frequencies**: `thermo_freq=10000`, `stress_freq=5000`, `num_stress_curves=10`
-- **Thermo columns**: includes `Pxz` and `Xz` — used by `plot_lammps_log.py` to auto-detect shear runs
-- **`gel_strain_cm` variable**: `gel_strain_cm = (xcm_top_x − xcm_bot_x − xcm_sep_0) / gel_thick`. Starts at ~target_strain_xz immediately after change_box, then partially relaxes during Phase 2 NVT. Written to `shear_strain_*.dat` (4 columns: step, gel_lz_initial, gel_thick, gel_strain_cm).
 - **Stress outputs**:
   - `stress_tensor_polymer/solvent_*.dat`: box-integrated 6-component tensor vs time (key for G); xz is col 5 (1-indexed)
   - `stress_profile_z_polymer/solvent_*.dat`: z-binned 6-component profile
-  - `shear_strain_*.dat`: **4 columns**: step, gel_lz_initial, gel_thick, gel_strain_cm (surface COM)
-  - `box_dimensions_*.dat`: step lx ly lz xy xz yz (7 columns; xz = target_xz = constant in Phase 3)
+  - `shear_strain_*.dat`: **4 columns**: step, gel_lz_initial, gel_thick, gel_strain_cm
+  - `box_dimensions_*.dat`: step lx ly lz xy xz yz (xz=0 throughout — box stays orthogonal)
   - `gel_dimensions_rg_*.dat`: step lx_rg ly_rg lz_rg
-- **G extraction**: G = ⟨stress_p_xz⟩ / target_strain_xz (time-averaged in Phase 3, box-integrated polymer stress divided by box-level shear strain)
-- **Solvent stress**: isotropic at equilibrium (σ_s_xz ≈ 0); G comes entirely from polymer network
-- **Optimal node count**: 1–2 nodes on Bridges-2/Expanse (~165k atoms → ≥700 atoms/task). Rule: target ≥1000 atoms/MPI task.
+- **G extraction**: G = ⟨stress_p_xz⟩ / gel_strain_cm_final (from shear_strain_*.dat last value)
+- **Optimal node count**: 1–2 nodes on Bridges-2/Expanse (~165k atoms). Rule: ≥1000 atoms/MPI task.
 - **IMPORTANT**: `slab_elongation/` folder still exists — delete manually after verifying shear_slab works
 
 ## Active Tasks / Open Questions
@@ -267,4 +271,5 @@ Optionally prepend `git pull` to `run_lammps.sh` / `run_lammps_bridges.sh` so it
 - *2026-04-18*: **`gel_strain` corrected to `xz/lz`** — Previous formula `xz/v_gel_lz_initial` (where gel_lz_initial is the Rg-based gel thickness ≈ gel_thick) overstates γ by factor lz/gel_thick ≈ 1.018 because lz = gel_thick + 2σ buffer. With `remap x`, xz = erate × lz × t exactly, so xz/lz = erate × t = target_strain_xz. The Rg-based gel_lz_initial is still stored as a reference but is no longer used in the strain formula.
 - *2026-04-18*: **`fix deform remap x` fails for elastic gels** — gel COM strain saturates at ~45% of target (observed: 0.045 for γ_target=0.10). Root cause: FENE/crosslink restoring forces generate velocities opposing each step's remap displacement; NVT propagates these velocities. Elastic solid resists continuous rate-controlled shear. Fix: replace Phase 2 with `change_box all xz final ${target_xz} remap units box` (one instantaneous affine step) followed by `run 0` + NVT at LOCKED box geometry. The x-periodic bond topology (bonds crossing x-PBC carry image offset of xz in x) enforces gel_strain = target_strain_xz — NVT cannot un-shear the gel without an NPT barostat. FENE safety: max per-bond extension at 10% shear ≈ 0.097σ (6% of R0=1.5σ — safe). `nsteps_shear` now = NVT relaxation steps at fixed geometry (was: ramping steps with fix deform).
 - *2026-04-18*: **Added polymer COM gel strain tracking** — `poly_top_s` / `poly_bot_s` groups (top/bottom 10% of gel by z, static) + `compute xcm_top/xcm_bot com` + `xcm_sep_0` snapshot → `gel_strain_cm = (xcm_top_x − xcm_bot_x − xcm_sep_0) / gel_thick`. Now 4th column of `shear_strain_*.dat`. With change_box approach, gel_strain_cm starts at ~target_strain_xz and partially relaxes (expected for surface layers); interior network held by periodic topology.
-- *2026-04-18*: **`fix move` rheometer approach ultimately abandoned** — Three rounds of incremental fixes (shear_frac 0.1→0.05, vshear 30% slower, backbone-only driven groups) pushed FENE warning onset from step 92k→107k→149k but never eliminated the failure. Root cause: `fix move` overrides velocity post-integration every step, creating a hard velocity discontinuity at the driven/interior boundary. The one bond straddling that boundary always stretches monotonically. **Final decision: revert to `change_box` + NVT approach** (as described in the current Design Notes above). Key insight: gel_strain_cm tracks surface relaxation (expected and physically correct); interior gel is held at target_strain_xz by x-periodic bond topology. G = ⟨σ_p_xz⟩ / target_strain_xz using box strain, not gel_strain_cm.
+- *2026-04-18*: **`change_box` approach abandoned** — reverted to change_box + NVT after fix move failures, but Dylan noted that the gel is surrounded by a thin solvent film. Instantaneous box tilt pushes the solvent shell; the gel translates sideways rather than shearing internally. change_box works for systems without solvent film or with periodic gel networks, but not here.
+- *2026-04-19*: **Gradient `fix move variable` — current approach** — Inspired by Dylan's "soft grab" idea: instead of a hard velocity step (0 → vshear at driven/interior boundary), apply a linear velocity ramp across the top/bottom 30% of gel. Per-atom variable: `variable vx_top_grad atom "v_vshear * (z - v_grad_top_zlo) / v_grad_thick"`. Applied via `fix move variable v_vx_top_grad NULL NULL NULL NULL NULL` to all polymer (types 1+2) in gradient zone. Each bond within gradient sees only Δv ≈ vshear × Δz/grad_thick ≈ 0.25×vshear → no monotonic stretching anywhere. Innermost gradient atom has v_prescribed ≈ 0.06×vshear; NVT interior atom sees this small excess and accommodates it. gel_strain_cm tracked from outermost 1% (≈ 0.998×vshear) → G = ⟨σ_p_xz⟩ / gel_strain_cm_final. Phase 3 freezes full gradient zones (not just thin driven layers) via `fix move linear 0 0 0`.

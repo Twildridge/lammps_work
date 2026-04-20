@@ -7,30 +7,31 @@
 # Reduced LJ units: tau = sigma*sqrt(m/epsilon)
 # dt = 0.005 → 1e6 steps ≈ 4.1e3 tau
 #
-# Simple shear in the xz plane:
-#   - Target deformation applied via change_box all xz final <target_xz> remap.
-#     All atoms displaced affinely proportional to z in one instantaneous step.
-#   - Phase 2 then runs NVT at the LOCKED box geometry (no fix deform).
-#     The x-periodic bond topology enforces gel_strain = target_strain_xz:
-#     bonds crossing the x-PBC carry an image offset of xz in x — a topological
-#     constraint NVT cannot relax without an NPT barostat changing the box shape.
-#   - G = σ_xz / γ  (measured in Phase 3 at thermal equilibrium)
+# Simple shear in the xz plane via gradient fix move (rheometer-style):
+#   - Top 30% of gel polymer: velocity profile v(z) = +vshear × (z−z_inner)/grad_thick
+#     (0 at inner boundary → +vshear at gel top surface)
+#   - Bottom 30% of gel polymer: mirror profile, reaching −vshear at bottom surface
+#   - Interior 40% of gel + all solvent: NVT thermostat (free motion)
+#   - Box stays ORTHOGONAL throughout (xz = 0).
+#   - G = ⟨σ_p_xz⟩ / gel_strain_cm_final  (Phase 3 time-averaged polymer stress)
 #
-# Why NOT fix deform remap x (previous approach — FAILED for elastic gels):
-#   fix deform remap x displaces atoms affinely every step, but FENE bonds and
-#   crosslinks generate elastic restoring velocities that partially undo each
-#   remap displacement.  For a stiff crosslinked network the gel COM strain
-#   saturates far below target_strain_xz (observed: ~0.045 for γ_target=0.10).
-#   Locking the box at the target geometry avoids this competition entirely.
+# Why gradient fix move (not hard fix move):
+#   Hard fix move (previous approach — FAILED): v_driven = vshear, v_interior = 0.
+#   One bond straddles the driven/interior boundary with full vshear discontinuity
+#   → stretches monotonically → FENE failure.  Tried: shear_frac=0.05, 30% slower
+#   vshear, backbone-only driven groups → warnings pushed 92k→149k steps, never cured.
+#   Gradient fix move: each bond within the gradient zone sees only
+#   Δv ≈ vshear × bond_Δz / grad_thick ≈ 0.25×vshear per bond.  The NVT interior
+#   atom at the innermost boundary sees ≈ 0.08×vshear discontinuity — safe.
 #
-# Why NOT fix move rheometer plates (even earlier — also FAILED):
-#   fix move overrides atom velocity post-integration; FENE bonds at the
-#   driven/interior interface stretch monotonically.
+# Why NOT change_box (also FAILED for this system):
+#   Gel surrounded by thin solvent film: instantaneous box tilt pushes the solvent,
+#   gel merely translates sideways rather than shearing internally.
 #
 # Phases:
 #   1. Brief NPT equilibration (undeformed, isotropic)
-#   2. Shear application: change_box xz final + NVT relaxation at fixed geometry
-#   3. NVT production at fixed deformed geometry → time-averaged stresses → G
+#   2. Gradient fix move shear — top/bot 30% driven, interior NVT
+#   3. NVT production with gradient zone frozen → time-averaged stresses → G
 #
 # Outputs (all in the timestamped lammps_runs/ working directory):
 #   log.lammps                                    bulk pressure: pxx pyy pzz pxy pxz pyz
@@ -61,7 +62,7 @@ variable target_strain_xz equal 0.10
 
 # ----- Phase Lengths -----
 variable nsteps_equil  equal 50000    # Phase 1: NPT equilibration steps
-variable nsteps_shear  equal 285000   # Phase 2: NVT relaxation steps after instantaneous change_box
+variable nsteps_shear  equal 285000   # Phase 2: gradient fix move shear steps
 # nsteps (Phase 3 production) comes from bash via -var nsteps
 
 # ----- Output Frequencies -----
@@ -87,7 +88,7 @@ variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 
 print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
-print ">>> Shear: γ_target=${target_strain_xz}  nsteps_shear=${nsteps_shear} (NVT relax at fixed xz)"
+print ">>> Shear: γ_target=${target_strain_xz}  nsteps_shear=${nsteps_shear} (gradient fix move, box stays orthogonal)"
 
 # ----- Spatial Binning -----
 variable binWidth    equal 2.0
@@ -256,29 +257,50 @@ variable hw_z equal v_region_frac*v_rg_scale*sqrt(v_Rg_zz + v_eps)
 variable gel_lz_initial equal $(v_gel_lz_rg)
 print ">>> Initial gel thickness (Rg): ${gel_lz_initial}"
 
-# ----- Polymer gel shear tracking (COM method) — PRIMARY strain measurement -----
-# Top and bottom 10% of gel polymer tracked separately.
-# gel_strain_cm = (x_COM_top − x_COM_bot − xcm_sep_0) / gel_thick
-# This is THE gel shear strain: the relative x-displacement of driven surfaces
-# normalised by the gel thickness.  Expected to reach target_strain_xz at end of Phase 2.
-#
-# Groups are STATIC (post-equilibration z positions).  In Phase 2 they are DRIVEN
-# by fix move; in Phase 3 they are held frozen by fix move linear 0 0 0.
-# Cross-linked gels don't diffuse so static group membership stays representative.
+# ----- Gradient velocity shear groups -----
+# Gradient zone: top/bottom shear_frac of gel — ALL polymer (backbone + crosslinkers).
+#   Including crosslinkers prevents FENE stress at backbone-crosslinker bonds in gradient.
+# Tracking zone: outermost track_frac — backbone only for COM tracking.
+#   At ~1% depth, tracking atoms have prescribed v ≈ (1 - track_frac/shear_frac/2)×vshear
+#   so gel_strain_cm ≈ 0.998 × target at end of Phase 2.
+# Interior: all atoms NOT in gradient polymer — interior polymer + all solvent.
 
-variable shear_frac   equal 0.05
-variable gel_thick    equal $(v_gel_zhi - v_gel_zlo)
+variable shear_frac    equal 0.30    # gradient spans 30% of gel from each end (leaves 40% interior)
+variable track_frac    equal 0.01    # outermost 1% for COM strain tracking
+variable gel_thick     equal $(v_gel_zhi - v_gel_zlo)
 
-# Freeze z-bounds for top/bottom 10% of gel as constants
-variable top_zlo_val  equal $(v_gel_zhi - v_shear_frac*(v_gel_zhi - v_gel_zlo))
-variable bot_zhi_val  equal $(v_gel_zlo + v_shear_frac*(v_gel_zhi - v_gel_zlo))
+# Gradient z-bounds (snapshotted as constants — gel_zhi/gel_zlo are already constants)
+variable grad_top_zlo  equal $(v_gel_zhi - v_shear_frac * v_gel_thick)
+variable grad_bot_zhi  equal $(v_gel_zlo + v_shear_frac * v_gel_thick)
+variable grad_thick    equal $(v_shear_frac * v_gel_thick)
 
-region reg_top block EDGE EDGE EDGE EDGE ${top_zlo_val} ${gel_zhi} units box
-region reg_bot block EDGE EDGE EDGE EDGE ${gel_zlo} ${bot_zhi_val} units box
-group top_all    region reg_top
-group bot_all    region reg_bot
-group poly_top_s intersect backbone top_all    # backbone only — crosslinkers stay in interior_mobile
-group poly_bot_s intersect backbone bot_all    # backbone only — crosslinkers stay in interior_mobile
+# COM tracking z-bounds (outermost 1%, well inside the gradient zone)
+variable top_track_zlo equal $(v_gel_zhi - v_track_frac * v_gel_thick)
+variable bot_track_zhi equal $(v_gel_zlo + v_track_frac * v_gel_thick)
+
+print ">>> gel_thick: ${gel_thick}  grad_thick: ${grad_thick}"
+print ">>> Gradient: z_inner_top = ${grad_top_zlo}  z_inner_bot = ${grad_bot_zhi}"
+
+region reg_grad_top  block EDGE EDGE EDGE EDGE ${grad_top_zlo}  ${gel_zhi}      units box
+region reg_grad_bot  block EDGE EDGE EDGE EDGE ${gel_zlo}       ${grad_bot_zhi} units box
+region reg_track_top block EDGE EDGE EDGE EDGE ${top_track_zlo} ${gel_zhi}      units box
+region reg_track_bot block EDGE EDGE EDGE EDGE ${gel_zlo}       ${bot_track_zhi} units box
+
+group grad_top_all   region reg_grad_top
+group grad_bot_all   region reg_grad_bot
+group track_top_all  region reg_track_top
+group track_bot_all  region reg_track_bot
+
+# Gradient groups — all polymer types in the gradient zones
+group poly_top_grad intersect polymer grad_top_all
+group poly_bot_grad intersect polymer grad_bot_all
+
+# COM tracking groups — backbone only in outermost 1% (near full vshear)
+group poly_top_s intersect backbone track_top_all
+group poly_bot_s intersect backbone track_bot_all
+
+# Interior: everything NOT in gradient polymer groups (interior polymer, crosslinkers, solvent)
+group interior_mobile subtract all_mobile poly_top_grad poly_bot_grad
 
 compute xcm_top poly_top_s com
 compute xcm_bot poly_bot_s com
@@ -286,62 +308,70 @@ compute xcm_bot poly_bot_s com
 run 0   # force xcm compute initialization before snapshotting
 
 # Snapshot x-COM separation as a constant (reference state before shear)
-variable xcm_sep_0     equal $(c_xcm_top[1] - c_xcm_bot[1])
+variable xcm_sep_0    equal $(c_xcm_top[1] - c_xcm_bot[1])
 
-# Direct polymer gel shear strain (live, updates every step as xcm evolves)
+# Live gel strain from COM of outermost tracking layers.
+# These atoms are driven at ≈ vshear (v_prescribed ≈ 0.998×vshear for track_frac=0.01,
+# shear_frac=0.30), so gel_strain_cm ≈ 0.998 × target_strain_xz at Phase 2 end.
+# Use the MEASURED gel_strain_cm as γ for G = ⟨σ_p_xz⟩ / γ — more accurate than target.
 variable gel_strain_cm equal (c_xcm_top[1] - c_xcm_bot[1] - v_xcm_sep_0) / v_gel_thick
 
-print ">>> gel_thick (actual z-span):           ${gel_thick}"
-print ">>> xcm_sep_0 (x-COM top-bot, t=0):      ${xcm_sep_0}"
-print ">>> poly_top_s count: $(count(poly_top_s))  poly_bot_s count: $(count(poly_bot_s))"
+print ">>> xcm_sep_0 (x-COM top-bot, t=0): ${xcm_sep_0}"
+print ">>> poly_top_grad: $(count(poly_top_grad))  poly_bot_grad: $(count(poly_bot_grad))"
+print ">>> poly_top_s (tracking 1%): $(count(poly_top_s))  poly_bot_s: $(count(poly_bot_s))"
+print ">>> interior_mobile: $(count(interior_mobile))"
 
-# ----- Target xz tilt for change_box -----
-# γ = xz / lz  →  xz_target = target_strain_xz × lz (evaluated at current lz after box z resize)
-variable target_xz equal ${target_strain_xz}*lz
-print ">>> target_xz = ${target_xz} σ  (= ${target_strain_xz} × lz)"
+# ----- Shear velocity -----
+# Top surface (z=gel_zhi) moves at +vshear, bottom (z=gel_zlo) at -vshear.
+# Chosen so relative surface displacement at end of Phase 2 = target_strain_xz × gel_thick.
+#   2 × vshear × nsteps_shear × dt = target_strain_xz × gel_thick
+# Velocity discontinuity at gradient/interior boundary:
+#   Δv ≈ vshear × Δz_bond / grad_thick ≈ vshear × 0.97 / grad_thick  (per bond in gradient)
+#   For shear_frac=0.30, grad_thick≈0.30×gel_thick → Δv/vshear ≈ 0.25 per bond.
+#   Innermost gradient atom: v_prescribed ≈ vshear × Δz_first_atom / grad_thick ≈ 0.06×vshear.
+#   NVT interior atom sees only this tiny discontinuity — no monotonic FENE stretching.
+variable vshear     equal $(v_target_strain_xz * v_gel_thick / (2.0 * v_nsteps_shear * v_timestep_prod))
+variable neg_vshear equal -v_vshear
+print ">>> vshear = ${vshear} σ/τ  (total surface displacement = $(v_vshear*v_nsteps_shear*v_timestep_prod) σ)"
+
+# Per-atom gradient velocity profiles (atom-style variables):
+#   Top:    v(z) = +vshear × (z − grad_top_zlo) / grad_thick
+#           → 0 at inner boundary (z = grad_top_zlo), +vshear at surface (z = gel_zhi)
+#   Bottom: v(z) = −vshear × (grad_bot_zhi − z) / grad_thick
+#           → 0 at inner boundary (z = grad_bot_zhi), −vshear at surface (z = gel_zlo)
+variable vx_top_grad atom "v_vshear * (z - v_grad_top_zlo) / v_grad_thick"
+variable vx_bot_grad atom "v_neg_vshear * (v_grad_bot_zhi - z) / v_grad_thick"
 
 
 # ==========================================================================
-#              PHASE 2: SHEAR APPLICATION (instantaneous + NVT relax)
+#              PHASE 2: SHEAR APPLICATION (gradient fix move)
 # ==========================================================================
-# Apply target xz tilt instantaneously via change_box; all atoms remapped affinely.
-# NVT then relaxes internal stresses at the LOCKED box geometry.
+# Gradient velocity profile driven on top/bottom 30% of gel polymer.
+# Box stays ORTHOGONAL (xz = 0).
 #
-# Why this works for elastic gels:
-#   The x-periodic bond topology enforces interior gel_strain ≈ target_strain_xz.
-#   Bonds crossing the x-PBC carry an image offset of xz in x — a topological
-#   constraint that NVT at fixed box shape cannot relax.  Surface polymer layers
-#   (poly_top_s / poly_bot_s) do partially relax; gel_strain_cm tracks this
-#   surface relaxation and its plateau is typically < target_strain_xz.
-#   That is EXPECTED and physically correct — it is NOT a sign of failure.
+# FENE safety analysis:
+#   Within gradient zone: adjacent bonded atoms both have prescribed velocities
+#   that differ by only Δv ≈ vshear × Δz/grad_thick — no stretching within gradient.
+#   At gradient/interior boundary: innermost gradient atom has v ≈ 0.06×vshear;
+#   NVT interior neighbor sees this tiny excess → thermostat accommodates without
+#   bond growth.  No monotonic stretching anywhere.
 #
-# Strain convention:
-#   gel_strain_box = xz / lz = target_strain_xz  (box-level, interior, fixed)
-#   gel_strain_cm  = (xcm_top − xcm_bot − xcm_sep_0) / gel_thick  (surface, partially relaxes)
-#
-# G is computed from the box-level strain in Phase 3:
-#   G = ⟨σ_p_xz⟩ / target_strain_xz
+# gel_strain_cm tracks COM of outermost 1% (≈ 0.998×vshear) → rises monotonically.
+# G in Phase 3: ⟨σ_p_xz⟩ / gel_strain_cm_final
 
 print "========================================"
-print "Phase 2: Instantaneous change_box + NVT relax (${nsteps_shear} steps)"
-print "  Applying xz = ${target_xz} σ  (γ_box = ${target_strain_xz})"
+print "Phase 2: Gradient fix move (${nsteps_shear} steps)"
+print "  Gradient: top/bot ${shear_frac} of gel  |  vshear = ${vshear} σ/τ"
+print "  Expected gel_strain_cm at end: ≈ ${target_strain_xz}"
 print "========================================"
 
-# Instantaneous affine shear — all atoms displaced proportional to z
-change_box all xz final ${target_xz} remap
+fix nvt_shear      interior_mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_shear      interior_mobile momentum 100 linear 1 1 1
+fix move_top_grad  poly_top_grad move variable v_vx_top_grad NULL NULL NULL NULL NULL
+fix move_bot_grad  poly_bot_grad move variable v_vx_bot_grad NULL NULL NULL NULL NULL
 
-run 0   # force compute update after change_box before snapshotting
-print ">>> Immediately post-change_box:"
-print ">>>   xz = $(xz)  lz = $(lz)  gel_strain_box = $(xz/lz)"
-print ">>>   gel_strain_cm = $(v_gel_strain_cm)  (should be ≈ ${target_strain_xz})"
-
-fix nvt_shear  all_mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix mom_shear  all_mobile momentum 100 linear 1 1 1
-
-# Track gel surface-layer COM strain during NVT relaxation.
-# gel_strain_cm will partially relax from ~target_strain_xz toward a lower plateau.
-# gel_strain_box (= xz/lz) stays fixed at target_strain_xz throughout.
 # Columns: step  gel_lz_initial  gel_thick  gel_strain_cm
+# gel_strain_cm should rise monotonically from 0 → ≈target_strain_xz.
 fix out_shear_strain all print ${stress_freq} &
     "$(step) ${gel_lz_initial} ${gel_thick} $(v_gel_strain_cm)" &
     file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
@@ -349,13 +379,15 @@ fix out_shear_strain all print ${stress_freq} &
 run ${nsteps_shear}
 
 unfix out_shear_strain
+unfix move_bot_grad
+unfix move_top_grad
 unfix mom_shear
 unfix nvt_shear
 undump traj_setup
 
 print ">>> Phase 2 complete"
-print ">>>   gel_strain_box (interior) = $(xz/lz)  (= target: ${target_strain_xz})"
-print ">>>   gel_strain_cm  (surface)  = $(v_gel_strain_cm)  (partial relaxation expected)"
+print ">>>   gel_strain_cm = $(v_gel_strain_cm)  (target: ${target_strain_xz})"
+print ">>>   G = <sigma_p_xz> / $(v_gel_strain_cm)"
 print ">>> Post-shear gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
 
 # Freeze Rg-based region half-widths as constants (gel geometry now fixed)
@@ -441,27 +473,38 @@ compute chunk_z_solvent  solvent  chunk/atom bin/1d z lower ${binWidth_reduced} 
 
 
 # ==========================================================================
-#              PHASE 3: NVT PRODUCTION (Fixed Deformed Geometry)
+#              PHASE 3: NVT PRODUCTION (Frozen Gradient Boundary)
 # ==========================================================================
-# Box xz is locked at target_xz from Phase 2; no fix deform, no driven plates.
-# All mobile atoms equilibrate freely under NVT at the fixed strained geometry.
-# Stress relaxes toward equilibrium plateau → G = ⟨σ_p_xz⟩ / target_strain_xz.
+# Gradient polymer zones (top/bot 30%) frozen at Phase 2 final x-positions
+# via fix move linear 0 0 0 (velocity = 0 each step → atoms held in place).
+# Interior polymer + solvent (interior_mobile) equilibrate freely under NVT.
+# Stress relaxes to equilibrium → G = ⟨σ_p_xz⟩ / gel_strain_cm_final.
 #
-# The box tilt is the strain — fixing the box (no barostat on xz) is equivalent
-# to a constant-strain boundary condition, which is correct for G measurement.
+# FENE safety in Phase 3:
+#   Frozen atoms have v=0; interior atoms can move freely in response to FENE forces.
+#   Interior atom bonded to frozen atom: FENE force pulls it toward frozen atom,
+#   interior atom responds freely → bond reaches mechanical equilibrium.
+#   No monotonic growth (unlike Phase 2 hard fix move where driven atom is
+#   continuously being reset — frozen atom does not move, just resists).
+#
+# compute stress/atom NULL uses virial (forces), not velocities.
+# Frozen atoms' bond forces ARE included in the virial sum → correct σ_p_xz.
 #
 # fix mom_zero angular:
-#   Removes any residual angular momentum every 100 steps from all_mobile.
-#   Virial-based stress/atom is unaffected by velocity corrections.
+#   Removes any residual angular momentum from Phase 2 drive every 100 steps.
+#   Applied to interior_mobile only (gradient zone is frozen, angular not relevant).
 
 print "========================================"
 print "Phase 3: NVT production (${nsteps} steps)"
-print "  Box xz = $(xz) (fixed)  gel_strain_box = ${target_strain_xz}"
-print "  G = <sigma_p_xz> / ${target_strain_xz}"
+print "  Gradient zones frozen at Phase 2 final positions"
+print "  gel_strain_cm = $(v_gel_strain_cm)  (= γ for G calculation)"
+print "  G = <sigma_p_xz> / $(v_gel_strain_cm)"
 print "========================================"
 
-fix nvt_prod  all_mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix mom_zero  all_mobile momentum 100 linear 1 1 1 angular
+fix hold_top  poly_top_grad   move linear 0 0 0   # freeze top gradient zone
+fix hold_bot  poly_bot_grad   move linear 0 0 0   # freeze bottom gradient zone
+fix nvt_prod  interior_mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_zero  interior_mobile momentum 100 linear 1 1 1 angular
 
 # Production trajectory — sparse, all mobile atoms (for volume fraction extraction)
 dump traj_prod all_mobile custom ${dump_freq_prod} &
@@ -540,13 +583,14 @@ run ${nsteps}
 undump traj_prod
 unfix mom_zero
 unfix nvt_prod
+unfix hold_bot
+unfix hold_top
 
 print "========================================"
 print "Shear slab simulation complete"
-print "  gel_strain_box (interior) = $(xz/lz)  (= target: ${target_strain_xz})"
-print "  gel_strain_cm  (surface)  = $(v_gel_strain_cm)  (partially relaxed, expected)"
+print "  gel_strain_cm (γ for G): $(v_gel_strain_cm)  (target: ${target_strain_xz})"
 print "  gel_lz_initial: ${gel_lz_initial}  gel_thick: ${gel_thick}"
-print "  Final box: $(lx) x $(ly) x $(lz)  xz = $(xz)"
+print "  Final box: $(lx) x $(ly) x $(lz)  xz = $(xz)  (orthogonal: xz should be 0)"
 print "========================================"
 
 variable outfile string "final_shear_${dataname}_${interaction}_${nsteps}"
