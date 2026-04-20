@@ -270,7 +270,7 @@ print ">>> Initial gel thickness (Rg): ${gel_lz_initial}"
 #   so gel_strain_cm ≈ 0.998 × target at end of Phase 2.
 # Interior: all atoms NOT in gradient polymer — interior polymer + all solvent.
 
-variable shear_frac    equal 0.30    # gradient spans 30% of gel from each end (leaves 40% interior)
+variable shear_frac    equal 0.20    # gradient spans 30% of gel from each end (leaves 40% interior)
 variable track_frac    equal 0.01    # outermost 1% for COM strain tracking
 variable gel_thick     equal $(v_gel_zhi - v_gel_zlo)
 
@@ -354,7 +354,7 @@ variable vx_bot_grad atom "v_neg_vshear * (v_grad_bot_zhi - z) / v_grad_thick"
 # ==========================================================================
 #              PHASE 2: SHEAR APPLICATION (gradient fix move)
 # ==========================================================================
-# Gradient velocity profile driven on top/bottom 30% of gel polymer.
+# Gradient velocity profile driven on top/bottom 20% of gel polymer.
 # Box stays ORTHOGONAL (xz = 0).
 #
 # FENE safety analysis:
@@ -375,7 +375,7 @@ print "  Expected gel_strain_cm at end: ≈ ${target_strain_xz}"
 print "========================================"
 
 fix nvt_shear      interior_mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix mom_shear      interior_mobile momentum 100 linear 1 1 1
+fix mom_shear      interior_mobile momentum 100 linear 1 1 1 angular
 # fix move variable arg order: x y z vx vy vz  (NULL = not prescribed)
 # Prescribe only vx (arg 4); leave x, y, z, vy, vz as NULL.
 fix move_top_grad  poly_top_grad move variable NULL NULL NULL v_vx_top_grad NULL NULL
