@@ -383,7 +383,17 @@ print "  Expected gel_strain_cm at end: ~0.9 * ${target_strain_xz}  (measured, n
 print "========================================"
 
 fix nvt_shear      interior_mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix mom_shear      interior_mobile momentum 100 linear 1 1 1 angular
+# COM drift: zero LINEAR momentum of ALL mobile atoms (gradient + interior).
+#   Gradient atoms have prescribed vx, so the linear correction is overridden by
+#   fix move variable each step — net effect: only interior atoms are permanently
+#   corrected.  But applying to all_mobile ensures gradient atom net momentum
+#   (from slight top/bot atom count asymmetry) doesn't accumulate into a system drift.
+fix mom_lin        all_mobile      momentum 100 linear 1 1 1
+# Rotation: zero ANGULAR momentum of interior only.
+#   Gradient zone has intentional angular momentum from the shear profile —
+#   applying 'angular' there would fight and dampen the flow.  Interior atoms
+#   should not develop net rotation; removing it here prevents slow gel spin.
+fix mom_rot        interior_mobile momentum 100 angular
 # fix move variable arg order: x y z vx vy vz  (NULL = not prescribed)
 # Prescribe only vx (arg 4); leave x, y, z, vy, vz as NULL.
 fix move_top_grad  poly_top_grad move variable NULL NULL NULL v_vx_top_grad NULL NULL
@@ -400,7 +410,8 @@ run ${nsteps_shear}
 unfix out_shear_strain
 unfix move_bot_grad
 unfix move_top_grad
-unfix mom_shear
+unfix mom_rot
+unfix mom_lin
 unfix nvt_shear
 undump traj_setup
 
