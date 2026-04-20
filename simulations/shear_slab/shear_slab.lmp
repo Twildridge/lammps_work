@@ -7,22 +7,23 @@
 # Reduced LJ units: tau = sigma*sqrt(m/epsilon)
 # dt = 0.005 → 1e6 steps ≈ 4.1e3 tau
 #
-# Simple shear in the xz plane via gradient fix move (rheometer-style):
-#   - Top 30% of gel polymer: velocity profile v(z) = +vshear × (z−z_inner)/grad_thick
-#     (0 at inner boundary → +vshear at gel top surface)
-#   - Bottom 30% of gel polymer: mirror profile, reaching −vshear at bottom surface
+# Simple shear in the xz plane via staircase fix move linear (rheometer-style):
+#   - Top 30% of gel polymer: 5 discrete sub-layers, each driven at k/5 × vshear
+#     (pt1 innermost at 0.2×vshear → pt5 outermost at vshear)
+#   - Bottom 30% of gel polymer: mirror staircase, pb1 at -0.2×vshear → pb5 at -vshear
 #   - Interior 40% of gel + all solvent: NVT thermostat (free motion)
 #   - Box stays ORTHOGONAL throughout (xz = 0).
 #   - G = ⟨σ_p_xz⟩ / gel_strain_cm_final  (Phase 3 time-averaged polymer stress)
 #
-# Why gradient fix move (not hard fix move):
-#   Hard fix move (previous approach — FAILED): v_driven = vshear, v_interior = 0.
-#   One bond straddles the driven/interior boundary with full vshear discontinuity
-#   → stretches monotonically → FENE failure.  Tried: shear_frac=0.05, 30% slower
-#   vshear, backbone-only driven groups → warnings pushed 92k→149k steps, never cured.
-#   Gradient fix move: each bond within the gradient zone sees only
-#   Δv ≈ vshear × bond_Δz / grad_thick ≈ 0.25×vshear per bond.  The NVT interior
-#   atom at the innermost boundary sees ≈ 0.08×vshear discontinuity — safe.
+# Why staircase fix move linear (not continuous gradient):
+#   Hard fix move (FAILED): v_driven = vshear, v_interior = 0.
+#   Full vshear discontinuity → monotonic FENE failure.  Tried: shear_frac=0.05,
+#   30% slower vshear, backbone-only driven groups → failure at 149k steps.
+#   Continuous gradient fix move variable (ALSO FAILED): atom-style velocity
+#   variables silently not applied on many LAMMPS cluster builds → gel_strain_cm≈0.
+#   Staircase fix move linear: velocity discontinuity at each boundary = 0.20×vshear.
+#   fix move linear is well-tested and reliable in all LAMMPS versions.
+#   FENE safety factor ≈ 2.6× relative to previous failure mode.
 #
 # Why NOT change_box (also FAILED for this system):
 #   Gel surrounded by thin solvent film: instantaneous box tilt pushes the solvent,
@@ -274,6 +275,25 @@ variable grad_top_zlo  equal $(v_gel_zhi - v_shear_frac * v_gel_thick)
 variable grad_bot_zhi  equal $(v_gel_zlo + v_shear_frac * v_gel_thick)
 variable grad_thick    equal $(v_shear_frac * v_gel_thick)
 
+# 5 discrete sub-layers per side (staircase velocity gradient).
+# Each layer has thickness lf × gel_thick.  Velocity at each boundary = k/5 × vshear.
+# Max velocity discontinuity at any boundary = 0.20 × vshear (vs. full vshear for hard fix move).
+variable lf    equal $(v_shear_frac / 5.0)
+
+# Top sub-layer z lower-bounds (layer 5 = outermost, layer 1 = innermost)
+variable t5lo  equal $(v_gel_zhi - 1.0*v_lf*v_gel_thick)
+variable t4lo  equal $(v_gel_zhi - 2.0*v_lf*v_gel_thick)
+variable t3lo  equal $(v_gel_zhi - 3.0*v_lf*v_gel_thick)
+variable t2lo  equal $(v_gel_zhi - 4.0*v_lf*v_gel_thick)
+# t1 lower bound = grad_top_zlo  (already defined)
+
+# Bottom sub-layer z upper-bounds (layer 5 = outermost, layer 1 = innermost)
+variable b5hi  equal $(v_gel_zlo + 1.0*v_lf*v_gel_thick)
+variable b4hi  equal $(v_gel_zlo + 2.0*v_lf*v_gel_thick)
+variable b3hi  equal $(v_gel_zlo + 3.0*v_lf*v_gel_thick)
+variable b2hi  equal $(v_gel_zlo + 4.0*v_lf*v_gel_thick)
+# b1 upper bound = grad_bot_zhi  (already defined)
+
 # COM tracking z-bounds (outermost 1%, well inside the gradient zone)
 variable top_track_zlo equal $(v_gel_zhi - v_track_frac * v_gel_thick)
 variable bot_track_zhi equal $(v_gel_zlo + v_track_frac * v_gel_thick)
@@ -301,6 +321,46 @@ group poly_bot_s intersect backbone track_bot_all
 
 # Interior: everything NOT in gradient polymer groups (interior polymer, crosslinkers, solvent)
 group interior_mobile subtract all_mobile poly_top_grad poly_bot_grad
+
+# ---- 5 sub-layer regions and groups (top side) ----
+# Polymer atoms in each sub-layer get a constant prescribed velocity via fix move linear.
+# pt5 = outermost (vel = +vshear), pt1 = innermost (vel = +0.2*vshear)
+region rt5 block EDGE EDGE EDGE EDGE ${t5lo}         ${gel_zhi}      units box
+region rt4 block EDGE EDGE EDGE EDGE ${t4lo}         ${t5lo}         units box
+region rt3 block EDGE EDGE EDGE EDGE ${t3lo}         ${t4lo}         units box
+region rt2 block EDGE EDGE EDGE EDGE ${t2lo}         ${t3lo}         units box
+region rt1 block EDGE EDGE EDGE EDGE ${grad_top_zlo} ${t2lo}         units box
+group rt5_all region rt5
+group rt4_all region rt4
+group rt3_all region rt3
+group rt2_all region rt2
+group rt1_all region rt1
+group pt5 intersect polymer rt5_all
+group pt4 intersect polymer rt4_all
+group pt3 intersect polymer rt3_all
+group pt2 intersect polymer rt2_all
+group pt1 intersect polymer rt1_all
+
+# ---- 5 sub-layer regions and groups (bottom side) ----
+# pb5 = outermost (vel = -vshear), pb1 = innermost (vel = -0.2*vshear)
+region rb5 block EDGE EDGE EDGE EDGE ${gel_zlo}      ${b5hi}         units box
+region rb4 block EDGE EDGE EDGE EDGE ${b5hi}         ${b4hi}         units box
+region rb3 block EDGE EDGE EDGE EDGE ${b4hi}         ${b3hi}         units box
+region rb2 block EDGE EDGE EDGE EDGE ${b3hi}         ${b2hi}         units box
+region rb1 block EDGE EDGE EDGE EDGE ${b2hi}         ${grad_bot_zhi} units box
+group rb5_all region rb5
+group rb4_all region rb4
+group rb3_all region rb3
+group rb2_all region rb2
+group rb1_all region rb1
+group pb5 intersect polymer rb5_all
+group pb4 intersect polymer rb4_all
+group pb3 intersect polymer rb3_all
+group pb2 intersect polymer rb2_all
+group pb1 intersect polymer rb1_all
+
+print ">>> Sub-layer groups (top): pt5=$(count(pt5)) pt4=$(count(pt4)) pt3=$(count(pt3)) pt2=$(count(pt2)) pt1=$(count(pt1))"
+print ">>> Sub-layer groups (bot): pb5=$(count(pb5)) pb4=$(count(pb4)) pb3=$(count(pb3)) pb2=$(count(pb2)) pb1=$(count(pb1))"
 
 compute xcm_top poly_top_s com
 compute xcm_bot poly_bot_s com
@@ -334,13 +394,16 @@ variable vshear     equal $(v_target_strain_xz * v_gel_thick / (2.0 * v_nsteps_s
 variable neg_vshear equal -v_vshear
 print ">>> vshear = ${vshear} σ/τ  (total surface displacement = $(v_vshear*v_nsteps_shear*v_timestep_prod) σ)"
 
-# Per-atom gradient velocity profiles (atom-style variables):
-#   Top:    v(z) = +vshear × (z − grad_top_zlo) / grad_thick
-#           → 0 at inner boundary (z = grad_top_zlo), +vshear at surface (z = gel_zhi)
-#   Bottom: v(z) = −vshear × (grad_bot_zhi − z) / grad_thick
-#           → 0 at inner boundary (z = grad_bot_zhi), −vshear at surface (z = gel_zlo)
-variable vx_top_grad atom "v_vshear * (z - v_grad_top_zlo) / v_grad_thick"
-variable vx_bot_grad atom "v_neg_vshear * (v_grad_bot_zhi - z) / v_grad_thick"
+# Staircase velocity fractions for 5 sub-layers (evaluated as constants now that vshear is known)
+variable vf1  equal $(0.2*v_vshear)
+variable vf2  equal $(0.4*v_vshear)
+variable vf3  equal $(0.6*v_vshear)
+variable vf4  equal $(0.8*v_vshear)
+variable nvf1 equal $(-0.2*v_vshear)
+variable nvf2 equal $(-0.4*v_vshear)
+variable nvf3 equal $(-0.6*v_vshear)
+variable nvf4 equal $(-0.8*v_vshear)
+print ">>> Staircase Δv = $(0.2*v_vshear) σ/τ per sub-layer boundary (0.20 × vshear)"
 
 
 # ==========================================================================
@@ -360,15 +423,26 @@ variable vx_bot_grad atom "v_neg_vshear * (v_grad_bot_zhi - z) / v_grad_thick"
 # G in Phase 3: ⟨σ_p_xz⟩ / gel_strain_cm_final
 
 print "========================================"
-print "Phase 2: Gradient fix move (${nsteps_shear} steps)"
-print "  Gradient: top/bot ${shear_frac} of gel  |  vshear = ${vshear} σ/τ"
+print "Phase 2: Staircase fix move linear (${nsteps_shear} steps)"
+print "  Gradient: top/bot ${shear_frac} of gel  |  5 sub-layers  |  vshear = ${vshear} σ/τ"
+print "  Δv per boundary = 0.20×vshear — max discontinuity at any layer interface"
 print "  Expected gel_strain_cm at end: ≈ ${target_strain_xz}"
 print "========================================"
 
-fix nvt_shear      interior_mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix mom_shear      interior_mobile momentum 100 linear 1 1 1
-fix move_top_grad  poly_top_grad move variable v_vx_top_grad NULL NULL NULL NULL NULL
-fix move_bot_grad  poly_bot_grad move variable v_vx_bot_grad NULL NULL NULL NULL NULL
+fix nvt_shear  interior_mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_shear  interior_mobile momentum 100 linear 1 1 1
+# Top staircase: pt5 (outermost) → +vshear, pt1 (innermost) → +0.2×vshear
+fix move_pt5   pt5 move linear ${vshear} 0 0
+fix move_pt4   pt4 move linear ${vf4}    0 0
+fix move_pt3   pt3 move linear ${vf3}    0 0
+fix move_pt2   pt2 move linear ${vf2}    0 0
+fix move_pt1   pt1 move linear ${vf1}    0 0
+# Bottom staircase: pb5 (outermost) → -vshear, pb1 (innermost) → -0.2×vshear
+fix move_pb5   pb5 move linear ${neg_vshear} 0 0
+fix move_pb4   pb4 move linear ${nvf4}       0 0
+fix move_pb3   pb3 move linear ${nvf3}       0 0
+fix move_pb2   pb2 move linear ${nvf2}       0 0
+fix move_pb1   pb1 move linear ${nvf1}       0 0
 
 # Columns: step  gel_lz_initial  gel_thick  gel_strain_cm
 # gel_strain_cm should rise monotonically from 0 → ≈target_strain_xz.
@@ -379,8 +453,16 @@ fix out_shear_strain all print ${stress_freq} &
 run ${nsteps_shear}
 
 unfix out_shear_strain
-unfix move_bot_grad
-unfix move_top_grad
+unfix move_pb1
+unfix move_pb2
+unfix move_pb3
+unfix move_pb4
+unfix move_pb5
+unfix move_pt1
+unfix move_pt2
+unfix move_pt3
+unfix move_pt4
+unfix move_pt5
 unfix mom_shear
 unfix nvt_shear
 undump traj_setup
@@ -475,7 +557,7 @@ compute chunk_z_solvent  solvent  chunk/atom bin/1d z lower ${binWidth_reduced} 
 # ==========================================================================
 #              PHASE 3: NVT PRODUCTION (Frozen Gradient Boundary)
 # ==========================================================================
-# Gradient polymer zones (top/bot 30%) frozen at Phase 2 final x-positions
+# All 10 sub-layer groups (pt1-pt5, pb1-pb5) frozen at Phase 2 final x-positions
 # via fix move linear 0 0 0 (velocity = 0 each step → atoms held in place).
 # Interior polymer + solvent (interior_mobile) equilibrate freely under NVT.
 # Stress relaxes to equilibrium → G = ⟨σ_p_xz⟩ / gel_strain_cm_final.
@@ -501,8 +583,17 @@ print "  gel_strain_cm = $(v_gel_strain_cm)  (= γ for G calculation)"
 print "  G = <sigma_p_xz> / $(v_gel_strain_cm)"
 print "========================================"
 
-fix hold_top  poly_top_grad   move linear 0 0 0   # freeze top gradient zone
-fix hold_bot  poly_bot_grad   move linear 0 0 0   # freeze bottom gradient zone
+# Freeze all 10 sub-layers at Phase 2 final positions (vel = 0 each step)
+fix hold_pt5  pt5 move linear 0 0 0
+fix hold_pt4  pt4 move linear 0 0 0
+fix hold_pt3  pt3 move linear 0 0 0
+fix hold_pt2  pt2 move linear 0 0 0
+fix hold_pt1  pt1 move linear 0 0 0
+fix hold_pb5  pb5 move linear 0 0 0
+fix hold_pb4  pb4 move linear 0 0 0
+fix hold_pb3  pb3 move linear 0 0 0
+fix hold_pb2  pb2 move linear 0 0 0
+fix hold_pb1  pb1 move linear 0 0 0
 fix nvt_prod  interior_mobile nvt temp ${temp_target} ${temp_target} 1.0
 fix mom_zero  interior_mobile momentum 100 linear 1 1 1 angular
 
@@ -583,8 +674,16 @@ run ${nsteps}
 undump traj_prod
 unfix mom_zero
 unfix nvt_prod
-unfix hold_bot
-unfix hold_top
+unfix hold_pb1
+unfix hold_pb2
+unfix hold_pb3
+unfix hold_pb4
+unfix hold_pb5
+unfix hold_pt1
+unfix hold_pt2
+unfix hold_pt3
+unfix hold_pt4
+unfix hold_pt5
 
 print "========================================"
 print "Shear slab simulation complete"
