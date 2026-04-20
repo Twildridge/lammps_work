@@ -161,24 +161,25 @@ rsync -avP $USER@data.bridges2.psc.edu:<PATH>.lammpstrj.gz ~/Downloads
 
 ## shear_slab.lmp — Design Notes
 
-- **3 phases**: (1) NPT iso equilibration → (2) staircase fix move linear shear (box stays orthogonal) → (3) frozen sub-layers + interior NVT production → G = ⟨σ_p_xz⟩ / gel_strain_cm_final
-- **Shear method** (CURRENT, as of 2026-04-19): **5-layer staircase `fix move linear`** across the top/bottom 30% of the gel. Top gradient zone split into 5 sub-layers (pt1–pt5): pt1 innermost at +0.2×vshear, pt5 outermost at +vshear. Bottom is mirror (pb1–pb5). Max velocity discontinuity at any layer boundary = 0.20×vshear. Box stays orthogonal (xz=0).
-- **Why staircase fix move linear works**:
-  - Hard `fix move` (past failure): full vshear discontinuity at one boundary → monotonic FENE failure.
-  - Continuous `fix move variable` (ALSO FAILED, 2026-04-19): atom-style velocity variables silently not applied on many LAMMPS cluster builds → gel_strain_cm ≈ 0 after full run.
-  - Staircase: Δv = 0.20×vshear at each boundary. FENE safety factor ≈ 2.6× relative to previous failure. `fix move linear` is well-tested and reliable in all LAMMPS versions.
+- **3 phases**: (1) NPT iso equilibration → (2) gradient fix move variable shear (box stays orthogonal) → (3) frozen gradient + interior NVT production → G = ⟨σ_p_xz⟩ / gel_strain_cm_final
+- **Shear method** (CURRENT, as of 2026-04-19): **`fix move variable`** with a continuous linear velocity gradient across the top/bottom 30% of the gel. Each atom in the gradient zone gets a per-atom vx prescribed each step via an atom-style variable. Box stays orthogonal (xz=0).
+- **Critical syntax note — `fix move variable` argument order**:
+  - Arguments are: **x y z vx vy vz** (positions first, then velocities)
+  - To prescribe only vx: `fix move_top_grad poly_top_grad move variable NULL NULL NULL v_vx_top_grad NULL NULL`
+  - A prior run had the velocity variable as arg 1 (x-position), which prescribed a near-zero x-coordinate instead of velocity → gel_strain_cm ≈ 0.
+- **Why gradient fix move (not hard fix move)**: hard fix move has full vshear discontinuity at one boundary → monotonic FENE failure. Gradient: each bond sees only Δv ≈ vshear × Δz/grad_thick. For shear_frac=0.30, Δv/vshear ≈ 0.25 per bond — safe.
+- **Why NOT staircase fix move linear** (also considered): requires 10 sub-layer groups → exceeds LAMMPS 32-group limit (35 groups needed for this system). Would require recompiling LAMMPS with larger group limit.
 - **Why NOT `change_box`** (tried, failed): gel surrounded by thin solvent film → instantaneous box tilt pushes solvent, gel translates sideways, no internal shear.
 - **Why NOT `fix deform remap x`** (tried, failed): NVT propagates FENE restoring velocities opposing each remap → COM strain saturates at ~45% of target.
 - **Why NOT hard `fix move`** (tried in 3 iterations, failed): shear_frac 0.1→0.05, 30% slower vshear, backbone-only driven groups → FENE warnings pushed 92k→149k steps, never eliminated.
 - **Why NOT `fix addforce`**: constant force → jagged surfaces, uncontrolled elastic strain → over-shearing.
-- **Group structure**:
-  - `poly_top_grad` / `poly_bot_grad`: ALL polymer in top/bottom shear_frac=0.30. Still used to define `interior_mobile`.
-  - `pt1–pt5`, `pb1–pb5`: 5 sub-layer polymer groups per side, each spanning 6% of gel_thick. These are the actual driven groups.
-  - `poly_top_s` / `poly_bot_s`: backbone only (type 1), outermost track_frac=0.01 — COM tracking. These atoms are in pt5 → prescribed exactly vshear.
+- **Group structure** (15 total — well under 32 limit):
+  - `poly_top_grad` / `poly_bot_grad`: ALL polymer in top/bottom shear_frac=0.30. Used for fix move variable AND interior_mobile subtract.
+  - `poly_top_s` / `poly_bot_s`: backbone only (type 1), outermost track_frac=0.01 — COM tracking.
   - `interior_mobile`: subtract all_mobile poly_top_grad poly_bot_grad — gets NVT in Phase 2 and 3.
-- **Velocity variables**: `vshear`, `neg_vshear` (±full), `vf1`–`vf4`, `nvf1`–`nvf4` (±0.2/0.4/0.6/0.8 × vshear). All snapshotted as constants after gel_thick is known.
-- **Strain measurement**: `gel_strain_cm = (xcm_top_x − xcm_bot_x − xcm_sep_0) / gel_thick`. poly_top_s atoms are in pt5 (outermost sub-layer), prescribed exactly vshear → gel_strain_cm reaches exactly target_strain_xz at Phase 2 end. **G uses measured gel_strain_cm as γ**.
-- **Phase 3 boundary condition**: `fix move linear 0 0 0` on all 10 sub-layer groups (hold_pt1–pt5, hold_pb1–pb5). Interior atoms respond freely → mechanical equilibrium.
+- **Velocity variables**: `vshear`, `neg_vshear`. Atom-style: `vx_top_grad`, `vx_bot_grad` (linear gradient from 0 at inner boundary to ±vshear at surface).
+- **Strain measurement**: `gel_strain_cm = (xcm_top_x − xcm_bot_x − xcm_sep_0) / gel_thick`. Tracking atoms at outermost 1% → prescribed v ≈ 0.998×vshear → gel_strain_cm ≈ 0.998×target at Phase 2 end. **G uses measured gel_strain_cm as γ**.
+- **Phase 3 boundary condition**: `fix hold_top/hold_bot` (`fix move linear 0 0 0`) on poly_top_grad and poly_bot_grad. Interior atoms respond freely → mechanical equilibrium.
 - **Pair style**: WCA (`lj/cut 1.122`); **Bond coeffs**: `30.0 1.5 1.0 1.0` (Kremer-Grest FENE)
 - **Parameters to tune**: `target_strain_xz` (0.10), `shear_frac` (0.30), `nsteps_shear` (285000)
 - **Gel thickness**: gel_thick ≈ 111σ (confirmed from log: `gel_lz_rg = 111.4σ`). Much larger than initial ~13σ estimate.
@@ -270,5 +271,8 @@ Optionally prepend `git pull` to `run_lammps.sh` / `run_lammps_bridges.sh` so it
 - *2026-04-18*: **`fix deform remap x` fails for elastic gels** — gel COM strain saturates at ~45% of target (observed: 0.045 for γ_target=0.10). Root cause: FENE/crosslink restoring forces generate velocities opposing each step's remap displacement; NVT propagates these velocities. Elastic solid resists continuous rate-controlled shear. Fix: replace Phase 2 with `change_box all xz final ${target_xz} remap units box` (one instantaneous affine step) followed by `run 0` + NVT at LOCKED box geometry. The x-periodic bond topology (bonds crossing x-PBC carry image offset of xz in x) enforces gel_strain = target_strain_xz — NVT cannot un-shear the gel without an NPT barostat. FENE safety: max per-bond extension at 10% shear ≈ 0.097σ (6% of R0=1.5σ — safe). `nsteps_shear` now = NVT relaxation steps at fixed geometry (was: ramping steps with fix deform).
 - *2026-04-18*: **Added polymer COM gel strain tracking** — `poly_top_s` / `poly_bot_s` groups (top/bottom 10% of gel by z, static) + `compute xcm_top/xcm_bot com` + `xcm_sep_0` snapshot → `gel_strain_cm = (xcm_top_x − xcm_bot_x − xcm_sep_0) / gel_thick`. Now 4th column of `shear_strain_*.dat`. With change_box approach, gel_strain_cm starts at ~target_strain_xz and partially relaxes (expected for surface layers); interior network held by periodic topology.
 - *2026-04-18*: **`change_box` approach abandoned** — reverted to change_box + NVT after fix move failures, but Dylan noted that the gel is surrounded by a thin solvent film. Instantaneous box tilt pushes the solvent shell; the gel translates sideways rather than shearing internally. change_box works for systems without solvent film or with periodic gel networks, but not here.
-- *2026-04-19*: **Gradient `fix move variable` — FAILED silently** — Implemented linear velocity ramp using per-atom variables (`variable vx_top_grad atom "v_vshear * (z - v_grad_top_zlo) / v_grad_thick"`), applied via `fix move variable`. LAMMPS accepted the syntax without error but `gel_strain_cm = 6e-5` after the full 285k-step Phase 2 run. Diagnosis: `fix move variable` with atom-style velocity variables is silently ignored (not applied) on many LAMMPS cluster builds. Gradient polymer atoms received no time integration and no velocity drive → stationary gel. Trajectory animation confirmed: no shear.
-- *2026-04-19*: **5-layer staircase `fix move linear` — current approach** — Replace the 2 broken `fix move variable` commands with 10 `fix move linear` commands across 5 discrete sub-layers per side. Top gradient zone (30% of gel) split into pt1 (innermost, +0.2×vshear), pt2 (+0.4×), pt3 (+0.6×), pt4 (+0.8×), pt5 (outermost, +vshear). Bottom mirror (pb1–pb5). Velocity discontinuity at each inter-layer boundary = 0.20×vshear. `fix move linear` is well-tested in all LAMMPS versions. FENE safety factor ≈ 2.6× relative to previous hard fix move failure at 149k steps. poly_top_s tracking atoms are in pt5 → prescribed exactly vshear → gel_strain_cm reaches exactly target_strain_xz. Phase 3 freezes all 10 sub-layers via `fix move linear 0 0 0`.
+- *2026-04-19*: **Gradient `fix move variable` — argument order bug found and fixed** — First attempt used wrong argument order: `fix move_top_grad poly_top_grad move variable v_vx_top_grad NULL NULL NULL NULL NULL`. The `fix move variable` arg order is **x y z vx vy vz** (positions first, then velocities). Passing the velocity variable as arg 1 prescribed x-position ≈ `vshear * Δz/grad_thick` ≈ 0.001σ (atoms stayed essentially frozen), not x-velocity. Result: gel_strain_cm ≈ 6e-5 (effectively zero). Also attempted 5-layer staircase with `fix move linear` to avoid the issue, but hit LAMMPS max-32-groups limit (35 groups needed). Fix: correct argument order `NULL NULL NULL v_vx_top_grad NULL NULL` — prescribes vx only, leaves positions free. Current working syntax:
+  ```lammps
+  variable vx_top_grad atom "v_vshear * (z - v_grad_top_zlo) / v_grad_thick"
+  fix move_top_grad poly_top_grad move variable NULL NULL NULL v_vx_top_grad NULL NULL
+  ```
