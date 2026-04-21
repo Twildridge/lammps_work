@@ -161,47 +161,42 @@ rsync -avP $USER@data.bridges2.psc.edu:<PATH>.lammpstrj.gz ~/Downloads
 
 ## shear_slab.lmp — Design Notes
 
-- **3 phases**: (1) NPT iso equilibration → (2) gradient fix move variable shear (box stays orthogonal) → (3) frozen gradient + interior NVT production → G = ⟨σ_p_xz⟩ / gel_strain_cm_final
-- **Shear method** (CURRENT, as of 2026-04-19): **`fix move variable`** with an **exponential velocity gradient** across the top/bottom **15%** of the gel. Profile: v(ζ) = vshear × (exp(k·ζ)−1)/(exp(k)−1), k=3, where ζ=(z−z_inner)/grad_thick ∈ [0,1]. Nearly flat (≈0) near the interior boundary (ζ≈0), steep at the outer surface (ζ=1). Velocity is purely horizontal (x-direction); no vy/vz prescribed. Angular momentum zeroed for interior_mobile in both Phase 2 and 3.
-- **Critical syntax note — `fix move variable` argument order**:
-  - Arguments are: **x y z vx vy vz** (positions first, then velocities)
-  - To prescribe only vx: `fix move_top_grad poly_top_grad move variable NULL NULL NULL v_vx_top_grad NULL NULL`
-  - Prior bug: velocity variable in arg 1 (x-position) → prescribed x-coordinate ≈ 0.001σ, not velocity → gel_strain_cm ≈ 0.
-- **FENE failure history and fix**:
-  - Hard fix move (FAILED): full vshear at one boundary → monotonic FENE failure.
-  - Linear gradient 30% (FAILED at step ~330k): Δv per bond at inner boundary ≈ 0.030×vshear.
-  - Exponential k=3 at 15%: inner-boundary Δv per bond ≈ 0.0094×vshear (3.2× safer). Steep outer region bonds are both within the gradient zone → no discontinuity.
-- **Why NOT staircase fix move linear**: requires 35 groups → exceeds LAMMPS 32-group limit.
-- **Why NOT `change_box`** (tried, failed): gel surrounded by thin solvent film → translates sideways, no internal shear.
-- **Why NOT `fix deform remap x`** (tried, failed): COM strain saturates at ~45% of target.
-- **Why NOT hard `fix move`** (tried 3×, failed): FENE warnings pushed 92k→149k steps.
-- **Group structure** (15 total — well under 32 limit):
-  - `poly_top_grad` / `poly_bot_grad`: ALL polymer in top/bottom shear_frac=0.15. Used for fix move variable AND interior_mobile subtract.
-  - `poly_top_s` / `poly_bot_s`: backbone only (type 1), outermost track_frac=0.01 — COM tracking.
-  - `interior_mobile`: subtract all_mobile poly_top_grad poly_bot_grad — gets NVT in Phase 2 and 3.
-- **Velocity variables**: `vshear`, `neg_vshear`, `exp_k` (=3.0), `exp_k_m1` (=exp(3)−1≈19.086). Atom-style: `vx_top_grad`, `vx_bot_grad` (exponential profile), `zero_v` (=0.0, for vy and vz prescription).
-- **Strain measurement**: `gel_strain_cm = (xcm_top_x − xcm_bot_x − xcm_sep_0) / gel_thick`. With 15% zone and k=3, tracking atoms (outermost 1%) get v ≈ 0.81–1.0×vshear → gel_strain_cm ≈ 0.9×target at Phase 2 end. **G uses measured gel_strain_cm as γ** (not target_strain_xz).
-- **Phase 2 momentum control** (two separate fixes):
-  - `fix mom_lin all_mobile momentum 100 linear 1 1 1` — zeros linear COM drift for entire system. Gradient atoms have slightly different counts (28319 top vs 28530 bottom) causing slow +x drift if not corrected. `fix move variable` overrides gradient vx each step so correction only sticks on interior atoms, but prevents accumulation.
-  - `fix mom_rot interior_mobile momentum 100 angular` — removes spurious rotation from interior only. Applying angular to all_mobile would remove the shear-flow angular momentum from the gradient zone and fight the prescribed profile.
-- **Phase 3 boundary condition**: `fix hold_top/hold_bot` (`fix move linear 0 0 0`) on poly_top_grad and poly_bot_grad. Interior atoms respond freely → mechanical equilibrium.
-- **Pair style**: WCA (`lj/cut 1.122`); **Bond coeffs**: `30.0 1.5 1.0 1.0` (Kremer-Grest FENE)
-- **Parameters to tune**: `target_strain_xz` (0.10), `shear_frac` (0.15), `nsteps_shear` (285000)
-- **Gel thickness**: gel_thick ≈ 111σ (confirmed from log: `gel_lz_rg = 111.4σ`). Much larger than initial ~13σ estimate.
-- **Triclinic setup**: `change_box all triclinic` before any dump (LAMMPS restriction). z-binning requires `units reduced`.
+- **Input data file**: isolated gel WITH attached shear plates, produced by `scripts/add_plates_to_gel.py`.
+- **Atom types**: 1=polymer, 2=crosslinker, 3=solvent, 4=plate
+- **Bond types**: 1=FENE (polymer-polymer), 2=harmonic k=30 r0=1 (plate-polymer)
+- **3 phases**: (1) NVT equilibration (plates frozen) → (2) plate-driven shear → (3) plates frozen at final position + NVT production → G = ⟨σ_p_xz⟩ / gel_strain_cm_final
+- **Shear method** (CURRENT, as of 2026-04-20): **`fix move linear ±vshear 0 0`** on `plate_top` / `plate_bot`. Top plate: +vshear, bottom: −vshear. Plates translate purely in x (vy=vz=0 always → no rotation possible). Harmonic bonds (type 2) transmit shear from plate → surface polymer → interior network via FENE. No velocity-gradient zone, no group-limit issues.
+- **Why plate approach** (all earlier polymer-driven methods abandoned):
+  - Hard fix move on polymer (FAILED 3×): FENE failure at driven/interior boundary (driven atom velocity reset each step → monotonic bond stretch).
+  - Linear gradient 30% (FAILED ~330k steps): Δv at inner boundary still too large.
+  - Exponential gradient k=3, 15%, fix move variable vx+vy+vz=0 (FAILED ~200k): xz-rotation eliminated but FENE still failed — root cause unclear, possibly cumulative.
+  - `fix deform remap x` (FAILED): COM strain saturates at ~45% of target.
+  - `change_box` instantaneous (FAILED): solvent film causes gel to translate, not shear.
+  - **Plate approach**: plate atoms (type 4) driven; FENE bonds are only between polymer atoms; harmonic bonds (no max extension) transmit plate motion to surface polymer; distributed gel shear is safe at 10% target strain.
+- **add_plates_to_gel.py**: `scripts/add_plates_to_gel.py`. Square lattice, spacing 1.5σ. Plate offset 0.5σ from polymer surface. Each plate atom bonded (harmonic) to nearest polymer atom within 2.5σ cutoff (~96% bonding rate). Output: 4 atom types, 2 bond types. ~2312 plate atoms per data file.
+- **Group structure**: `polymer` (1,2), `backbone` (1), `solvent` (3), `gel` (1,2,3), `plate` (4), `plate_top`/`plate_bot` (type 4, split at box zmid), `poly_top_s`/`poly_bot_s` (backbone, outermost 1%).
+- **Strain measurement**: `gel_strain_cm = (xcm_top_x − xcm_bot_x − xcm_sep_0) / gel_thick`. Tracking groups (poly_top_s/bot_s) are outermost 1% of polymer backbone — they follow the plate via harmonic bonds → gel_strain_cm ≈ target at Phase 2 end.
+- **Phase 1**: `fix freeze_plates_1 plate move linear 0 0 0` + `fix nvt_equil gel nvt` + `fix mom_equil gel momentum linear`. NVT (not NPT) because plates define z-boundaries — NPT would push gel into plate.
+- **Phase 2 momentum**: `fix mom_lin gel momentum 100 linear 1 1 1` + `fix mom_rot gel momentum 100 angular`. Both applied to gel only (plates have prescribed velocity, unaffected).
+- **Phase 3**: `fix freeze_top/bot plate_top/bot move linear 0 0 0` + `fix nvt_prod gel nvt` + `fix mom_prod gel momentum linear angular`.
+- **Bond style**: `bond_style hybrid fene harmonic`; `bond_coeff 1 fene 30.0 1.5 1.0 1.0`; `bond_coeff 2 harmonic 30.0 1.0`
+- **Pair style**: WCA for all pairs including plate (lj/cut 1.122, ε=1, σ=1)
+- **Gel thickness**: gel_thick ≈ 109σ (rho04 dataset, surface-to-surface)
+- **Triclinic setup**: `change_box all triclinic` before any dump (LAMMPS restriction).
 - **Output frequencies**: `thermo_freq=10000`, `stress_freq=5000`, `num_stress_curves=10`
-- **Stress outputs**:
-  - `stress_tensor_polymer/solvent_*.dat`: box-integrated 6-component tensor vs time (key for G); xz is col 5 (1-indexed)
+- **Stress outputs** (same columns as before):
+  - `stress_tensor_polymer/solvent_*.dat`: box-integrated 6-component tensor vs time; xz is col 5
   - `stress_profile_z_polymer/solvent_*.dat`: z-binned 6-component profile
-  - `shear_strain_*.dat`: **4 columns**: step, gel_lz_initial, gel_thick, gel_strain_cm
-  - `box_dimensions_*.dat`: step lx ly lz xy xz yz (xz=0 throughout — box stays orthogonal)
+  - `shear_strain_*.dat`: step, gel_lz_initial, gel_thick, gel_strain_cm
+  - `box_dimensions_*.dat`: step lx ly lz xy xz yz
   - `gel_dimensions_rg_*.dat`: step lx_rg ly_rg lz_rg
-- **G extraction**: G = ⟨stress_p_xz⟩ / gel_strain_cm_final (from shear_strain_*.dat last value)
-- **Optimal node count**: 1–2 nodes on Bridges-2/Expanse (~165k atoms). Rule: ≥1000 atoms/MPI task.
+- **G extraction**: G = ⟨stress_p_xz⟩ / gel_strain_cm_final
+- **Optimal node count**: 1–2 nodes on Bridges-2/Expanse (~168k atoms). Rule: ≥1000 atoms/MPI task.
 - **IMPORTANT**: `slab_elongation/` folder still exists — delete manually after verifying shear_slab works
 
 ## Active Tasks / Open Questions
 
+- [ ] Run `add_plates_to_gel.py` on each isolated gel data file to generate `*_with_plates.data`
 - [ ] Run shear_slab on 1–2 nodes (not 4 — too small a system) and copy output to `flow_data_local/`
 - [ ] Create `shear_modulus_analysis.ipynb` once first results are in
 - [ ] Verify G decreases with decreasing crosslink density (rho02 → rho08 series)
@@ -283,4 +278,5 @@ Optionally prepend `git pull` to `run_lammps.sh` / `run_lammps_bridges.sh` so it
   variable vx_top_grad atom "v_vshear * (z - v_grad_top_zlo) / v_grad_thick"
   fix move_top_grad poly_top_grad move variable NULL NULL NULL v_vx_top_grad NULL NULL
   ```
-- *2026-04-20*: **Gradient zone rotation fixed — vz=0 and vy=0 added to fix move variable** — Gradient zone atoms were rotating in the xz plane (up on the left, down on the right for the top layer) during Phase 2. Root cause: `fix move variable NULL NULL NULL v_vx_top_grad NULL NULL` prescribed only vx; vy and vz were free. FENE z-forces from the sheared interior created a net torque on the gradient zone — same problem that `fix move linear v=(vshear,0,0)` avoided by implicitly setting vz=0. Fix: add `variable zero_v atom 0.0` and update both gradient fixes to `NULL NULL NULL v_vx_top_grad v_zero_v v_zero_v`. This makes the gradient zone act as a true rheometer plate: slides purely horizontally in x, no out-of-plane displacement. Interior atoms remain free to adjust z-positions → FENE bonds equilibrate normally.
+- *2026-04-20*: **Gradient zone rotation — diagnosed and abandoned entire approach** — Even with vz=vy=0 added to `fix move variable` (to prevent rotation), the exponential gradient approach failed with FENE errors around step ~120k-200k. The gradient zone rotation was from free vz; fixing it via `v_zero_v` eliminated rotation but FENE failures persisted from a different mechanism. Decision: abandon all polymer-driven gradient approaches and switch to the **plate-driven approach** (see below).
+- *2026-04-20*: **Switched to plate-driven shear** — Created `scripts/add_plates_to_gel.py` which adds rigid graphene-like plates (atom type 4, square lattice spacing 1.5σ) to the top/bottom of the isolated gel. Each plate atom is bonded to the nearest surface polymer via a harmonic bond (k=30, r0=1σ, no max extension). `shear_slab.lmp` completely rewritten: Phase 1 NVT with plates frozen; Phase 2 `fix move linear ±vshear 0 0` on plate groups; Phase 3 plates frozen + NVT production. Bond style changed to `hybrid fene harmonic`. This approach eliminates the driven/interior FENE interface entirely: plate atoms (type 4) are driven; all FENE bonds are between polymer atoms only; harmonic bonds transmit shear to surface polymer; distributed gel strain ~0.09% per bond at 10% target strain — far below FENE limit.
