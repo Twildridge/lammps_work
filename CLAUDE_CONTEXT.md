@@ -34,7 +34,7 @@ Coarse-grained molecular dynamics simulations of **tetrahedral hydrogel slabs** 
 
 3. **Calculate M (longitudinal modulus)**
    - ✅ Done: Found from network stress (polymer partial stress)
-   - Script: `scripts/longitudinal_modulus_analysis.ipynb`
+   - Script: `scripts/compression_analysis.ipynb`
 
 4. **Calculate G (shear modulus)** ← *CURRENT FOCUS*
    - Method: Shear the simulation box (xz plane) and record gel stresses
@@ -42,7 +42,7 @@ Coarse-grained molecular dynamics simulations of **tetrahedral hydrogel slabs** 
    - Simulation script: `simulations/shear_slab/shear_slab.lmp` (created 2026-04-15)
    - Input: isolated swollen gel from `isolate_gel.ipynb` → `lammps_data/input_data/`
    - G = σ_xz / γ_xz from Phase 3 time-averaged stress tensor
-   - Still need: run shear_slab, write shear_modulus_analysis.ipynb
+   - Still need: run shear_slab, write `scripts/shear_modulus_analysis.ipynb`
 
 5. **Run permeation simulations**
    - Add reservoir pressure measurements to find ΔP
@@ -62,18 +62,20 @@ lammps/                          ← workspace root (synced to MacBook via iClou
 │   ├── simulations/
 │   │   ├── slab_with_support/   ← equilibration/compression sims
 │   │   ├── slab_with_flow/      ← permeation + compression sims (slab_with_flow.lmp)
-│   │   ├── shear_slab/          ← shear modulus sims (renamed from slab_elongation)
-│   │   │   ├── shear_slab.lmp   ← xz shear sim; 3 phases: NPT + shear + NVT production
+│   │   ├── shear_slab/          ← shear modulus sims
+│   │   │   ├── shear_slab.lmp   ← xz shear sim; 3 phases: NVT + shear + NVT production
 │   │   │   └── shear_slab.batch ← Bridges-2 batch script
-│   │   ├── slab_elongation/     ← OLD (uniaxial elongation); keep or delete manually
 │   │   ├── polymer_phase/
 │   │   ├── polymer_pure/
 │   │   ├── solvent_phase/
 │   │   └── solvent_pure/
 │   ├── scripts/
-│   │   ├── longitudinal_modulus_analysis.ipynb   ← M calculation (done)
-│   │   ├── flow_poroelasticity_analysis.ipynb    ← permeation analysis
-│   │   ├── add_walls_to_slab.ipynb               ← data file builder
+│   │   ├── compression_analysis.ipynb    ← M, Dc, pore pressure, volume fractions
+│   │   ├── permeation_analysis.ipynb     ← flow profiles, pore pressure evolution (future)
+│   │   ├── shear_modulus_analysis.ipynb  ← G from shear stress (to create once data exists)
+│   │   ├── add_plates_to_gel.py          ← builds *_with_plates.data for shear_slab
+│   │   ├── add_plates_to_gel.ipynb
+│   │   ├── add_walls_to_slab.ipynb
 │   │   ├── add_walls_with_angles.ipynb
 │   │   ├── slab_with_support.ipynb
 │   │   ├── slab_with_support_angled.ipynb
@@ -84,26 +86,63 @@ lammps/                          ← workspace root (synced to MacBook via iClou
 │   │   ├── plot_lammps_log.py
 │   │   ├── plot_stress_profiles.py
 │   │   ├── plot_piston_data.py
+│   │   ├── git_sync.sh
 │   │   ├── run_lammps.sh / run_lammps_pod.sh / run_lammps_bridges.sh
 │   │   └── write_tracking.py
 │   ├── lammps_data/             ← small data files (in repo)
-│   ├── README.md                ← workflow documentation
-│   ├── expanse_lammps_guide.md  ← cluster-specific guide
-│   ├── slab_data_file_info.md   ← data file specs log
-│   ├── documenting_pod_runs.md  ← HPC performance notes
+│   ├── .gitattributes           ← strips notebook outputs before git commit (nbstripout)
+│   ├── README.md
+│   ├── expanse_lammps_guide.md
+│   ├── slab_data_file_info.md
+│   ├── documenting_pod_runs.md
 │   ├── lj_units_cheat_sheet.md
-│   ├── git_setup_instructions.md
-│   └── tracking.txt             ← legacy performance log (not actively used)
+│   └── git_setup_instructions.md
 │
 ├── flow_data_local/             ← local copy of HPC output (NOT in git)
-│   ├── partial_stress_data/     ← .dat files: stress_x/y/z_polymer/solvent, strain, piston
-│   └── flow_plots/              ← output plots from analysis notebooks
+│   ├── compression/             ← slab_with_flow compression_mode=1 output
+│   │   ├── rho04_p1.5_600k_2M/ ← canonical run (P*=1.5, current)
+│   │   ├── rho04_500k_2M/      ← older run (P*=1.0)
+│   │   └── rho04_p1.05_15M_10M/← oldest run
+│   ├── shear/                   ← shear_slab output (future)
+│   │   └── <RUN_ID>/
+│   ├── permeation/              ← slab_with_flow compression_mode=0 output (future)
+│   │   └── <RUN_ID>/
+│   ├── plots/                   ← auto-saved analysis plots
+│   │   ├── compression/<RUN_ID>/
+│   │   ├── shear/<RUN_ID>/
+│   │   └── permeation/<RUN_ID>/
+│   └── traj_files.nosync/       ← large .lammpstrj files (iCloud nosync)
 │
 ├── lammps_data_files_local/     ← large .data files (NOT in git, local only)
 │
 ├── add_walls_to_slab.ipynb      ← (root-level, older versions)
 └── slab_with_support_4.ipynb
 ```
+
+## Analysis Notebook CONFIG Pattern
+
+Every analysis notebook has a config cell (cell 3) at the top — **only these two lines change between runs:**
+
+```python
+RUN_ID   = "rho04_p1.5_600k_2M"   # folder name inside flow_data_local/<sim_type>/
+sim_name = "walled_slab_support_5beads_tall_rho04_p1.5_..."  # LAMMPS file prefix
+```
+
+Path variables are then derived automatically:
+- `DATA_DIR`  = `../../flow_data_local/<sim_type>/<RUN_ID>/`  (input .dat files)
+- `PLOT_DIR`  = `../../flow_data_local/plots/<sim_type>/<RUN_ID>/`  (auto-created)
+- `TRAJ_FILE` = `../../flow_data_local/traj_files.nosync/gel_flow_<sim_name>.lammpstrj`
+
+## nbstripout (notebook output stripping)
+
+Notebook outputs are automatically stripped before every git commit via `nbstripout`.
+One-time setup on each machine:
+```bash
+pip install nbstripout
+cd ~/docs/grad_research/lammps/lammps_work
+nbstripout --install
+```
+The `.gitattributes` file in the repo root ensures the rule is applied everywhere.
 
 ---
 

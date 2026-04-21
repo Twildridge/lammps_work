@@ -1,0 +1,4 @@
+# Strip Jupyter notebook outputs before every commit.
+# On each machine: pip install nbstripout && nbstripout --install
+*.ipynb filter=nbstripout
+*.ipynb diff=ipynb
