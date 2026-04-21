@@ -115,15 +115,17 @@ group solvent    type 3
 group gel        type 1 2 3      # all mobile gel atoms (NVT target)
 group plate      type 4          # all plate atoms
 
-# Top/bottom plate by z-position (box midplane)
-# Evaluated AFTER read_data so EDGE reflects actual box bounds.
-# Using zlo/zhi of the full box; midplane is (zlo+zhi)/2.
+# Top/bottom plate by z-position (box midplane).
+# group intersect takes GROUP IDs — must create intermediate groups from regions first,
+# then intersect with the plate type group.
 variable zmid equal 0.5*(zlo+zhi)
-region reg_plate_top block EDGE EDGE EDGE EDGE ${zmid} EDGE units box
-region reg_plate_bot block EDGE EDGE EDGE EDGE EDGE ${zmid} units box
+region reg_plate_top block EDGE EDGE EDGE EDGE ${zmid} EDGE  units box
+region reg_plate_bot block EDGE EDGE EDGE EDGE EDGE  ${zmid} units box
 
-group plate_top intersect plate reg_plate_top
-group plate_bot intersect plate reg_plate_bot
+group all_top_z  region reg_plate_top   # all atoms above zmid (any type)
+group all_bot_z  region reg_plate_bot   # all atoms below zmid (any type)
+group plate_top  intersect plate all_top_z
+group plate_bot  intersect plate all_bot_z
 
 print ">>> plate_top: $(count(plate_top))  plate_bot: $(count(plate_bot))"
 
