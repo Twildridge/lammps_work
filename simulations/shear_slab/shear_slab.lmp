@@ -246,11 +246,13 @@ variable track_frac    equal 0.01
 variable top_track_zlo equal $(v_gel_zhi - v_track_frac * v_gel_thick)
 variable bot_track_zhi equal $(v_gel_zlo + v_track_frac * v_gel_thick)
 
-region reg_track_top block EDGE EDGE EDGE EDGE ${top_track_zlo} ${gel_zhi}      units box
+region reg_track_top block EDGE EDGE EDGE EDGE ${top_track_zlo} ${gel_zhi}       units box
 region reg_track_bot block EDGE EDGE EDGE EDGE ${gel_zlo}       ${bot_track_zhi} units box
 
-group poly_top_s intersect backbone reg_track_top
-group poly_bot_s intersect backbone reg_track_bot
+group all_track_top region reg_track_top
+group all_track_bot region reg_track_bot
+group poly_top_s intersect backbone all_track_top
+group poly_bot_s intersect backbone all_track_bot
 
 compute xcm_top poly_top_s com
 compute xcm_bot poly_bot_s com
