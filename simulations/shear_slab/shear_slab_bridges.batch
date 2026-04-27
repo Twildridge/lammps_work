@@ -47,7 +47,7 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 #   Phase 3 (production): NSTEPS (set here)
 # -----------------------------------------------------------------------
 FOLDER="shear_slab"
-DATANAME="isolated_slab_support_5beads_tall_rho04_1.0_1.0_500000_polymer_only_1.0_0.0_100000"
+DATANAME="isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_with_plates"
 INTERACTION="1.0_0.0"   # epsSS_epsSP (solvent-solvent _ polymer-solvent)
 NSTEPS=500000
 OLDSTEPS=0              # Set to 0 for fresh run, or previous totsteps for continuation
