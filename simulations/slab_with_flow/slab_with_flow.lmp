@@ -247,15 +247,28 @@ dump traj_setup gel_system custom ${dump_freq_setup} &
 
 
 # ==========================================================================
-#         PHASE 1: BRIEF Z-NPT TO EQUILIBRATE PRESSURE AFTER WALL INSERTION
+#         PHASE 1: BRIEF ISOTROPIC NPT TO EQUILIBRATE PRESSURE AFTER WALL INSERTION
 # ==========================================================================
-# The data file includes support/piston atoms not present during equilibration,
-# which shifts the instantaneous pressure slightly.  A short z-only NPT lets
-# the box z-dimension (and mobile atom positions) relax to the target pressure
-# before any mode-dependent equilibration or production.
-# Rigid bodies (support, piston) scale with the box as rigid units.
+# The data file includes support/piston/wall atoms not present during equilibration,
+# which shifts the instantaneous pressure.  A short isotropic NPT lets the box
+# shrink uniformly (x, y, z) to the target pressure.
+#
+# fix rigid overrides atom positions every step, fighting NPT's dilate-all
+# box rescaling.  We temporarily replace rigid_walls and rigid_support with
+# setforce 0 0 0 + fix nve so their positions are carried by the box scaling
+# but they exert no net force on themselves.  After npt_pre we restore the
+# rigid fixes.
 
-# Full 3D NVT equilibration
+# --- Temporarily release rigid constraints so box scaling can move walls/support ---
+unfix rigid_walls
+unfix rigid_support
+
+fix freeze_walls   walls   setforce 0.0 0.0 0.0
+fix freeze_support support setforce 0.0 0.0 0.0
+fix nve_walls      walls   nve
+fix nve_support    support nve
+
+# Full 3D NVT equilibration (walls/support now move passively with box)
 fix nvt_equil mobile nvt temp ${temp_target} ${temp_target} 1.0
 
 if "${compression_mode} == 0" then "run ${perm_setup_freq}"
@@ -265,13 +278,28 @@ print ">>> Post-equilibration T = $(c_mobile_temp)"
 
 unfix nvt_equil
 
-
+# Isotropic NPT — all three box dimensions rescale together so the gel+solvent
+# compression is physically uniform (not z-only).
+# P_damp = 2.0 (= 400 dt) is short enough for fast re-equilibration here.
 fix npt_pre mobile npt temp ${temp_target} ${temp_target} 1.0 &
-    z ${P_target} ${P_target} 2.0
+    x ${P_target} ${P_target} 50.0 &
+    y ${P_target} ${P_target} 50.0 &
+    z ${P_target} ${P_target} 50.0
 run 50000
 unfix npt_pre
 
-print ">>> Post-pressure-equilibration T = $(c_mobile_temp)  Pz = $(pzz)"
+print ">>> Post-pressure-equilibration T = $(c_mobile_temp)  Press = $(press)"
+
+# --- Restore rigid constraints ---
+unfix freeze_walls
+unfix freeze_support
+unfix nve_walls
+unfix nve_support
+
+velocity walls   set 0.0 0.0 0.0
+velocity support set 0.0 0.0 0.0
+fix rigid_walls   walls   rigid single force * off off off torque * off off off
+fix rigid_support support rigid single force * off off off torque * off off off
 
 undump traj_setup
 

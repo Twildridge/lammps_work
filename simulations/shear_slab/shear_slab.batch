@@ -38,9 +38,9 @@ module load python/3.8.12
 #   Phase 3 (production): NSTEPS (set here)
 # -----------------------------------------------------------------------
 FOLDER="shear_slab"
-DATANAME="isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000"
+DATANAME="isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_with_plates"
 INTERACTION="1.0_1.0"   # epsSS_epsSP (solvent-solvent _ polymer-solvent)
-NSTEPS=100000
+NSTEPS=2000000
 OLDSTEPS=0              # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""                 # Options: stress, volume, stressvol, or leave empty
 
