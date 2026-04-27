@@ -55,7 +55,7 @@ variable comp_percent    equal 0.1      # strain threshold for compression halt
 
 # ----- Output Frequencies -----
 variable thermo_freq     equal 10000 # 2000  # 250000
-variable dump_freq_setup equal 1000      # frequent dumps during Phase 1
+variable dump_freq_setup equal 10000      # frequent dumps during Phase 1
 variable dump_freq_prod  equal 10000 # 5000 # 100000     # sparse dumps during Phase 2
 variable volume_freq     equal 5000 # 1000 # 5000
 
@@ -282,9 +282,9 @@ unfix nvt_equil
 # compression is physically uniform (not z-only).
 # P_damp = 2.0 (= 400 dt) is short enough for fast re-equilibration here.
 fix npt_pre mobile npt temp ${temp_target} ${temp_target} 1.0 &
-    x ${P_target} ${P_target} 50.0 &
-    y ${P_target} ${P_target} 50.0 &
-    z ${P_target} ${P_target} 50.0
+    x ${P_target} ${P_target} 100.0 &
+    y ${P_target} ${P_target} 100.0 &
+    z ${P_target} ${P_target} 100.0
 run 50000
 unfix npt_pre
 
