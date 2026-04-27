@@ -4,8 +4,8 @@
 # Bond types:  1=FENE (polymer-polymer), 2=harmonic (plate-polymer, k=30, r0=1)
 #
 # Shear method: fix move linear on plate atoms.
-#   Top plate: vx = +vshear   Bottom plate: vx = -vshear
-#   Plates move only in x (vy=vz=0) — no rotation possible.
+#   Right plate (+x face): vz = +vshear   Left plate (-x face): vz = -vshear
+#   Plates move only in z (vx=vy=0) — no rotation possible.
 #   Plate atoms are bonded (harmonic) to surface polymer → gel shears internally.
 #   No velocity-gradient zone, no exponential profile, no group-limit issues.
 #
@@ -27,7 +27,7 @@
 #   stress_data/stress_tensor_solvent_*.dat   6-component solvent stress vs time
 #   stress_data/stress_profile_z_polymer_*.dat z-binned polymer stress
 #   stress_data/stress_profile_z_solvent_*.dat z-binned solvent stress
-#   stress_data/shear_strain_*.dat            step  gel_lz_initial  gel_thick  gel_strain_cm
+#   stress_data/shear_strain_*.dat            step  gel_lz_initial  gel_gap  gel_strain_cm
 #   volume_data/gel_dimensions_rg_*.dat       Rg-based gel dimensions
 #   volume_data/box_dimensions_*.dat          box dims vs step
 #   volume_data/polymer_com_*.dat             polymer COM vs step
@@ -115,19 +115,19 @@ group solvent    type 3
 group gel        type 1 2 3      # all mobile gel atoms (NVT target)
 group plate      type 4          # all plate atoms
 
-# Top/bottom plate by z-position (box midplane).
+# Right/left plate by x-position (box midplane).
 # group intersect takes GROUP IDs — must create intermediate groups from regions first,
 # then intersect with the plate type group.
-variable zmid equal 0.5*(zlo+zhi)
-region reg_plate_top block EDGE EDGE EDGE EDGE ${zmid} EDGE  units box
-region reg_plate_bot block EDGE EDGE EDGE EDGE EDGE  ${zmid} units box
+variable xmid equal 0.5*(xlo+xhi)
+region reg_plate_right block ${xmid} EDGE EDGE EDGE EDGE EDGE  units box
+region reg_plate_left  block EDGE  ${xmid} EDGE EDGE EDGE EDGE units box
 
-group all_top_z  region reg_plate_top   # all atoms above zmid (any type)
-group all_bot_z  region reg_plate_bot   # all atoms below zmid (any type)
-group plate_top  intersect plate all_top_z
-group plate_bot  intersect plate all_bot_z
+group all_right_x  region reg_plate_right   # all atoms right of xmid (any type)
+group all_left_x   region reg_plate_left    # all atoms left  of xmid (any type)
+group plate_right  intersect plate all_right_x
+group plate_left   intersect plate all_left_x
 
-print ">>> plate_top: $(count(plate_top))  plate_bot: $(count(plate_bot))"
+print ">>> plate_right: $(count(plate_right))  plate_left: $(count(plate_left))"
 
 
 # ==========================================================================
@@ -185,6 +185,7 @@ reset_timestep 0
 timestep ${timestep_prod}
 
 # Triclinic needed for any later use (LAMMPS restriction: before any dump)
+# Box stays orthogonal and fixed in x — plates define the x boundaries.
 change_box all triclinic
 
 dump traj_setup gel custom ${dump_freq_setup} &
@@ -212,8 +213,8 @@ print ">>> Box after Phase 1: $(lx) x $(ly) x $(lz)"
 # ==========================================================================
 
 compute polymer_com polymer com
-compute minz        polymer reduce min z
-compute maxz        polymer reduce max z
+compute minx        polymer reduce min x
+compute maxx        polymer reduce max x
 compute rg_tensor   polymer gyration
 
 variable gel_lx_rg equal 2.0*sqrt(3.0*c_rg_tensor[1])
@@ -223,14 +224,14 @@ variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
 
 run 0
 
-variable gel_zlo      equal $(c_minz)
-variable gel_zhi      equal $(c_maxz)
-variable gel_thick    equal $(v_gel_zhi - v_gel_zlo)
-variable gel_lz_initial equal $(v_gel_lz_rg)
+variable gel_xlo      equal $(c_minx)
+variable gel_xhi      equal $(c_maxx)
+variable gel_gap      equal $(v_gel_xhi - v_gel_xlo)   # gap direction (x)
+variable gel_lz_initial equal $(v_gel_lz_rg)            # long axis reference (z)
 
-print ">>> Gel z-extent: ${gel_zlo} to ${gel_zhi}  (thick = ${gel_thick} σ)"
+print ">>> Gel x-extent: ${gel_xlo} to ${gel_xhi}  (gap = ${gel_gap} σ)"
 print ">>> Gel Rg dims: $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
-print ">>> gel_lz_initial (Rg): ${gel_lz_initial}"
+print ">>> gel_lz_initial (Rg, long axis): ${gel_lz_initial}"
 
 # Rg half-widths (for spatial analysis region sizing)
 variable eps   equal 1.0e-12
@@ -241,34 +242,36 @@ variable hw_x equal v_region_frac*v_rg_scale*sqrt(v_Rg_xx + v_eps)
 variable hw_y equal v_region_frac*v_rg_scale*sqrt(v_Rg_yy + v_eps)
 variable hw_z equal v_region_frac*v_rg_scale*sqrt(v_Rg_zz + v_eps)
 
-# COM tracking groups — outermost 1% of polymer for gel_strain_cm
-variable track_frac    equal 0.01
-variable top_track_zlo equal $(v_gel_zhi - v_track_frac * v_gel_thick)
-variable bot_track_zhi equal $(v_gel_zlo + v_track_frac * v_gel_thick)
+# COM tracking groups — outermost 1% of polymer (in x) for gel_strain_cm
+# Strain = (z-COM_right - z-COM_left - zcm_sep_0) / gel_gap
+# i.e., how far the right and left polymer surfaces have displaced in z
+variable track_frac      equal 0.01
+variable right_track_xlo equal $(v_gel_xhi - v_track_frac * v_gel_gap)
+variable left_track_xhi  equal $(v_gel_xlo + v_track_frac * v_gel_gap)
 
-region reg_track_top block EDGE EDGE EDGE EDGE ${top_track_zlo} ${gel_zhi}       units box
-region reg_track_bot block EDGE EDGE EDGE EDGE ${gel_zlo}       ${bot_track_zhi} units box
+region reg_track_right block ${right_track_xlo} ${gel_xhi} EDGE EDGE EDGE EDGE units box
+region reg_track_left  block ${gel_xlo} ${left_track_xhi}  EDGE EDGE EDGE EDGE units box
 
-group all_track_top region reg_track_top
-group all_track_bot region reg_track_bot
-group poly_top_s intersect backbone all_track_top
-group poly_bot_s intersect backbone all_track_bot
+group all_track_right region reg_track_right
+group all_track_left  region reg_track_left
+group poly_right_s intersect backbone all_track_right
+group poly_left_s  intersect backbone all_track_left
 
-compute xcm_top poly_top_s com
-compute xcm_bot poly_bot_s com
+compute zcm_right poly_right_s com
+compute zcm_left  poly_left_s  com
 
 run 0
 
-variable xcm_sep_0 equal $(c_xcm_top[1] - c_xcm_bot[1])
-variable gel_strain_cm equal (c_xcm_top[1] - c_xcm_bot[1] - v_xcm_sep_0) / v_gel_thick
+variable zcm_sep_0    equal $(c_zcm_right[3] - c_zcm_left[3])
+variable gel_strain_cm equal (c_zcm_right[3] - c_zcm_left[3] - v_zcm_sep_0) / v_gel_gap
 
-print ">>> xcm_sep_0 (x-COM top-bot, t=0): ${xcm_sep_0}"
-print ">>> poly_top_s: $(count(poly_top_s))  poly_bot_s: $(count(poly_bot_s))"
+print ">>> zcm_sep_0 (z-COM right-left, t=0): ${zcm_sep_0}"
+print ">>> poly_right_s: $(count(poly_right_s))  poly_left_s: $(count(poly_left_s))"
 
 # Plate velocity for target strain:
-#   vshear = target_strain * gel_thick / (2 * nsteps_shear * dt)
-# Both plates contribute equally; gel_thick is the polymer extent.
-variable vshear     equal $(v_target_strain_xz * v_gel_thick / (2.0 * v_nsteps_shear * v_timestep_prod))
+#   vshear = target_strain * gel_gap / (2 * nsteps_shear * dt)
+# Both plates contribute equally; gel_gap is the polymer x-extent (gap direction).
+variable vshear     equal $(v_target_strain_xz * v_gel_gap / (2.0 * v_nsteps_shear * v_timestep_prod))
 variable neg_vshear equal -v_vshear
 print ">>> vshear = ${vshear} σ/τ"
 
@@ -284,19 +287,19 @@ print ">>> vshear = ${vshear} σ/τ"
 
 print "========================================"
 print "Phase 2: Plate-driven shear (${nsteps_shear} steps)"
-print "  Top plate: vx = +${vshear}   Bottom plate: vx = -${vshear}"
+print "  Right plate (+x): vz = +${vshear}   Left plate (-x): vz = -${vshear}"
 print "  Box stays ORTHOGONAL (xz = 0)"
 print "========================================"
 
-fix drive_top  plate_top move linear  ${vshear} 0 0
-fix drive_bot  plate_bot move linear  ${neg_vshear} 0 0
+fix drive_right  plate_right move linear  0 0  ${vshear}
+fix drive_left   plate_left  move linear  0 0  ${neg_vshear}
 fix nvt_shear  gel       nvt  temp ${temp_target} ${temp_target} 1.0
 fix mom_lin    gel       momentum 100 linear 1 1 1
 fix mom_rot    gel       momentum 100 angular
 
-# Columns: step  gel_lz_initial  gel_thick  gel_strain_cm
+# Columns: step  gel_lz_initial  gel_gap  gel_strain_cm
 fix out_shear_strain all print ${stress_freq} &
-    "$(step) ${gel_lz_initial} ${gel_thick} $(v_gel_strain_cm)" &
+    "$(step) ${gel_lz_initial} ${gel_gap} $(v_gel_strain_cm)" &
     file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
 
 run ${nsteps_shear}
@@ -305,13 +308,13 @@ unfix out_shear_strain
 unfix mom_rot
 unfix mom_lin
 unfix nvt_shear
-unfix drive_bot
-unfix drive_top
+unfix drive_left
+unfix drive_right
 undump traj_setup
 
 print ">>> Phase 2 complete"
 print ">>>   gel_strain_cm = $(v_gel_strain_cm)  (target: ${target_strain_xz})"
-print ">>>   G = <sigma_p_xz> / $(v_gel_strain_cm)"
+print ">>>   G = <sigma_p_xz> / $(v_gel_strain_cm)  [gap=x, shear=z]"
 print ">>> Post-shear gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
 
 # Freeze Rg half-widths as constants (gel geometry now fixed)
@@ -395,8 +398,8 @@ print "  Plates frozen at Phase 2 final positions"
 print "  gel_strain_cm = $(v_gel_strain_cm)  (= γ for G)"
 print "========================================"
 
-fix freeze_top  plate_top move linear 0 0 0
-fix freeze_bot  plate_bot move linear 0 0 0
+fix freeze_right  plate_right move linear 0 0 0
+fix freeze_left   plate_left  move linear 0 0 0
 fix nvt_prod    gel       nvt  temp ${temp_target} ${temp_target} 1.0
 fix mom_prod    gel       momentum 100 linear 1 1 1 angular
 
@@ -468,13 +471,13 @@ run ${nsteps}
 undump traj_prod
 unfix mom_prod
 unfix nvt_prod
-unfix freeze_bot
-unfix freeze_top
+unfix freeze_left
+unfix freeze_right
 
 print "========================================"
 print "Shear slab simulation complete"
 print "  gel_strain_cm (γ for G): $(v_gel_strain_cm)  (target: ${target_strain_xz})"
-print "  gel_lz_initial: ${gel_lz_initial}  gel_thick: ${gel_thick}"
+print "  gel_lz_initial: ${gel_lz_initial}  gel_gap: ${gel_gap}"
 print "  Final box: $(lx) x $(ly) x $(lz)  xz = $(xz)"
 print "========================================"
 
