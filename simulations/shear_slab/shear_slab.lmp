@@ -188,11 +188,17 @@ timestep ${timestep_prod}
 # Box stays orthogonal and fixed in x — plates define the x boundaries.
 change_box all triclinic
 
-dump traj_setup gel custom ${dump_freq_setup} &
+dump traj_setup all custom ${dump_freq_setup} &
     traj_files/setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
     id type mol x y z
 
-minimize 1.0e-4 1.0e-6 500 5000
+# Freeze plates during minimize so only gel atoms relax around the plates.
+# setforce 0 0 0 zeroes forces on plate atoms (gradient = 0 → no movement).
+# Increased step budget (5000 / 50000) for a 170k-atom system.
+fix freeze_plates_min plate setforce 0.0 0.0 0.0
+velocity plate set 0.0 0.0 0.0
+minimize 1.0e-4 1.0e-6 5000 50000
+unfix freeze_plates_min
 
 fix freeze_plates_1 plate     move linear 0 0 0
 fix nvt_equil       gel       nvt temp ${temp_target} ${temp_target} 1.0
@@ -403,7 +409,7 @@ fix freeze_left   plate_left  move linear 0 0 0
 fix nvt_prod    gel       nvt  temp ${temp_target} ${temp_target} 1.0
 fix mom_prod    gel       momentum 100 linear 1 1 1 angular
 
-dump traj_prod gel custom ${dump_freq_prod} &
+dump traj_prod all custom ${dump_freq_prod} &
     traj_files/prod_${dataname}_${interaction}_${nsteps}.lammpstrj &
     id type mol x y z
 
