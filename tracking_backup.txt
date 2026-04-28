@@ -71,6 +71,7 @@ slab_support_5beads_tall_8_1.0_1.2_200000                              57.60    
 walled_slab_support_5beads_tall_3_1.5_1.4_20000000_1.5_1.4_50000       79.38      79.38      114.96     1482595    18:08
 final_config_slab_support_5beads_tall_rho02_1_1.0_1.0_1000000_solvent_only_1.0_0.0_100000 98.10      98.10      181.60     245401     18:25
 walled_slab_support_tall_angle_8_1.0_1.0_10000000_1.0_1.0_100000       77.08      77.08      132.44     1079019    21:16
+isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_with_plates_1.0_1.0_1000000 51.57      51.22      113.50     165922     21:56          
 walled_slab_support_5beads_tall_3_1.0_1.4_20000000_1.0_1.4_50000       81.46      81.46      117.98     1575670    22:14
 slab_support_tall_angle_2_1.0_0.9_500000                               66.00      66.00      92.00      496866     23:15
 slab_support_5beads_tall_6_1.0_1.2_250000                              52.80      52.80      117.40     392541     25:47
