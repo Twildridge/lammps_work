@@ -48,7 +48,8 @@ variable target_strain_xz equal 0.10
 # Phase lengths
 variable nsteps_npt    equal 50000    # Phase 1a: NPT — find equilibrium volume (plates frozen)
 variable nsteps_equil  equal 100000   # Phase 1b: NVT — equilibrate at NPT volume (plates frozen)
-variable nsteps_shear  equal 285000   # Phase 2: plate-driven shear
+variable nsteps_shear_base equal 285000   # reference for vshear calculation
+variable nsteps_shear      equal 570000   # 2× safety buffer — halt fires at target_strain
 # nsteps (Phase 3 production) from bash via -var nsteps
 
 # Output frequencies
@@ -300,25 +301,24 @@ variable gel_strain_cm equal (c_zcm_right[3] - c_zcm_left[3] - v_zcm_sep_0) / v_
 print ">>> zcm_sep_0 (z-COM right-left, t=0): ${zcm_sep_0}"
 print ">>> poly_right_s: $(count(poly_right_s))  poly_left_s: $(count(poly_left_s))"
 
-# Plate velocity for target strain:
-#   vshear = target_strain * gel_gap / (2 * nsteps_shear * dt)
-# Both plates contribute equally; gel_gap is the polymer x-extent (gap direction).
-variable vshear     equal $(v_target_strain_xz * v_gel_gap / (2.0 * v_nsteps_shear * v_timestep_prod))
+# Plate velocity: 1.1× the speed that would reach target_strain in nsteps_shear_base steps.
+# The run is capped by fix halt at target_strain, so nsteps_shear is just a safety buffer.
+#   vshear = 1.1 * target_strain * gel_gap / (2 * nsteps_shear_base * dt)
+variable vshear     equal $(v_target_strain_xz * v_gel_gap / (2.0 * v_nsteps_shear_base * v_timestep_prod) * 1.1)
 variable neg_vshear equal -v_vshear
-print ">>> vshear = ${vshear} σ/τ"
+print ">>> vshear = ${vshear} σ/τ  (1.1× base speed; halt fires at gel_strain_cm = ${target_strain_xz})"
 
 
 # ==========================================================================
 #              PHASE 2: SHEAR APPLICATION (Plate-Driven)
 # ==========================================================================
-# Top plate driven at +vshear, bottom at -vshear.
-# fix move linear prescribes vx=±vshear, vy=0, vz=0 every step — plates
-# translate purely in x, no rotation possible.
-# Gel (types 1,2,3) evolves freely under NVT.
-# Angular momentum of gel zeroed every 100 steps (rotation prevention).
+# Plates driven at ±vshear (1.1× base speed) in z.
+# fix halt stops the run as soon as gel_strain_cm >= target_strain_xz (10%).
+# nsteps_shear is a 2× safety buffer — the halt fires well before it runs out.
+# After the halt the script continues; plates are then frozen for Phase 3.
 
 print "========================================"
-print "Phase 2: Plate-driven shear (${nsteps_shear} steps)"
+print "Phase 2: Plate-driven shear (up to ${nsteps_shear} steps, halt at ${target_strain_xz})"
 print "  Right plate (+x): vz = +${vshear}   Left plate (-x): vz = -${vshear}"
 print "  Box stays ORTHOGONAL (xz = 0)"
 print "========================================"
@@ -334,8 +334,13 @@ fix out_shear_strain all print ${stress_freq} &
     "$(step) ${gel_lz_initial} ${gel_gap} $(v_gel_strain_cm)" &
     file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
 
+# Halt when target xz strain is reached (linear poroelasticity regime).
+# error continue: run exits cleanly; script proceeds to Phase 3.
+fix halt_shear all halt ${stress_freq} v_gel_strain_cm >= ${target_strain_xz} error continue
+
 run ${nsteps_shear}
 
+unfix halt_shear
 unfix out_shear_strain
 unfix mom_rot
 unfix mom_lin
