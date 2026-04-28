@@ -46,13 +46,8 @@ variable timestep_prod  equal 0.005
 variable target_strain_xz equal 0.10
 
 # Phase lengths
-<<<<<<< Updated upstream
-variable nsteps_equil  equal 100000    # Phase 1: NVT equilibration (plates frozen)
-variable nsteps_npt    equal 50000    # Phase 1a: NPT — find equilibrium volume (plates frozen)
-=======
 variable nsteps_npt    equal 50000    # Phase 1a: NPT — find equilibrium volume (plates frozen)
 variable nsteps_equil  equal 100000   # Phase 1b: NVT — equilibrate at NPT volume (plates frozen)
->>>>>>> Stashed changes
 variable nsteps_shear  equal 285000   # Phase 2: plate-driven shear
 # nsteps (Phase 3 production) from bash via -var nsteps
 
