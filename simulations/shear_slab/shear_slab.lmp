@@ -46,7 +46,11 @@ variable timestep_prod  equal 0.005
 variable target_strain_xz equal 0.10
 
 # Phase lengths
+<<<<<<< Updated upstream
 variable nsteps_equil  equal 100000    # Phase 1: NVT equilibration (plates frozen)
+=======
+variable nsteps_equil  equal 200000   # Phase 1: NPT equilibration (plates rigid, free in x)
+>>>>>>> Stashed changes
 variable nsteps_shear  equal 285000   # Phase 2: plate-driven shear
 # nsteps (Phase 3 production) from bash via -var nsteps
 
@@ -170,15 +174,24 @@ thermo ${thermo_freq}
 
 
 # ==========================================================================
-#              PHASE 1: NVT EQUILIBRATION (Plates Frozen)
+#              PHASE 1: NPT EQUILIBRATION (Plates Rigid, Free in x)
 # ==========================================================================
-# Plates are frozen in place; gel equilibrates via NVT.
-# Box stays orthogonal and fixed in z — plates define the z boundaries.
-# NVT (not NPT): plate positions are fixed, so changing box z would
-# create overlaps between gel and plates.
+# Each plate is treated as a single rigid body (fix rigid single):
+#   - Internal geometry is frozen → plate stays flat (yz-plane, normal to x).
+#   - torque disabled → no rotation; plate cannot tilt.
+#   - Full forces in x, y, z are still applied → WCA repulsion with gel works.
+#   - Plates are free to translate in x (and y/z, though bonds constrain them)
+#     so they can find the equilibrium gap width.
+#
+# Barostat (x only): only lx is adjusted to reach P_target. ly and lz are
+# held fixed so the plates (which tile the full y-z box face) always match
+# the periodic box dimensions exactly.
+#
+# This lets the gel + plate system reach P = P_target together, which equals
+# the gel pressure once the plates are in mechanical equilibrium.
 
 print "========================================"
-print "Phase 1: NVT equilibration (${nsteps_equil} steps, plates frozen)"
+print "Phase 1: NPT equilibration (${nsteps_equil} steps, plates rigid+free)"
 print "========================================"
 
 reset_timestep 0
@@ -200,15 +213,20 @@ velocity plate set 0.0 0.0 0.0
 minimize 1.0e-4 1.0e-6 5000 50000
 unfix freeze_plates_min
 
-fix freeze_plates_1 plate     move linear 0 0 0
-fix nvt_equil       gel       nvt temp ${temp_target} ${temp_target} 1.0
-fix mom_equil       gel       momentum 100 linear 1 1 1
+# Each plate as a single rigid body — flat (torque off) but free to slide in x.
+fix rigid_right plate_right rigid single torque 1 off off off
+fix rigid_left  plate_left  rigid single torque 1 off off off
+# NPT on gel: thermostat + x-only barostat (ly,lz stay fixed for plate tiling).
+fix npt_equil   gel         npt temp ${temp_target} ${temp_target} 1.0 &
+                                 x ${P_target} ${P_target} 10.0
+fix mom_equil   gel         momentum 100 linear 1 1 1
 
 run ${nsteps_equil}
 
 unfix mom_equil
-unfix nvt_equil
-unfix freeze_plates_1
+unfix npt_equil
+unfix rigid_left
+unfix rigid_right
 
 print ">>> Post-equilibration T = $(c_gel_temp)  P = $(press)"
 print ">>> Box after Phase 1: $(lx) x $(ly) x $(lz)"
