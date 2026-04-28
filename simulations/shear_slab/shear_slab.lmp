@@ -46,8 +46,13 @@ variable timestep_prod  equal 0.005
 variable target_strain_xz equal 0.10
 
 # Phase lengths
+<<<<<<< Updated upstream
 variable nsteps_equil  equal 100000    # Phase 1: NVT equilibration (plates frozen)
 variable nsteps_npt    equal 50000    # Phase 1a: NPT — find equilibrium volume (plates frozen)
+=======
+variable nsteps_npt    equal 50000    # Phase 1a: NPT — find equilibrium volume (plates frozen)
+variable nsteps_equil  equal 100000   # Phase 1b: NVT — equilibrate at NPT volume (plates frozen)
+>>>>>>> Stashed changes
 variable nsteps_shear  equal 285000   # Phase 2: plate-driven shear
 # nsteps (Phase 3 production) from bash via -var nsteps
 
@@ -356,56 +361,76 @@ variable hw_z equal $(v_hw_z)
 
 
 # ==========================================================================
+#                    BULK REGION (exclude 5σ near each plate)
+# ==========================================================================
+# Atoms within 5σ of either plate surface are bonded to the plate via
+# harmonic springs and carry artifactual constraint stresses. Exclude them
+# from all stress measurements so only the interior gel is sampled.
+
+variable xlo_bulk equal ${gel_xlo}+5.0
+variable xhi_bulk equal ${gel_xhi}-5.0
+variable bulk_lx  equal v_xhi_bulk-v_xlo_bulk       # x-extent of bulk region
+variable bulk_vol equal v_bulk_lx*ly*lz              # bulk volume (dynamic: ly,lz fixed post-NPT)
+region   reg_bulk block ${xlo_bulk} ${xhi_bulk} EDGE EDGE EDGE EDGE units box
+group    all_bulk  region reg_bulk
+group    poly_bulk intersect polymer all_bulk
+group    solv_bulk intersect solvent all_bulk
+print ">>> Bulk x-range: ${xlo_bulk} to ${xhi_bulk}  (bulk_lx = $(v_bulk_lx))"
+print ">>> bulk_vol = $(v_bulk_vol)"
+print ">>> poly_bulk: $(count(poly_bulk))  solv_bulk: $(count(solv_bulk))"
+
+
+# ==========================================================================
 #                    ANALYSIS: PARTIAL STRESSES
 # ==========================================================================
 
-compute stress_polymer polymer stress/atom NULL
-compute stress_solvent solvent  stress/atom NULL
+compute stress_polymer poly_bulk stress/atom NULL
+compute stress_solvent solv_bulk stress/atom NULL
 
-# Box-integrated polymer stress
-compute sig_p_xx polymer reduce sum c_stress_polymer[1]
-compute sig_p_yy polymer reduce sum c_stress_polymer[2]
-compute sig_p_zz polymer reduce sum c_stress_polymer[3]
-compute sig_p_xy polymer reduce sum c_stress_polymer[4]
-compute sig_p_xz polymer reduce sum c_stress_polymer[5]
-compute sig_p_yz polymer reduce sum c_stress_polymer[6]
+# Box-integrated polymer stress (bulk only)
+compute sig_p_xx poly_bulk reduce sum c_stress_polymer[1]
+compute sig_p_yy poly_bulk reduce sum c_stress_polymer[2]
+compute sig_p_zz poly_bulk reduce sum c_stress_polymer[3]
+compute sig_p_xy poly_bulk reduce sum c_stress_polymer[4]
+compute sig_p_xz poly_bulk reduce sum c_stress_polymer[5]
+compute sig_p_yz poly_bulk reduce sum c_stress_polymer[6]
 
-variable stress_p_xx equal c_sig_p_xx/vol
-variable stress_p_yy equal c_sig_p_yy/vol
-variable stress_p_zz equal c_sig_p_zz/vol
-variable stress_p_xy equal c_sig_p_xy/vol
-variable stress_p_xz equal c_sig_p_xz/vol
-variable stress_p_yz equal c_sig_p_yz/vol
+variable stress_p_xx equal c_sig_p_xx/v_bulk_vol
+variable stress_p_yy equal c_sig_p_yy/v_bulk_vol
+variable stress_p_zz equal c_sig_p_zz/v_bulk_vol
+variable stress_p_xy equal c_sig_p_xy/v_bulk_vol
+variable stress_p_xz equal c_sig_p_xz/v_bulk_vol
+variable stress_p_yz equal c_sig_p_yz/v_bulk_vol
 
-# Box-integrated solvent stress
-compute sig_s_xx solvent reduce sum c_stress_solvent[1]
-compute sig_s_yy solvent reduce sum c_stress_solvent[2]
-compute sig_s_zz solvent reduce sum c_stress_solvent[3]
-compute sig_s_xy solvent reduce sum c_stress_solvent[4]
-compute sig_s_xz solvent reduce sum c_stress_solvent[5]
-compute sig_s_yz solvent reduce sum c_stress_solvent[6]
+# Box-integrated solvent stress (bulk only)
+compute sig_s_xx solv_bulk reduce sum c_stress_solvent[1]
+compute sig_s_yy solv_bulk reduce sum c_stress_solvent[2]
+compute sig_s_zz solv_bulk reduce sum c_stress_solvent[3]
+compute sig_s_xy solv_bulk reduce sum c_stress_solvent[4]
+compute sig_s_xz solv_bulk reduce sum c_stress_solvent[5]
+compute sig_s_yz solv_bulk reduce sum c_stress_solvent[6]
 
-variable stress_s_xx equal c_sig_s_xx/vol
-variable stress_s_yy equal c_sig_s_yy/vol
-variable stress_s_zz equal c_sig_s_zz/vol
-variable stress_s_xy equal c_sig_s_xy/vol
-variable stress_s_xz equal c_sig_s_xz/vol
-variable stress_s_yz equal c_sig_s_yz/vol
+variable stress_s_xx equal c_sig_s_xx/v_bulk_vol
+variable stress_s_yy equal c_sig_s_yy/v_bulk_vol
+variable stress_s_zz equal c_sig_s_zz/v_bulk_vol
+variable stress_s_xy equal c_sig_s_xy/v_bulk_vol
+variable stress_s_xz equal c_sig_s_xz/v_bulk_vol
+variable stress_s_yz equal c_sig_s_yz/v_bulk_vol
 
 # Per-atom z-bin stress (pre-divided by bin volume for fix ave/chunk)
-variable s_p_xx atom c_stress_polymer[1]/(lx*ly*${binWidth})
-variable s_p_yy atom c_stress_polymer[2]/(lx*ly*${binWidth})
-variable s_p_zz atom c_stress_polymer[3]/(lx*ly*${binWidth})
-variable s_p_xy atom c_stress_polymer[4]/(lx*ly*${binWidth})
-variable s_p_xz atom c_stress_polymer[5]/(lx*ly*${binWidth})
-variable s_p_yz atom c_stress_polymer[6]/(lx*ly*${binWidth})
+variable s_p_xx atom c_stress_polymer[1]/(v_bulk_lx*ly*${binWidth})
+variable s_p_yy atom c_stress_polymer[2]/(v_bulk_lx*ly*${binWidth})
+variable s_p_zz atom c_stress_polymer[3]/(v_bulk_lx*ly*${binWidth})
+variable s_p_xy atom c_stress_polymer[4]/(v_bulk_lx*ly*${binWidth})
+variable s_p_xz atom c_stress_polymer[5]/(v_bulk_lx*ly*${binWidth})
+variable s_p_yz atom c_stress_polymer[6]/(v_bulk_lx*ly*${binWidth})
 
-variable s_s_xx atom c_stress_solvent[1]/(lx*ly*${binWidth})
-variable s_s_yy atom c_stress_solvent[2]/(lx*ly*${binWidth})
-variable s_s_zz atom c_stress_solvent[3]/(lx*ly*${binWidth})
-variable s_s_xy atom c_stress_solvent[4]/(lx*ly*${binWidth})
-variable s_s_xz atom c_stress_solvent[5]/(lx*ly*${binWidth})
-variable s_s_yz atom c_stress_solvent[6]/(lx*ly*${binWidth})
+variable s_s_xx atom c_stress_solvent[1]/(v_bulk_lx*ly*${binWidth})
+variable s_s_yy atom c_stress_solvent[2]/(v_bulk_lx*ly*${binWidth})
+variable s_s_zz atom c_stress_solvent[3]/(v_bulk_lx*ly*${binWidth})
+variable s_s_xy atom c_stress_solvent[4]/(v_bulk_lx*ly*${binWidth})
+variable s_s_xz atom c_stress_solvent[5]/(v_bulk_lx*ly*${binWidth})
+variable s_s_yz atom c_stress_solvent[6]/(v_bulk_lx*ly*${binWidth})
 
 
 # ==========================================================================
@@ -413,8 +438,8 @@ variable s_s_yz atom c_stress_solvent[6]/(lx*ly*${binWidth})
 # ==========================================================================
 
 variable binWidth_reduced equal $(v_binWidth/lz)
-compute chunk_z_polymer polymer chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
-compute chunk_z_solvent  solvent  chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+compute chunk_z_polymer poly_bulk chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+compute chunk_z_solvent  solv_bulk chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
 
 
 # ==========================================================================
@@ -459,13 +484,13 @@ fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_s
 #    OUTPUT: Z-PROFILE STRESS TENSOR
 # ==========================================================================
 
-fix prof_z_polymer polymer ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+fix prof_z_polymer poly_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_polymer &
     v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_xz v_s_p_yz &
     norm none &
     file output_files/stress_data/stress_profile_z_polymer_${dataname}_${interaction}_${nsteps}.dat
 
-fix prof_z_solvent solvent ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_solvent &
     v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_xz v_s_s_yz &
     norm none &
