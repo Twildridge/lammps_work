@@ -37,12 +37,13 @@ Coarse-grained molecular dynamics simulations of **tetrahedral hydrogel slabs** 
    - Script: `scripts/compression_analysis.ipynb`
 
 4. **Calculate G (shear modulus)** ← *CURRENT FOCUS*
-   - Method: Shear the simulation box (xz plane) and record gel stresses
+   - Method: Plate-driven shear (±z on x-face plates); record gel stresses in Phase 3
    - Verify G decreases with decreasing crosslink density
-   - Simulation script: `simulations/shear_slab/shear_slab.lmp` (created 2026-04-15)
-   - Input: isolated swollen gel from `isolate_gel.ipynb` → `lammps_data/input_data/`
-   - G = σ_xz / γ_xz from Phase 3 time-averaged stress tensor
-   - Still need: run shear_slab, write `scripts/shear_modulus_analysis.ipynb`
+   - Simulation script: `simulations/shear_slab/shear_slab.lmp` (finalized 2026-04-28)
+   - Input: isolated swollen gel + attached plates from `scripts/add_plates_to_gel.ipynb`
+   - G = ⟨σ_p_xz⟩ / γ_final from Phase 3 time-averaged stress tensor
+   - Analysis notebook: `scripts/shear_analysis.ipynb` ← created 2026-04-28
+   - Still need: run shear_slab, verify G vs crosslink density series
 
 5. **Run permeation simulations**
    - Add reservoir pressure measurements to find ΔP
@@ -72,7 +73,7 @@ lammps/                          ← workspace root (synced to MacBook via iClou
 │   ├── scripts/
 │   │   ├── compression_analysis.ipynb    ← M, Dc, pore pressure, volume fractions
 │   │   ├── permeation_analysis.ipynb     ← flow profiles, pore pressure evolution (future)
-│   │   ├── shear_modulus_analysis.ipynb  ← G from shear stress (to create once data exists)
+│   │   ├── shear_analysis.ipynb          ← G, N1, N2, profiles, poroelastic decomp (created 2026-04-28)
 │   │   ├── add_plates_to_gel.py          ← builds *_with_plates.data for shear_slab
 │   │   ├── add_plates_to_gel.ipynb
 │   │   ├── add_walls_to_slab.ipynb
@@ -198,49 +199,56 @@ rsync -avP $USER@data.bridges2.psc.edu:<PATH>.lammpstrj.gz ~/Downloads
 
 ---
 
-## shear_slab.lmp — Design Notes
+## shear_slab.lmp — Design Notes (updated 2026-04-28)
 
-- **Input data file**: isolated gel WITH attached shear plates, produced by `scripts/add_plates_to_gel.py`.
+- **Input data file**: isolated gel WITH attached shear plates, produced by `scripts/add_plates_to_gel.ipynb`.
 - **Atom types**: 1=polymer, 2=crosslinker, 3=solvent, 4=plate
 - **Bond types**: 1=FENE (polymer-polymer), 2=harmonic k=30 r0=1 (plate-polymer)
-- **3 phases**: (1) NVT equilibration (plates frozen) → (2) plate-driven shear → (3) plates frozen at final position + NVT production → G = ⟨σ_p_xz⟩ / gel_strain_cm_final
-- **Shear method** (CURRENT, as of 2026-04-20): **`fix move linear ±vshear 0 0`** on `plate_top` / `plate_bot`. Top plate: +vshear, bottom: −vshear. Plates translate purely in x (vy=vz=0 always → no rotation possible). Harmonic bonds (type 2) transmit shear from plate → surface polymer → interior network via FENE. No velocity-gradient zone, no group-limit issues.
-- **Why plate approach** (all earlier polymer-driven methods abandoned):
-  - Hard fix move on polymer (FAILED 3×): FENE failure at driven/interior boundary (driven atom velocity reset each step → monotonic bond stretch).
-  - Linear gradient 30% (FAILED ~330k steps): Δv at inner boundary still too large.
-  - Exponential gradient k=3, 15%, fix move variable vx+vy+vz=0 (FAILED ~200k): xz-rotation eliminated but FENE still failed — root cause unclear, possibly cumulative.
-  - `fix deform remap x` (FAILED): COM strain saturates at ~45% of target.
-  - `change_box` instantaneous (FAILED): solvent film causes gel to translate, not shear.
-  - **Plate approach**: plate atoms (type 4) driven; FENE bonds are only between polymer atoms; harmonic bonds (no max extension) transmit plate motion to surface polymer; distributed gel shear is safe at 10% target strain.
-- **add_plates_to_gel.py**: `scripts/add_plates_to_gel.py`. Square lattice, spacing 1.5σ. Plate offset 0.5σ from polymer surface. Each plate atom bonded (harmonic) to nearest polymer atom within 2.5σ cutoff (~96% bonding rate). Output: 4 atom types, 2 bond types. ~2312 plate atoms per data file.
-- **Group structure**: `polymer` (1,2), `backbone` (1), `solvent` (3), `gel` (1,2,3), `plate` (4), `plate_top`/`plate_bot` (type 4, split at box zmid), `poly_top_s`/`poly_bot_s` (backbone, outermost 1%).
-- **Strain measurement**: `gel_strain_cm = (xcm_top_x − xcm_bot_x − xcm_sep_0) / gel_thick`. Tracking groups (poly_top_s/bot_s) are outermost 1% of polymer backbone — they follow the plate via harmonic bonds → gel_strain_cm ≈ target at Phase 2 end.
-- **Phase 1**: `fix freeze_plates_1 plate move linear 0 0 0` + `fix nvt_equil gel nvt` + `fix mom_equil gel momentum linear`. NVT (not NPT) because plates define z-boundaries — NPT would push gel into plate.
-- **Phase 2 momentum**: `fix mom_lin gel momentum 100 linear 1 1 1` + `fix mom_rot gel momentum 100 angular`. Both applied to gel only (plates have prescribed velocity, unaffected).
-- **Phase 3**: `fix freeze_top/bot plate_top/bot move linear 0 0 0` + `fix nvt_prod gel nvt` + `fix mom_prod gel momentum linear angular`.
+- **Phases**:
+  - Phase 1a (NPT, 50k steps): plates frozen (`fix move linear 0 0 0`); gel runs `fix npt iso P_target`; box x adjusts to reach P=1.5. Plate atoms scale with box (reduced coords fixed).
+  - Phase 1b (NVT, 100k steps): box locked at NPT-final volume; plates frozen; gel thermalises.
+  - Phase 2 (shear, up to 570k steps): plates driven ±vshear in z; `fix halt` stops run when `gel_strain_cm ≥ target_strain_xz` (10%).
+  - Phase 3 (NVT production, `nsteps` from bash): plates frozen at Phase 2 final positions; gel NVT. G = ⟨σ_p_xz⟩_bulk / gel_strain_cm_final.
+- **Shear method**: **`fix move linear 0 0 ±vshear`** on `plate_right` / `plate_left`. Right plate (+x face): +vshear in z. Left plate (−x face): −vshear in z. Plates translate purely in z (vx=vy=0 → no rotation). Harmonic bonds transmit shear from plate → surface polymer → interior network via FENE. Shear plane is **xz** (gap=x, shear direction=z).
+- **Plate orientation**: plates are flat **yz-planes** (normal to x), placed at x = gel_xlo − 0.5σ and x = gel_xhi + 0.5σ. The gel is tall in z and short in x; plates tile the full y-z box face.
+- **Plate grouping**: `plate_right` = type 4 atoms with x > xmid; `plate_left` = type 4 atoms with x < xmid. Groups defined at startup from region + intersect (static).
+- **add_plates_to_gel.ipynb**: square lattice spacing 1.5σ; offset 0.5σ from polymer surface; each plate atom bonded (harmonic) to nearest polymer atom within 2.5σ cutoff (~90–93% bonding rate). ~2550 plate atoms per plate (rho04 tall dataset). Output: 4 atom types, 2 bond types.
+- **vshear**: `1.1 × target_strain × gel_gap / (2 × nsteps_shear_base × dt)`. `nsteps_shear_base = 285000` anchors the speed; `nsteps_shear = 570000` is a 2× safety buffer. `fix halt` fires at gel_strain_cm ≥ 0.10 → Phase 2 always stops at exactly the target strain.
+- **Strain measurement**: `gel_strain_cm = (zcm_right − zcm_left − zcm_sep_0) / gel_gap`. Tracking groups `poly_right_s` / `poly_left_s` are outermost 1% of backbone (in x) on each side — bonded directly to the plates → accurate surface displacement.
+- **Bulk stress region**: atoms within 5σ of each plate face excluded from all stress calculations (`poly_bulk` / `solv_bulk` groups, x ∈ [gel_xlo+5, gel_xhi−5]). Stress normalised by **bulk volume** = `bulk_lx × ly × lz` (not full box volume).
+- **Group structure**: `polymer` (1,2), `backbone` (1), `crosslinks` (2), `solvent` (3), `gel` (1,2,3), `plate` (4), `plate_right`/`plate_left` (type 4, split at xmid), `poly_right_s`/`poly_left_s` (backbone, outermost 1% in x), `poly_bulk`/`solv_bulk` (bulk interior, 5σ from walls).
+- **Minimize**: plates frozen with `fix setforce 0 0 0` + `velocity plate set 0 0 0` during minimize (5000/50000 steps). Allows gel to relax around plates before dynamics.
+- **Trajectory dumps**: both `traj_setup` and `traj_prod` dump **`all`** atoms (includes plate type 4 → plates visible in OVITO).
 - **Bond style**: `bond_style hybrid fene harmonic`; `bond_coeff 1 fene 30.0 1.5 1.0 1.0`; `bond_coeff 2 harmonic 30.0 1.0`
 - **Pair style**: WCA for all pairs including plate (lj/cut 1.122, ε=1, σ=1)
-- **Gel thickness**: gel_thick ≈ 109σ (rho04 dataset, surface-to-surface)
+- **Gel gap (x)**: gel_gap ≈ 47.9σ (rho04 tall dataset, polymer surface-to-surface)
 - **Triclinic setup**: `change_box all triclinic` before any dump (LAMMPS restriction).
-- **Output frequencies**: `thermo_freq=10000`, `stress_freq=5000`, `num_stress_curves=10`
-- **Stress outputs** (same columns as before):
-  - `stress_tensor_polymer/solvent_*.dat`: box-integrated 6-component tensor vs time; xz is col 5
-  - `stress_profile_z_polymer/solvent_*.dat`: z-binned 6-component profile
-  - `shear_strain_*.dat`: step, gel_lz_initial, gel_thick, gel_strain_cm
+- **Output frequencies**: `thermo_freq=25000`, `dump_freq=25000`, `stress_freq=10000`
+- **Stress outputs**:
+  - `stress_tensor_polymer/solvent_*.dat`: bulk-integrated 6-component tensor vs time (bulk_vol normalised); σ_xz is col 5 → used for G
+  - `stress_profile_z_polymer/solvent_*.dat`: z-binned 6-component profile (bulk atoms only, bin volume = bulk_lx × ly × binWidth)
+  - `shear_strain_*.dat`: step, gel_lz_initial, gel_gap, gel_strain_cm
   - `box_dimensions_*.dat`: step lx ly lz xy xz yz
   - `gel_dimensions_rg_*.dat`: step lx_rg ly_rg lz_rg
-- **G extraction**: G = ⟨stress_p_xz⟩ / gel_strain_cm_final
-- **Optimal node count**: 1–2 nodes on Bridges-2/Expanse (~168k atoms). Rule: ≥1000 atoms/MPI task.
-- **IMPORTANT**: `slab_elongation/` folder still exists — delete manually after verifying shear_slab works
+  - `polymer_com_*.dat`: step polymer_com_x _y _z
+- **G extraction**: G = ⟨stress_p_xz⟩ / gel_strain_cm_final (from stress_tensor_polymer, col 5)
+- **Optimal node count**: 1–2 nodes on Bridges-2/Expanse (~171k atoms). Rule: ≥1000 atoms/MPI task.
+- **c_gel_press note**: `compute gel_press all pressure gel_temp pair bond` reports **virial-only** pressure (~0.86) because `pair bond` keywords exclude the kinetic NkT/V term. Full pressure is `press` in thermo (~1.5). Both are real; they measure different things.
+
+## shear_analysis.ipynb — Design Notes (created 2026-04-28)
+
+- Located at `scripts/shear_analysis.ipynb`
+- Reads output from `shear_slab.lmp` Phase 3 production run
+- Planned analyses: G from ⟨σ_p_xz⟩/γ, normal stress differences N1/N2, z-profile stress plots, poroelastic decomposition (polymer + solvent contributions), G vs crosslink density series
 
 ## Active Tasks / Open Questions
 
-- [ ] Run `add_plates_to_gel.py` on each isolated gel data file to generate `*_with_plates.data`
-- [ ] Run shear_slab on 1–2 nodes (not 4 — too small a system) and copy output to `flow_data_local/`
-- [ ] Create `shear_modulus_analysis.ipynb` once first results are in
-- [ ] Verify G decreases with decreasing crosslink density (rho02 → rho08 series)
-- [ ] Milestone 2 cleanup: edit LAMMPS script so P* = 1.5 from t=0; align traj/volume output frequencies
+- [ ] Run `add_plates_to_gel.ipynb` on each isolated gel data file to generate `*_with_plates.data`
+- [ ] Run shear_slab on 1–2 nodes and copy output to `flow_data_local/shear/`
+- [ ] Populate `shear_analysis.ipynb` once first results arrive; verify G vs crosslink density series
+- [ ] Milestone 2 cleanup: align traj/volume output frequencies
 - [ ] Keep README.md and expanse_lammps_guide.md up to date
+- [ ] Delete `slab_elongation/` folder (superseded by shear_slab)
 
 ---
 
@@ -319,3 +327,10 @@ Optionally prepend `git pull` to `run_lammps.sh` / `run_lammps_bridges.sh` so it
   ```
 - *2026-04-20*: **Gradient zone rotation — diagnosed and abandoned entire approach** — Even with vz=vy=0 added to `fix move variable` (to prevent rotation), the exponential gradient approach failed with FENE errors around step ~120k-200k. The gradient zone rotation was from free vz; fixing it via `v_zero_v` eliminated rotation but FENE failures persisted from a different mechanism. Decision: abandon all polymer-driven gradient approaches and switch to the **plate-driven approach** (see below).
 - *2026-04-20*: **Switched to plate-driven shear** — Created `scripts/add_plates_to_gel.py` which adds rigid graphene-like plates (atom type 4, square lattice spacing 1.5σ) to the top/bottom of the isolated gel. Each plate atom is bonded to the nearest surface polymer via a harmonic bond (k=30, r0=1σ, no max extension). `shear_slab.lmp` completely rewritten: Phase 1 NVT with plates frozen; Phase 2 `fix move linear ±vshear 0 0` on plate groups; Phase 3 plates frozen + NVT production. Bond style changed to `hybrid fene harmonic`. This approach eliminates the driven/interior FENE interface entirely: plate atoms (type 4) are driven; all FENE bonds are between polymer atoms only; harmonic bonds transmit shear to surface polymer; distributed gel strain ~0.09% per bond at 10% target strain — far below FENE limit.
+- *2026-04-28*: **shear_slab.lmp — plates are x-face yz-planes (not top/bottom)** — `add_plates_to_gel.ipynb` places plates on the x-faces of the gel (yz-planes, normal to x). Shear direction is z (not x). `plate_right` / `plate_left` groups split by xmid (not zmid). `fix move linear 0 0 ±vshear` drives plates in z. Gel shears in xz plane. Old notes referencing `plate_top`/`plate_bot`, z-split, or x-direction shear are superseded.
+- *2026-04-28*: **Trajectory dumps now include plates** — Both `traj_setup` and `traj_prod` previously used `gel` group (type 4 plate atoms absent from trajectory). Changed to `all` → plates now visible in OVITO. The "half-plates at top and bottom" artifact was the flat z-faces of the gel slab being mistaken for plates (plates were invisible); the "left half pushed down" was correct xz-shear + PBC wraparound visualisation, not a physics bug.
+- *2026-04-28*: **Phase 1 changed to NPT (50k) + NVT (100k)** — Old Phase 1 was NVT-only with frozen plates. New Phase 1a: `fix npt gel iso P_target` (50k steps, plates frozen with `fix move linear 0 0 0`); box x adjusts to reach P=1.5; plate atoms scale with box (their reduced coords stay fixed). Phase 1b: NVT at NPT-final volume (100k steps, plates remain frozen). This ensures the gel enters shear at the correct equilibrium density. Minimize improved: plates frozen with `fix setforce 0 0 0` + `velocity plate set 0 0 0` during minimize (5000/50000 steps) so only gel atoms relax. Previously minimise ran on all atoms including plates (500/5000 steps), leaving bond-stretch strains that caused high initial PE (~12).
+- *2026-04-28*: **Bulk stress region** — Atoms within 5σ of each plate face excluded from stress measurements (`poly_bulk` / `solv_bulk`, x ∈ [gel_xlo+5, gel_xhi−5]). These near-wall atoms carry artifactual constraint stresses from the harmonic plate-polymer bonds. All stress computes (`stress/atom`, `reduce sum`, `chunk/atom`) and output fixes (`ave/time`, `ave/chunk`) updated to use bulk groups. Stress normalised by `bulk_vol = bulk_lx × ly × lz` (not `vol`); z-bin stress normalised by `bulk_lx × ly × binWidth`. Using `vol` was incorrect and would understate stress magnitudes.
+- *2026-04-28*: **Shear speed +10%, doubled steps, `fix halt` at target strain** — `vshear` increased to `1.1 × target_strain × gel_gap / (2 × nsteps_shear_base × dt)` (base = 285000 steps). `nsteps_shear` doubled to 570000 as a safety buffer. `fix halt_shear all halt ${stress_freq} v_gel_strain_cm >= ${target_strain_xz} error continue` stops Phase 2 as soon as gel_strain_cm ≥ 0.10, then Phase 3 proceeds from the exact target strain. Pattern mirrors `slab_with_flow.lmp` compression halt.
+- *2026-04-28*: **`c_gel_press` vs `press`** — `compute gel_press all pressure gel_temp pair bond` reports virial-only pressure (~0.86) because listing `pair bond` keywords excludes the kinetic NkT/V contribution. Full system pressure is `press` in thermo (~1.5). The NPT barostat targets `press`, not `c_gel_press`. Both are physically meaningful (configurational vs total pressure).
+- *2026-04-28*: **`shear_analysis.ipynb` created** — New analysis notebook at `scripts/shear_analysis.ipynb` for extracting G, N1, N2, z-profile stresses, and poroelastic decomposition from shear_slab Phase 3 output.
