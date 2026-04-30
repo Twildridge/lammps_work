@@ -246,60 +246,91 @@ dump traj_setup gel_system custom ${dump_freq_setup} &
    id type mol x y z
 
 
-# ==========================================================================
-#         PHASE 1: BRIEF ISOTROPIC NPT TO EQUILIBRATE PRESSURE AFTER WALL INSERTION
-# ==========================================================================
-# The data file includes support/piston/wall atoms not present during equilibration,
-# which shifts the instantaneous pressure.  A short isotropic NPT lets the box
-# shrink uniformly (x, y, z) to the target pressure.
-#
-# fix rigid overrides atom positions every step, fighting NPT's dilate-all
-# box rescaling.  We temporarily replace rigid_walls and rigid_support with
-# setforce 0 0 0 + fix nve so their positions are carried by the box scaling
-# but they exert no net force on themselves.  After npt_pre we restore the
-# rigid fixes.
+# Walls and support remain rigid throughout — no NPT, no temporary nve.
+# (NPT was removed because fix rigid force*off prevents the frozen piston from
+#  scaling with the box: gel atoms scale upward past the piston → FENE errors
+#  and T spike.  See notes in CLAUDE_CONTEXT.md 2026-04-29.)
 
-# --- Temporarily release rigid constraints so box scaling can move walls/support ---
-unfix rigid_walls
-unfix rigid_support
-
-fix freeze_walls   walls   setforce 0.0 0.0 0.0
-fix freeze_support support setforce 0.0 0.0 0.0
-fix nve_walls      walls   nve
-fix nve_support    support nve
-
-# Full 3D NVT equilibration (walls/support now move passively with box)
+# Full 3D NVT equilibration at fixed box volume
 fix nvt_equil mobile nvt temp ${temp_target} ${temp_target} 1.0
 
 if "${compression_mode} == 0" then "run ${perm_setup_freq}"
 if "${compression_mode} == 1" then "run ${comp_setup_freq}"
 
 print ">>> Post-equilibration T = $(c_mobile_temp)"
-
 unfix nvt_equil
 
-# Isotropic NPT — all three box dimensions rescale together so the gel+solvent
-# compression is physically uniform (not z-only).
-# P_damp = 2.0 (= 400 dt) is short enough for fast re-equilibration here.
-fix npt_pre mobile npt temp ${temp_target} ${temp_target} 1.0 &
-    x ${P_target} ${P_target} 100.0 &
-    y ${P_target} ${P_target} 100.0 &
-    z ${P_target} ${P_target} 100.0
-run 50000
-unfix npt_pre
 
-print ">>> Post-pressure-equilibration T = $(c_mobile_temp)  Press = $(press)"
+# ==========================================================================
+#    PHASE 0.5: PISTON PRE-COMPRESSION TO TARGET PRESSURE (compression mode)
+# ==========================================================================
+# After wall insertion some solvent is removed near the walls, dropping
+# mobile_press from 1.5 to ~0.44.  NPT cannot fix this: the piston is frozen
+# with fix rigid (force off), so NPT box scaling moves gel atoms past the
+# static piston → FENE bond stretching and T spikes.
+#
+# Correct fix: use the piston itself — the only legitimate z degree of freedom
+# (x,y are locked by lateral walls).  Ramp the piston force slowly to the
+# level that produces P_target, let the piston settle, then freeze it.
+# Phase 2 then adds its own ramp ON TOP of this base force.
+#
+# piston_force_base = -P_target * Lx * Ly / N_piston (computed at runtime)
+#                   ≈ -1.5 * 65.15^2 / 54162  ≈  -0.1176 ε/σ per atom
 
-# --- Restore rigid constraints ---
-unfix freeze_walls
-unfix freeze_support
-unfix nve_walls
-unfix nve_support
+print "========================================"
+print "Phase 0.5: Piston pre-compression to P_target"
+print "========================================"
 
-velocity walls   set 0.0 0.0 0.0
-velocity support set 0.0 0.0 0.0
-fix rigid_walls   walls   rigid single force * off off off torque * off off off
-fix rigid_support support rigid single force * off off off torque * off off off
+variable precomp_ramp_steps  equal 100000
+variable precomp_hold_steps  equal 100000
+variable precomp_equil_steps equal 50000
+variable precomp_f_start     equal -0.01
+variable precomp_f_base      equal -${P_target}*lx*ly/count(piston)
+
+print ">>> precomp_f_base = $(v_precomp_f_base)"
+
+# Enable piston z-motion (permeation piston is already free from Phase 0)
+if "${compression_mode} == 1" then "unfix freeze_piston"
+if "${compression_mode} == 1" then "unfix rigid_piston"
+if "${compression_mode} == 1" then &
+    "fix rigid_piston piston rigid single force * off off on torque * off off off"
+
+fix nvt_precomp mobile nvt temp ${temp_target} ${temp_target} 1.0
+
+# Phase 0.5a: Ramp force from gentle start to base level (avoids FENE stretching)
+if "${compression_mode} == 1" then &
+    "fix drag_precomp piston viscous 0.05"
+if "${compression_mode} == 1" then &
+    "variable precomp_framp equal ramp(${precomp_f_start},${precomp_f_base})"
+if "${compression_mode} == 1" then &
+    "fix push_precomp piston addforce 0.0 0.0 v_precomp_framp"
+if "${compression_mode} == 1" then "run ${precomp_ramp_steps}"
+if "${compression_mode} == 1" then "unfix push_precomp"
+
+# Phase 0.5b: Hold at base force — piston reaches mechanical equilibrium
+if "${compression_mode} == 1" then &
+    "fix push_precomp_hold piston addforce 0.0 0.0 ${precomp_f_base}"
+if "${compression_mode} == 1" then "run ${precomp_hold_steps}"
+if "${compression_mode} == 1" then "unfix push_precomp_hold"
+if "${compression_mode} == 1" then "unfix drag_precomp"
+
+# Permeation mode: extra NVT so piston can settle on the solvent surface
+if "${compression_mode} == 0" then "run 100000"
+
+print ">>> Post-pre-compression: T = $(c_mobile_temp)  mobile_press = $(c_mobile_press)"
+
+# Freeze piston at equilibrium position (compression mode)
+if "${compression_mode} == 1" then "velocity piston set 0.0 0.0 0.0"
+if "${compression_mode} == 1" then "unfix rigid_piston"
+if "${compression_mode} == 1" then &
+    "fix rigid_piston piston rigid single force * off off off torque * off off off"
+if "${compression_mode} == 1" then "fix freeze_piston piston setforce 0.0 0.0 0.0"
+
+# NVT equilibration at frozen piston density
+run ${precomp_equil_steps}
+unfix nvt_precomp
+
+print ">>> Post-pressure-equilibration T = $(c_mobile_temp)  Press = $(press)  mobile_press = $(c_mobile_press)"
 
 undump traj_setup
 
@@ -398,13 +429,17 @@ compute myTemp mobile temp/partial 1 1 0
 fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
 fix_modify nvt_prod temp myTemp
 
-# ----- Piston Force (linear ramp over each run segment) -----
+# ----- Piston Force (base + linear ramp) -----
+# push_piston_base holds the piston at P_target (same force used in Phase 0.5).
+# push_piston adds the additional ramp that drives compression beyond P_target.
+# Total force = base + ramp = ramp(f_base+f_start, f_base+f_end).
+# For defaults: total ≈ ramp(-0.138, -0.198) → ΔP ≈ 0.26→1.03 above P_target=1.5.
 # ramp(lo,hi) evaluates to lo at step 0 of the run and hi at the final step.
-# In compression mode the run may halt early, so the force won't reach
-# piston_force_end — but it ramps as far as the run goes.
+# In compression mode the run may halt early so the force won't reach f_end.
 variable piston_force_ramp equal ramp(${piston_force_start},${piston_force_end})
-fix push_piston piston addforce 0.0 0.0 v_piston_force_ramp
-fix piston_drag piston viscous 0.01
+fix push_piston      piston addforce 0.0 0.0 v_piston_force_ramp
+fix push_piston_base piston addforce 0.0 0.0 ${precomp_f_base}
+fix piston_drag      piston viscous 0.01
 
 # ----- Production Trajectory (sparse sampling) -----
 dump traj_flow gel_system custom ${dump_freq_prod} &
@@ -719,6 +754,7 @@ if "${compression_mode} == 1" then "uncompute maxz"
 
 # Disable piston force and motion
 if "${compression_mode} == 1" then "unfix push_piston"
+if "${compression_mode} == 1" then "unfix push_piston_base"
 if "${compression_mode} == 1" then "unfix piston_drag"
 if "${compression_mode} == 1" then "unfix rigid_piston"
 if "${compression_mode} == 1" then "velocity piston set 0.0 0.0 0.0"
@@ -733,6 +769,7 @@ if "${compression_mode} == 1" then "run ${relax_steps}"
 # ==========================================================================
 
 # Unfix piston motion fixes — only still active in permeation mode
+# (push_piston_base is compression-mode only; already unfixed above if comp_mode=1)
 if "${compression_mode} == 0" then "unfix push_piston"
 if "${compression_mode} == 0" then "unfix piston_drag"
 
