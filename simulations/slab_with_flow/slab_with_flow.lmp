@@ -8,23 +8,28 @@
 # dt = 0.005 → 1e6 steps ≈ 4.1e3 tau
 #
 # Modes (set compression_mode below):
-#   compression_mode = 0 : PERMEATION  — piston interacts with solvent (WCA);
-#                          solvent flows through support under piston pressure.
-#   compression_mode = 1 : COMPRESSION — piston passes through solvent (no 3-5
-#                          interaction); piston contacts gel directly, squeezes
-#                          solvent out the support bottom.  Piston is frozen once
-#                          comp_percent strain is reached; stresses then relax at
-#                          fixed deformation for the remainder of nsteps.
+#   compression_mode = 0 : PERMEATION  — piston-solvent WCA stays ON throughout;
+#                          constant downward force on piston drives solvent through
+#                          gel and support.  Halts when feed reservoir ≤ 2σ thick.
+#   compression_mode = 1 : COMPRESSION — piston-solvent WCA starts ON, is turned
+#                          off in Phase 1 so piston rests directly on gel.
+#                          Constant-velocity piston compresses gel to comp_percent;
+#                          piston freezes and stresses relax for remainder of nsteps.
 #
-# Phases:
-#   1. Mode-dependent equilibration (full 3D NVT, full LJ from the start).
-#        PERMEATION:  perm_setup_freq steps, piston z-free (settles onto solvent).
-#        COMPRESSION: comp_setup_freq steps, piston fully frozen, solvent-piston OFF.
-#      Brief minimize at the start to resolve any residual overlaps.
-#   2. Production — nsteps total (compression + relaxation combined).
-#      Compression mode: halts at comp_percent strain, then relaxes for the
-#                        remaining (nsteps - steps_used_compressing) steps.
-#      Permeation  mode: runs nsteps with ramped force, no halt.
+# Phase 0 (both modes):
+#   Z-only NPT with piston-solvent WCA ON.  Piston floats on solvent (z-force on).
+#   Walls/support temporarily on nve+setforce so they scale with the box.
+#   Box lz adjusts until c_mobile_press = P_target = 1.5.
+#
+# Phase 1 (compression only):
+#   Turn off pair_coeff 3↔5.  Z-only NPT again — solvent fills the gap and
+#   pressure dips, barostat re-compresses to 1.5 with piston resting on gel.
+#
+# Phase 2 (production):
+#   COMPRESSION: constant-velocity piston (v_piston_prod) to comp_percent strain,
+#                then freeze + relax.
+#   PERMEATION:  constant force on piston; records feed/permeate reservoir
+#                pressures, permeate flux, and halts when feed ≤ feed_halt_thick.
 
 
 # ==========================================================================
@@ -42,16 +47,22 @@ variable temp_target   equal 1.0
 variable P_target      equal 1.5
 variable timestep_prod equal 0.005
 
-# ----- Piston Force Ramp -----
-# Force ramps linearly from start to end over each production run segment.
-# Negative = pushing in -z direction.
-variable piston_force_start equal -0.02
-variable piston_force_end   equal -0.08
+# ----- NPT parameters (Phase 0 and compression Phase 1) -----
+variable npt_z_damp        equal 100.0   # barostat z-damping time (time units)
+variable phase0_npt_steps  equal 200000  # Phase 0: steps for z-NPT (P 0.44→1.5)
+variable phase1c_npt_steps equal 100000  # compression Phase 1: re-NPT after 3↔5 off
+variable npt_equil_steps   equal 50000   # NVT after each NPT to finish settling
 
-# ----- Phase 1: Mode-Dependent Setup -----
-variable perm_setup_freq equal 20000    # permeation equilibration steps
-variable comp_setup_freq equal 50000    # compression equilibration steps
-variable comp_percent    equal 0.1      # strain threshold for compression halt
+# ----- Compression Phase 2 -----
+variable comp_percent    equal 0.1      # strain threshold for halt
+variable v_piston_prod   equal 0.04     # σ/τ (= 1σ per 5000 steps at dt=0.005)
+
+# ----- Permeation Phase 2 -----
+# perm_piston_force: constant downward force per piston atom (negative = -z).
+# ΔP ≈ |force| × N_piston / (Lx × Ly) — set to drive measurable flow.
+variable perm_piston_force equal -0.05  # ε/σ per atom; ΔP ≈ 0.64 above P_target
+variable feed_halt_thick   equal 2.0    # halt when feed reservoir ≤ this (σ)
+variable flux_freq         equal 1000   # permeate bead count output interval (steps)
 
 # ----- Output Frequencies -----
 variable thermo_freq     equal 10000 # 2000  # 250000
@@ -109,7 +120,8 @@ print "========================================"
 print "Flow/Compression simulation: ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
 print "Production steps: ${nsteps}"
-print "Piston force: ${piston_force_start} -> ${piston_force_end} (ramp)"
+print "Compression piston velocity: ${v_piston_prod} sigma/tau"
+print "Permeation piston force: ${perm_piston_force} eps/sigma per atom"
 print "========================================"
 
 
@@ -144,12 +156,9 @@ pair_coeff 2 4 1.0 ${sigma} 1.122
 pair_coeff 1 5 1.0 ${sigma} 1.122
 pair_coeff 2 5 1.0 ${sigma} 1.122
 
-# Solvent-piston: mode-dependent from the start
-#   permeation  (0) → WCA: piston pushes fluid as a plug
-#   compression (1) → OFF: piston passes through solvent freely
-pair_coeff 3 5 0.0 ${sigma} 0.0                 # default: OFF (compression)
-if "${compression_mode} == 0" then &
-    "pair_coeff 3 5 1.0 ${sigma} 1.122"          # permeation: WCA
+# Solvent-piston: WCA ON for both modes at startup.
+# Compression Phase 1 turns this OFF after Phase 0 NPT.
+pair_coeff 3 5 1.0 ${sigma} 1.122
 
 # Wall interactions (WCA)
 pair_coeff 1 6 1.0 ${sigma} 1.122
@@ -195,17 +204,11 @@ fix rigid_support support rigid single force * off off off torque * off off off
 velocity walls set 0.0 0.0 0.0
 fix rigid_walls walls rigid single force * off off off torque * off off off
 
-# Piston: mode-dependent from the start
-#   Compression: fully frozen during Phase 1 (z-motion enabled in Phase 2)
-#   Permeation:  z-motion enabled immediately (settles onto solvent surface)
+# Piston: z-motion enabled for both modes from the start.
+# Phase 0 NPT requires the piston to float freely on the solvent (z-force on).
+# Compression Phase 2 will switch to force * off off off for velocity control.
 velocity piston set 0.0 0.0 0.0
-
-if "${compression_mode} == 1" then &
-    "fix rigid_piston piston rigid single force * off off off torque * off off off" &
-    "fix freeze_piston piston setforce 0.0 0.0 0.0"
-
-if "${compression_mode} == 0" then &
-    "fix rigid_piston piston rigid single force * off off on torque * off off off"
+fix rigid_piston piston rigid single force * off off on torque * off off off
 
 
 # ==========================================================================
@@ -220,117 +223,126 @@ thermo ${thermo_freq}
 
 
 # ==========================================================================
-#              PHASE 0: MODE-DEPENDENT EQUILIBRATION
+#              PHASE 0: Z-ONLY NPT — RESTORE P_TARGET (BOTH MODES)
 # ==========================================================================
-# Full LJ from the start (no soft push needed — data file is pre-cleaned).
-# Brief minimize to resolve any residual overlaps, then full 3D NVT.
-#   PERMEATION:  perm_setup_freq steps, piston z-free (settles onto solvent).
-#   COMPRESSION: comp_setup_freq steps, piston frozen, solvent-piston OFF.
+# The walled data file has mobile_press ≈ 0.44 (some solvent removed near walls).
+# Run a z-only NPT with piston-solvent WCA ON to restore P_target = 1.5:
+#   - Piston floats on solvent (z-force on, WCA supports it).
+#   - Walls/support temporarily on nve+setforce so their coordinates scale with lz.
+#   - NPT adjusts lz; piston dynamically responds to forces each step.
+#   - X,Y box dimensions stay fixed (walls define lateral extent).
+#
+# NOTE: This only works because the piston has z-force ON (fix rigid force * off
+# off ON). A frozen piston (force * off off off) would not scale with the box —
+# that was the bug in earlier attempts (see CLAUDE_CONTEXT.md 2026-04-29).
 
 print "========================================"
-if "${compression_mode} == 0" then &
-    "print 'Phase 0: Permeation equilibration (${perm_setup_freq} steps)'"
-if "${compression_mode} == 1" then &
-    "print 'Phase 0: Compression equilibration (${comp_setup_freq} steps)'"
+print "Phase 0: Z-only NPT to restore P_target = ${P_target}"
 print "========================================"
 
 reset_timestep 0
 timestep ${timestep_prod}
 
-# Brief minimize to clean up any residual overlaps
+# Brief minimize to clean up any residual overlaps from wall insertion
 minimize 1.0e-4 1.0e-6 1000 10000
 
-# Setup trajectory (both modes) (don't forget to uncomment "undump")
+# Setup trajectory
 dump traj_setup gel_system custom ${dump_freq_setup} &
    traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
    id type mol x y z
 
+# Temporarily allow walls and support to scale with the box during NPT
+unfix rigid_walls
+unfix rigid_support
+fix freeze_walls   walls   setforce 0.0 0.0 0.0
+fix freeze_support support setforce 0.0 0.0 0.0
+fix nve_walls      walls   nve
+fix nve_support    support nve
 
-# Walls and support remain rigid throughout — no NPT, no temporary nve.
-# (NPT was removed because fix rigid force*off prevents the frozen piston from
-#  scaling with the box: gel atoms scale upward past the piston → FENE errors
-#  and T spike.  See notes in CLAUDE_CONTEXT.md 2026-04-29.)
+# Brief NVT to thermalize before engaging barostat
+fix nvt_phase0_pre mobile nvt temp ${temp_target} ${temp_target} 1.0
+run 10000
+unfix nvt_phase0_pre
 
-# Full 3D NVT equilibration at fixed box volume
-fix nvt_equil mobile nvt temp ${temp_target} ${temp_target} 1.0
+# Z-only NPT: thermostat + z-barostat (piston floats freely on solvent)
+fix npt_phase0 mobile npt temp ${temp_target} ${temp_target} 1.0 &
+    z ${P_target} ${P_target} ${npt_z_damp}
+run ${phase0_npt_steps}
+unfix npt_phase0
 
-if "${compression_mode} == 0" then "run ${perm_setup_freq}"
-if "${compression_mode} == 1" then "run ${comp_setup_freq}"
+print ">>> Post-Phase-0 NPT: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)  lz=$(lz)"
 
-print ">>> Post-equilibration T = $(c_mobile_temp)"
-unfix nvt_equil
+# Restore rigid walls and support
+unfix freeze_walls
+unfix freeze_support
+unfix nve_walls
+unfix nve_support
+velocity walls   set 0.0 0.0 0.0
+velocity support set 0.0 0.0 0.0
+fix rigid_walls   walls   rigid single force * off off off torque * off off off
+fix rigid_support support rigid single force * off off off torque * off off off
+
+# Short NVT equilibration at the new box volume (piston still z-free)
+fix nvt_phase0_eq mobile nvt temp ${temp_target} ${temp_target} 1.0
+run ${npt_equil_steps}
+unfix nvt_phase0_eq
+print ">>> Post-Phase-0 equil: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
 
 
 # ==========================================================================
-#    PHASE 0.5: PISTON PRE-COMPRESSION TO TARGET PRESSURE (compression mode)
+#      PHASE 1 (COMPRESSION ONLY): TURN OFF 3↔5, RE-NPT TO P_TARGET
 # ==========================================================================
-# After wall insertion some solvent is removed near the walls, dropping
-# mobile_press from 1.5 to ~0.44.  NPT cannot fix this: the piston is frozen
-# with fix rigid (force off), so NPT box scaling moves gel atoms past the
-# static piston → FENE bond stretching and T spikes.
-#
-# Correct fix: use the piston itself — the only legitimate z degree of freedom
-# (x,y are locked by lateral walls).  Ramp the piston force slowly to the
-# level that produces P_target, let the piston settle, then freeze it.
-# Phase 2 then adds its own ramp ON TOP of this base force.
-#
-# piston_force_base = -P_target * Lx * Ly / N_piston (computed at runtime)
-#                   ≈ -1.5 * 65.15^2 / 54162  ≈  -0.1176 ε/σ per atom
+# Turning off pair_coeff 3↔5 removes the ~1σ WCA exclusion shell around each
+# piston bead; solvent fills that space and pressure dips slightly.
+# The z-only NPT re-equilibrates mobile_press back to P_target.
+# The piston does not need to reach the gel here — in Phase 2 the constant-
+# velocity piston travels freely through the solvent (no 3↔5 repulsion) until
+# it contacts the gel, then compresses it to comp_percent strain.
 
-print "========================================"
-print "Phase 0.5: Piston pre-compression to P_target"
-print "========================================"
-
-variable precomp_ramp_steps  equal 100000
-variable precomp_hold_steps  equal 100000
-variable precomp_equil_steps equal 50000
-variable precomp_f_start     equal -0.01
-variable precomp_f_base      equal -${P_target}*lx*ly/count(piston)
-
-print ">>> precomp_f_base = $(v_precomp_f_base)"
-
-# Enable piston z-motion (permeation piston is already free from Phase 0)
-if "${compression_mode} == 1" then "unfix freeze_piston"
-if "${compression_mode} == 1" then "unfix rigid_piston"
+if "${compression_mode} == 1" then "print '========================================'"
 if "${compression_mode} == 1" then &
-    "fix rigid_piston piston rigid single force * off off on torque * off off off"
+    "print 'Phase 1 (compression): turn off solvent-piston, re-NPT to P_target'"
+if "${compression_mode} == 1" then "print '========================================'"
 
-fix nvt_precomp mobile nvt temp ${temp_target} ${temp_target} 1.0
-
-# Phase 0.5a: Ramp force from gentle start to base level (avoids FENE stretching)
+# Turn off solvent-piston interaction
 if "${compression_mode} == 1" then &
-    "fix drag_precomp piston viscous 0.05"
+    "pair_coeff 3 5 0.0 ${sigma} 0.0"
+
+# Walls/support scale with box again
+if "${compression_mode} == 1" then "unfix rigid_walls"
+if "${compression_mode} == 1" then "unfix rigid_support"
 if "${compression_mode} == 1" then &
-    "variable precomp_framp equal ramp(${precomp_f_start},${precomp_f_base})"
+    "fix freeze_walls   walls   setforce 0.0 0.0 0.0"
 if "${compression_mode} == 1" then &
-    "fix push_precomp piston addforce 0.0 0.0 v_precomp_framp"
-if "${compression_mode} == 1" then "run ${precomp_ramp_steps}"
-if "${compression_mode} == 1" then "unfix push_precomp"
+    "fix freeze_support support setforce 0.0 0.0 0.0"
+if "${compression_mode} == 1" then "fix nve_walls      walls   nve"
+if "${compression_mode} == 1" then "fix nve_support    support nve"
 
-# Phase 0.5b: Hold at base force — piston reaches mechanical equilibrium
 if "${compression_mode} == 1" then &
-    "fix push_precomp_hold piston addforce 0.0 0.0 ${precomp_f_base}"
-if "${compression_mode} == 1" then "run ${precomp_hold_steps}"
-if "${compression_mode} == 1" then "unfix push_precomp_hold"
-if "${compression_mode} == 1" then "unfix drag_precomp"
+    "fix npt_phase1c mobile npt temp ${temp_target} ${temp_target} 1.0 z ${P_target} ${P_target} ${npt_z_damp}"
+if "${compression_mode} == 1" then "run ${phase1c_npt_steps}"
+if "${compression_mode} == 1" then "unfix npt_phase1c"
 
-# Permeation mode: extra NVT so piston can settle on the solvent surface
-if "${compression_mode} == 0" then "run 100000"
-
-print ">>> Post-pre-compression: T = $(c_mobile_temp)  mobile_press = $(c_mobile_press)"
-
-# Freeze piston at equilibrium position (compression mode)
-if "${compression_mode} == 1" then "velocity piston set 0.0 0.0 0.0"
-if "${compression_mode} == 1" then "unfix rigid_piston"
 if "${compression_mode} == 1" then &
-    "fix rigid_piston piston rigid single force * off off off torque * off off off"
-if "${compression_mode} == 1" then "fix freeze_piston piston setforce 0.0 0.0 0.0"
+    "print '>>> Post-Phase-1c NPT: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)  lz=$(lz)'"
 
-# NVT equilibration at frozen piston density
-run ${precomp_equil_steps}
-unfix nvt_precomp
+if "${compression_mode} == 1" then "unfix freeze_walls"
+if "${compression_mode} == 1" then "unfix freeze_support"
+if "${compression_mode} == 1" then "unfix nve_walls"
+if "${compression_mode} == 1" then "unfix nve_support"
+if "${compression_mode} == 1" then "velocity walls   set 0.0 0.0 0.0"
+if "${compression_mode} == 1" then "velocity support set 0.0 0.0 0.0"
+if "${compression_mode} == 1" then &
+    "fix rigid_walls   walls   rigid single force * off off off torque * off off off"
+if "${compression_mode} == 1" then &
+    "fix rigid_support support rigid single force * off off off torque * off off off"
 
-print ">>> Post-pressure-equilibration T = $(c_mobile_temp)  Press = $(press)  mobile_press = $(c_mobile_press)"
+if "${compression_mode} == 1" then &
+    "fix nvt_phase1c_eq mobile nvt temp ${temp_target} ${temp_target} 1.0"
+if "${compression_mode} == 1" then "run ${npt_equil_steps}"
+if "${compression_mode} == 1" then "unfix nvt_phase1c_eq"
+if "${compression_mode} == 1" then &
+    "print '>>> Pre-production: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)'"
 
 undump traj_setup
 
@@ -418,28 +430,26 @@ print "========================================"
 print "Phase 2: Production — piston forcing"
 print "========================================"
 
-# ----- Enable Piston z-Motion (compression mode only — permeation already has it) -----
-if "${compression_mode} == 1" then "unfix freeze_piston"
+# ----- Compression: switch piston to velocity control -----
+# After Phase 1 NPT, piston is on force * off off on (z-free).
+# For compression Phase 2 we switch to force * off off off so that the
+# prescribed velocity is maintained exactly (no acceleration from gel).
 if "${compression_mode} == 1" then "unfix rigid_piston"
 if "${compression_mode} == 1" then &
-    "fix rigid_piston piston rigid single force * off off on torque * off off off"
+    "fix rigid_piston piston rigid single force * off off off torque * off off off"
+if "${compression_mode} == 1" then &
+    "velocity piston set 0.0 0.0 -${v_piston_prod}"
 
 # ----- Thermostat (x,y only — z is flow/compression direction) -----
 compute myTemp mobile temp/partial 1 1 0
 fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
 fix_modify nvt_prod temp myTemp
 
-# ----- Piston Force (base + linear ramp) -----
-# push_piston_base holds the piston at P_target (same force used in Phase 0.5).
-# push_piston adds the additional ramp that drives compression beyond P_target.
-# Total force = base + ramp = ramp(f_base+f_start, f_base+f_end).
-# For defaults: total ≈ ramp(-0.138, -0.198) → ΔP ≈ 0.26→1.03 above P_target=1.5.
-# ramp(lo,hi) evaluates to lo at step 0 of the run and hi at the final step.
-# In compression mode the run may halt early so the force won't reach f_end.
-variable piston_force_ramp equal ramp(${piston_force_start},${piston_force_end})
-fix push_piston      piston addforce 0.0 0.0 v_piston_force_ramp
-fix push_piston_base piston addforce 0.0 0.0 ${precomp_f_base}
-fix piston_drag      piston viscous 0.01
+# ----- Permeation: constant force on piston + light damping -----
+# Piston already has force * off off on from Phase 0; just add the driving force.
+if "${compression_mode} == 0" then &
+    "fix push_piston piston addforce 0.0 0.0 ${perm_piston_force}"
+if "${compression_mode} == 0" then "fix piston_drag piston viscous 0.01"
 
 # ----- Production Trajectory (sparse sampling) -----
 dump traj_flow gel_system custom ${dump_freq_prod} &
@@ -587,6 +597,46 @@ if "${compression_mode} == 0" then "variable P_res_perm equal c_pv_perm/v_vol_pe
 
 
 # ==========================================================================
+#         PERMEATION: PERMEATE FLUX COUNTER + FEED-THICKNESS HALT
+# ==========================================================================
+# Permeate flux: solvent that passes through the gel and support exits at
+# z < zlo and wraps via PBC to z ≈ zhi (top of box).  The piston is located
+# BETWEEN the gel and the box top, well below zhi, so the top 10σ of the
+# box is an unambiguous permeate accumulation zone.  Counting beads there
+# gives a monotonically increasing cumulative permeate count:
+#
+#   Flux = ΔN_permeate / (Δt × Lx × Ly)  — computed in post-processing.
+#
+# Using a fixed band near zhi (rather than a region above the piston) avoids
+# the complication of the piston being deep inside the solvent column — the
+# feed solvent above the piston never reaches z > zhi−10 while the piston
+# is pushing it downward.
+#
+# Feed-thickness halt: stops the run when the feed reservoir (between gel top
+# and piston bottom face) is ≤ feed_halt_thick = 2σ, preventing the piston
+# from crashing into the gel and causing FENE errors.
+
+if "${compression_mode} == 0" then &
+    "variable permeate_zlo equal $(zhi-10.0)"
+if "${compression_mode} == 0" then &
+    "region reg_permeate block EDGE EDGE EDGE EDGE v_permeate_zlo EDGE side in"
+if "${compression_mode} == 0" then &
+    "group g_permeate dynamic solvent region reg_permeate every ${flux_freq}"
+if "${compression_mode} == 0" then &
+    "variable N_permeate equal count(g_permeate)"
+
+if "${compression_mode} == 0" then "fix out_permeate_flux all print ${flux_freq} '$(step) $(v_N_permeate)' file output_files/permeation_data/permeate_count_${dataname}_${interaction}_${nsteps}.dat screen no"
+
+# Feed-reservoir thickness = piston bottom face − gel top surface
+if "${compression_mode} == 0" then &
+    "variable feed_thickness equal c_piston_com[3]-0.5-c_maxz"
+if "${compression_mode} == 0" then &
+    "fix halt_perm all halt ${volume_freq} v_feed_thickness <= ${feed_halt_thick} error continue"
+
+print ">>> Phase 2 start: piston_z=$(c_piston_com[3])  gel_top=$(c_maxz)"
+
+
+# ==========================================================================
 #                         OUTPUT: PISTON DATA
 # ==========================================================================
 
@@ -718,6 +768,7 @@ run ${nsteps}
 # files will contain entries spanning both the compression and relaxation phases.
 
 if "${compression_mode} == 1" then "unfix halt_compress"
+if "${compression_mode} == 0" then "unfix halt_perm"
 variable phase2_end   equal $(step)
 variable relax_steps  equal ${nsteps}-(${phase2_end}-${phase2_start})
 if "${compression_mode} == 1 && ${relax_steps} <= 0" then &
@@ -752,12 +803,9 @@ if "${compression_mode} == 1" then "uncompute maxy"
 if "${compression_mode} == 1" then "uncompute minz"
 if "${compression_mode} == 1" then "uncompute maxz"
 
-# Disable piston force and motion
-if "${compression_mode} == 1" then "unfix push_piston"
-if "${compression_mode} == 1" then "unfix push_piston_base"
-if "${compression_mode} == 1" then "unfix piston_drag"
-if "${compression_mode} == 1" then "unfix rigid_piston"
+# Freeze piston (velocity control: no force fixes to unfix)
 if "${compression_mode} == 1" then "velocity piston set 0.0 0.0 0.0"
+if "${compression_mode} == 1" then "unfix rigid_piston"
 if "${compression_mode} == 1" then &
     "fix rigid_piston piston rigid single force * off off off torque * off off off"
 
@@ -768,10 +816,10 @@ if "${compression_mode} == 1" then "run ${relax_steps}"
 #                            CLEANUP
 # ==========================================================================
 
-# Unfix piston motion fixes — only still active in permeation mode
-# (push_piston_base is compression-mode only; already unfixed above if comp_mode=1)
+# Unfix permeation-mode fixes
 if "${compression_mode} == 0" then "unfix push_piston"
 if "${compression_mode} == 0" then "unfix piston_drag"
+if "${compression_mode} == 0" then "unfix out_permeate_flux"
 
 undump traj_flow
 
