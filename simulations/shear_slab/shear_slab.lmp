@@ -20,13 +20,13 @@
 #   1. NVT equilibration — plates frozen (fix move linear 0 0 0), gel NVT
 #   2. Shear — plates driven at ±vshear, gel NVT
 #   3. Production — plates frozen at Phase 2 final position, gel NVT
-#      G = <sigma_p_xz> / gel_strain_cm_final
+#      G = <sigma_p_zx> / gel_strain_cm_final
 #
 # Outputs:
 #   stress_data/stress_tensor_polymer_*.dat   6-component polymer stress vs time
 #   stress_data/stress_tensor_solvent_*.dat   6-component solvent stress vs time
-#   stress_data/stress_profile_z_polymer_*.dat z-binned polymer stress
-#   stress_data/stress_profile_z_solvent_*.dat z-binned solvent stress
+#   stress_data/stress_profile_x_polymer_*.dat x-binned polymer stress (gap direction)
+#   stress_data/stress_profile_x_solvent_*.dat x-binned solvent stress (gap direction)
 #   stress_data/shear_strain_*.dat            step  gel_lz_initial  gel_gap  gel_strain_cm
 #   volume_data/gel_dimensions_rg_*.dat       Rg-based gel dimensions
 #   volume_data/box_dimensions_*.dat          box dims vs step
@@ -43,7 +43,7 @@ variable P_target       equal 1.5
 variable timestep_prod  equal 0.005
 
 # Shear strain target (keep <= 0.10 for linear elastic regime)
-variable target_strain_xz equal 0.10
+variable target_strain_zx equal 0.10
 
 # Phase lengths
 variable nsteps_npt    equal 50000    # Phase 1a: NPT — find equilibrium volume (plates frozen)
@@ -73,7 +73,7 @@ variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 
 print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
-print ">>> Shear: γ_target=${target_strain_xz}  nsteps_shear=${nsteps_shear}  (plate-driven)"
+print ">>> Shear: γ_target=${target_strain_zx}  nsteps_shear=${nsteps_shear}  (plate-driven)"
 
 # Spatial binning
 variable binWidth    equal 2.0
@@ -102,7 +102,7 @@ print "========================================"
 print "Shear slab simulation (plate-driven): ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
 print "Production steps: ${nsteps}"
-print "Target shear strain: ${target_strain_xz}"
+print "Target shear strain: ${target_strain_zx}"
 print "========================================"
 
 
@@ -304,21 +304,21 @@ print ">>> poly_right_s: $(count(poly_right_s))  poly_left_s: $(count(poly_left_
 # Plate velocity: 1.1× the speed that would reach target_strain in nsteps_shear_base steps.
 # The run is capped by fix halt at target_strain, so nsteps_shear is just a safety buffer.
 #   vshear = 1.1 * target_strain * gel_gap / (2 * nsteps_shear_base * dt)
-variable vshear     equal $(v_target_strain_xz * v_gel_gap / (2.0 * v_nsteps_shear_base * v_timestep_prod) * 1.1)
+variable vshear     equal $(v_target_strain_zx * v_gel_gap / (2.0 * v_nsteps_shear_base * v_timestep_prod) * 1.1)
 variable neg_vshear equal -v_vshear
-print ">>> vshear = ${vshear} σ/τ  (1.1× base speed; halt fires at gel_strain_cm = ${target_strain_xz})"
+print ">>> vshear = ${vshear} σ/τ  (1.1× base speed; halt fires at gel_strain_cm = ${target_strain_zx})"
 
 
 # ==========================================================================
 #              PHASE 2: SHEAR APPLICATION (Plate-Driven)
 # ==========================================================================
 # Plates driven at ±vshear (1.1× base speed) in z.
-# fix halt stops the run as soon as gel_strain_cm >= target_strain_xz (10%).
+# fix halt stops the run as soon as gel_strain_cm >= target_strain_zx (10%).
 # nsteps_shear is a 2× safety buffer — the halt fires well before it runs out.
 # After the halt the script continues; plates are then frozen for Phase 3.
 
 print "========================================"
-print "Phase 2: Plate-driven shear (up to ${nsteps_shear} steps, halt at ${target_strain_xz})"
+print "Phase 2: Plate-driven shear (up to ${nsteps_shear} steps, halt at ${target_strain_zx})"
 print "  Right plate (+x): vz = +${vshear}   Left plate (-x): vz = -${vshear}"
 print "  Box stays ORTHOGONAL (xz = 0)"
 print "========================================"
@@ -336,7 +336,7 @@ fix out_shear_strain all print ${stress_freq} &
 
 # Halt when target xz strain is reached (linear poroelasticity regime).
 # error continue: run exits cleanly; script proceeds to Phase 3.
-fix halt_shear all halt ${stress_freq} v_gel_strain_cm >= ${target_strain_xz} error continue
+fix halt_shear all halt ${stress_freq} v_gel_strain_cm >= ${target_strain_zx} error continue
 
 run ${nsteps_shear}
 
@@ -350,8 +350,8 @@ unfix drive_right
 undump traj_setup
 
 print ">>> Phase 2 complete"
-print ">>>   gel_strain_cm = $(v_gel_strain_cm)  (target: ${target_strain_xz})"
-print ">>>   G = <sigma_p_xz> / $(v_gel_strain_cm)  [gap=x, shear=z]"
+print ">>>   gel_strain_cm = $(v_gel_strain_cm)  (target: ${target_strain_zx})"
+print ">>>   G = <sigma_p_zx> / $(v_gel_strain_cm)  [gap=x, shear=z]"
 print ">>> Post-shear gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
 
 # Freeze Rg half-widths as constants (gel geometry now fixed)
@@ -367,8 +367,8 @@ variable hw_z equal $(v_hw_z)
 # harmonic springs and carry artifactual constraint stresses. Exclude them
 # from all stress measurements so only the interior gel is sampled.
 
-variable xlo_bulk equal ${gel_xlo}+5.0
-variable xhi_bulk equal ${gel_xhi}-5.0
+variable xlo_bulk equal ${gel_xlo}+3.0
+variable xhi_bulk equal ${gel_xhi}-3.0
 variable bulk_lx  equal v_xhi_bulk-v_xlo_bulk       # x-extent of bulk region
 variable bulk_vol equal v_bulk_lx*ly*lz              # bulk volume (dynamic: ly,lz fixed post-NPT)
 region   reg_bulk block ${xlo_bulk} ${xhi_bulk} EDGE EDGE EDGE EDGE units box
@@ -392,14 +392,14 @@ compute sig_p_xx poly_bulk reduce sum c_stress_polymer[1]
 compute sig_p_yy poly_bulk reduce sum c_stress_polymer[2]
 compute sig_p_zz poly_bulk reduce sum c_stress_polymer[3]
 compute sig_p_xy poly_bulk reduce sum c_stress_polymer[4]
-compute sig_p_xz poly_bulk reduce sum c_stress_polymer[5]
+compute sig_p_zx poly_bulk reduce sum c_stress_polymer[5]
 compute sig_p_yz poly_bulk reduce sum c_stress_polymer[6]
 
 variable stress_p_xx equal c_sig_p_xx/v_bulk_vol
 variable stress_p_yy equal c_sig_p_yy/v_bulk_vol
 variable stress_p_zz equal c_sig_p_zz/v_bulk_vol
 variable stress_p_xy equal c_sig_p_xy/v_bulk_vol
-variable stress_p_xz equal c_sig_p_xz/v_bulk_vol
+variable stress_p_zx equal c_sig_p_zx/v_bulk_vol
 variable stress_p_yz equal c_sig_p_yz/v_bulk_vol
 
 # Box-integrated solvent stress (bulk only)
@@ -407,39 +407,40 @@ compute sig_s_xx solv_bulk reduce sum c_stress_solvent[1]
 compute sig_s_yy solv_bulk reduce sum c_stress_solvent[2]
 compute sig_s_zz solv_bulk reduce sum c_stress_solvent[3]
 compute sig_s_xy solv_bulk reduce sum c_stress_solvent[4]
-compute sig_s_xz solv_bulk reduce sum c_stress_solvent[5]
+compute sig_s_zx solv_bulk reduce sum c_stress_solvent[5]
 compute sig_s_yz solv_bulk reduce sum c_stress_solvent[6]
 
 variable stress_s_xx equal c_sig_s_xx/v_bulk_vol
 variable stress_s_yy equal c_sig_s_yy/v_bulk_vol
 variable stress_s_zz equal c_sig_s_zz/v_bulk_vol
 variable stress_s_xy equal c_sig_s_xy/v_bulk_vol
-variable stress_s_xz equal c_sig_s_xz/v_bulk_vol
+variable stress_s_zx equal c_sig_s_zx/v_bulk_vol
 variable stress_s_yz equal c_sig_s_yz/v_bulk_vol
 
-# Per-atom z-bin stress (pre-divided by bin volume for fix ave/chunk)
-variable s_p_xx atom c_stress_polymer[1]/(v_bulk_lx*ly*${binWidth})
-variable s_p_yy atom c_stress_polymer[2]/(v_bulk_lx*ly*${binWidth})
-variable s_p_zz atom c_stress_polymer[3]/(v_bulk_lx*ly*${binWidth})
-variable s_p_xy atom c_stress_polymer[4]/(v_bulk_lx*ly*${binWidth})
-variable s_p_xz atom c_stress_polymer[5]/(v_bulk_lx*ly*${binWidth})
-variable s_p_yz atom c_stress_polymer[6]/(v_bulk_lx*ly*${binWidth})
+# Per-atom x-bin stress (pre-divided by bin volume for fix ave/chunk).
+# Bins are slabs normal to x (gap direction); bin volume = binWidth * Ly * Lz.
+variable s_p_xx atom c_stress_polymer[1]/(${binWidth}*ly*lz)
+variable s_p_yy atom c_stress_polymer[2]/(${binWidth}*ly*lz)
+variable s_p_zz atom c_stress_polymer[3]/(${binWidth}*ly*lz)
+variable s_p_xy atom c_stress_polymer[4]/(${binWidth}*ly*lz)
+variable s_p_zx atom c_stress_polymer[5]/(${binWidth}*ly*lz)
+variable s_p_yz atom c_stress_polymer[6]/(${binWidth}*ly*lz)
 
-variable s_s_xx atom c_stress_solvent[1]/(v_bulk_lx*ly*${binWidth})
-variable s_s_yy atom c_stress_solvent[2]/(v_bulk_lx*ly*${binWidth})
-variable s_s_zz atom c_stress_solvent[3]/(v_bulk_lx*ly*${binWidth})
-variable s_s_xy atom c_stress_solvent[4]/(v_bulk_lx*ly*${binWidth})
-variable s_s_xz atom c_stress_solvent[5]/(v_bulk_lx*ly*${binWidth})
-variable s_s_yz atom c_stress_solvent[6]/(v_bulk_lx*ly*${binWidth})
+variable s_s_xx atom c_stress_solvent[1]/(${binWidth}*ly*lz)
+variable s_s_yy atom c_stress_solvent[2]/(${binWidth}*ly*lz)
+variable s_s_zz atom c_stress_solvent[3]/(${binWidth}*ly*lz)
+variable s_s_xy atom c_stress_solvent[4]/(${binWidth}*ly*lz)
+variable s_s_zx atom c_stress_solvent[5]/(${binWidth}*ly*lz)
+variable s_s_yz atom c_stress_solvent[6]/(${binWidth}*ly*lz)
 
 
 # ==========================================================================
 #                    ANALYSIS: SPATIAL CHUNKS (z-binning)
 # ==========================================================================
 
-variable binWidth_reduced equal $(v_binWidth/lz)
-compute chunk_z_polymer poly_bulk chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
-compute chunk_z_solvent  solv_bulk chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+variable binWidth_reduced equal $(v_binWidth/lx)
+compute chunk_x_polymer poly_bulk chunk/atom bin/1d x lower ${binWidth_reduced} units reduced
+compute chunk_x_solvent  solv_bulk chunk/atom bin/1d x lower ${binWidth_reduced} units reduced
 
 
 # ==========================================================================
@@ -447,7 +448,7 @@ compute chunk_z_solvent  solv_bulk chunk/atom bin/1d z lower ${binWidth_reduced}
 # ==========================================================================
 # Both plates frozen at Phase 2 final positions (fix move linear 0 0 0).
 # Gel NVT: interior relaxes to mechanical equilibrium at frozen strain.
-# G = <sigma_p_xz> / gel_strain_cm_final.
+# G = <sigma_p_zx> / gel_strain_cm_final.
 
 print "========================================"
 print "Phase 3: NVT production (${nsteps} steps)"
@@ -471,12 +472,12 @@ dump traj_prod all custom ${dump_freq_prod} &
 
 fix avg_stress_polymer all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     v_stress_p_xx v_stress_p_yy v_stress_p_zz &
-    v_stress_p_xy v_stress_p_xz v_stress_p_yz &
+    v_stress_p_xy v_stress_p_zx v_stress_p_yz &
     file output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}.dat
 
 fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     v_stress_s_xx v_stress_s_yy v_stress_s_zz &
-    v_stress_s_xy v_stress_s_xz v_stress_s_yz &
+    v_stress_s_xy v_stress_s_zx v_stress_s_yz &
     file output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}.dat
 
 
@@ -484,17 +485,17 @@ fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_s
 #    OUTPUT: Z-PROFILE STRESS TENSOR
 # ==========================================================================
 
-fix prof_z_polymer poly_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    chunk_z_polymer &
-    v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_xz v_s_p_yz &
+fix prof_x_polymer poly_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_x_polymer &
+    v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_zx v_s_p_yz &
     norm none &
-    file output_files/stress_data/stress_profile_z_polymer_${dataname}_${interaction}_${nsteps}.dat
+    file output_files/stress_data/stress_profile_x_polymer_${dataname}_${interaction}_${nsteps}.dat
 
-fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    chunk_z_solvent &
-    v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_xz v_s_s_yz &
+fix prof_x_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_x_solvent &
+    v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_zx v_s_s_yz &
     norm none &
-    file output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
+    file output_files/stress_data/stress_profile_x_solvent_${dataname}_${interaction}_${nsteps}.dat
 
 
 # ==========================================================================
@@ -533,7 +534,7 @@ unfix freeze_right
 
 print "========================================"
 print "Shear slab simulation complete"
-print "  gel_strain_cm (γ for G): $(v_gel_strain_cm)  (target: ${target_strain_xz})"
+print "  gel_strain_cm (γ for G): $(v_gel_strain_cm)  (target: ${target_strain_zx})"
 print "  gel_lz_initial: ${gel_lz_initial}  gel_gap: ${gel_gap}"
 print "  Final box: $(lx) x $(ly) x $(lz)  xz = $(xz)"
 print "========================================"
