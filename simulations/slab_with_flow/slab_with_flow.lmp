@@ -288,7 +288,7 @@ unfix nvt_equil
 # with the box and contributes zero spurious virial to the barostat.
 
 variable npt_T_damp equal 10.0      # thermostat damping (τ)
-variable npt_P_damp equal 1000.0    # barostat damping (τ) — intentionally slow
+variable npt_P_damp equal 10000.0    # barostat damping (τ) — intentionally slow
 variable npt_p05_steps equal 500000 # NPT run length
 
 if "${compression_mode} == 1" then "print '========================================'"
