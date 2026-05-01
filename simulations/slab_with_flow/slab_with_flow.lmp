@@ -287,8 +287,13 @@ unfix nvt_equil
 # With piston also on nve+setforce (not fix rigid), it scales isotropically
 # with the box and contributes zero spurious virial to the barostat.
 
+<<<<<<< Updated upstream
 variable npt_T_damp equal 10.0      # thermostat damping (τ)
 variable npt_P_damp equal 10000.0    # barostat damping (τ) — intentionally slow
+=======
+variable npt_P_damp equal 1000.0    # barostat damping (τ) — intentionally slow
+# (Langevin thermostat T_damp = 1.0 τ is hardcoded in the fix lang_p05 block)
+>>>>>>> Stashed changes
 variable npt_p05_steps equal 500000 # NPT run length
 
 if "${compression_mode} == 1" then "print '========================================'"
@@ -310,14 +315,23 @@ if "${compression_mode} == 1" then "fix freeze_support support setforce 0.0 0.0 
 if "${compression_mode} == 1" then "fix nve_walls      walls   nve"
 if "${compression_mode} == 1" then "fix nve_support    support nve"
 
-# Isotropic NPT — slow damping prevents FENE overshoot
+# Langevin thermostat + NPH barostat.
+# Nosé-Hoover (fix npt) fails here: FENE bonds near their limit continuously
+# inject kinetic energy faster than NH friction can remove it, leaving T stuck
+# at ~6.  Langevin adds per-atom friction ∝ v, which removes energy in direct
+# proportion to how hot each atom is — robust even under FENE stress.
+# fix nph handles the pressure barostat (isotropic, slow P_damp = 1000 τ).
+# fix langevin T_damp = 1.0 τ keeps temperature firmly at T_target.
 if "${compression_mode} == 1" then &
-    "fix npt_p05 mobile npt temp ${temp_target} ${temp_target} ${npt_T_damp} iso ${P_target} ${P_target} ${npt_P_damp}"
+    "fix lang_p05 mobile langevin ${temp_target} ${temp_target} 1.0 48279"
+if "${compression_mode} == 1" then &
+    "fix nph_p05 mobile nph iso ${P_target} ${P_target} ${npt_P_damp}"
 if "${compression_mode} == 1" then "run ${npt_p05_steps}"
-if "${compression_mode} == 1" then "unfix npt_p05"
+if "${compression_mode} == 1" then "unfix lang_p05"
+if "${compression_mode} == 1" then "unfix nph_p05"
 
 if "${compression_mode} == 1" then &
-    "print '>>> Post-NPT: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)  vol=$(vol)'"
+    "print '>>> Post-NPH: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)  vol=$(vol)'"
 
 # Restore rigid piston at its new (scaled) position
 if "${compression_mode} == 1" then "unfix nve_piston"
