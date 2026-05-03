@@ -9,27 +9,30 @@
 #
 # Modes (set compression_mode below):
 #   compression_mode = 0 : PERMEATION  — piston-solvent WCA stays ON throughout;
-#                          constant downward force on piston drives solvent through
-#                          gel and support.  Halts when feed reservoir ≤ 2σ thick.
-#   compression_mode = 1 : COMPRESSION — piston-solvent WCA starts ON, is turned
-#                          off in Phase 1 so piston rests directly on gel.
-#                          Constant-velocity piston compresses gel to comp_percent;
+#                          force ramp drives solvent through gel until P_perm =
+#                          P_target, then constant force for steady-state flux/ΔP
+#                          measurement.  Halts when feed reservoir ≤ 2σ thick.
+#   compression_mode = 1 : COMPRESSION — piston-solvent WCA is OFF from the start;
+#                          piston is frozen during equilibration and then moves at
+#                          constant velocity to compress gel to comp_percent strain;
 #                          piston freezes and stresses relax for remainder of nsteps.
 #
 # Phase 0 (both modes):
-#   Z-only NPT with piston-solvent WCA ON.  Piston floats on solvent (z-force on).
-#   Walls/support temporarily on nve+setforce so they scale with the box.
-#   Box lz adjusts until c_mobile_press = P_target = 1.5.
+#   NVT equilibration at fixed box volume.  Piston frozen (compression) or
+#   z-free on solvent (permeation).
 #
-# Phase 1 (compression only):
-#   Turn off pair_coeff 3↔5.  Z-only NPT again — solvent fills the gap and
-#   pressure dips, barostat re-compresses to 1.5 with piston resting on gel.
+# Phase 0.5 (compression only):
+#   Isotropic Langevin + NPH to bring mobile_press → P_target = 1.5.
+#   All rigid bodies (piston, walls, support) temporarily on nve+setforce so
+#   they scale with the box without creating asymmetric virial contributions.
+#   Langevin thermostat (not Nosé-Hoover) is used because FENE bonds inject
+#   heat faster than NH can remove; Langevin per-atom friction always wins.
 #
 # Phase 2 (production):
 #   COMPRESSION: constant-velocity piston (v_piston_prod) to comp_percent strain,
 #                then freeze + relax.
-#   PERMEATION:  constant force on piston; records feed/permeate reservoir
-#                pressures, permeate flux, and halts when feed ≤ feed_halt_thick.
+#   PERMEATION:  piston force ramp → P_perm = P_target, then constant force;
+#                records feed/permeate reservoir pressures and permeate flux.
 
 
 # ==========================================================================
@@ -206,10 +209,11 @@ velocity walls set 0.0 0.0 0.0
 fix rigid_walls walls rigid single force * off off off torque * off off off
 
 # Piston: mode-dependent from the start.
-#   Compression: fully frozen during Phase 0 — NPT compresses mobile atoms
-#                around the static piston (piston is above the gel, gap > 0,
-#                so NPT never pushes gel atoms into the piston face).
-#                3↔5 OFF means piston contributes zero to Pzz → z-NPT stable.
+#   Compression: fully frozen during Phase 0 NVT (force * off off off +
+#                setforce 0).  Released to nve+setforce during Phase 0.5
+#                Langevin+NPH so it scales isotropically with the box.
+#                Restored to rigid+frozen after Phase 0.5; then released
+#                again for constant-velocity compression in Phase 2.
 #   Permeation:  z-motion enabled immediately (piston floats on solvent).
 velocity piston set 0.0 0.0 0.0
 
@@ -233,18 +237,12 @@ thermo ${thermo_freq}
 
 
 # ==========================================================================
-#              PHASE 0: Z-ONLY NPT — RESTORE P_TARGET (BOTH MODES)
+#              PHASE 0: NVT EQUILIBRATION (BOTH MODES)
 # ==========================================================================
-# The walled data file has mobile_press ≈ 0.44 (some solvent removed near walls).
-# Run a z-only NPT with piston-solvent WCA ON to restore P_target = 1.5:
-#   - Piston floats on solvent (z-force on, WCA supports it).
-#   - Walls/support temporarily on nve+setforce so their coordinates scale with lz.
-#   - NPT adjusts lz; piston dynamically responds to forces each step.
-#   - X,Y box dimensions stay fixed (walls define lateral extent).
-#
-# NOTE: This only works because the piston has z-force ON (fix rigid force * off
-# off ON). A frozen piston (force * off off off) would not scale with the box —
-# that was the bug in earlier attempts (see CLAUDE_CONTEXT.md 2026-04-29).
+# Equilibrate at the current box volume.  No pressure adjustment here —
+# that is handled by the Langevin+NPH block (Phase 0.5) for compression,
+# or by the permeation force ramp in Phase 2 for permeation.
+# Box dimensions stay fixed throughout Phase 0.
 
 print "========================================"
 print "Phase 0: NVT equilibration"
@@ -272,20 +270,24 @@ unfix nvt_equil
 
 
 # ==========================================================================
-#    PHASE 0.5 (COMPRESSION ONLY): ISOTROPIC NPT WITH LARGE DAMPING
+#    PHASE 0.5 (COMPRESSION ONLY): ISOTROPIC LANGEVIN + NPH
 # ==========================================================================
-# The gel swells isotropically toward P_target.  All rigid bodies (walls,
-# support, piston) are put on nve+setforce so they scale freely with the box
-# and do not create asymmetric boundary conditions.
+# Brings mobile_press to P_target = 1.5 by isotropically swelling/deswelling
+# the gel.  All rigid bodies (piston, walls, support) are temporarily put on
+# nve+setforce so they scale freely with the box without contributing spurious
+# virial to the barostat.
 #
-# Key parameters — increase if FENE errors still appear:
-#   T_damp: thermostat damping time (τ).  Recommendation: 10-50 τ.
-#   P_damp: barostat damping time (τ).  Recommendation: 500-2000 τ.
-#           Larger P_damp → slower box change → safer for gel network.
-#           At P_damp=1000, box changes ~0.03% per 1000 steps — benign.
+# Why Langevin + NPH (not fix npt / Nosé-Hoover):
+#   FENE bonds under compression inject kinetic energy faster than the
+#   Nosé-Hoover chain can remove it → T stuck at ~6.  Langevin's per-atom
+#   friction coefficient (∝ v) removes energy in direct proportion to how
+#   hot each atom is — it always wins against FENE heating.
 #
-# With piston also on nve+setforce (not fix rigid), it scales in z with the
-# box and contributes zero spurious virial to the barostat.
+# Key parameters:
+#   npt_P_damp: barostat damping (τ).  100 τ is a good default; increase to
+#               500–1000 if FENE bond warnings appear.
+#   npt_p05_steps: run length.  200k is usually enough; increase if
+#                  mobile_press has not converged at the end of the run.
 
 variable npt_P_damp equal 100.0     # barostat damping (τ); increase if FENE errors appear
 variable npt_p05_steps equal 200000 # run length; increase if mobile_press not converged
@@ -302,13 +304,13 @@ if "${compression_mode} == 1" then "print '=====================================
 # faster than the NH chain can remove it; Langevin's per-atom friction removes
 # energy in direct proportion to velocity, which always wins.
 
-# Release piston to scale in z (nve+setforce, no fix rigid)
+# Release piston to scale isotropically (nve+setforce, no fix rigid)
 if "${compression_mode} == 1" then "unfix freeze_piston"
 if "${compression_mode} == 1" then "unfix rigid_piston"
 if "${compression_mode} == 1" then "fix nve_piston      piston nve"
 if "${compression_mode} == 1" then "fix setforce_piston piston setforce 0.0 0.0 0.0"
 
-# Release walls and support to scale in z
+# Release walls and support to scale isotropically
 if "${compression_mode} == 1" then "unfix rigid_walls"
 if "${compression_mode} == 1" then "unfix rigid_support"
 if "${compression_mode} == 1" then "fix freeze_walls   walls   setforce 0.0 0.0 0.0"
@@ -447,8 +449,9 @@ print "Phase 2: Production — piston forcing"
 print "========================================"
 
 # ----- Compression: unfreeze piston, switch to velocity control -----
-# The piston was frozen since initialization (Phase 0 + Phase 0.5 NPT).
-# Unfreeze, then re-fix with force*off off off so prescribed velocity is constant.
+# The piston was re-frozen after Phase 0.5 Langevin+NPH (rigid + setforce 0).
+# Unfreeze, then re-fix with force*off off off so the prescribed velocity
+# is maintained exactly (no force-driven acceleration from the gel).
 if "${compression_mode} == 1" then "unfix freeze_piston"
 if "${compression_mode} == 1" then "unfix rigid_piston"
 if "${compression_mode} == 1" then &
@@ -564,7 +567,9 @@ compute press_z_support support reduce/chunk chunk_z_support sum v_press_support
 #                  ANALYSIS: RESERVOIR PRESSURES (permeation mode only)
 # ==========================================================================
 # Reservoir pressures are only meaningful in permeation mode:
-#   Feed reservoir:     solvent between gel top (c_maxz) and piston bottom face.
+#   Feed reservoir:     solvent between gel top and piston bottom face.
+#                       Gel top is approximated by the Rg-based gel_top_rg
+#                       (robust to stray beads); c_maxz is NOT used here.
 #   Permeate reservoir: solvent above piston top face to box top; solvent that
 #                       has permeated through gel + support wraps via PBC here.
 #
@@ -585,13 +590,12 @@ compute press_z_support support reduce/chunk chunk_z_support sum v_press_support
 if "${compression_mode} == 0" then "variable piston_z_bot equal c_piston_com[3]-0.5*${sigma}"
 if "${compression_mode} == 0" then "variable piston_z_top equal c_piston_com[3]+0.5*${sigma}"
 
-# Feed: gel top → piston bottom face
-# Desired lower bound is c_maxz (true polymer top surface), but if the piston
-# has settled very close to the gel (gap < sigma), c_maxz >= piston_z_bot and
-# LAMMPS throws a "bad value" error at region creation.  Guard against this by
-# clamping res_feed_zlo to at most (piston_z_bot - sigma), giving a region that
-# is always at least 1 sigma tall.  The conditional below evaluates to c_maxz
-# when there is enough clearance, and falls back to the clamped value otherwise.
+# Feed: gel top → piston bottom face.
+# NOTE: c_maxz is used here (not gel_top_rg) because the region requires a
+# dynamic lower bound that tracks the true polymer surface.  The clamping guard
+# prevents LAMMPS "bad value" errors when a stray bead raises c_maxz above the
+# piston: if c_maxz >= piston_z_bot − σ, the lower bound is clamped to
+# piston_z_bot − σ, keeping the region at least 1σ tall.
 if "${compression_mode} == 0" then &
     "variable res_feed_zlo equal (c_maxz<(c_piston_com[3]-1.5*${sigma}))*c_maxz+(c_maxz>=(c_piston_com[3]-1.5*${sigma}))*(c_piston_com[3]-1.5*${sigma})"
 if "${compression_mode} == 0" then "region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo v_piston_z_bot side in"
