@@ -284,25 +284,31 @@ unfix nvt_equil
 #           Larger P_damp → slower box change → safer for gel network.
 #           At P_damp=1000, box changes ~0.03% per 1000 steps — benign.
 #
-# With piston also on nve+setforce (not fix rigid), it scales isotropically
-# with the box and contributes zero spurious virial to the barostat.
+# With piston also on nve+setforce (not fix rigid), it scales in z with the
+# box and contributes zero spurious virial to the barostat.
 
-variable npt_P_damp equal 1000.0    # barostat damping (τ) — intentionally slow
-# (Langevin thermostat T_damp = 1.0 τ is hardcoded in the fix lang_p05 block)
-variable npt_p05_steps equal 500000 # NPT run length
+variable npt_P_damp equal 100.0     # barostat damping (τ); increase if FENE errors appear
+variable npt_p05_steps equal 200000 # run length; increase if mobile_press not converged
 
 if "${compression_mode} == 1" then "print '========================================'"
 if "${compression_mode} == 1" then &
-    "print 'Phase 0.5 (compression): isotropic NPT to P_target'"
+    "print 'Phase 0.5 (compression): Langevin+NPH (isotropic) to P_target'"
 if "${compression_mode} == 1" then "print '========================================'"
 
-# Release piston to scale isotropically (nve + setforce, no fix rigid)
+# Isotropic NPH so the gel swells/deswells uniformly in all directions.
+# Piston and walls on nve+setforce during NPH so they scale with the box.
+# Langevin (T_damp=1.0): robust temperature control even under FENE stress.
+# Nosé-Hoover (fix npt) left T stuck at ~6 because FENE bonds inject energy
+# faster than the NH chain can remove it; Langevin's per-atom friction removes
+# energy in direct proportion to velocity, which always wins.
+
+# Release piston to scale in z (nve+setforce, no fix rigid)
 if "${compression_mode} == 1" then "unfix freeze_piston"
 if "${compression_mode} == 1" then "unfix rigid_piston"
 if "${compression_mode} == 1" then "fix nve_piston      piston nve"
 if "${compression_mode} == 1" then "fix setforce_piston piston setforce 0.0 0.0 0.0"
 
-# Release walls and support to scale isotropically
+# Release walls and support to scale in z
 if "${compression_mode} == 1" then "unfix rigid_walls"
 if "${compression_mode} == 1" then "unfix rigid_support"
 if "${compression_mode} == 1" then "fix freeze_walls   walls   setforce 0.0 0.0 0.0"
@@ -310,13 +316,6 @@ if "${compression_mode} == 1" then "fix freeze_support support setforce 0.0 0.0 
 if "${compression_mode} == 1" then "fix nve_walls      walls   nve"
 if "${compression_mode} == 1" then "fix nve_support    support nve"
 
-# Langevin thermostat + NPH barostat.
-# Nosé-Hoover (fix npt) fails here: FENE bonds near their limit continuously
-# inject kinetic energy faster than NH friction can remove it, leaving T stuck
-# at ~6.  Langevin adds per-atom friction ∝ v, which removes energy in direct
-# proportion to how hot each atom is — robust even under FENE stress.
-# fix nph handles the pressure barostat (isotropic, slow P_damp = 1000 τ).
-# fix langevin T_damp = 1.0 τ keeps temperature firmly at T_target.
 if "${compression_mode} == 1" then &
     "fix lang_p05 mobile langevin ${temp_target} ${temp_target} 1.0 48279"
 if "${compression_mode} == 1" then &
@@ -326,7 +325,7 @@ if "${compression_mode} == 1" then "unfix lang_p05"
 if "${compression_mode} == 1" then "unfix nph_p05"
 
 if "${compression_mode} == 1" then &
-    "print '>>> Post-NPH: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)  vol=$(vol)'"
+    "print '>>> Post-Langevin+NPH: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)  lz=$(lz)'"
 
 # Restore rigid piston at its new (scaled) position
 if "${compression_mode} == 1" then "unfix nve_piston"
@@ -388,6 +387,12 @@ variable gel_ly_rg equal 2.0*sqrt(3.0*c_rg_tensor[2])
 variable gel_lz_rg equal 2.0*sqrt(3.0*c_rg_tensor[3])
 variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
 
+# Robust gel-top estimate: polymer COM_z + half the Rg-based z-thickness.
+# c_maxz (raw maximum) is polluted by stray crosslinker/polymer beads that
+# diffuse into the solvent.  The Rg-based estimate is unaffected because
+# COM and Rg² are mean/variance over ~96k atoms — one outlier < 0.004%.
+variable gel_top_rg equal c_polymer_com[3]+0.5*v_gel_lz_rg
+
 # ----- Box dimensions -----
 variable box_lx equal lx
 variable box_ly equal ly
@@ -428,7 +433,7 @@ print "hw_z = ${hw_z}"
 variable gel_lz_initial equal $(v_gel_lz_rg)
 print ">>> Initial gel thickness (Rg): L0 = ${gel_lz_initial}"
 print ">>> Initial gel thickness (BB): L0 = $(v_gel_lz_bb)"
-print ">>> Gel top (c_maxz) = $(c_maxz)   Piston z = $(c_piston_com[3])   Gap = $(c_piston_com[3]-c_maxz)"
+print ">>> Gel top (Rg-based) = $(v_gel_top_rg)   c_maxz (raw) = $(c_maxz)   Piston z = $(c_piston_com[3])   Gap = $(c_piston_com[3]-v_gel_top_rg)"
 
 variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
 
@@ -651,13 +656,15 @@ if "${compression_mode} == 0" then &
 
 if "${compression_mode} == 0" then "fix out_permeate_flux all print ${flux_freq} '$(step) $(v_N_permeate)' file output_files/permeation_data/permeate_count_${dataname}_${interaction}_${nsteps}.dat screen no"
 
-# Feed-reservoir thickness = piston bottom face − gel top surface
+# Feed-reservoir thickness = piston bottom face − gel top (Rg-based, robust)
+# c_maxz is NOT used here: stray crosslinker beads in the solvent give a
+# spuriously large c_maxz that would falsely trigger an early halt.
 if "${compression_mode} == 0" then &
-    "variable feed_thickness equal c_piston_com[3]-0.5-c_maxz"
+    "variable feed_thickness equal c_piston_com[3]-0.5-v_gel_top_rg"
 if "${compression_mode} == 0" then &
     "fix halt_perm all halt ${volume_freq} v_feed_thickness <= ${feed_halt_thick} error continue"
 
-print ">>> Phase 2 start: piston_z=$(c_piston_com[3])  gel_top=$(c_maxz)"
+print ">>> Phase 2 start: piston_z=$(c_piston_com[3])  gel_top_rg=$(v_gel_top_rg)  gel_top_raw=$(c_maxz)"
 
 
 # ==========================================================================
