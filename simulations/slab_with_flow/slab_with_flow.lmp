@@ -290,7 +290,7 @@ unfix nvt_equil
 #                  mobile_press has not converged at the end of the run.
 
 variable npt_P_damp    equal 100.0   # barostat damping (τ); increase if FENE errors appear
-variable npt_p05_steps equal 200000  # run length; increase if mobile_press not converged
+variable npt_p05_steps equal 300000  # run length; increase if mobile_press not converged
 # NPH targets 'press', which includes the barostat's own virial contributions
 # (~+0.39 above c_mobile_press for this system).  To get c_mobile_press = 1.5
 # at NPH convergence, set npt_P05_target ≈ P_target + 0.39.
