@@ -289,12 +289,17 @@ unfix nvt_equil
 #   npt_p05_steps: run length.  200k is usually enough; increase if
 #                  mobile_press has not converged at the end of the run.
 
-variable npt_P_damp equal 100.0     # barostat damping (τ); increase if FENE errors appear
-variable npt_p05_steps equal 200000 # run length; increase if mobile_press not converged
+variable npt_P_damp    equal 100.0   # barostat damping (τ); increase if FENE errors appear
+variable npt_p05_steps equal 200000  # run length; increase if mobile_press not converged
+# NPH targets 'press', which includes the barostat's own virial contributions
+# (~+0.39 above c_mobile_press for this system).  To get c_mobile_press = 1.5
+# at NPH convergence, set npt_P05_target ≈ P_target + 0.39.
+# Re-calibrate if the system size or density changes significantly.
+variable npt_P05_target equal ${P_target}+0.39   # ≈ 1.89
 
 if "${compression_mode} == 1" then "print '========================================'"
 if "${compression_mode} == 1" then &
-    "print 'Phase 0.5 (compression): Langevin+NPH (isotropic) to P_target'"
+    "print 'Phase 0.5 (compression): Langevin+NPH iso, press target=${npt_P05_target} → c_mobile_press target=${P_target}'"
 if "${compression_mode} == 1" then "print '========================================'"
 
 # Isotropic NPH so the gel swells/deswells uniformly in all directions.
@@ -321,7 +326,7 @@ if "${compression_mode} == 1" then "fix nve_support    support nve"
 if "${compression_mode} == 1" then &
     "fix lang_p05 mobile langevin ${temp_target} ${temp_target} 1.0 48279"
 if "${compression_mode} == 1" then &
-    "fix nph_p05 mobile nph iso ${P_target} ${P_target} ${npt_P_damp}"
+    "fix nph_p05 mobile nph iso ${npt_P05_target} ${npt_P05_target} ${npt_P_damp}"
 if "${compression_mode} == 1" then "run ${npt_p05_steps}"
 if "${compression_mode} == 1" then "unfix lang_p05"
 if "${compression_mode} == 1" then "unfix nph_p05"
