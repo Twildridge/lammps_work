@@ -19,6 +19,9 @@ Output (saved inside <folder>/output_plots/convergence_plots/):
     {run_id}_shear_diagnostics.png — shear-specific panels (auto-generated
                                      when shear output files or Pxz/Xz thermo
                                      columns are detected)
+    {run_id}_flow_diagnostics.png  — piston force + pressure panels (auto-generated
+                                     when piston_force_*.dat is present;
+                                     mode detected from which files exist)
 """
 
 import argparse
@@ -453,6 +456,198 @@ def plot_shear_diagnostics(data, folder, run_id, output):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FLOW / COMPRESSION DIAGNOSTICS PLOT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plot_flow_diagnostics(folder, run_id, output):
+    """Piston force and reservoir-pressure diagnostics for slab_with_flow runs.
+
+    Mode is auto-detected from which output files are present:
+      Compression  — piston_force_*.dat present, no piston_force_pressure_*.dat
+                     Panels: piston force | gel strain | piston position
+      Permeation   — piston_force_pressure_*.dat also present
+                     Panels: piston force (with Phase-0 baseline) |
+                             F/A vs P_res_feed vs P_res_perm (instantaneous) |
+                             time-averaged reservoir pressures
+
+    File column reference
+    ─────────────────────
+    piston_force_*.dat              : step  F_piston_z
+    piston_force_pressure_*.dat     : step  F_z  F/A  P_res_feed  P_res_perm  P_feed×A
+    strain_zz_*.dat                 : step  L0   L_current
+    pressure_feed_*.dat             : fix ave/time scalar → (ts, [[P_feed], ...])
+    pressure_permeate_*.dat         : fix ave/time scalar → (ts, [[P_perm], ...])
+    piston_position_*.dat           : step  piston_z
+    """
+    piston_dir = os.path.join(folder, 'output_files', 'piston_data')
+    stress_dir = os.path.join(folder, 'output_files', 'stress_data')
+
+    force_file      = os.path.join(piston_dir, f'piston_force_{run_id}.dat')
+    force_pres_file = os.path.join(piston_dir, f'piston_force_pressure_{run_id}.dat')
+    pos_file        = os.path.join(piston_dir, f'piston_position_{run_id}.dat')
+    strain_file     = os.path.join(stress_dir,  f'strain_zz_{run_id}.dat')
+    p_feed_file     = os.path.join(stress_dir,  f'pressure_feed_{run_id}.dat')
+    p_perm_file     = os.path.join(stress_dir,  f'pressure_permeate_{run_id}.dat')
+
+    has_force      = os.path.exists(force_file)
+    has_force_pres = os.path.exists(force_pres_file)
+    has_pos        = os.path.exists(pos_file)
+    has_strain     = os.path.exists(strain_file)
+    has_p_feed     = os.path.exists(p_feed_file)
+    has_p_perm     = os.path.exists(p_perm_file)
+
+    if not has_force and not has_force_pres:
+        return  # nothing to do
+
+    is_permeation = has_force_pres
+
+    # Build panel list
+    panels = []
+    if has_force:
+        panels.append('force')
+    if is_permeation:
+        panels.append('force_vs_pres')       # F/A vs P_feed vs P_perm (instantaneous)
+        if has_p_feed or has_p_perm:
+            panels.append('pres_timeseries') # time-averaged reservoir pressures
+    else:
+        # compression-specific panels
+        if has_strain:
+            panels.append('strain')
+        if has_pos:
+            panels.append('piston_pos')
+
+    if not panels:
+        return
+
+    mode_label = 'permeation' if is_permeation else 'compression'
+    fig, axes = plt.subplots(len(panels), 1,
+                             figsize=(10, 3.5 * len(panels)), sharex=False)
+    if len(panels) == 1:
+        axes = [axes]
+    fig.suptitle(f'{run_id}  —  flow diagnostics ({mode_label})',
+                 fontsize=12, fontweight='bold')
+
+    for i, panel in enumerate(panels):
+        ax = axes[i]
+        ax.grid(alpha=0.3)
+
+        # ── Piston force time series (both modes) ─────────────────────────
+        if panel == 'force':
+            arr = read_fix_print(force_file)
+            if arr.size and arr.shape[1] >= 2:
+                t, fz = arr[:, 0], arr[:, 1]
+                ax.plot(t, fz, color='steelblue', lw=1.5, marker='o', markersize=2)
+                ax.axhline(0, color='k', ls=':', lw=0.8)
+                ax.set_ylabel('F_piston_z  (ε/σ)')
+                if is_permeation:
+                    ax.set_title(
+                        'Piston z-force  (positive = upward).  '
+                        'Phase-0 region is the zero-pressure baseline.',
+                        fontsize=9)
+                else:
+                    ax.set_title(
+                        'Gel reaction force on piston  '
+                        '(rises during compression → plateaus at ~10 % strain → relaxes)',
+                        fontsize=9)
+                    _annotate_last30(ax, fz, fmt='.4f', color='darkblue')
+                    # Mark peak force
+                    pk_idx = np.argmax(fz)
+                    ax.annotate(f'peak = {fz[pk_idx]:.4f}',
+                                xy=(t[pk_idx], fz[pk_idx]),
+                                xytext=(0.6, 0.92), textcoords='axes fraction',
+                                fontsize=8, color='steelblue',
+                                arrowprops=dict(arrowstyle='->', color='steelblue', lw=1),
+                                bbox=dict(boxstyle='round,pad=0.2',
+                                          facecolor='white', alpha=0.8))
+
+        # ── F/A vs P_feed vs P_perm (instantaneous, permeation) ──────────
+        elif panel == 'force_vs_pres':
+            arr = read_fix_print(force_pres_file)
+            # cols: step | F_z | F/A | P_res_feed | P_res_perm | P_feed×A
+            if arr.size and arr.shape[1] >= 6:
+                t        = arr[:, 0]
+                f_over_a = arr[:, 2]   # F / (lx·ly)  — piston pressure
+                p_feed   = arr[:, 3]   # feed reservoir pressure
+                p_perm   = arr[:, 4]   # permeate reservoir pressure
+
+                ax.plot(t, p_feed,   color='tomato',         lw=1.5, marker='o',
+                        markersize=2, label='P_res_feed  (below piston)')
+                ax.plot(t, p_perm,   color='cornflowerblue', lw=1.2, marker='o',
+                        markersize=2, alpha=0.8, label='P_res_perm  (above piston)')
+                ax.plot(t, f_over_a, color='steelblue',      lw=1.5, marker='s',
+                        markersize=2, ls='--',
+                        label='F_piston / A  (≈ P_feed − P_perm at quasi-equil)')
+                ax.axhline(0, color='k', ls=':', lw=0.8)
+                ax.set_ylabel('Pressure  (ε/σ³)')
+                ax.set_title(
+                    'Piston pressure vs reservoir pressures\n'
+                    'F/A ≈ P_feed − P_perm validates that pressure drop = piston force / area',
+                    fontsize=9)
+                ax.legend(fontsize=8)
+
+        # ── Time-averaged reservoir pressures (permeation, from fix ave/time) ──
+        elif panel == 'pres_timeseries':
+            plotted = False
+            if has_p_feed:
+                ts, dat = read_ave_time(p_feed_file)
+                if ts.size and dat.shape[1] >= 1:
+                    ax.plot(ts, dat[:, 0], color='tomato', lw=1.5, marker='o',
+                            markersize=2, label='P_res_feed  (time-averaged)')
+                    _annotate_last30(ax, dat[:, 0], fmt='.4f', color='tomato')
+                    plotted = True
+            if has_p_perm:
+                ts, dat = read_ave_time(p_perm_file)
+                if ts.size and dat.shape[1] >= 1:
+                    ax.plot(ts, dat[:, 0], color='cornflowerblue', lw=1.5,
+                            marker='o', markersize=2,
+                            label='P_res_perm  (time-averaged)')
+                    plotted = True
+            if plotted:
+                ax.set_ylabel('Reservoir Pressure  (ε/σ³)')
+                ax.set_title(
+                    'Time-averaged feed and permeate reservoir pressures\n'
+                    'ΔP = P_feed − P_perm drives steady-state solvent flux',
+                    fontsize=9)
+                ax.legend(fontsize=8)
+
+        # ── Gel compressive strain vs step (compression) ──────────────────
+        elif panel == 'strain':
+            arr = read_fix_print(strain_file)
+            # cols: step | L0 | L_current
+            if arr.size and arr.shape[1] >= 3:
+                t   = arr[:, 0]
+                L0  = arr[0, 1]          # initial Rg-based thickness (constant)
+                L   = arr[:, 2]          # current thickness
+                eps = (L0 - L) / L0 * 100.0  # strain in %
+                ax.plot(t, eps, color='darkorange', lw=1.5, marker='o', markersize=2)
+                ax.axhline(10.0, color='r', ls='--', lw=1.0, label='10 % target strain')
+                ax.set_ylabel('Gel Strain ε  (%)')
+                ax.set_title('Gel compressive strain (Rg-based thickness)', fontsize=9)
+                ax.legend(fontsize=8)
+                peak  = eps.max()
+                final = eps[-1]
+                ax.text(0.98, 0.92,
+                        f'Peak: {peak:.2f}%   Final (post-relax): {final:.2f}%',
+                        transform=ax.transAxes, fontsize=9, ha='right', va='top',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+
+        # ── Piston z-position vs step (compression) ───────────────────────
+        elif panel == 'piston_pos':
+            arr = read_fix_print(pos_file)
+            # cols: step | piston_z
+            if arr.size and arr.shape[1] >= 2:
+                t, z = arr[:, 0], arr[:, 1]
+                ax.plot(t, z, color='purple', lw=1.5, marker='o', markersize=2)
+                ax.set_ylabel('Piston z  (σ)')
+                ax.set_title('Piston centre-of-mass z position', fontsize=9)
+
+    axes[-1].set_xlabel('Step')
+    plt.tight_layout()
+    plt.savefig(output, dpi=150)
+    print(f"Flow diagnostics    → {output}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -495,3 +690,15 @@ if __name__ == '__main__':
     if shear_files_present or 'Pxz' in data or 'Xz' in data:
         plot_shear_diagnostics(data, args.folder, run_id,
                                os.path.join(out_dir, f'{run_id}_shear_diagnostics.png'))
+
+    # Flow/compression diagnostics (auto-triggered when piston force files are present).
+    # Mode (compression vs permeation) is detected inside plot_flow_diagnostics from
+    # which output files exist — no flag needed.
+    piston_dir = os.path.join(args.folder, 'output_files', 'piston_data')
+    force_files_present = (
+        os.path.exists(os.path.join(piston_dir, f'piston_force_{run_id}.dat')) or
+        os.path.exists(os.path.join(piston_dir, f'piston_force_pressure_{run_id}.dat'))
+    )
+    if force_files_present:
+        plot_flow_diagnostics(args.folder, run_id,
+                              os.path.join(out_dir, f'{run_id}_flow_diagnostics.png'))

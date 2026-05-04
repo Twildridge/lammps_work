@@ -235,6 +235,18 @@ thermo_style custom step c_mobile_temp pe ke etotal press c_mobile_press vol lx 
 thermo_modify lost warn
 thermo ${thermo_freq}
 
+# ----- Piston force compute (defined early so permeation mode can record a
+#       Phase 0 equilibrium baseline; compression mode only outputs from Phase 2) -----
+# c_piston_fz: sum of pairwise z-forces on ALL piston atoms.
+#   Positive = net upward (gel/solvent pushing piston up).
+#   In compression mode, setforce 0 is still active here → value will be 0
+#   until Phase 2 (when setforce is removed); the fix print is only defined
+#   for compression AFTER Phase 0.5 cleanup (see OUTPUT: PISTON DATA).
+#   In permeation mode, no setforce is ever applied, so the value is live now.
+compute piston_fz      piston reduce sum fz
+variable piston_area      equal lx*ly          # cross-sectional area of simulation box
+variable piston_pressure_z equal c_piston_fz/v_piston_area  # force normalised by area
+
 
 # ==========================================================================
 #              PHASE 0: NVT EQUILIBRATION (BOTH MODES)
@@ -261,6 +273,13 @@ dump traj_setup gel_system custom ${dump_freq_setup} &
 
 # NVT equilibration at fixed volume (piston frozen for compression, z-free for permeation)
 fix nvt_equil mobile nvt temp ${temp_target} ${temp_target} 1.0
+
+# Permeation: record piston force from the very start of Phase 0 to capture the
+# equilibrium (zero-applied-pressure) baseline.  The piston floats freely on solvent
+# (fix rigid_piston force * off off on, no setforce), so c_piston_fz is live now.
+# Compression mode: force output begins AFTER Phase 0.5 (see OUTPUT: PISTON DATA).
+if "${compression_mode} == 0" then &
+    "fix out_piston_force all print ${volume_freq} '$(step) $(c_piston_fz)' file output_files/piston_data/piston_force_${dataname}_${interaction}_${nsteps}.dat screen no"
 
 if "${compression_mode} == 0" then "run ${perm_setup_freq}"
 if "${compression_mode} == 1" then "run ${comp_setup_freq}"
@@ -686,6 +705,15 @@ fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_com[3])" &
 fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &
     file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${nsteps}.dat screen no
 
+# ----- Piston force: compression mode only (Phase 2 start = immediately after Phase 0.5) -----
+# setforce 0 was removed at Phase 2 setup above; pairwise z-forces are live from here.
+# Expected profile: rises as gel compresses → plateaus near comp_percent strain → decays
+# during stress relaxation.  This fix is intentionally NOT unfixed in the relaxation
+# cleanup block so that force relaxation is captured; it is removed at final cleanup.
+# (Permeation-mode force recording began before Phase 0 NVT; see above.)
+if "${compression_mode} == 1" then &
+    "fix out_piston_force all print ${volume_freq} '$(step) $(c_piston_fz)' file output_files/piston_data/piston_force_${dataname}_${interaction}_${nsteps}.dat screen no"
+
 
 # ==========================================================================
 #                    OUTPUT: PARTIAL STRESS PROFILES (time-averaged)
@@ -724,6 +752,20 @@ if "${compression_mode} == 0" then &
 
 if "${compression_mode} == 0" then &
     "fix avg_P_perm all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} v_P_res_perm file output_files/stress_data/pressure_permeate_${dataname}_${interaction}_${nsteps}.dat"
+
+# ----- Permeation: piston force vs reservoir pressure comparison -----
+# At mechanical quasi-equilibrium the piston force balances the pressure difference:
+#   c_piston_fz  ≈  (P_res_feed − P_res_perm) × lx × ly
+# P_feed_force (= P_res_feed × lx × ly) is the feed-pressure force equivalent;
+# comparing it to c_piston_fz validates that the reservoir pressure measurement
+# is consistent with the actual contact force on the piston.
+#
+# Output file columns (one row per volume_freq steps):
+#   step | F_piston_z | P_piston (=F/A) | P_res_feed | P_res_perm | P_feed×A
+if "${compression_mode} == 0" then &
+    "variable P_feed_force equal v_P_res_feed*v_piston_area"
+if "${compression_mode} == 0" then &
+    "fix out_piston_force_perm all print ${volume_freq} '$(step) $(c_piston_fz) $(v_piston_pressure_z) $(v_P_res_feed) $(v_P_res_perm) $(v_P_feed_force)' file output_files/piston_data/piston_force_pressure_${dataname}_${interaction}_${nsteps}.dat screen no"
 
 
 # ==========================================================================
@@ -843,6 +885,10 @@ if "${compression_mode} == 1" then "variable hw_z equal $(v_hw_z)"
 # Stop all volume/strain/dim output — everything is constant after piston freeze
 if "${compression_mode} == 1" then "unfix out_piston_pos"
 if "${compression_mode} == 1" then "unfix out_piston_vel"
+# NOTE: out_piston_force is intentionally NOT unfixed here.
+# The gel reaction force changes during stress relaxation (it should decay), and
+# capturing that decay is the point of Phase 2.  out_piston_force is removed in
+# the final cleanup block after run ${relax_steps} completes.
 if "${compression_mode} == 1" then "unfix out_strain_zz"
 if "${compression_mode} == 1" then "unfix out_gel_strain_thermo"
 if "${compression_mode} == 1" then "unfix out_gel_vol_bb"
@@ -873,6 +919,10 @@ if "${compression_mode} == 1" then "run ${relax_steps}"
 # ==========================================================================
 #                            CLEANUP
 # ==========================================================================
+
+# Piston force output (both modes) — removed here after all runs are complete
+unfix out_piston_force
+if "${compression_mode} == 0" then "unfix out_piston_force_perm"
 
 # Unfix permeation-mode fixes
 if "${compression_mode} == 0" then "unfix push_piston"
