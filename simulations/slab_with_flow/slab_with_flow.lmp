@@ -431,7 +431,13 @@ variable box_lz equal lz
 compute piston_com piston com          # PBC-aware COM; use [3] for z
 compute piston_vz piston reduce ave vz  # velocities do not wrap
 
-run 0   # initializes ALL computes in one pass
+# ----- Polymer z-displacement reference -----
+# Defined here so run 0 below captures the post-Phase-0.5 equilibrated positions
+# as the reference configuration.  This gives u_z(z, 0) = 0 at Phase 2 start
+# by construction.  c_displace_poly[3] is the PBC-aware z-displacement per atom.
+compute displace_poly polymer displace/atom
+
+run 0   # initializes ALL computes in one pass; sets displace_poly reference
 
 # ----- Snapshot Rg tensor for diagnostics and analysis region sizing -----
 variable Rg_xx equal c_rg_tensor[1]
@@ -585,6 +591,25 @@ variable press_support_z atom -(c_stress_support[1]+c_stress_support[2]+c_stress
 
 compute press_z_piston  piston  reduce/chunk chunk_z_piston  sum v_press_piston_z
 compute press_z_support support reduce/chunk chunk_z_support sum v_press_support_z
+
+
+# ==========================================================================
+#                 ANALYSIS: POLYMER Z-DISPLACEMENT
+# ==========================================================================
+# u_z(z, t): mean z-displacement of polymer atoms per z-bin.
+# Feeds the cooperative-diffusivity extraction via:
+#   ∂u_z/∂t = D_c ∂²u_z/∂z²
+# phi_p ∝ u_z, so this PDE is equivalent to the volume-fraction formulation
+# but avoids the computationally expensive Voronoi step.
+#
+# Uses the same z-binning (chunk_z_polymer) as the stress profiles so that
+# displacement and stress outputs are spatially registered.
+# Reference is the Phase 2 start (set by run 0 above); u_z(z, 0) = 0 everywhere.
+
+variable uz_poly atom c_displace_poly[3]
+
+# Mean z-displacement per z-bin (not sum: we want the field value, not the count)
+compute disp_z_polymer polymer reduce/chunk chunk_z_polymer mean v_uz_poly
 
 
 # ==========================================================================
@@ -742,6 +767,18 @@ fix avg_stress_z_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_st
 
 fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_press_z_support mode vector file output_files/stress_data/stress_z_support_${dataname}_${interaction}_${nsteps}.dat
+
+
+# ==========================================================================
+#             OUTPUT: POLYMER Z-DISPLACEMENT PROFILE (time-averaged)
+# ==========================================================================
+# Identical nevery/nrepeat/nfreq as stress profiles → displacement and stress
+# curves are time-aligned for joint fitting in compression_analysis.ipynb.
+# File format mirrors stress output: header + one row per nfreq, columns = bins.
+
+fix avg_disp_z_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_disp_z_polymer mode vector &
+    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat
 
 
 # ==========================================================================
