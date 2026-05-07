@@ -609,7 +609,7 @@ compute press_z_support support reduce/chunk chunk_z_support sum v_press_support
 variable uz_poly atom c_displace_poly[3]
 
 # Mean z-displacement per z-bin (not sum: we want the field value, not the count)
-compute disp_z_polymer polymer reduce/chunk chunk_z_polymer mean v_uz_poly
+compute disp_z_polymer polymer reduce/chunk chunk_z_polymer ave v_uz_poly
 
 
 # ==========================================================================
