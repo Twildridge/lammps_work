@@ -608,8 +608,8 @@ compute press_z_support support reduce/chunk chunk_z_support sum v_press_support
 
 variable uz_poly atom c_displace_poly[3]
 
-# Mean z-displacement per z-bin (not sum: we want the field value, not the count)
-compute disp_z_polymer polymer reduce/chunk chunk_z_polymer ave v_uz_poly
+# Note: compute reduce/chunk only supports sum/min/max, not ave.
+# Per-bin mean is obtained directly via fix ave/chunk in the OUTPUT section below.
 
 
 # ==========================================================================
@@ -776,8 +776,12 @@ fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_st
 # curves are time-aligned for joint fitting in compression_analysis.ipynb.
 # File format mirrors stress output: header + one row per nfreq, columns = bins.
 
-fix avg_disp_z_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_disp_z_polymer mode vector &
+# fix ave/chunk computes the per-bin mean of v_uz_poly (spatial avg within bin)
+# time-averaged over nrepeat_stress samples, output every nfreq_stress steps.
+# Output columns: Chunk  Ncount  coord_z  mean_uz
+# (coord_z = bin center in σ; Ncount = atoms contributing that frame)
+fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_polymer v_uz_poly &
     file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat
 
 
