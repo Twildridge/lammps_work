@@ -780,9 +780,17 @@ fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_st
 # time-averaged over nrepeat_stress samples, output every nfreq_stress steps.
 # Output columns: Chunk  Ncount  coord_z  mean_uz
 # (coord_z = bin center in σ; Ncount = atoms contributing that frame)
+#
+# NOTE (compression mode): this fix runs during the COMPRESSION RAMP and writes
+# to the _comp_phase_ diagnostic file.  At the compression halt the fix is
+# destroyed, the compute reference is reset to the compressed configuration,
+# and a fresh fix writes to the main output file (disp_z_polymer_*.dat).
+# This ensures the main file contains only relaxation-phase displacement with
+# u_z(z, 0) = 0 at the halt point — the correct initial condition for the
+# cooperative-diffusivity Fourier fit.
 fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_polymer v_uz_poly &
-    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat
+    file output_files/displacement_data/disp_z_polymer_comp_phase_${dataname}_${interaction}_${nsteps}.dat
 
 
 # ==========================================================================
@@ -953,6 +961,19 @@ if "${compression_mode} == 1" then "velocity piston set 0.0 0.0 0.0"
 if "${compression_mode} == 1" then "unfix rigid_piston"
 if "${compression_mode} == 1" then &
     "fix rigid_piston piston rigid single force * off off off torque * off off off"
+
+# ----- Displacement: reset reference to the compressed (halt) state -----
+# Destroy the compression-phase fix and compute, then redefine both from
+# scratch.  The new compute captures positions at THIS timestep (the halt
+# point) as its reference, giving u_z(z, 0) = 0 at the start of relaxation.
+# The fresh fix writes to the MAIN output file so that compression_analysis
+# only sees pure-relaxation displacement data.
+if "${compression_mode} == 1" then "unfix avg_disp_z_poly"
+if "${compression_mode} == 1" then "uncompute displace_poly"
+if "${compression_mode} == 1" then "compute displace_poly polymer displace/atom"
+if "${compression_mode} == 1" then "variable uz_poly atom c_displace_poly[3]"
+if "${compression_mode} == 1" then &
+    "fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} chunk_z_polymer v_uz_poly file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat"
 
 if "${compression_mode} == 1" then "run ${relax_steps}"
 
