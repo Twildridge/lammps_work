@@ -592,6 +592,28 @@ variable press_support_z atom -(c_stress_support[1]+c_stress_support[2]+c_stress
 compute press_z_piston  piston  reduce/chunk chunk_z_piston  sum v_press_piston_z
 compute press_z_support support reduce/chunk chunk_z_support sum v_press_support_z
 
+# ── True ZZ partial-stress component (σzz only) ───────────────────────────
+# The isotropic press_*_z variables above average (σxx+σyy+σzz)/3, which
+# mixes background pressure into the compression signal and cannot be used
+# directly to compute the longitudinal modulus.  These variables isolate the
+# ZZ virial component (c_stress[3]) needed for the Terzaghi decomposition:
+#   σ'_zz = (σ_p_zz + σ_s_zz) − p_pore,   p_pore = σ_s_zz / φ_s
+# Note: still virial-only (NULL kinetic); kinetic contribution is isotropic
+# and cancels in the effective-stress difference for an equilibrated solvent.
+variable sigma_p_zz atom -c_stress_polymer[3]/(lx*ly*${binWidth})
+variable sigma_s_zz atom -c_stress_solvent[3]/(lx*ly*${binWidth})
+variable sigma_p_xx atom -c_stress_polymer[1]/(lx*ly*${binWidth})
+variable sigma_s_xx atom -c_stress_solvent[1]/(lx*ly*${binWidth})
+variable sigma_p_yy atom -c_stress_polymer[2]/(lx*ly*${binWidth})
+variable sigma_s_yy atom -c_stress_solvent[2]/(lx*ly*${binWidth})
+
+compute sigmazz_poly polymer reduce/chunk chunk_z_polymer sum v_sigma_p_zz
+compute sigmazz_solv solvent  reduce/chunk chunk_z_solvent  sum v_sigma_s_zz
+compute sigmaxx_poly polymer reduce/chunk chunk_z_polymer sum v_sigma_p_xx
+compute sigmaxx_solv solvent  reduce/chunk chunk_z_solvent  sum v_sigma_s_xx
+compute sigmayy_poly polymer reduce/chunk chunk_z_polymer sum v_sigma_p_yy
+compute sigmayy_solv solvent  reduce/chunk chunk_z_solvent  sum v_sigma_s_yy
+
 
 # ==========================================================================
 #                 ANALYSIS: POLYMER Z-DISPLACEMENT
@@ -767,6 +789,25 @@ fix avg_stress_z_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_st
 
 fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_press_z_support mode vector file output_files/stress_data/stress_z_support_${dataname}_${interaction}_${nsteps}.dat
+
+# True ZZ partial-stress outputs (σzz component only; used for longitudinal modulus)
+fix avg_sigmazz_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmazz_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmaxx_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmaxx_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmayy_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${nsteps}.dat
 
 
 # ==========================================================================
