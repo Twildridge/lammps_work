@@ -68,7 +68,7 @@ variable flux_freq         equal 1000   # permeate bead count output interval (s
 # ----- Output Frequencies -----
 variable thermo_freq     equal 250000 # 2000  # 250000
 variable dump_freq_setup equal 10000      # frequent dumps during Phase 1
-variable dump_freq_prod  equal 100000 # 5000 # 100000     # sparse dumps during Phase 2
+variable dump_freq_prod  equal 200000 # 5000 # 100000     # sparse dumps during Phase 2
 variable volume_freq     equal 5000 # 1000 # 5000
 
 # ======================================================================
