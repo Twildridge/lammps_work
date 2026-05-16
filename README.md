@@ -42,8 +42,9 @@ lammps_work/                    ← This git repository
 │
 ├── simulations/                ← One folder per simulation type
 │   ├── slab_with_support/      ← Gel equilibration and compression (main workhorse)
-│   ├── slab_with_flow/         ← Permeation and compression with piston forcing
-│   ├── shear_slab/             ← Shear modulus measurement (xz shear of isolated gel)
+│   ├── slab_with_flow/         ← Permeation OR compression with piston forcing (compression_mode switch)
+│   ├── shear_slab/             ← Shear modulus measurement (plate-driven xz shear; current G workflow)
+│   ├── slab_elongation/        ← LEGACY uniaxial elongation prototype — superseded by shear_slab
 │   ├── solvent_phase/          ← Pure solvent equation of state sweep
 │   ├── solvent_pure/           ← Single-state pure solvent run
 │   ├── polymer_phase/          ← Pure polymer equation of state sweep
@@ -53,33 +54,48 @@ lammps_work/                    ← This git repository
 │   ├── run_lammps.sh           ← Job runner for Expanse
 │   ├── run_lammps_bridges.sh   ← Job runner for Bridges-2
 │   ├── run_lammps_pod.sh       ← Job runner for Pod
-│   ├── git_sync.sh             ← One-command GitHub sync (MacBook)
+│   ├── run_lammps_pod_old.sh   ← Legacy Pod runner (kept for reference)
+│   ├── build_lammps.sh         ← One-shot LAMMPS build script (Expanse-style cmake)
+│   ├── git_sync.sh             ← One-command GitHub sync (MacBook + clusters)
 │   ├── add_walls_to_slab.ipynb         ← Build slab data file (no angles)
 │   ├── add_walls_with_angles.ipynb     ← Build slab data file (with angles)
 │   ├── slab_with_support.ipynb         ← Build basic slab geometry
 │   ├── slab_with_support_angled.ipynb  ← Build angled-chain slab geometry
+│   ├── slab_with_support_old.ipynb     ← Legacy slab builder (kept for reference)
+│   ├── slab_with_support_old_2.ipynb   ← Legacy slab builder (kept for reference)
 │   ├── isolate_gel.ipynb               ← Extract just the swollen gel from a run
 │   ├── split_gel_slab.ipynb            ← Split a gel slab into pieces
+│   ├── add_plates_to_gel.ipynb         ← Attach shear plates to isolated gel (input for shear_slab)
+│   ├── add_more_plates_to_gel.ipynb    ← Variant: plates on all six faces (experimental)
 │   ├── pure_polymer.ipynb              ← Build pure polymer data file
 │   ├── pure_solvent_1.ipynb            ← Build pure solvent data file
-│   ├── longitudinal_modulus_analysis.ipynb  ← Calculate M from compression run
-│   ├── flow_poroelasticity_analysis.ipynb   ← Calculate Dc, flux, pore pressure
-│   ├── plot_lammps_log.py      ← Plot T, P, volume convergence from log.lammps
+│   ├── compression_analysis.ipynb           ← Current: M, Dc, pore pressure, volume fractions (compression runs)
+│   ├── longitudinal_modulus_analysis.ipynb  ← Older M-only notebook (superseded by compression_analysis)
+│   ├── permeation_analysis.ipynb            ← Flow profiles & pore pressure evolution (compression_mode=0)
+│   ├── flow_poroelasticity_analysis.ipynb   ← Older flow notebook (superseded by permeation_analysis)
+│   ├── shear_analysis.ipynb                 ← G, N1/N2, stress profiles (shear_slab output)
+│   ├── compression_analysis_backup.ipynb    ← Frozen snapshot of compression notebook
+│   ├── plot_lammps_log.py      ← Plot T, P, volume convergence from log.lammps (+ shear diagnostics)
 │   ├── plot_stress_profiles.py ← Plot stress and volume fraction profiles
 │   ├── plot_piston_data.py     ← Plot piston position and velocity
+│   ├── plot_eos.py             ← Plot P* vs ρ* for EOS sweeps (solvent_phase / polymer_phase)
 │   └── write_tracking.py       ← Log performance data to tracking.txt
 │
-├── lammps_data/                ← Small .data files committed to git
-│   └── (input_data/ lives outside the repo — see §4)
+├── lammps_data/                ← Reserved for small committed .data files (currently empty;
+│                                  input_data/ lives outside the repo — see §4)
 │
 ├── README.md                   ← This file
-├── CLAUDE_CONTEXT.md           ← Context file for Cowork AI sessions
+├── CLAUDE_CONTEXT.md           ← Context file for Cowork AI sessions (gitignored)
+├── .gitattributes              ← Runs nbstripout on every notebook commit (see §8)
 ├── lj_units_cheat_sheet.md     ← Unit conversions and parameter reference
 ├── expanse_lammps_guide.md     ← Expanse-specific setup and GitHub guide
 ├── slurm_commands_and_compiling.md  ← Cluster commands and LAMMPS build notes
 ├── slab_data_file_info.md      ← Log of every .data file that has been generated
 ├── documenting_pod_runs.md     ← HPC performance benchmarks
-└── tracking.txt                ← Legacy performance log (not actively maintained)
+├── time_vs_atoms.png           ← Benchmark figure (scaling vs system size)
+├── time_vs_timesteps.png       ← Benchmark figure (wall-clock vs timestep count)
+├── tracking.txt                ← Legacy performance log (not actively maintained)
+└── tracking_backup.txt         ← Snapshot of tracking.txt
 ```
 
 **What lives outside the repo** (on each machine):
@@ -179,10 +195,14 @@ Before running a gel simulation you need a `.data` file — a text file describi
 | `add_walls_with_angles.ipynb` | Same but with harmonic and cosine angle terms | When running angle-restrained chains |
 | `slab_with_support.ipynb` | Basic slab geometry builder | Reference / older geometry |
 | `slab_with_support_angled.ipynb` | Angled-chain slab geometry | Angled geometry variants |
-| `isolate_gel.ipynb` | Extracts the swollen polymer (+solvent) from a finished slab run | Input for `shear_slab` and modulus analysis |
+| `isolate_gel.ipynb` | Extracts the swollen polymer (+solvent) from a finished slab run | Pre-step for `shear_slab`; modulus analysis |
+| `add_plates_to_gel.ipynb` | Attaches rigid shear plates on the x-faces of an isolated gel (atom type 4, harmonic-bonded to surface polymer) | **Required input for `shear_slab.lmp`** |
+| `add_more_plates_to_gel.ipynb` | Variant that adds plates on all six faces | Experimental six-face confinement runs |
 | `split_gel_slab.ipynb` | Splits a slab into polymer-only and solvent-only files | Isolated component analysis |
 | `pure_polymer.ipynb` | Pure polymer box (no solvent) | EOS and baseline runs |
 | `pure_solvent_1.ipynb` | Pure solvent box | EOS and solvent calibration |
+
+Typical shear-modulus pipeline: run `slab_with_support` to equilibrate → `isolate_gel.ipynb` to strip the support/piston → `add_plates_to_gel.ipynb` to attach plates → submit `shear_slab.lmp` with the `*_with_plates.data` file.
 
 ### Typical workflow for a new slab
 
@@ -215,12 +235,15 @@ The `run_lammps` scripts handle all the bookkeeping automatically: creating time
 | Folder | What it simulates | Typical use |
 |--------|------------------|-------------|
 | `slab_with_support/` | Gel equilibration or axial compression with piston | Equilibrate gel; measure M (longitudinal modulus) |
-| `slab_with_flow/` | Piston-forced permeation or compression of a pre-equilibrated walled gel | Measure flux, Dc, pore pressure profiles |
-| `shear_slab/` | xz shear of an isolated swollen gel (from `isolate_gel.ipynb`) | Measure G (shear modulus) |
+| `slab_with_flow/` | Piston-forced permeation **or** compression of a pre-equilibrated walled gel — toggled by `variable compression_mode` (0 = permeation, 1 = compression). Phase 0.5 piston pre-compression brings the gel to P* = 1.5 before production. | Measure flux, Dc, pore pressure profiles (mode 0); load gel to measure M (mode 1) |
+| `shear_slab/` | Plate-driven xz shear of an isolated swollen gel with attached plates (input from `add_plates_to_gel.ipynb`). Phase 1a NPT (50k) + Phase 1b NVT (100k) + Phase 2 shear with `fix halt` at γ = 10% + Phase 3 NVT production. | Measure G (shear modulus) from ⟨σ_p,xz⟩ / γ |
+| `slab_elongation/` | Legacy uniaxial elongation prototype (NPT → fix deform z → NVT) | Superseded by `shear_slab/`; folder kept temporarily |
 | `solvent_phase/` | Pure solvent pressure sweep across many state points | Build solvent EOS |
 | `solvent_pure/` | Single pure solvent run | Baseline pressure/density check |
 | `polymer_phase/` | Pure polymer pressure sweep | Build polymer EOS |
 | `polymer_pure/` | Single pure polymer run | Baseline |
+
+> **Legacy `.lmp` files inside simulation folders** (`slab_with_flow_old1.lmp`, `slab_with_flow_old2.lmp`, `solvent_pure_old_no_piston_support.lmp`) are kept for reference but are no longer the active scripts — `run_lammps*.sh` always picks `<folder>.lmp`.
 
 Each folder contains:
 - `<name>.lmp` — the LAMMPS input script (controls the physics; rarely needs editing)
@@ -247,7 +270,15 @@ TYPE=""                 # stress, volume, stressvol, or leave empty
 - **`OLDSTEPS`**: set to the total timesteps already completed if continuing a previous run; 0 otherwise
 - **`TYPE`**: optional suffix that gets appended to the data file name in output (for labelling stress/volume variants)
 
-For `shear_slab`, `NSTEPS` controls only Phase 3 (production). Phase 1 (NPT equilibration, 50k steps) and Phase 2 (shear application, 200k steps) are hardcoded in `shear_slab.lmp`.
+For `shear_slab`, `NSTEPS` controls only Phase 3 (production). Phase 1a (NPT equilibration, 50k steps), Phase 1b (NVT lock, 100k steps), and Phase 2 (shear up to 570k steps, halted automatically at γ = 10%) are hardcoded inside `shear_slab.lmp`.
+
+For `slab_with_flow`, the operating mode is set **inside the `.lmp` file**, not the batch file:
+
+```lammps
+variable compression_mode equal 1    # 0 = permeation, 1 = compression
+```
+
+The same `.lmp` script runs both modes — change the variable, push, and resubmit.
 
 ### 5d. Submitting a job
 
@@ -433,16 +464,16 @@ python ~/Documents/lammps_work/scripts/write_tracking.py \
 
 ### 7b. Jupyter analysis notebooks
 
-Open these on your MacBook in JupyterLab (`jupyter lab`), pointing them at data files in `flow_data_local/`.
+Open these on your MacBook in JupyterLab (`jupyter lab`), pointing them at data files in `flow_data_local/<sim_type>/<RUN_ID>/`. Each notebook has a config cell near the top — only `RUN_ID` and `sim_name` change between runs; all paths derive from those.
 
-**`longitudinal_modulus_analysis.ipynb`** ← *Current: Milestone 3 (done)*
-Reads polymer partial stress vs. strain from a `slab_with_flow` compression run and extracts the longitudinal modulus M = Δσ_zz / Δε_zz. Inputs: `stress_tensor_polymer_*.dat`, `shear_strain_*.dat`.
+**`compression_analysis.ipynb`** ← *Current: Milestone 3 (M) + Milestone 5 (Dc)*
+Reads partial stress, volume fraction, and pore pressure data from a `slab_with_flow` compression run (`compression_mode = 1`). Extracts: longitudinal modulus M (both from network-stress integration and Voronoi-tessellated φ_p/φ_s decomposition), cooperative diffusivity Dc from φ_p(z,t) relaxation, and pore-pressure profiles. Inputs: `stress_tensor_polymer_*.dat`, `stress_profile_z_*.dat`, trajectory file. Supersedes `longitudinal_modulus_analysis.ipynb` (still present for reference).
 
-**`flow_poroelasticity_analysis.ipynb`** ← *Current: Milestones 5–6*
-Reads volume fraction and stress profiles from permeation runs. Extracts pore pressure profiles, cooperative diffusivity Dc (from mode-decay fitting), solvent flux, and osmotic/elastic pressure contributions. Inputs: `stress_profile_z_*.dat`, traj files.
+**`permeation_analysis.ipynb`** ← *Current: Milestones 5–6*
+Reads volume fraction and stress profiles from `slab_with_flow` permeation runs (`compression_mode = 0`). Extracts pore-pressure profiles φ_p(z), φ_s(z), p_p(z), network stress σ'(z), and solvent flux. Plots each trajectory dump as a separate curve to show temporal evolution. Supersedes `flow_poroelasticity_analysis.ipynb` (still present for reference).
 
-**`shear_modulus_analysis.ipynb`** ← *Upcoming: Milestone 4*
-Will read the box-integrated polymer stress tensor from `shear_slab` runs and extract shear modulus G = σ_xz / γ_xz. Inputs: `stress_tensor_polymer_*.dat`, `shear_strain_*.dat`.
+**`shear_analysis.ipynb`** ← *Current: Milestone 4 (G)*
+Reads the bulk-region polymer stress tensor from a `shear_slab` Phase 3 production run and extracts G = ⟨σ_p,xz⟩ / γ_cm, plus normal stress differences N1 / N2, x-profile stress plots, and a polymer/solvent poroelastic decomposition. Inputs: `stress_tensor_polymer_*.dat`, `stress_profile_x_polymer_*.dat`, `shear_strain_*.dat`. Atoms within 3σ of either plate are excluded from all stress computes.
 
 ---
 
@@ -466,6 +497,8 @@ lsync "my custom message"    # use a specific commit message
 ```
 
 `lsync` does: `git pull --rebase` → `git add -A` → `git commit` → `git push`. If there are no changes, it exits cleanly.
+
+> **`nbstripout` (notebook output stripping):** the `.gitattributes` file at the repo root runs `nbstripout` as a clean filter on every `*.ipynb` commit, so notebook *outputs* (figures, large data printouts) are never staged — only code and markdown. One-time install on each machine: `pip install nbstripout && (cd ~/Documents/lammps_work && nbstripout --install)`.
 
 ### Clusters → GitHub
 
@@ -679,4 +712,4 @@ Full details are in `lj_units_cheat_sheet.md`. Key conversions for PEG/water:
 
 ---
 
-*Last updated: 2026-04-15. For questions, contact Dylan Pollard (pollard@ucsb.edu).*
+*Last updated: 2026-05-15. For questions, contact Dylan Pollard (pollard@ucsb.edu).*

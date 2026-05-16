@@ -478,9 +478,11 @@ def plot_flow_diagnostics(folder, run_id, output):
     pressure_feed_*.dat             : fix ave/time scalar → (ts, [[P_feed], ...])
     pressure_permeate_*.dat         : fix ave/time scalar → (ts, [[P_perm], ...])
     piston_position_*.dat           : step  piston_z
+    permeate_count_*.dat            : step  N_permeate  (solvent atoms in permeate region)
     """
-    piston_dir = os.path.join(folder, 'output_files', 'piston_data')
-    stress_dir = os.path.join(folder, 'output_files', 'stress_data')
+    piston_dir  = os.path.join(folder, 'output_files', 'piston_data')
+    stress_dir  = os.path.join(folder, 'output_files', 'stress_data')
+    perm_dir    = os.path.join(folder, 'output_files', 'permeation_data')
 
     force_file      = os.path.join(piston_dir, f'piston_force_{run_id}.dat')
     force_pres_file = os.path.join(piston_dir, f'piston_force_pressure_{run_id}.dat')
@@ -488,6 +490,7 @@ def plot_flow_diagnostics(folder, run_id, output):
     strain_file     = os.path.join(stress_dir,  f'strain_zz_{run_id}.dat')
     p_feed_file     = os.path.join(stress_dir,  f'pressure_feed_{run_id}.dat')
     p_perm_file     = os.path.join(stress_dir,  f'pressure_permeate_{run_id}.dat')
+    flux_file       = os.path.join(perm_dir,    f'permeate_count_{run_id}.dat')
 
     has_force      = os.path.exists(force_file)
     has_force_pres = os.path.exists(force_pres_file)
@@ -495,6 +498,7 @@ def plot_flow_diagnostics(folder, run_id, output):
     has_strain     = os.path.exists(strain_file)
     has_p_feed     = os.path.exists(p_feed_file)
     has_p_perm     = os.path.exists(p_perm_file)
+    has_flux       = os.path.exists(flux_file)
 
     if not has_force and not has_force_pres:
         return  # nothing to do
@@ -509,6 +513,8 @@ def plot_flow_diagnostics(folder, run_id, output):
         panels.append('force_vs_pres')       # F/A vs P_feed vs P_perm (instantaneous)
         if has_p_feed or has_p_perm:
             panels.append('pres_timeseries') # time-averaged reservoir pressures
+        if has_flux:
+            panels.append('solvent_flux')    # N_permeate vs step
     else:
         # compression-specific panels
         if has_strain:
@@ -640,6 +646,24 @@ def plot_flow_diagnostics(folder, run_id, output):
                 ax.plot(t, z, color='purple', lw=1.5, marker='o', markersize=2)
                 ax.set_ylabel('Piston z  (σ)')
                 ax.set_title('Piston centre-of-mass z position', fontsize=9)
+
+        # ── Solvent flux: N_permeate vs step (permeation) ─────────────────
+        elif panel == 'solvent_flux':
+            arr = read_fix_print(flux_file)
+            # cols: step | N_permeate
+            if arr.size and arr.shape[1] >= 2:
+                t, n_perm = arr[:, 0], arr[:, 1]
+                ax.plot(t, n_perm, color='teal', lw=1.5, marker='o', markersize=2)
+                ax.set_ylabel('N_permeate  (atoms)')
+                ax.set_title(
+                    'Solvent atoms in permeate region vs time\n'
+                    'Slope = steady-state solvent flux  (atoms / τ)',
+                    fontsize=9)
+                # Annotate final count
+                ax.text(0.98, 0.05,
+                        f'Final count: {int(n_perm[-1])}',
+                        transform=ax.transAxes, fontsize=9, ha='right', va='bottom',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
     axes[-1].set_xlabel('Step')
     plt.tight_layout()
