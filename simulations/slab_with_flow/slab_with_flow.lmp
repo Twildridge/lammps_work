@@ -938,6 +938,73 @@ fix out_polymer_com all print ${volume_freq} &
 
 
 # ==========================================================================
+#  COMPRESSION MODE: REFERENCE-STATE (ε=0) STRESS RECORDING
+# ==========================================================================
+# The main fix ave/time stress fixes above start sampling at the moment they
+# are defined and emit their first output `nfreq_stress` steps later — long
+# after compression has already happened.  That means the first snapshot in
+# the regular stress files is NOT a clean ε=0 reference; it's a relaxation
+# state at ε≈comp_percent.  Using it for σ′_ref in compression_analysis.ipynb
+# gives a meaningless (often negative) Δσ′.
+#
+# Here we record stress with the piston temporarily HELD at v=0 for one
+# `nfreq_stress` window.  Output files are tagged "_ref_" so the analysis
+# notebook can pick them up as the true ε=0 reference.  This block adds
+# ~1 nfreq_stress to the run-time but only for compression mode; permeation
+# mode skips it entirely.
+
+if "${compression_mode} == 1" then "print '========================================'"
+if "${compression_mode} == 1" then "print 'Phase 2 pre-roll: ε=0 reference stress recording (${nfreq_stress} steps)'"
+if "${compression_mode} == 1" then "print '========================================'"
+
+# Hold the piston still during the reference window (cancels the
+# v_piston_prod assignment made during Phase 2 setup; restored below).
+if "${compression_mode} == 1" then "velocity piston set 0.0 0.0 0.0"
+
+# Reference fix ave/time fixes — same computes, "_ref_" filename tag.
+if "${compression_mode} == 1" then &
+    "fix ref_avg_sigmazz_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_ref_${dataname}_${interaction}_${nsteps}.dat"
+if "${compression_mode} == 1" then &
+    "fix ref_avg_sigmazz_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_ref_${dataname}_${interaction}_${nsteps}.dat"
+if "${compression_mode} == 1" then &
+    "fix ref_avg_sigmaxx_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_ref_${dataname}_${interaction}_${nsteps}.dat"
+if "${compression_mode} == 1" then &
+    "fix ref_avg_sigmaxx_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_ref_${dataname}_${interaction}_${nsteps}.dat"
+if "${compression_mode} == 1" then &
+    "fix ref_avg_sigmayy_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_ref_${dataname}_${interaction}_${nsteps}.dat"
+if "${compression_mode} == 1" then &
+    "fix ref_avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_ref_${dataname}_${interaction}_${nsteps}.dat"
+# Solvent-solvent-only reference (matches new sub-style 2 outputs above)
+if "${compression_mode} == 1" then &
+    "fix ref_avg_sigmazz_solv_ss all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_sigmazz_solv_ss mode vector file output_files/stress_data/sigmazz_solvent_ss_ref_${dataname}_${interaction}_${nsteps}.dat"
+if "${compression_mode} == 1" then &
+    "fix ref_avg_sigmaxx_solv_ss all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_sigmaxx_solv_ss mode vector file output_files/stress_data/sigmaxx_solvent_ss_ref_${dataname}_${interaction}_${nsteps}.dat"
+if "${compression_mode} == 1" then &
+    "fix ref_avg_sigmayy_solv_ss all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_sigmayy_solv_ss mode vector file output_files/stress_data/sigmayy_solvent_ss_ref_${dataname}_${interaction}_${nsteps}.dat"
+
+# Run for ONE full averaging window so each "_ref_" file gets exactly one
+# stress snapshot at ε=0.
+if "${compression_mode} == 1" then "run ${nfreq_stress}"
+
+# Tear down the reference fixes
+if "${compression_mode} == 1" then "unfix ref_avg_sigmazz_poly"
+if "${compression_mode} == 1" then "unfix ref_avg_sigmazz_solv"
+if "${compression_mode} == 1" then "unfix ref_avg_sigmaxx_poly"
+if "${compression_mode} == 1" then "unfix ref_avg_sigmaxx_solv"
+if "${compression_mode} == 1" then "unfix ref_avg_sigmayy_poly"
+if "${compression_mode} == 1" then "unfix ref_avg_sigmayy_solv"
+if "${compression_mode} == 1" then "unfix ref_avg_sigmazz_solv_ss"
+if "${compression_mode} == 1" then "unfix ref_avg_sigmaxx_solv_ss"
+if "${compression_mode} == 1" then "unfix ref_avg_sigmayy_solv_ss"
+
+# Reinstate the production-velocity assignment for the actual compression
+if "${compression_mode} == 1" then "velocity piston set 0.0 0.0 -${v_piston_prod}"
+
+if "${compression_mode} == 1" then &
+    "print '>>> Reference recording done.  step=$(step)  gel_strain=$(v_gel_strain)'"
+
+
+# ==========================================================================
 #         COMPRESSION MODE: HALT AT comp_percent STRAIN
 # ==========================================================================
 # fix halt stops the current run command (error continue = no abort).
