@@ -1,0 +1,639 @@
+# ========== Compression Modulus Simulation — Plate-Driven (Isotropic) ==========
+# Input: isolated gel WITH six plates attached (from add_more_plates_to_gel.ipynb).
+# Atom types: 1=polymer, 2=crosslinker, 3=solvent, 4=plate
+# Bond types:  1=FENE (polymer-polymer), 2=harmonic (plate-polymer, k=30, r0=1)
+#
+# Compression method: fix move linear on all six plate groups simultaneously.
+#   Top   plate (+z face): vz = -vcompress_z   Bot   plate (-z face): vz = +vcompress_z
+#   Front plate (+y face): vy = -vcompress_y   Back  plate (-y face): vy = +vcompress_y
+#   Right plate (+x face): vx = -vcompress_x   Left  plate (-x face): vx = +vcompress_x
+#   Plates move only along their normal axis → isotropic compression.
+#   Plate atoms are bonded (harmonic) to surface polymer → gel compresses internally.
+#   No direct force on FENE bonds; harmonic bonds transmit load at each face safely.
+#
+# Plate-plate interactions disabled (neigh_modify exclude type 4 4) to prevent
+# spurious cross-face forces between the six independent plate molecules.
+#
+# Why NOT fix deform (box compression):
+#   fix deform rescales ALL atom positions, which conflicts with the plate-polymer
+#   harmonic bonds and risks FENE failure at the driven surfaces.
+#   Plate-driven compression keeps the box fixed; plates mechanically transmit
+#   the load to the gel through harmonic bonds (same logic as shear_slab).
+#
+# Phases:
+#   1. NVT equilibration — all 6 plates frozen (fix move 0 0 0), gel NVT
+#      1a. NPT (nsteps_npt steps):  find equilibrium box volume at P = P_target
+#      1b. NVT (nsteps_equil steps): relax internal stresses at NPT-final volume
+#   2. Compression — all 6 plates driven inward simultaneously, gel NVT
+#      Run halts when compress_strain_z >= target_strain_comp
+#   3. Production — all 6 plates frozen at Phase 2 final positions, gel NVT
+#      K = -(sig_p_xx + sig_p_yy + sig_p_zz) / (3 * compress_strain_vol_final)
+#
+# Plate mol IDs (assigned by add_more_plates_to_gel.ipynb):
+#   top   = max_mol_gel + 1      bot   = max_mol_gel + 2
+#   front = max_mol_gel + 3      back  = max_mol_gel + 4
+#   right = max_mol_gel + 5      left  = max_mol_gel + 6
+# These are resolved at runtime via compute reduce max mol on the gel group.
+# (Spatial region grouping fails because right/left plates span the full y-range,
+#  overlapping with the y-extent of front/back plates.)
+#
+# Outputs:
+#   stress_data/stress_tensor_polymer_*.dat    6-component polymer stress vs time
+#   stress_data/stress_tensor_solvent_*.dat    6-component solvent stress vs time
+#   stress_data/stress_profile_z_polymer_*.dat z-binned polymer stress (top/bot axis)
+#   stress_data/stress_profile_z_solvent_*.dat z-binned solvent stress
+#   stress_data/compress_strain_*.dat          step  gap_z_0  gap_z  strain_z  strain_vol
+#   volume_data/gel_dimensions_rg_*.dat        Rg-based gel dimensions
+#   volume_data/box_dimensions_*.dat           box dims vs step
+#   volume_data/polymer_com_*.dat              polymer COM vs step
+
+
+# ==========================================================================
+#                              PARAMETERS
+# ==========================================================================
+
+variable sigma          equal 1.0
+variable temp_target    equal 1.0
+variable P_target       equal 1.5
+variable timestep_prod  equal 0.005
+
+# Linear compressive strain target per axis (keep <= 0.10 for linear elastic regime)
+variable target_strain_comp equal 0.10
+
+# Phase lengths
+variable nsteps_npt           equal 50000    # Phase 1a: NPT — find equilibrium volume
+variable nsteps_equil         equal 100000   # Phase 1b: NVT — equilibrate at NPT volume
+variable nsteps_compress_base equal 285000   # reference for vcompress velocity calculation
+variable nsteps_compress      equal 570000   # 2× safety buffer — halt fires at target_strain
+# nsteps (Phase 3 production) passed from bash via -var nsteps
+
+# Output frequencies
+variable thermo_freq     equal 25000
+variable dump_freq_setup equal 25000
+variable dump_freq_prod  equal 25000
+variable stress_freq     equal 10000
+
+# Time averaging (stress) — adaptive
+variable num_stress_curves equal 10
+variable nevery_target     equal 100
+variable nrepeat_max       equal 2000
+variable nrepeat_min       equal 50
+
+variable nfreq_raw    equal floor(${nsteps}/v_num_stress_curves)
+variable nrepeat_raw  equal floor(v_nfreq_raw/v_nevery_target)
+
+variable nr_lo equal (v_nrepeat_raw>v_nrepeat_min)*v_nrepeat_raw+(v_nrepeat_raw<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepeat_max)*v_nrepeat_max
+variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
+variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
+
+print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
+print ">>> Compression: ε_target=${target_strain_comp}  nsteps_compress=${nsteps_compress}  (plate-driven, isotropic)"
+
+# Spatial binning
+variable binWidth    equal 2.0
+variable rg_scale    equal 1.8
+variable region_frac equal 1
+
+
+# ==========================================================================
+#                           INITIALIZATION
+# ==========================================================================
+
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+pair_style lj/cut 1.122
+bond_style hybrid fene harmonic
+
+read_data data_files/${dataname}.data nocoeff
+
+comm_modify cutoff 5.0
+
+print "========================================"
+print "Compression slab simulation (plate-driven): ${dataname}"
+print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
+print "Production steps: ${nsteps}"
+print "Target compressive strain (per axis): ${target_strain_comp}"
+print "========================================"
+
+
+# ==========================================================================
+#                          GROUP DEFINITIONS
+# ==========================================================================
+
+group polymer    type 1 2
+group backbone   type 1
+group crosslinks type 2
+group solvent    type 3
+group gel        type 1 2 3      # all mobile gel atoms (NVT target)
+group plate      type 4          # all plate atoms (all 6 plates combined)
+
+# Individual plate subgroups (plate_top, plate_bot, etc.) are defined after
+# Phase 1 equilibration in the GEL CHARACTERIZATION section below, once
+# the plate mol IDs have been computed via compute reduce max mol.
+
+
+# ==========================================================================
+#                       INTERATOMIC POTENTIALS
+# ==========================================================================
+
+# WCA (purely repulsive) for all pairs by default
+pair_coeff * * 1.0 ${sigma} 1.122
+
+# Tunable polymer-solvent and solvent-solvent
+pair_coeff 1 3 ${epsSP} ${sigma} 1.122
+pair_coeff 2 3 ${epsSP} ${sigma} 1.122
+pair_coeff 3 3 ${epsSS} ${sigma} 1.122
+
+# Plate interactions:
+#   Plate-plate interactions DISABLED — the six plates must not repel each
+#   other across the gel (unlike shear_slab which only has two plates).
+#   Plate-gel interactions: WCA (soft repulsive wall contact).
+neigh_modify exclude type 4 4
+pair_coeff 4 4 0.0 ${sigma} 0.0               # plate-plate DISABLED
+pair_coeff 1 4 1.0 ${sigma} 1.122             # polymer-plate WCA
+pair_coeff 2 4 1.0 ${sigma} 1.122             # crosslinker-plate WCA
+pair_coeff 3 4 1.0 ${sigma} 1.122             # solvent-plate WCA
+
+# Bond coefficients
+bond_coeff 1 fene     30.0 1.5 1.0 1.0   # polymer-polymer FENE (Kremer-Grest)
+bond_coeff 2 harmonic 30.0 1.0            # plate-polymer harmonic (k=30, r0=1)
+
+special_bonds fene
+neigh_modify delay 0 every 1 check yes
+
+
+# ==========================================================================
+#                           THERMO OUTPUT
+# ==========================================================================
+
+compute gel_temp  gel   temp
+compute gel_press all   pressure gel_temp pair bond
+
+thermo_style custom step c_gel_temp pe ke etotal press c_gel_press &
+    pxx pyy pzz pxy pxz pyz vol lx ly lz xy xz yz
+thermo_modify lost warn
+thermo ${thermo_freq}
+
+
+# ==========================================================================
+#              PHASE 1: EQUILIBRATION (NPT then NVT, all plates frozen)
+# ==========================================================================
+# Phase 1a — NPT (${nsteps_npt} steps):
+#   All 6 plates frozen with fix move linear 0 0 0; box adjusts iso to P_target.
+#   Plate atoms scale with the box (reduced coords fixed) so plate-polymer
+#   gaps adjust consistently with the gel. Goal: equilibrium box volume.
+#
+# Phase 1b — NVT (${nsteps_equil} steps):
+#   Box locked at NPT-final volume. Plates remain frozen. Gel thermalises.
+#   Goal: relax internal stresses at correct density before compression.
+
+print "========================================"
+print "Phase 1a: NPT equilibration (${nsteps_npt} steps, all plates frozen)"
+print "========================================"
+
+reset_timestep 0
+timestep ${timestep_prod}
+
+# Triclinic box required before any dump (LAMMPS restriction).
+change_box all triclinic
+
+dump traj_setup all custom ${dump_freq_setup} &
+    traj_files/setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
+    id type mol x y z
+
+# Minimize with all plates frozen — only gel atoms relax around plates.
+fix freeze_plates_min plate setforce 0.0 0.0 0.0
+velocity plate set 0.0 0.0 0.0
+minimize 1.0e-4 1.0e-6 5000 50000
+unfix freeze_plates_min
+
+# --- Phase 1a: NPT ---
+fix freeze_plates_npt plate   move linear 0 0 0
+fix npt_equil         gel     npt temp ${temp_target} ${temp_target} 1.0 &
+                                   iso ${P_target} ${P_target} 10.0
+fix mom_npt           gel     momentum 100 linear 1 1 1
+
+run ${nsteps_npt}
+
+unfix mom_npt
+unfix npt_equil
+unfix freeze_plates_npt
+
+print ">>> Post-NPT T = $(c_gel_temp)  P = $(press)"
+print ">>> NPT-final box: $(lx) x $(ly) x $(lz)  (this becomes the NVT input volume)"
+
+print "========================================"
+print "Phase 1b: NVT equilibration (${nsteps_equil} steps, all plates frozen)"
+print "  Box fixed at NPT-final volume"
+print "========================================"
+
+# --- Phase 1b: NVT at NPT-final volume ---
+fix freeze_plates_1 plate   move linear 0 0 0
+fix nvt_equil       gel     nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_equil       gel     momentum 100 linear 1 1 1
+
+run ${nsteps_equil}
+
+unfix mom_equil
+unfix nvt_equil
+unfix freeze_plates_1
+
+print ">>> Post-NVT T = $(c_gel_temp)  P = $(press)"
+print ">>> Box after Phase 1: $(lx) x $(ly) x $(lz)"
+
+
+# ==========================================================================
+#          GEL CHARACTERIZATION & PLATE SETUP (post-equilibration)
+# ==========================================================================
+# Identify individual plates by mol ID. add_more_plates_to_gel.ipynb assigns
+# mol IDs max_mol_gel+1..+6 (top, bot, front, back, right, left in order).
+# We compute the max mol ID of gel atoms (types 1 2 3) at this point.
+#
+# Note: spatial region grouping cannot be used here because the right/left
+# plates span the full box y-range, which overlaps the y-positions of the
+# front/back plates. Mol ID is the only unambiguous identifier.
+
+compute polymer_com  polymer com
+compute minx_polymer polymer reduce min x
+compute maxx_polymer polymer reduce max x
+compute miny_polymer polymer reduce min y
+compute maxy_polymer polymer reduce max y
+compute minz_polymer polymer reduce min z
+compute maxz_polymer polymer reduce max z
+compute rg_tensor    polymer gyration
+
+# Atom-style variable used to access mol ID per atom in compute reduce
+variable mol_id atom mol
+compute max_mol_gel gel reduce max v_mol_id
+
+variable gel_lx_rg equal 2.0*sqrt(3.0*c_rg_tensor[1])
+variable gel_ly_rg equal 2.0*sqrt(3.0*c_rg_tensor[2])
+variable gel_lz_rg equal 2.0*sqrt(3.0*c_rg_tensor[3])
+variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
+
+run 0
+
+variable gel_xlo equal $(c_minx_polymer)
+variable gel_xhi equal $(c_maxx_polymer)
+variable gel_ylo equal $(c_miny_polymer)
+variable gel_yhi equal $(c_maxy_polymer)
+variable gel_zlo equal $(c_minz_polymer)
+variable gel_zhi equal $(c_maxz_polymer)
+
+print ">>> Gel x-extent: ${gel_xlo} to ${gel_xhi}  (lx_gel = $(v_gel_xhi - v_gel_xlo) σ)"
+print ">>> Gel y-extent: ${gel_ylo} to ${gel_yhi}  (ly_gel = $(v_gel_yhi - v_gel_ylo) σ)"
+print ">>> Gel z-extent: ${gel_zlo} to ${gel_zhi}  (lz_gel = $(v_gel_zhi - v_gel_zlo) σ)"
+print ">>> Gel Rg dims: $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
+
+# Rg half-widths (for bulk region sizing — frozen as constants after Phase 2)
+variable eps   equal 1.0e-12
+variable Rg_xx equal c_rg_tensor[1]
+variable Rg_yy equal c_rg_tensor[2]
+variable Rg_zz equal c_rg_tensor[3]
+variable hw_x equal v_region_frac*v_rg_scale*sqrt(v_Rg_xx + v_eps)
+variable hw_y equal v_region_frac*v_rg_scale*sqrt(v_Rg_yy + v_eps)
+variable hw_z equal v_region_frac*v_rg_scale*sqrt(v_Rg_zz + v_eps)
+
+# ── Assign individual plate groups by mol ID ──────────────────────────────────
+variable mol_top_plate   equal round($(c_max_mol_gel)+1)
+variable mol_bot_plate   equal round($(c_max_mol_gel)+2)
+variable mol_front_plate equal round($(c_max_mol_gel)+3)
+variable mol_back_plate  equal round($(c_max_mol_gel)+4)
+variable mol_right_plate equal round($(c_max_mol_gel)+5)
+variable mol_left_plate  equal round($(c_max_mol_gel)+6)
+
+print ">>> Plate mol IDs: top=${mol_top_plate}  bot=${mol_bot_plate}  front=${mol_front_plate}  back=${mol_back_plate}  right=${mol_right_plate}  left=${mol_left_plate}"
+
+variable is_plate_top   atom "(type==4)&&(mol==${mol_top_plate})"
+variable is_plate_bot   atom "(type==4)&&(mol==${mol_bot_plate})"
+variable is_plate_front atom "(type==4)&&(mol==${mol_front_plate})"
+variable is_plate_back  atom "(type==4)&&(mol==${mol_back_plate})"
+variable is_plate_right atom "(type==4)&&(mol==${mol_right_plate})"
+variable is_plate_left  atom "(type==4)&&(mol==${mol_left_plate})"
+
+group plate_top   variable is_plate_top
+group plate_bot   variable is_plate_bot
+group plate_front variable is_plate_front
+group plate_back  variable is_plate_back
+group plate_right variable is_plate_right
+group plate_left  variable is_plate_left
+
+print ">>> plate_top: $(count(plate_top))  plate_bot: $(count(plate_bot))"
+print ">>> plate_front: $(count(plate_front))  plate_back: $(count(plate_back))"
+print ">>> plate_right: $(count(plate_right))  plate_left: $(count(plate_left))"
+
+# ── Plate COM computes (for strain tracking and velocity scaling) ─────────────
+compute com_top   plate_top   com
+compute com_bot   plate_bot   com
+compute com_front plate_front com
+compute com_back  plate_back  com
+compute com_right plate_right com
+compute com_left  plate_left  com
+
+run 0
+
+# Initial plate-to-plate gaps (frozen as reference values)
+variable gap_z_0 equal $(c_com_top[3]   - c_com_bot[3])
+variable gap_y_0 equal $(c_com_front[2] - c_com_back[2])
+variable gap_x_0 equal $(c_com_right[1] - c_com_left[1])
+
+print ">>> Plate-to-plate gaps (initial): x = ${gap_x_0}  y = ${gap_y_0}  z = ${gap_z_0}"
+
+# Live gap variables (evaluated each time they appear in output/halt)
+variable gap_z_current equal (c_com_top[3]   - c_com_bot[3])
+variable gap_y_current equal (c_com_front[2] - c_com_back[2])
+variable gap_x_current equal (c_com_right[1] - c_com_left[1])
+
+# Compressive strain per axis: positive = compression
+variable compress_strain_z   equal (v_gap_z_0 - v_gap_z_current) / v_gap_z_0
+variable compress_strain_y   equal (v_gap_y_0 - v_gap_y_current) / v_gap_y_0
+variable compress_strain_x   equal (v_gap_x_0 - v_gap_x_current) / v_gap_x_0
+variable compress_strain_vol equal 1.0 - (1.0-v_compress_strain_x)*(1.0-v_compress_strain_y)*(1.0-v_compress_strain_z)
+
+# Plate velocities: 1.1× the speed that reaches target_strain in nsteps_compress_base steps.
+# Each plate moves inward by (target_strain * gap_0 / 2) over nsteps_compress_base steps.
+# The run is halted by fix halt, so nsteps_compress is just a 2× safety buffer.
+variable vcompress_z equal $(v_target_strain_comp * v_gap_z_0 / (2.0 * v_nsteps_compress_base * v_timestep_prod) * 1.1)
+variable vcompress_y equal $(v_target_strain_comp * v_gap_y_0 / (2.0 * v_nsteps_compress_base * v_timestep_prod) * 1.1)
+variable vcompress_x equal $(v_target_strain_comp * v_gap_x_0 / (2.0 * v_nsteps_compress_base * v_timestep_prod) * 1.1)
+
+print ">>> vcompress_z = ${vcompress_z}  vcompress_y = ${vcompress_y}  vcompress_x = ${vcompress_x}"
+print ">>> (1.1× base speed; halt fires at compress_strain_z = ${target_strain_comp})"
+
+
+# ==========================================================================
+#              PHASE 2: COMPRESSION (Plate-Driven, Isotropic)
+# ==========================================================================
+# All 6 plates driven inward simultaneously toward the gel center.
+# fix halt stops the run when compress_strain_z >= target_strain_comp.
+# nsteps_compress is a 2× safety buffer — the halt fires well before it ends.
+# After the halt the script continues; all plates are frozen for Phase 3.
+#
+# Sign convention (each plate moves toward gel center):
+#   Top   (+z face): vz = -vcompress_z   Bot   (-z face): vz = +vcompress_z
+#   Front (+y face): vy = -vcompress_y   Back  (-y face): vy = +vcompress_y
+#   Right (+x face): vx = -vcompress_x   Left  (-x face): vx = +vcompress_x
+
+print "========================================"
+print "Phase 2: Plate-driven isotropic compression (up to ${nsteps_compress} steps)"
+print "  Top/Bot   (±z): v = ±${vcompress_z}"
+print "  Front/Back (±y): v = ±${vcompress_y}"
+print "  Right/Left (±x): v = ±${vcompress_x}"
+print "  Halt fires at compress_strain_z = ${target_strain_comp}"
+print "========================================"
+
+fix drive_top   plate_top   move linear  0             0            -${vcompress_z}
+fix drive_bot   plate_bot   move linear  0             0             ${vcompress_z}
+fix drive_front plate_front move linear  0            -${vcompress_y}  0
+fix drive_back  plate_back  move linear  0             ${vcompress_y}  0
+fix drive_right plate_right move linear -${vcompress_x}  0           0
+fix drive_left  plate_left  move linear  ${vcompress_x}  0           0
+
+fix nvt_compress gel     nvt  temp ${temp_target} ${temp_target} 1.0
+fix mom_lin_c    gel     momentum 100 linear 1 1 1
+fix mom_rot_c    gel     momentum 100 angular
+
+# Output: step  gap_z_0  gap_z_current  compress_strain_z  compress_strain_vol
+fix out_compress_strain all print ${stress_freq} &
+    "$(step) ${gap_z_0} $(v_gap_z_current) $(v_compress_strain_z) $(v_compress_strain_vol)" &
+    file output_files/stress_data/compress_strain_${dataname}_${interaction}_${nsteps}.dat screen no
+
+# Halt when z-strain reaches target (isotropic → x/y strains track z closely)
+fix halt_compress all halt ${stress_freq} v_compress_strain_z >= ${target_strain_comp} error continue
+
+run ${nsteps_compress}
+
+unfix halt_compress
+unfix out_compress_strain
+unfix mom_rot_c
+unfix mom_lin_c
+unfix nvt_compress
+unfix drive_left
+unfix drive_right
+unfix drive_back
+unfix drive_front
+unfix drive_bot
+unfix drive_top
+undump traj_setup
+
+print ">>> Phase 2 complete"
+print ">>>   compress_strain_z   = $(v_compress_strain_z)   (target: ${target_strain_comp})"
+print ">>>   compress_strain_y   = $(v_compress_strain_y)"
+print ">>>   compress_strain_x   = $(v_compress_strain_x)"
+print ">>>   compress_strain_vol = $(v_compress_strain_vol)  (= ε_vol for K)"
+print ">>>   K = -(sig_p_xx+sig_p_yy+sig_p_zz) / (3 × $(v_compress_strain_vol))"
+print ">>> Post-compression gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
+
+# Freeze Rg half-widths as constants (gel geometry now set by compression)
+variable hw_x equal $(v_hw_x)
+variable hw_y equal $(v_hw_y)
+variable hw_z equal $(v_hw_z)
+
+
+# ==========================================================================
+#             BULK REGION (exclude 3σ near each plate face)
+# ==========================================================================
+# Atoms within 3σ of any plate face carry artifactual constraint stresses
+# from the harmonic plate-polymer bonds. Exclude all six faces.
+
+variable xlo_bulk equal ${gel_xlo}+3.0
+variable xhi_bulk equal ${gel_xhi}-3.0
+variable ylo_bulk equal ${gel_ylo}+3.0
+variable yhi_bulk equal ${gel_yhi}-3.0
+variable zlo_bulk equal ${gel_zlo}+3.0
+variable zhi_bulk equal ${gel_zhi}-3.0
+variable bulk_lx  equal v_xhi_bulk-v_xlo_bulk
+variable bulk_ly  equal v_yhi_bulk-v_ylo_bulk
+variable bulk_lz  equal v_zhi_bulk-v_zlo_bulk
+variable bulk_vol equal v_bulk_lx*v_bulk_ly*v_bulk_lz
+
+region reg_bulk block ${xlo_bulk} ${xhi_bulk} ${ylo_bulk} ${yhi_bulk} ${zlo_bulk} ${zhi_bulk} units box
+group all_bulk  region reg_bulk
+group poly_bulk intersect polymer all_bulk
+group solv_bulk intersect solvent all_bulk
+
+print ">>> Bulk x: ${xlo_bulk} to ${xhi_bulk}  (lx = $(v_bulk_lx))"
+print ">>> Bulk y: ${ylo_bulk} to ${yhi_bulk}  (ly = $(v_bulk_ly))"
+print ">>> Bulk z: ${zlo_bulk} to ${zhi_bulk}  (lz = $(v_bulk_lz))"
+print ">>> bulk_vol = $(v_bulk_vol)"
+print ">>> poly_bulk: $(count(poly_bulk))  solv_bulk: $(count(solv_bulk))"
+
+
+# ==========================================================================
+#                    ANALYSIS: PARTIAL STRESSES
+# ==========================================================================
+
+compute stress_polymer poly_bulk stress/atom NULL
+compute stress_solvent solv_bulk stress/atom NULL
+
+# Box-integrated polymer stress (bulk only)
+compute sig_p_xx poly_bulk reduce sum c_stress_polymer[1]
+compute sig_p_yy poly_bulk reduce sum c_stress_polymer[2]
+compute sig_p_zz poly_bulk reduce sum c_stress_polymer[3]
+compute sig_p_xy poly_bulk reduce sum c_stress_polymer[4]
+compute sig_p_zx poly_bulk reduce sum c_stress_polymer[5]
+compute sig_p_yz poly_bulk reduce sum c_stress_polymer[6]
+
+variable stress_p_xx equal c_sig_p_xx/v_bulk_vol
+variable stress_p_yy equal c_sig_p_yy/v_bulk_vol
+variable stress_p_zz equal c_sig_p_zz/v_bulk_vol
+variable stress_p_xy equal c_sig_p_xy/v_bulk_vol
+variable stress_p_zx equal c_sig_p_zx/v_bulk_vol
+variable stress_p_yz equal c_sig_p_yz/v_bulk_vol
+
+# Box-integrated solvent stress (bulk only)
+compute sig_s_xx solv_bulk reduce sum c_stress_solvent[1]
+compute sig_s_yy solv_bulk reduce sum c_stress_solvent[2]
+compute sig_s_zz solv_bulk reduce sum c_stress_solvent[3]
+compute sig_s_xy solv_bulk reduce sum c_stress_solvent[4]
+compute sig_s_zx solv_bulk reduce sum c_stress_solvent[5]
+compute sig_s_yz solv_bulk reduce sum c_stress_solvent[6]
+
+variable stress_s_xx equal c_sig_s_xx/v_bulk_vol
+variable stress_s_yy equal c_sig_s_yy/v_bulk_vol
+variable stress_s_zz equal c_sig_s_zz/v_bulk_vol
+variable stress_s_xy equal c_sig_s_xy/v_bulk_vol
+variable stress_s_zx equal c_sig_s_zx/v_bulk_vol
+variable stress_s_yz equal c_sig_s_yz/v_bulk_vol
+
+# Per-atom z-bin stress (slabs normal to z — the top/bot compression axis)
+# Bin volume = binWidth * Lx * Ly
+variable s_p_xx atom c_stress_polymer[1]/(${binWidth}*lx*ly)
+variable s_p_yy atom c_stress_polymer[2]/(${binWidth}*lx*ly)
+variable s_p_zz atom c_stress_polymer[3]/(${binWidth}*lx*ly)
+variable s_p_xy atom c_stress_polymer[4]/(${binWidth}*lx*ly)
+variable s_p_zx atom c_stress_polymer[5]/(${binWidth}*lx*ly)
+variable s_p_yz atom c_stress_polymer[6]/(${binWidth}*lx*ly)
+
+variable s_s_xx atom c_stress_solvent[1]/(${binWidth}*lx*ly)
+variable s_s_yy atom c_stress_solvent[2]/(${binWidth}*lx*ly)
+variable s_s_zz atom c_stress_solvent[3]/(${binWidth}*lx*ly)
+variable s_s_xy atom c_stress_solvent[4]/(${binWidth}*lx*ly)
+variable s_s_zx atom c_stress_solvent[5]/(${binWidth}*lx*ly)
+variable s_s_yz atom c_stress_solvent[6]/(${binWidth}*lx*ly)
+
+
+# ==========================================================================
+#                    ANALYSIS: SPATIAL CHUNKS (z-binning)
+# ==========================================================================
+# Bin along z (top/bot compression direction; also the long axis of the gel)
+
+variable binWidth_reduced equal $(v_binWidth/lz)
+compute chunk_z_polymer poly_bulk chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+compute chunk_z_solvent  solv_bulk chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+
+
+# ==========================================================================
+#              PHASE 3: NVT PRODUCTION (All Plates Frozen)
+# ==========================================================================
+# All 6 plates frozen at Phase 2 final positions.
+# Gel NVT: interior relaxes to mechanical equilibrium at frozen compression.
+# K = -(stress_p_xx + stress_p_yy + stress_p_zz) / (3 * compress_strain_vol_final)
+
+print "========================================"
+print "Phase 3: NVT production (${nsteps} steps)"
+print "  All 6 plates frozen at Phase 2 final positions"
+print "  compress_strain_vol = $(v_compress_strain_vol)  (= ε_vol for K)"
+print "========================================"
+
+fix freeze_top   plate_top   move linear 0 0 0
+fix freeze_bot   plate_bot   move linear 0 0 0
+fix freeze_front plate_front move linear 0 0 0
+fix freeze_back  plate_back  move linear 0 0 0
+fix freeze_right plate_right move linear 0 0 0
+fix freeze_left  plate_left  move linear 0 0 0
+fix nvt_prod     gel         nvt  temp ${temp_target} ${temp_target} 1.0
+fix mom_prod     gel         momentum 100 linear 1 1 1 angular
+
+dump traj_prod all custom ${dump_freq_prod} &
+    traj_files/prod_${dataname}_${interaction}_${nsteps}.lammpstrj &
+    id type mol x y z
+
+
+# ==========================================================================
+#    OUTPUT: BOX-INTEGRATED STRESS TENSOR
+# ==========================================================================
+
+fix avg_stress_polymer all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz &
+    v_stress_p_xy v_stress_p_zx v_stress_p_yz &
+    file output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_stress_s_xx v_stress_s_yy v_stress_s_zz &
+    v_stress_s_xy v_stress_s_zx v_stress_s_yz &
+    file output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+
+# ==========================================================================
+#    OUTPUT: Z-PROFILE STRESS TENSOR
+# ==========================================================================
+
+fix prof_z_polymer poly_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_polymer &
+    v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_zx v_s_p_yz &
+    norm none &
+    file output_files/stress_data/stress_profile_z_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_solvent &
+    v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_zx v_s_s_yz &
+    norm none &
+    file output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+
+# ==========================================================================
+#    OUTPUT: GEL AND BOX DIMENSIONS
+# ==========================================================================
+
+fix out_gel_dims_rg all print ${stress_freq} &
+    "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix out_box_dims all print ${stress_freq} &
+    "$(step) $(lx) $(ly) $(lz) $(xy) $(xz) $(yz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix out_polymer_com all print ${stress_freq} &
+    "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}.dat screen no
+
+
+# ==========================================================================
+#                         PRODUCTION RUN
+# ==========================================================================
+
+run ${nsteps}
+
+
+# ==========================================================================
+#                            CLEANUP
+# ==========================================================================
+
+undump traj_prod
+unfix mom_prod
+unfix nvt_prod
+unfix freeze_left
+unfix freeze_right
+unfix freeze_back
+unfix freeze_front
+unfix freeze_bot
+unfix freeze_top
+
+print "========================================"
+print "Compression slab simulation complete"
+print "  compress_strain_z   = $(v_compress_strain_z)"
+print "  compress_strain_y   = $(v_compress_strain_y)"
+print "  compress_strain_x   = $(v_compress_strain_x)"
+print "  compress_strain_vol = $(v_compress_strain_vol)  (= ε_vol for K)"
+print "  gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
+print "  Final box: $(lx) x $(ly) x $(lz)"
+print "========================================"
+
+variable outfile string "final_compress_${dataname}_${interaction}_${nsteps}"
+write_data ${outfile}.data
