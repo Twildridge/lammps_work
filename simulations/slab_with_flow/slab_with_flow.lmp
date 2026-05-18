@@ -110,15 +110,19 @@ boundary p p p
 atom_style molecular
 atom_modify map array
 
-# Hybrid lj/cut with two identical sub-styles:
-#   sub-style 1 (lj/cut, 1st)  → ALL pairs except solvent-solvent (3-3)
-#   sub-style 2 (lj/cut, 2nd)  → SOLVENT-SOLVENT (3-3) ONLY
+# Hybrid with two distinct sub-styles:
+#   sub-style lj/cut    → ALL pairs except solvent-solvent (3-3)
+#   sub-style lj/expand → SOLVENT-SOLVENT (3-3) ONLY  (delta=0 → identical
+#                          to lj/cut; unique name lets us select it via
+#                          "compute stress/atom NULL pair lj/expand" without
+#                          needing an integer index, which older LAMMPS builds
+#                          do not support in compute stress/atom)
 # This lets us read out the pure solvent-fluid virial per z-bin via
-#   compute stress/atom solvent NULL pair lj/cut 2
+#   compute stress/atom solvent NULL pair lj/expand
 # which is the physically correct source for the poroelastic pore pressure
 # (the group-based σ_s mixes in 1/2 of the polymer-solvent virial — see the
 # poroelasticity notes in compression_analysis.ipynb).
-pair_style hybrid lj/cut 1.122 lj/cut 1.122
+pair_style hybrid lj/cut 1.122 lj/expand 1.122
 bond_style fene
 
 read_data data_files/${dataname}.data nocoeff
@@ -152,47 +156,50 @@ group gel_system type 1 2 3 4 5
 # ==========================================================================
 
 # NOTE: pair_style hybrid requires each pair_coeff to name its sub-style.
-#   "lj/cut 1" → 1st instance (everything except solvent-solvent)
-#   "lj/cut 2" → 2nd instance (solvent-solvent ONLY)
+#   "lj/cut"    → lj/cut instance (everything except solvent-solvent)
+#   "lj/expand" → lj/expand instance (solvent-solvent ONLY; delta=0 → identical
+#                  physics to lj/cut; unique name enables style-based filtering
+#                  in compute stress/atom without an integer index)
 # A pair of atom types may only be assigned to ONE sub-style at a time; later
 # pair_coeff commands override earlier ones for the same type pair.
 
-# Default: full LJ for all pairs (sub-style 1)
-pair_coeff * * lj/cut 1 1.0 ${sigma} 1.122
+# Default: full LJ for all pairs via lj/cut
+pair_coeff * * lj/cut 1.0 ${sigma} 1.122
 
 # Polymer-solvent (tunable)
-pair_coeff 1 3 lj/cut 1 ${epsSP} ${sigma} 1.122    # polymer-solvent
-pair_coeff 2 3 lj/cut 1 ${epsSP} ${sigma} 1.122    # crosslinker-solvent
+pair_coeff 1 3 lj/cut ${epsSP} ${sigma} 1.122    # polymer-solvent
+pair_coeff 2 3 lj/cut ${epsSP} ${sigma} 1.122    # crosslinker-solvent
 
-# Solvent-solvent → SUB-STYLE 2 (its own slot so we can isolate its virial)
-pair_coeff 3 3 lj/cut 2 ${epsSS} ${sigma} 1.122    # solvent-solvent
+# Solvent-solvent → lj/expand (delta=0 ≡ lj/cut; unique name for virial isolation)
+# lj/expand coeff format: epsilon sigma delta [cutoff]
+pair_coeff 3 3 lj/expand ${epsSS} ${sigma} 0.0   # solvent-solvent
 
 # Polymer/crosslinker with support and piston (WCA repulsive)
-pair_coeff 1 4 lj/cut 1 1.0 ${sigma} 1.122
-pair_coeff 2 4 lj/cut 1 1.0 ${sigma} 1.122
-pair_coeff 1 5 lj/cut 1 1.0 ${sigma} 1.122
-pair_coeff 2 5 lj/cut 1 1.0 ${sigma} 1.122
+pair_coeff 1 4 lj/cut 1.0 ${sigma} 1.122
+pair_coeff 2 4 lj/cut 1.0 ${sigma} 1.122
+pair_coeff 1 5 lj/cut 1.0 ${sigma} 1.122
+pair_coeff 2 5 lj/cut 1.0 ${sigma} 1.122
 
 # Solvent-piston: mode-dependent from the start.
 #   Compression: OFF — piston passes through solvent freely, loads gel directly.
 #   Permeation:  ON  — piston pushes solvent as a plug through the gel.
-pair_coeff 3 5 lj/cut 1 0.0 ${sigma} 0.0          # default: OFF (compression)
+pair_coeff 3 5 lj/cut 0.0 ${sigma} 0.0          # default: OFF (compression)
 if "${compression_mode} == 0" then &
-    "pair_coeff 3 5 lj/cut 1 1.0 ${sigma} 1.122"
+    "pair_coeff 3 5 lj/cut 1.0 ${sigma} 1.122"
 
 # Wall interactions (WCA)
-pair_coeff 1 6 lj/cut 1 1.0 ${sigma} 1.122
-pair_coeff 2 6 lj/cut 1 1.0 ${sigma} 1.122
-pair_coeff 3 6 lj/cut 1 1.0 ${sigma} 1.122
+pair_coeff 1 6 lj/cut 1.0 ${sigma} 1.122
+pair_coeff 2 6 lj/cut 1.0 ${sigma} 1.122
+pair_coeff 3 6 lj/cut 1.0 ${sigma} 1.122
 
 # Non-interacting pairs
-pair_coeff 3 4 lj/cut 1 0.0 ${sigma} 0.0   # solvent-support
-pair_coeff 4 4 lj/cut 1 0.0 ${sigma} 0.0   # support-support
-pair_coeff 4 5 lj/cut 1 0.0 ${sigma} 0.0   # support-piston
-pair_coeff 4 6 lj/cut 1 0.0 ${sigma} 0.0   # support-wall
-pair_coeff 5 5 lj/cut 1 0.0 ${sigma} 0.0   # piston-piston
-pair_coeff 5 6 lj/cut 1 0.0 ${sigma} 0.0   # piston-wall
-pair_coeff 6 6 lj/cut 1 0.0 ${sigma} 0.0   # wall-wall
+pair_coeff 3 4 lj/cut 0.0 ${sigma} 0.0   # solvent-support
+pair_coeff 4 4 lj/cut 0.0 ${sigma} 0.0   # support-support
+pair_coeff 4 5 lj/cut 0.0 ${sigma} 0.0   # support-piston
+pair_coeff 4 6 lj/cut 0.0 ${sigma} 0.0   # support-wall
+pair_coeff 5 5 lj/cut 0.0 ${sigma} 0.0   # piston-piston
+pair_coeff 5 6 lj/cut 0.0 ${sigma} 0.0   # piston-wall
+pair_coeff 6 6 lj/cut 0.0 ${sigma} 0.0   # wall-wall
 
 # ----- Bonds and Angles -----
 bond_coeff * 30.0 1.5 1.0 1.0
@@ -631,14 +638,14 @@ compute sigmayy_poly polymer reduce/chunk chunk_z_polymer sum v_sigma_p_yy
 compute sigmayy_solv solvent  reduce/chunk chunk_z_solvent  sum v_sigma_s_yy
 
 # ── Solvent-SOLVENT-only z-binned stress (σ_s,ss) ─────────────────────────
-# Filters the per-atom virial to pair interactions from sub-style 2 only
-# (the lj/cut instance to which 3-3 is assigned).  This excludes the
-# polymer-solvent virial that contaminates the group-based σ_s above, and
-# gives the pore pressure that mixture-theory poroelasticity actually wants:
+# Filters the per-atom virial to the lj/expand sub-style only (3-3 pairs).
+# Using the style name "lj/expand" as the filter avoids the integer-index
+# syntax ("pair lj/cut 2") that older LAMMPS builds reject.  lj/expand with
+# delta=0 is physically identical to lj/cut, so the virial values are exact.
+# This excludes the polymer-solvent virial that contaminates the group-based
+# σ_s above, and gives the pore pressure mixture-theory poroelasticity wants:
 #   p_pore(z) = (1/3) tr(σ_s,ss)(z) / φ_s(z)
-# Requires LAMMPS new enough to support the `pair <style> <index>` filter on
-# compute stress/atom (in current docs as of recent stable releases).
-compute stress_solvent_ss solvent stress/atom NULL pair lj/cut 2
+compute stress_solvent_ss solvent stress/atom NULL pair lj/expand
 
 variable sigma_s_ss_zz atom -c_stress_solvent_ss[3]/(lx*ly*${binWidth})
 variable sigma_s_ss_xx atom -c_stress_solvent_ss[1]/(lx*ly*${binWidth})
