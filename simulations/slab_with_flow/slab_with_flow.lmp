@@ -110,7 +110,15 @@ boundary p p p
 atom_style molecular
 atom_modify map array
 
-pair_style lj/cut 1.122
+# Hybrid lj/cut with two identical sub-styles:
+#   sub-style 1 (lj/cut, 1st)  → ALL pairs except solvent-solvent (3-3)
+#   sub-style 2 (lj/cut, 2nd)  → SOLVENT-SOLVENT (3-3) ONLY
+# This lets us read out the pure solvent-fluid virial per z-bin via
+#   compute stress/atom solvent NULL pair lj/cut 2
+# which is the physically correct source for the poroelastic pore pressure
+# (the group-based σ_s mixes in 1/2 of the polymer-solvent virial — see the
+# poroelasticity notes in compression_analysis.ipynb).
+pair_style hybrid lj/cut 1.122 lj/cut 1.122
 bond_style fene
 
 read_data data_files/${dataname}.data nocoeff
@@ -143,40 +151,48 @@ group gel_system type 1 2 3 4 5
 #                       INTERATOMIC POTENTIALS
 # ==========================================================================
 
-# Default: full LJ for all pairs
-pair_coeff * * 1.0 ${sigma} 1.122
+# NOTE: pair_style hybrid requires each pair_coeff to name its sub-style.
+#   "lj/cut 1" → 1st instance (everything except solvent-solvent)
+#   "lj/cut 2" → 2nd instance (solvent-solvent ONLY)
+# A pair of atom types may only be assigned to ONE sub-style at a time; later
+# pair_coeff commands override earlier ones for the same type pair.
 
-# Polymer-solvent & solvent-solvent (tunable)
-pair_coeff 1 3 ${epsSP} ${sigma} 1.122    # polymer-solvent
-pair_coeff 2 3 ${epsSP} ${sigma} 1.122    # crosslinker-solvent
-pair_coeff 3 3 ${epsSS} ${sigma} 1.122    # solvent-solvent
+# Default: full LJ for all pairs (sub-style 1)
+pair_coeff * * lj/cut 1 1.0 ${sigma} 1.122
+
+# Polymer-solvent (tunable)
+pair_coeff 1 3 lj/cut 1 ${epsSP} ${sigma} 1.122    # polymer-solvent
+pair_coeff 2 3 lj/cut 1 ${epsSP} ${sigma} 1.122    # crosslinker-solvent
+
+# Solvent-solvent → SUB-STYLE 2 (its own slot so we can isolate its virial)
+pair_coeff 3 3 lj/cut 2 ${epsSS} ${sigma} 1.122    # solvent-solvent
 
 # Polymer/crosslinker with support and piston (WCA repulsive)
-pair_coeff 1 4 1.0 ${sigma} 1.122
-pair_coeff 2 4 1.0 ${sigma} 1.122
-pair_coeff 1 5 1.0 ${sigma} 1.122
-pair_coeff 2 5 1.0 ${sigma} 1.122
+pair_coeff 1 4 lj/cut 1 1.0 ${sigma} 1.122
+pair_coeff 2 4 lj/cut 1 1.0 ${sigma} 1.122
+pair_coeff 1 5 lj/cut 1 1.0 ${sigma} 1.122
+pair_coeff 2 5 lj/cut 1 1.0 ${sigma} 1.122
 
 # Solvent-piston: mode-dependent from the start.
 #   Compression: OFF — piston passes through solvent freely, loads gel directly.
 #   Permeation:  ON  — piston pushes solvent as a plug through the gel.
-pair_coeff 3 5 0.0 ${sigma} 0.0                 # default: OFF (compression)
+pair_coeff 3 5 lj/cut 1 0.0 ${sigma} 0.0          # default: OFF (compression)
 if "${compression_mode} == 0" then &
-    "pair_coeff 3 5 1.0 ${sigma} 1.122"
+    "pair_coeff 3 5 lj/cut 1 1.0 ${sigma} 1.122"
 
 # Wall interactions (WCA)
-pair_coeff 1 6 1.0 ${sigma} 1.122
-pair_coeff 2 6 1.0 ${sigma} 1.122
-pair_coeff 3 6 1.0 ${sigma} 1.122
+pair_coeff 1 6 lj/cut 1 1.0 ${sigma} 1.122
+pair_coeff 2 6 lj/cut 1 1.0 ${sigma} 1.122
+pair_coeff 3 6 lj/cut 1 1.0 ${sigma} 1.122
 
 # Non-interacting pairs
-pair_coeff 3 4 0.0 ${sigma} 0.0         # solvent-support
-pair_coeff 4 4 0.0 ${sigma} 0.0         # support-support
-pair_coeff 4 5 0.0 ${sigma} 0.0         # support-piston
-pair_coeff 4 6 0.0 ${sigma} 0.0         # support-wall
-pair_coeff 5 5 0.0 ${sigma} 0.0         # piston-piston
-pair_coeff 5 6 0.0 ${sigma} 0.0         # piston-wall
-pair_coeff 6 6 0.0 ${sigma} 0.0         # wall-wall
+pair_coeff 3 4 lj/cut 1 0.0 ${sigma} 0.0   # solvent-support
+pair_coeff 4 4 lj/cut 1 0.0 ${sigma} 0.0   # support-support
+pair_coeff 4 5 lj/cut 1 0.0 ${sigma} 0.0   # support-piston
+pair_coeff 4 6 lj/cut 1 0.0 ${sigma} 0.0   # support-wall
+pair_coeff 5 5 lj/cut 1 0.0 ${sigma} 0.0   # piston-piston
+pair_coeff 5 6 lj/cut 1 0.0 ${sigma} 0.0   # piston-wall
+pair_coeff 6 6 lj/cut 1 0.0 ${sigma} 0.0   # wall-wall
 
 # ----- Bonds and Angles -----
 bond_coeff * 30.0 1.5 1.0 1.0
@@ -614,6 +630,24 @@ compute sigmaxx_solv solvent  reduce/chunk chunk_z_solvent  sum v_sigma_s_xx
 compute sigmayy_poly polymer reduce/chunk chunk_z_polymer sum v_sigma_p_yy
 compute sigmayy_solv solvent  reduce/chunk chunk_z_solvent  sum v_sigma_s_yy
 
+# ── Solvent-SOLVENT-only z-binned stress (σ_s,ss) ─────────────────────────
+# Filters the per-atom virial to pair interactions from sub-style 2 only
+# (the lj/cut instance to which 3-3 is assigned).  This excludes the
+# polymer-solvent virial that contaminates the group-based σ_s above, and
+# gives the pore pressure that mixture-theory poroelasticity actually wants:
+#   p_pore(z) = (1/3) tr(σ_s,ss)(z) / φ_s(z)
+# Requires LAMMPS new enough to support the `pair <style> <index>` filter on
+# compute stress/atom (in current docs as of recent stable releases).
+compute stress_solvent_ss solvent stress/atom NULL pair lj/cut 2
+
+variable sigma_s_ss_zz atom -c_stress_solvent_ss[3]/(lx*ly*${binWidth})
+variable sigma_s_ss_xx atom -c_stress_solvent_ss[1]/(lx*ly*${binWidth})
+variable sigma_s_ss_yy atom -c_stress_solvent_ss[2]/(lx*ly*${binWidth})
+
+compute sigmazz_solv_ss solvent reduce/chunk chunk_z_solvent sum v_sigma_s_ss_zz
+compute sigmaxx_solv_ss solvent reduce/chunk chunk_z_solvent sum v_sigma_s_ss_xx
+compute sigmayy_solv_ss solvent reduce/chunk chunk_z_solvent sum v_sigma_s_ss_yy
+
 
 # ==========================================================================
 #                 ANALYSIS: POLYMER Z-DISPLACEMENT
@@ -808,6 +842,16 @@ fix avg_sigmayy_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_str
 
 fix avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+# Solvent-solvent-only z-binned stress (pair sub-style 2 filter)
+fix avg_sigmazz_solv_ss all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_solv_ss mode vector file output_files/stress_data/sigmazz_solvent_ss_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmaxx_solv_ss all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmaxx_solv_ss mode vector file output_files/stress_data/sigmaxx_solvent_ss_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmayy_solv_ss all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmayy_solv_ss mode vector file output_files/stress_data/sigmayy_solvent_ss_${dataname}_${interaction}_${nsteps}.dat
 
 
 # ==========================================================================
