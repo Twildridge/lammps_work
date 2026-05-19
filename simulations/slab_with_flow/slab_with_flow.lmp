@@ -635,17 +635,30 @@ compute sigmayy_solv solvent  reduce/chunk chunk_z_solvent  sum v_sigma_s_yy
 #   is always included.  Some 3-polymer ps pairs are also captured but are
 #   discarded in post-processing by filtering ptype1==ptype2==3.
 #
-# p1/p2/p3 = xx/yy/zz per-pair virial (full pair contribution, not split
-#   ½ per atom).  Sign convention matches compute stress/atom:
-#   p_α = -r_α * F_α  (positive for repulsive/compressed pairs).
+# fx/fy/fz = force on atom I due to atom J.  lj/cut exposes force components
+#   but NOT the virial fields p1/p2/p3 (those require special per-pair virial
+#   support that lj/cut does not implement → "extra field" error at runtime).
+#   The virial is reconstructed in post-processing from forces + positions:
+#     p_zz_pair = -(r_z * fz)   where r_z = z_J - z_I  (PBC-corrected)
+#     p_xx_pair = -(r_x * fx),  p_yy_pair = -(r_y * fy)
+#   Sign convention: positive p means repulsive/compressed → same as p1/p2/p3.
+#   z-positions z_I and z_J come from the main traj dump (same dump_freq_prod).
 #
 # Post-processing steps (see compression_analysis.ipynb):
-#   1. Read pairs dump (atom IDs, types, p1/p2/p3) frame by frame.
-#   2. Read main traj dump (id type z) at the same timesteps.
-#   3. For each ss pair: z_mid = (z_i + z_j) / 2; assign to z-bin.
-#   4. sigma_ss_zz(bin) = -sum(p3) / (lx * ly * binWidth)
-#   5. Time-average across frames to match the main stress profile cadence.
-compute pl_local  solvent pair/local  p1 p2 p3
+#   1. Read pairs dump (atom IDs, types, fx/fy/fz) frame by frame.
+#   2. Read main traj dump (id type x y z) at the same timesteps.
+#   3. Filter: keep rows where ptype1==3 AND ptype2==3.
+#   4. For each ss pair:
+#        r_x/y/z = pos_J - pos_I  (with PBC wrap: if |r_α| > L_α/2, subtract L_α)
+#        p_zz = -(r_z * fz);  z_mid = (z_I + z_J) / 2; assign to z-bin
+#   5. sigma_ss_zz(bin) = sum(p_zz_in_bin) / (lx * ly * binWidth)
+#      (no extra factor of 2: fx/fy/fz is force on atom I only, and r_I*f_I
+#       gives the full pair contribution already — the other half r_J*f_J
+#       is equal by Newton's 3rd law, so sum over all I-as-first pairs gives
+#       the complete double-counted virial; divide by 2 if you use both atoms)
+#      → safest: only count each pair once (as stored in this dump) and use
+#        W_pair = -(r_z * fz) without the factor of 2.
+compute pl_local  solvent pair/local  fx fy fz
 compute ids_local solvent property/local patom1 patom2 ptype1 ptype2
 
 
@@ -843,10 +856,11 @@ fix avg_sigmayy_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_str
 fix avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${nsteps}.dat
 
-# ── Per-pair virial dump for ss-only stress (post-processing) ─────────────
-# Columns: patom1 patom2 ptype1 ptype2 p_xx p_yy p_zz
+# ── Per-pair force dump for ss-only stress (post-processing) ──────────────
+# Columns: patom1 patom2 ptype1 ptype2 fx fy fz
+#   (fx/fy/fz = force on atom I due to atom J)
 # Synchronized with traj_flow dump (same dump_freq_prod timesteps) so that
-# atom z-positions can be cross-referenced by timestep for z-bin assignment.
+# atom positions can be cross-referenced by timestep for r_ij and z-bin.
 # Output directory must exist before the run: output_files/pair_data/
 dump pairlocal_dump solvent local ${dump_freq_prod} &
     output_files/pair_data/pairs_${dataname}_${interaction}_${nsteps}.dump &
