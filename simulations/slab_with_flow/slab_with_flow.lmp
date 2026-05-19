@@ -550,17 +550,39 @@ region reg_y block v_reg_y_xlo v_reg_y_xhi EDGE EDGE v_reg_y_zlo v_reg_y_zhi sid
 #                    ANALYSIS: CHUNK DEFINITIONS
 # ==========================================================================
 
-# 1D binning with dynamic rectangular regions
+# 1D binning with dynamic rectangular regions (x, y — single user each, no conflict)
 compute chunk_x_polymer polymer chunk/atom bin/1d x lower ${binWidth} region reg_x
 compute chunk_y_polymer polymer chunk/atom bin/1d y lower ${binWidth} region reg_y
-compute chunk_z_polymer polymer chunk/atom bin/1d z lower ${binWidth}
-
 compute chunk_x_solvent solvent chunk/atom bin/1d x lower ${binWidth} region reg_x
 compute chunk_y_solvent solvent chunk/atom bin/1d y lower ${binWidth} region reg_y
-compute chunk_z_solvent solvent chunk/atom bin/1d z lower ${binWidth}
 
-# Z profiles use the full box for all components (no region) — this lets the
-# piston location be visualized directly in the z-stress profiles.
+# Z profiles — one chunk/atom per reduce/chunk user.
+# LAMMPS 22Jul2025 rejects multiple fix ave/time sharing the same chunk/atom
+# via different reduce/chunk computes ("Two fix commands using same compute
+# chunk/atom command in incompatible ways").  Each compute reduce/chunk must
+# therefore reference a unique chunk/atom ID.
+#
+#   chunk_z_poly_p   → press_z_polymer  (isotropic z-press, polymer)
+#   chunk_z_poly_zz  → sigmazz_poly
+#   chunk_z_poly_xx  → sigmaxx_poly
+#   chunk_z_poly_yy  → sigmayy_poly
+#   chunk_z_polymer  → fix avg_disp_z_poly (displacement, relaxation phase only)
+#   chunk_z_solv_p   → press_z_solvent  (isotropic z-press, solvent)
+#   chunk_z_solv_zz  → sigmazz_solv
+#   chunk_z_solv_xx  → sigmaxx_solv
+#   chunk_z_solv_yy  → sigmayy_solv
+compute chunk_z_poly_p   polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_poly_zz  polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_poly_xx  polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_poly_yy  polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_polymer  polymer chunk/atom bin/1d z lower ${binWidth}
+
+compute chunk_z_solv_p   solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_zz  solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_xx  solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_yy  solvent chunk/atom bin/1d z lower ${binWidth}
+
+# Piston and support — single user each, no conflict
 compute chunk_z_piston  piston  chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_support support chunk/atom bin/1d z lower ${binWidth}
 
@@ -584,11 +606,11 @@ variable press_solvent_z atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress
 # Sum pre-divided per-atom contributions over chunks → pressure per bin
 compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer_x
 compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer_y
-compute press_z_polymer polymer reduce/chunk chunk_z_polymer sum v_press_polymer_z
+compute press_z_polymer polymer reduce/chunk chunk_z_poly_p  sum v_press_polymer_z
 
-compute press_x_solvent solvent reduce/chunk chunk_x_solvent sum v_press_solvent_x
-compute press_y_solvent solvent reduce/chunk chunk_y_solvent sum v_press_solvent_y
-compute press_z_solvent solvent reduce/chunk chunk_z_solvent sum v_press_solvent_z
+compute press_x_solvent solvent reduce/chunk chunk_x_solvent  sum v_press_solvent_x
+compute press_y_solvent solvent reduce/chunk chunk_y_solvent  sum v_press_solvent_y
+compute press_z_solvent solvent reduce/chunk chunk_z_solv_p   sum v_press_solvent_z
 
 # Piston and support partial stresses — same methodology as above.
 # stress/atom NULL captures pairwise virial only (no kinetic term), which is
@@ -617,12 +639,12 @@ variable sigma_s_xx atom -c_stress_solvent[1]/(lx*ly*${binWidth})
 variable sigma_p_yy atom -c_stress_polymer[2]/(lx*ly*${binWidth})
 variable sigma_s_yy atom -c_stress_solvent[2]/(lx*ly*${binWidth})
 
-compute sigmazz_poly polymer reduce/chunk chunk_z_polymer sum v_sigma_p_zz
-compute sigmazz_solv solvent  reduce/chunk chunk_z_solvent  sum v_sigma_s_zz
-compute sigmaxx_poly polymer reduce/chunk chunk_z_polymer sum v_sigma_p_xx
-compute sigmaxx_solv solvent  reduce/chunk chunk_z_solvent  sum v_sigma_s_xx
-compute sigmayy_poly polymer reduce/chunk chunk_z_polymer sum v_sigma_p_yy
-compute sigmayy_solv solvent  reduce/chunk chunk_z_solvent  sum v_sigma_s_yy
+compute sigmazz_poly polymer reduce/chunk chunk_z_poly_zz sum v_sigma_p_zz
+compute sigmazz_solv solvent  reduce/chunk chunk_z_solv_zz sum v_sigma_s_zz
+compute sigmaxx_poly polymer reduce/chunk chunk_z_poly_xx sum v_sigma_p_xx
+compute sigmaxx_solv solvent  reduce/chunk chunk_z_solv_xx sum v_sigma_s_xx
+compute sigmayy_poly polymer reduce/chunk chunk_z_poly_yy sum v_sigma_p_yy
+compute sigmayy_solv solvent  reduce/chunk chunk_z_solv_yy sum v_sigma_s_yy
 
 # ── Pair-local data for ss-only virial (post-processing) ─────────────────
 # compute stress/atom does not support sub-style filtering in this LAMMPS
