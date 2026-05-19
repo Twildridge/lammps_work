@@ -967,7 +967,36 @@ if "${compression_mode} == 1" then &
 
 # Run for ONE full averaging window so each "_ref_" file gets exactly one
 # stress snapshot at ε=0.
-if "${compression_mode} == 1" then "run ${nfreq_stress}"
+#
+# CRITICAL — must end at an epoch boundary (multiple of nfreq_stress from
+# step 0), NOT just `run ${nfreq_stress}` from the current step:
+#
+#   fix ave/time epoch boundaries are ALWAYS at multiples of nfreq from
+#   step 0 (see FixAveTime::nextvalid in src/fix_ave_time.cpp), regardless
+#   of when the fix is created.  If the pre-roll run ends mid-epoch, the
+#   ref_ fixes have an active compute chunk/atom lock that never gets
+#   released — because fix ave/time's destructor only calls unlock() for
+#   ave=RUNNING/WINDOW (see FixAveTime::~FixAveTime), and these fixes use
+#   the default ave=ONE.  The dangling lockfix pointer (plus stale
+#   lockstart/lockstop) then collides with the production-fix lock attempt
+#   that follows, producing:
+#
+#     ERROR: Two fix commands using same compute chunk/atom command in
+#            incompatible ways (src/compute_chunk_atom.cpp:680)
+#
+#   The check at line 680 of compute_chunk_atom.cpp is exactly
+#   `startstep != lockstart || stopstep != lockstop` — i.e. it fires when
+#   a different lock window is requested for an already-locked chunk/atom.
+#
+# Fix: pad the pre-roll length so it ends at the FIRST multiple of
+# nfreq_stress >= step + nfreq_stress.  At that step end_of_step fires
+# unlock() naturally; the subsequent unfix then sees lockfix == nullptr.
+# preroll_steps lies in [nfreq_stress, 2*nfreq_stress).
+if "${compression_mode} == 1" then &
+    "variable preroll_steps equal (floor(($(step)-1)/${nfreq_stress})+2)*${nfreq_stress}-$(step)"
+if "${compression_mode} == 1" then &
+    "print '>>> Pre-roll aligned: running ${preroll_steps} steps to align with nfreq_stress=${nfreq_stress} epoch boundary'"
+if "${compression_mode} == 1" then "run ${preroll_steps}"
 
 # Tear down the reference fixes
 if "${compression_mode} == 1" then "unfix ref_avg_sigmazz_poly"
@@ -988,13 +1017,21 @@ if "${compression_mode} == 1" then &
 #                    OUTPUT: PARTIAL STRESS PROFILES (time-averaged)
 # ==========================================================================
 # NOTE: these fixes are defined HERE — after the reference recording block —
-# so that they are NOT active during the ref_ run above.  LAMMPS 22Jul2025
-# rejects two ave/time fixes that share the same compute chunk/atom at run
-# setup ("Two fix commands using same compute chunk/atom command in
-# incompatible ways").  The ref_ fixes and these production fixes both route
-# through chunk_z_polymer / chunk_z_solvent, so they cannot coexist.
-# Placing these definitions here means they only accumulate during the actual
-# compression + relaxation run, which is exactly the data we want.
+# so that they are NOT active during the ref_ run above.  Two reasons:
+#  (1) Each ref_ fix and its production-fix counterpart route through the
+#      same compute chunk/atom (chunk_z_poly_zz, chunk_z_solv_zz, etc.).
+#      Coexisting in one run causes a "Two fix commands using same compute
+#      chunk/atom command in incompatible ways" error at fix ave/time setup
+#      because the lock windows (start, stop) differ between the fixes.
+#  (2) The ref_ fixes must complete their first epoch and release their
+#      chunk/atom lock BEFORE the production fixes are defined.  The
+#      pre-roll run length is aligned to nfreq_stress epoch boundaries
+#      (see Phase 2 pre-roll block); the subsequent unfix then finds
+#      lockfix == nullptr and is a no-op for lock state.  If pre-roll were
+#      run with `run ${nfreq_stress}` (mid-epoch end), the unfix would NOT
+#      release the lock — fix ave/time's destructor only unlocks for
+#      ave=RUNNING/WINDOW, not the default ave=ONE — and these production
+#      fixes would then fail with the same chunk/atom error.
 
 fix avg_stress_x_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_press_x_polymer mode vector file output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${nsteps}.dat
