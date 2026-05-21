@@ -834,13 +834,23 @@ if "${compression_mode} == 1" then &
 # ── Per-pair force dump for ss-only stress (post-processing) ──────────────
 # Columns: patom1 patom2 ptype1 ptype2 fx fy fz
 #   (fx/fy/fz = force on atom I due to atom J)
-# Synchronized with traj_flow dump (same dump_freq_prod timesteps) so that
-# atom positions can be cross-referenced by timestep for r_ij and z-bin.
+# Frequency: nfreq_stress — one pairs frame per stress-profile snapshot.
+# This synchronises σ_s,ss(z,t) with σ_p(z,t) and σ_s(z,t) so all three
+# can be plotted on the same time-evolution axes in compression_analysis.ipynb.
+# Atom positions for r_IJ are supplied by traj_stress_sync (same timesteps).
 # Output directory must exist before the run: output_files/pair_data/
-dump pairlocal_dump solvent local ${dump_freq_prod} &
+dump pairlocal_dump solvent local ${nfreq_stress} &
     output_files/pair_data/pairs_${dataname}_${interaction}_${nsteps}.dump &
     c_ids_local[1] c_ids_local[2] c_ids_local[3] c_ids_local[4] &
     c_pl_local[1] c_pl_local[2] c_pl_local[3]
+
+# Companion position dump — same frequency, same timesteps as pairlocal_dump.
+# Used by compute_ss_stress_from_pairs to look up r_IJ for each ss pair.
+# Column layout matches gel_flow_*.lammpstrj so read_lammpstrj_frame works.
+# Output directory must exist before the run: traj_files/
+dump traj_stress_sync gel_system custom ${nfreq_stress} &
+    traj_files/traj_stress_${dataname}_${interaction}_${nsteps}.lammpstrj &
+    id type mol x y z
 
 
 # ==========================================================================
@@ -963,7 +973,28 @@ if "${compression_mode} == 1" then &
     "fix ref_avg_sigmayy_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_ref_${dataname}_${interaction}_${nsteps}.dat"
 if "${compression_mode} == 1" then &
     "fix ref_avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_ref_${dataname}_${interaction}_${nsteps}.dat"
-# (Solvent-solvent-only reference stress output omitted — not supported by this build)
+# ── ε=0 solvent-solvent-only (ss) reference dumps (pairs + traj) ─────────
+# dump local has no fix ave/time / chunk-atom epoch-lock issue, so we can
+# safely write one frame here while the piston is still frozen at v=0.
+#
+# Two dumps are written in the same run 1:
+#   pairs_ref_*.dump  — pair/local forces for ss virial reconstruction
+#   traj_ref_*.lammpstrj — matching atom positions (id type mol x y z)
+#                          needed by compute_ss_stress_from_pairs to form r_IJ
+#
+# The traj_ref dump uses the same column layout as the main traj_flow dump
+# so that read_lammpstrj_frame/compute_ss_stress_from_pairs work unmodified.
+#
+# NOTE: run 1 advances the step counter by 1 *before* preroll_steps is
+# computed below — the formula uses $(step) at evaluation time, so the
+# epoch alignment automatically accounts for it.
+if "${compression_mode} == 1" then &
+    "dump pairlocal_ref solvent local 1 output_files/pair_data/pairs_ref_${dataname}_${interaction}_${nsteps}.dump c_ids_local[1] c_ids_local[2] c_ids_local[3] c_ids_local[4] c_pl_local[1] c_pl_local[2] c_pl_local[3]"
+if "${compression_mode} == 1" then &
+    "dump traj_ref gel_system custom 1 traj_files/traj_ref_${dataname}_${interaction}_${nsteps}.lammpstrj id type mol x y z"
+if "${compression_mode} == 1" then "run 1"
+if "${compression_mode} == 1" then "undump pairlocal_ref"
+if "${compression_mode} == 1" then "undump traj_ref"
 
 # Run for ONE full averaging window so each "_ref_" file gets exactly one
 # stress snapshot at ε=0.
@@ -1213,6 +1244,7 @@ if "${compression_mode} == 0" then "unfix out_permeate_flux"
 
 undump traj_flow
 undump pairlocal_dump
+undump traj_stress_sync
 
 print "========================================"
 print "Simulation complete"
