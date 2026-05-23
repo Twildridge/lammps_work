@@ -22,6 +22,10 @@ Output (saved inside <folder>/output_plots/convergence_plots/):
     {run_id}_flow_diagnostics.png  — piston force + pressure panels (auto-generated
                                      when piston_force_*.dat is present;
                                      mode detected from which files exist)
+    {run_id}_chempot_diagnostics.png — Widom μ_ex(z) profiles + solvent density
+                                       (auto-generated when
+                                       output_files/chemical_potential/ files present;
+                                       produced by slab_with_support runs)
 """
 
 import argparse
@@ -95,6 +99,54 @@ def read_ave_time(filepath):
         return np.array([]), np.empty((0, 0))
     arr = np.array(rows)
     return arr[:, 0], arr[:, 1:]
+
+
+def read_ave_chunk(filepath):
+    """Parse LAMMPS fix ave/chunk output.
+
+    The file format is:
+        # comment lines
+        # comment lines
+        timestep  n_chunks
+        chunk_id  coord  Ncount  val1  val2 ...
+        ...
+        timestep  n_chunks
+        ...
+
+    Returns a list of (timestep, coords, values) tuples where:
+        timestep : float — the output step
+        coords   : 1-D array of length n_chunks — bin-centre coordinates
+        values   : 2-D array (n_chunks, n_cols) — Ncount, then each property
+    """
+    frames = []
+    with open(filepath) as f:
+        lines = [l.strip() for l in f if l.strip() and not l.startswith('#')]
+
+    i = 0
+    while i < len(lines):
+        parts = lines[i].split()
+        # Block header: exactly two tokens, both numeric (timestep + n_chunks)
+        if len(parts) == 2:
+            try:
+                ts    = float(parts[0])
+                nrows = int(parts[1])
+                i += 1
+                coords, values = [], []
+                for _ in range(nrows):
+                    if i < len(lines):
+                        row = [float(x) for x in lines[i].split()]
+                        # row[0]=chunk_id  row[1]=coord  row[2]=Ncount  row[3+]=props
+                        if len(row) >= 3:
+                            coords.append(row[1])
+                            values.append(row[2:])  # Ncount + computed properties
+                        i += 1
+                if coords:
+                    frames.append((ts, np.array(coords), np.array(values)))
+                continue
+            except (ValueError, IndexError):
+                pass
+        i += 1
+    return frames
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -672,6 +724,188 @@ def plot_flow_diagnostics(folder, run_id, output):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CHEMICAL POTENTIAL DIAGNOSTICS PLOT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plot_chempot_diagnostics(folder, run_id, output):
+    """Widom excess chemical potential and solvent density diagnostics.
+
+    Auto-generated when output_files/chemical_potential/ files are present
+    (produced by slab_with_support runs with fix widom).
+
+    Panels
+    ──────
+    1. μ_ex(z) profiles  — one coloured curve per time snapshot (10 total).
+       x-axis: bin index (1 = bottom of box, N = top).
+       A flat profile confirms thermodynamic equilibrium (uniform μ).
+       Any spatial gradient is a driving force for solvent flow.
+
+    2. Solvent number density ρ_s(z)  — one curve per output frame.
+       From fix ave/chunk density/number  (output_files/chemical_potential/
+       solvent_density_z_*.dat).
+       V̄_s  ≈  1 / ρ_s  (partial molar volume, reduced LJ units).
+       Inside the gel ρ_s drops due to polymer exclusion, NOT compression —
+       V̄_s should be measured in the pure-solvent reservoir region (top/bottom
+       of the box) where ρ_s ≈ ρ_s,bulk.  The plot annotates the reservoir
+       estimate of ρ_s,bulk and the corresponding V̄_s.
+
+    File column reference
+    ─────────────────────
+    mu_z_*.dat            (fix print)    : step | μ_ex bin1 … bin20
+    solvent_density_z_*.dat (fix ave/chunk) : chunk coord Ncount density/number
+    """
+    chem_dir  = os.path.join(folder, 'output_files', 'chemical_potential')
+    mu_file   = os.path.join(chem_dir, f'mu_z_{run_id}.dat')
+    dens_file = os.path.join(chem_dir, f'solvent_density_z_{run_id}.dat')
+
+    has_mu   = os.path.exists(mu_file)
+    has_dens = os.path.exists(dens_file)
+
+    if not has_mu and not has_dens:
+        return
+
+    n_panels = int(has_mu) + int(has_dens)
+    fig, axes = plt.subplots(n_panels, 1, figsize=(10, 4.5 * n_panels))
+    if n_panels == 1:
+        axes = [axes]
+    fig.suptitle(f'{run_id}  —  chemical potential diagnostics',
+                 fontsize=12, fontweight='bold')
+    panel_idx = 0
+
+    # ── Panel 1: μ_ex(z) time evolution ──────────────────────────────────────
+    if has_mu:
+        arr = read_fix_print(mu_file)   # shape (n_frames, 1 + N_bins)
+        ax  = axes[panel_idx]; panel_idx += 1
+        ax.grid(alpha=0.3)
+
+        if arr.size and arr.shape[1] >= 2:
+            n_bins   = arr.shape[1] - 1          # e.g. 20
+            n_frames = len(arr)
+            bin_idx  = np.arange(1, n_bins + 1)  # 1 … N_bins
+
+            colors = plt.cm.viridis(np.linspace(0, 1, max(n_frames, 1)))
+            for i, row in enumerate(arr):
+                step    = int(row[0])
+                mu_vals = row[1:]
+                ax.plot(bin_idx, mu_vals, color=colors[i], lw=1.5,
+                        marker='o', markersize=3,
+                        label=f'step {step:,}')
+
+            ax.set_xlabel(f'z-bin  (1 = bottom of box, {n_bins} = top)')
+            ax.set_ylabel('μ_ex  (ε)')
+            ax.set_title(
+                'Widom excess chemical potential profile  μ_ex(z)\n'
+                'Flat → equilibrium;  gradient → driving force for solvent flow.\n'
+                'Pore pressure difference:  Δp = Δμ_ex / V̄_s  (use ρ_s panel below)',
+                fontsize=9)
+            ax.legend(fontsize=7, ncol=min(n_frames, 5),
+                      loc='upper right', framealpha=0.7)
+
+            # Annotate final-frame uniformity
+            if n_frames > 0:
+                final_mu  = arr[-1, 1:]
+                mu_range  = float(final_mu.max() - final_mu.min())
+                mu_mean   = float(final_mu.mean())
+                ax.text(0.02, 0.05,
+                        f'Final frame:  mean μ_ex = {mu_mean:.4f} ε'
+                        f'   Δμ_ex (max−min) = {mu_range:.4f} ε',
+                        transform=ax.transAxes, fontsize=9, va='bottom',
+                        bbox=dict(boxstyle='round,pad=0.3',
+                                  facecolor='white', alpha=0.85))
+                # Flag non-uniformity
+                if mu_range > 0.05:
+                    ax.text(0.02, 0.92,
+                            f'⚠ Δμ_ex = {mu_range:.4f} ε  (> 0.05 ε) — '
+                            'system may not be at full equilibrium',
+                            transform=ax.transAxes, fontsize=9, color='red', va='top',
+                            bbox=dict(boxstyle='round,pad=0.3',
+                                      facecolor='white', alpha=0.85))
+        else:
+            ax.text(0.5, 0.5, 'No data in mu_z file',
+                    transform=ax.transAxes, ha='center', va='center')
+
+    # ── Panel 2: Solvent density ρ_s(z) + V̄_s annotation ───────────────────
+    if has_dens:
+        frames = read_ave_chunk(dens_file)
+        ax     = axes[panel_idx]; panel_idx += 1
+        ax.grid(alpha=0.3)
+
+        if frames:
+            n_frames = len(frames)
+            colors   = plt.cm.plasma(np.linspace(0, 1, max(n_frames, 1)))
+            rho_res_last = None
+            z_last       = None
+
+            for i, (ts, coords, values) in enumerate(frames):
+                # values columns: Ncount (col 0),  density/number (col 1)
+                if values.shape[1] < 2:
+                    continue
+                rho = values[:, 1]   # density/number
+                ax.plot(coords, rho, color=colors[i], lw=1.5,
+                        marker='o', markersize=2,
+                        label=f'step {int(ts):,}')
+                if i == n_frames - 1:
+                    rho_res_last = rho
+                    z_last       = coords
+
+            ax.set_xlabel('z  (σ)')
+            ax.set_ylabel('ρ_s  (σ⁻³)')
+            ax.set_title(
+                'Solvent number density profile  ρ_s(z)\n'
+                'V̄_s = 1/ρ_s,reservoir  (partial molar volume, LJ units).\n'
+                'Dip inside gel = polymer exclusion, not solvent compression.',
+                fontsize=9)
+            ax.legend(fontsize=7, ncol=min(n_frames, 5),
+                      loc='upper right', framealpha=0.7)
+
+            # Annotate V̄_s from the pure-solvent reservoir bins.
+            # Strategy: use bins where ρ_s > RHO_THRESH_FRAC * max(ρ_s).
+            # The gel depresses ρ_s by polymer exclusion, so reservoir bins
+            # (pure solvent) cluster at the top of the density distribution.
+            # This is purely data-driven and does not assume a fixed z-fraction,
+            # so it works regardless of where the gel sits in the box — consistent
+            # with how slab_with_flow uses Rg to locate the gel boundary.
+            RHO_THRESH_FRAC = 0.85   # bins below 85 % of max ρ_s are excluded
+            if rho_res_last is not None and z_last is not None and len(z_last) > 4:
+                rho_max      = float(rho_res_last.max())
+                res_mask     = rho_res_last >= RHO_THRESH_FRAC * rho_max
+                if res_mask.sum() >= 2 and rho_max > 1e-6:
+                    rho_res  = float(rho_res_last[res_mask].mean())
+                    vbar     = 1.0 / rho_res
+                    # Shade the identified reservoir bins
+                    res_z = z_last[res_mask]
+                    ax.axvspan(float(res_z.min()), float(res_z.max()),
+                               alpha=0.10, color='steelblue',
+                               label=f'reservoir bins (ρ_s ≥ {RHO_THRESH_FRAC:.0%} × max)')
+                    ax.text(0.98, 0.92,
+                            f'Reservoir  ρ_s = {rho_res:.4f} σ⁻³'
+                            f'  ({res_mask.sum()} bins)\n'
+                            f'→  V̄_s = {vbar:.3f} σ³  per solvent atom',
+                            transform=ax.transAxes, fontsize=9,
+                            ha='right', va='top',
+                            bbox=dict(boxstyle='round,pad=0.3',
+                                      facecolor='lightyellow', alpha=0.9))
+                    ax.legend(fontsize=7, ncol=min(n_frames, 5),
+                              loc='upper left', framealpha=0.7)
+                else:
+                    ax.text(0.98, 0.92,
+                            f'Could not isolate reservoir bins\n'
+                            f'(fewer than 2 bins above {RHO_THRESH_FRAC:.0%} × max ρ_s)',
+                            transform=ax.transAxes, fontsize=9,
+                            ha='right', va='top', color='red',
+                            bbox=dict(boxstyle='round,pad=0.3',
+                                      facecolor='white', alpha=0.85))
+        else:
+            ax.text(0.5, 0.5, 'No data in solvent_density_z file',
+                    transform=ax.transAxes, ha='center', va='center')
+
+    axes[-1].set_xlabel(axes[-1].get_xlabel() or 'Position')
+    plt.tight_layout()
+    plt.savefig(output, dpi=150)
+    print(f"Chempot diagnostics → {output}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -726,3 +960,16 @@ if __name__ == '__main__':
     if force_files_present:
         plot_flow_diagnostics(args.folder, run_id,
                               os.path.join(out_dir, f'{run_id}_flow_diagnostics.png'))
+
+    # Chemical potential diagnostics (auto-triggered when mu_z or solvent_density_z
+    # files are present in output_files/chemical_potential/).
+    # Produced by slab_with_support runs that include fix widom.
+    chem_dir = os.path.join(args.folder, 'output_files', 'chemical_potential')
+    chempot_files_present = (
+        os.path.exists(os.path.join(chem_dir, f'mu_z_{run_id}.dat')) or
+        os.path.exists(os.path.join(chem_dir, f'solvent_density_z_{run_id}.dat'))
+    )
+    if chempot_files_present:
+        plot_chempot_diagnostics(args.folder, run_id,
+                                 os.path.join(out_dir,
+                                              f'{run_id}_chempot_diagnostics.png'))

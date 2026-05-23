@@ -27,6 +27,26 @@ variable thermo_freq equal 10000
 variable dump_freq equal 10000
 variable volume_freq equal 10000
 
+# ── Widom insertion / chemical potential ─────────────────────────────────────
+# Produces 10 μ_ex(z) snapshots evenly spaced over the production run —
+# same cadence as the 10 stress-profile curves in slab_with_flow.
+# Each snapshot fires fix widom with M_widom ghost insertions per z-slab.
+#
+# N_widom_bins z-slabs divide [zlo, zhi] into equal-width bands via
+# variable-bound regions that track the box during NPT fluctuations.
+# Bin 1 is at the bottom (zlo), bin N is at the top (zhi).
+#
+# μ_ex output: output_files/chemical_potential/mu_z_*.dat
+#   columns: step | μ_ex bin1 | μ_ex bin2 | ... | μ_ex bin20
+# Solvent density output: output_files/chemical_potential/solvent_density_z_*.dat
+#   (used to estimate partial molar volume V̄_s = 1/ρ_s per bin)
+#
+# NOTE: create output_files/chemical_potential/ before the run.
+variable num_widom_curves equal 10     # time-snapshots of μ(z) over production run
+variable M_widom          equal 1000   # ghost-particle insertions per bin per snapshot
+variable N_widom_bins     equal 20     # number of equal-width z-slabs
+variable nfreq_widom      equal floor(${nsteps}/v_num_widom_curves)
+
 # Equilibration parameters
 variable temp_target equal 1.0
 variable press_target equal 1.5 # APPROPRIATE VALUE IMPORTANT
@@ -245,6 +265,115 @@ fix box_dims_output all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_
 
 
 
+# =====================================================================
+#   CHEMICAL POTENTIAL: WIDOM TEST-PARTICLE INSERTION
+# =====================================================================
+# 20 equal-width z-slabs with variable-bound regions — tracks NPT box.
+# One fix widom per slab fires every nfreq_widom steps (= nsteps/10),
+# attempting M_widom ghost insertions of type-3 (solvent) atoms.
+# fix widom outputs the Widom excess chemical potential μ_ex for the
+# most recent evaluation window as f_widom_bN[1].
+#
+# The fix print fires on the same schedule as the widom fixes
+# (both use nfreq_widom), so the output captures freshly-computed values.
+# ${restartFlag} = "file" on fresh start, "append" on restart.
+#
+# Ideal-gas correction: μ = μ_ex + k_B T ln(ρ_s Λ³).  For pore-pressure
+# differences only Δμ_ex(z) matters (the ideal term cancels if T is uniform
+# and Λ is the same everywhere, which it is for LJ atoms).
+
+# ----- Dynamic bin boundaries (fractions of box z-extent) -----
+variable w_dz  equal (zhi-zlo)/${N_widom_bins}
+
+variable w_z0  equal zlo+ 0.0*v_w_dz
+variable w_z1  equal zlo+ 1.0*v_w_dz
+variable w_z2  equal zlo+ 2.0*v_w_dz
+variable w_z3  equal zlo+ 3.0*v_w_dz
+variable w_z4  equal zlo+ 4.0*v_w_dz
+variable w_z5  equal zlo+ 5.0*v_w_dz
+variable w_z6  equal zlo+ 6.0*v_w_dz
+variable w_z7  equal zlo+ 7.0*v_w_dz
+variable w_z8  equal zlo+ 8.0*v_w_dz
+variable w_z9  equal zlo+ 9.0*v_w_dz
+variable w_z10 equal zlo+10.0*v_w_dz
+variable w_z11 equal zlo+11.0*v_w_dz
+variable w_z12 equal zlo+12.0*v_w_dz
+variable w_z13 equal zlo+13.0*v_w_dz
+variable w_z14 equal zlo+14.0*v_w_dz
+variable w_z15 equal zlo+15.0*v_w_dz
+variable w_z16 equal zlo+16.0*v_w_dz
+variable w_z17 equal zlo+17.0*v_w_dz
+variable w_z18 equal zlo+18.0*v_w_dz
+variable w_z19 equal zlo+19.0*v_w_dz
+variable w_z20 equal zlo+20.0*v_w_dz
+
+# ----- z-slab regions (dynamic: v_ prefix → evaluated every step) -----
+region widom_bin1  block EDGE EDGE EDGE EDGE v_w_z0  v_w_z1  side in
+region widom_bin2  block EDGE EDGE EDGE EDGE v_w_z1  v_w_z2  side in
+region widom_bin3  block EDGE EDGE EDGE EDGE v_w_z2  v_w_z3  side in
+region widom_bin4  block EDGE EDGE EDGE EDGE v_w_z3  v_w_z4  side in
+region widom_bin5  block EDGE EDGE EDGE EDGE v_w_z4  v_w_z5  side in
+region widom_bin6  block EDGE EDGE EDGE EDGE v_w_z5  v_w_z6  side in
+region widom_bin7  block EDGE EDGE EDGE EDGE v_w_z6  v_w_z7  side in
+region widom_bin8  block EDGE EDGE EDGE EDGE v_w_z7  v_w_z8  side in
+region widom_bin9  block EDGE EDGE EDGE EDGE v_w_z8  v_w_z9  side in
+region widom_bin10 block EDGE EDGE EDGE EDGE v_w_z9  v_w_z10 side in
+region widom_bin11 block EDGE EDGE EDGE EDGE v_w_z10 v_w_z11 side in
+region widom_bin12 block EDGE EDGE EDGE EDGE v_w_z11 v_w_z12 side in
+region widom_bin13 block EDGE EDGE EDGE EDGE v_w_z12 v_w_z13 side in
+region widom_bin14 block EDGE EDGE EDGE EDGE v_w_z13 v_w_z14 side in
+region widom_bin15 block EDGE EDGE EDGE EDGE v_w_z14 v_w_z15 side in
+region widom_bin16 block EDGE EDGE EDGE EDGE v_w_z15 v_w_z16 side in
+region widom_bin17 block EDGE EDGE EDGE EDGE v_w_z16 v_w_z17 side in
+region widom_bin18 block EDGE EDGE EDGE EDGE v_w_z17 v_w_z18 side in
+region widom_bin19 block EDGE EDGE EDGE EDGE v_w_z18 v_w_z19 side in
+region widom_bin20 block EDGE EDGE EDGE EDGE v_w_z19 v_w_z20 side in
+
+# ----- fix widom: one per z-slab, unique seed per fix -----
+# Group = all: ghost particle interacts with all atom types (polymer,
+# support, piston) — correct for measuring the total solvent insertion cost.
+# Type 3 = solvent.  No full_energy needed for lj/cut without kspace.
+fix widom_b1  all widom ${nfreq_widom} ${M_widom} 3 12345 ${temp_target} region widom_bin1
+fix widom_b2  all widom ${nfreq_widom} ${M_widom} 3 12346 ${temp_target} region widom_bin2
+fix widom_b3  all widom ${nfreq_widom} ${M_widom} 3 12347 ${temp_target} region widom_bin3
+fix widom_b4  all widom ${nfreq_widom} ${M_widom} 3 12348 ${temp_target} region widom_bin4
+fix widom_b5  all widom ${nfreq_widom} ${M_widom} 3 12349 ${temp_target} region widom_bin5
+fix widom_b6  all widom ${nfreq_widom} ${M_widom} 3 12350 ${temp_target} region widom_bin6
+fix widom_b7  all widom ${nfreq_widom} ${M_widom} 3 12351 ${temp_target} region widom_bin7
+fix widom_b8  all widom ${nfreq_widom} ${M_widom} 3 12352 ${temp_target} region widom_bin8
+fix widom_b9  all widom ${nfreq_widom} ${M_widom} 3 12353 ${temp_target} region widom_bin9
+fix widom_b10 all widom ${nfreq_widom} ${M_widom} 3 12354 ${temp_target} region widom_bin10
+fix widom_b11 all widom ${nfreq_widom} ${M_widom} 3 12355 ${temp_target} region widom_bin11
+fix widom_b12 all widom ${nfreq_widom} ${M_widom} 3 12356 ${temp_target} region widom_bin12
+fix widom_b13 all widom ${nfreq_widom} ${M_widom} 3 12357 ${temp_target} region widom_bin13
+fix widom_b14 all widom ${nfreq_widom} ${M_widom} 3 12358 ${temp_target} region widom_bin14
+fix widom_b15 all widom ${nfreq_widom} ${M_widom} 3 12359 ${temp_target} region widom_bin15
+fix widom_b16 all widom ${nfreq_widom} ${M_widom} 3 12360 ${temp_target} region widom_bin16
+fix widom_b17 all widom ${nfreq_widom} ${M_widom} 3 12361 ${temp_target} region widom_bin17
+fix widom_b18 all widom ${nfreq_widom} ${M_widom} 3 12362 ${temp_target} region widom_bin18
+fix widom_b19 all widom ${nfreq_widom} ${M_widom} 3 12363 ${temp_target} region widom_bin19
+fix widom_b20 all widom ${nfreq_widom} ${M_widom} 3 12364 ${temp_target} region widom_bin20
+
+# ----- μ_ex(z) profile output -----
+# One line per nfreq_widom step: step and the 20 bin μ_ex values.
+# Bin k center ≈ zlo + (k - 0.5) * w_dz  (compute in post-processing
+# using box_dimensions output for lz).
+fix out_mu_z all print ${nfreq_widom} &
+    "$(step) $(f_widom_b1[1]) $(f_widom_b2[1]) $(f_widom_b3[1]) $(f_widom_b4[1]) $(f_widom_b5[1]) $(f_widom_b6[1]) $(f_widom_b7[1]) $(f_widom_b8[1]) $(f_widom_b9[1]) $(f_widom_b10[1]) $(f_widom_b11[1]) $(f_widom_b12[1]) $(f_widom_b13[1]) $(f_widom_b14[1]) $(f_widom_b15[1]) $(f_widom_b16[1]) $(f_widom_b17[1]) $(f_widom_b18[1]) $(f_widom_b19[1]) $(f_widom_b20[1])" &
+    ${restartFlag} output_files/chemical_potential/mu_z_${dataname}_${interaction}_${totsteps}.dat screen no
+
+# ----- Solvent number density profile (for V̄_s = 1/ρ_s estimation) -----
+# Uses the same nevery/nrepeat/nfreq as the existing stress output so the
+# density and μ_ex profiles can be compared on the same time axis.
+# V̄_s = 1/ρ_s(z) gives the local partial molar volume per bin.
+# In the incompressible limit V̄_s should be uniform; any deviation inside
+# the gel (reduced ρ_s from polymer exclusion) is expected and is the
+# quantity to compare between reservoir and gel regions.
+compute chunk_z_solv_density solvent chunk/atom bin/1d z lower ${binWidth}
+fix avg_solv_density all ave/chunk ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} &
+    chunk_z_solv_density density/number &
+    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${totsteps}.dat
+
 # Production run
 fix remove_drift mobile momentum 1000 linear 1 1 1 angular
 run ${nsteps}
@@ -255,6 +384,31 @@ run ${nsteps}
 unfix 1
 unfix remove_drift
 undump poly_traj
+
+# Widom / chemical potential cleanup
+unfix widom_b1
+unfix widom_b2
+unfix widom_b3
+unfix widom_b4
+unfix widom_b5
+unfix widom_b6
+unfix widom_b7
+unfix widom_b8
+unfix widom_b9
+unfix widom_b10
+unfix widom_b11
+unfix widom_b12
+unfix widom_b13
+unfix widom_b14
+unfix widom_b15
+unfix widom_b16
+unfix widom_b17
+unfix widom_b18
+unfix widom_b19
+unfix widom_b20
+unfix out_mu_z
+unfix avg_solv_density
+uncompute chunk_z_solv_density
 
 
 
