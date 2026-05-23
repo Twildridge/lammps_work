@@ -282,7 +282,10 @@ fix box_dims_output all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_
 # differences only Δμ_ex(z) matters (the ideal term cancels if T is uniform
 # and Λ is the same everywhere, which it is for LJ atoms).
 
-# ----- Dynamic bin boundaries (fractions of box z-extent) -----
+# ----- Bin boundary variables (equal-style; evaluated once via ${} substitution) -----
+# w_dz and w_zN are equal-style variables whose values are read once via ${w_zN}
+# when the region commands below are parsed.  At that point the box is at its
+# NPT-equilibrated dimensions, so the 20 bins uniformly tile [zlo, zhi].
 variable w_dz  equal (zhi-zlo)/${N_widom_bins}
 
 variable w_z0  equal zlo+ 0.0*v_w_dz
@@ -307,27 +310,35 @@ variable w_z18 equal zlo+18.0*v_w_dz
 variable w_z19 equal zlo+19.0*v_w_dz
 variable w_z20 equal zlo+20.0*v_w_dz
 
-# ----- z-slab regions (dynamic: v_ prefix → evaluated every step) -----
-region widom_bin1  block EDGE EDGE EDGE EDGE v_w_z0  v_w_z1  side in
-region widom_bin2  block EDGE EDGE EDGE EDGE v_w_z1  v_w_z2  side in
-region widom_bin3  block EDGE EDGE EDGE EDGE v_w_z2  v_w_z3  side in
-region widom_bin4  block EDGE EDGE EDGE EDGE v_w_z3  v_w_z4  side in
-region widom_bin5  block EDGE EDGE EDGE EDGE v_w_z4  v_w_z5  side in
-region widom_bin6  block EDGE EDGE EDGE EDGE v_w_z5  v_w_z6  side in
-region widom_bin7  block EDGE EDGE EDGE EDGE v_w_z6  v_w_z7  side in
-region widom_bin8  block EDGE EDGE EDGE EDGE v_w_z7  v_w_z8  side in
-region widom_bin9  block EDGE EDGE EDGE EDGE v_w_z8  v_w_z9  side in
-region widom_bin10 block EDGE EDGE EDGE EDGE v_w_z9  v_w_z10 side in
-region widom_bin11 block EDGE EDGE EDGE EDGE v_w_z10 v_w_z11 side in
-region widom_bin12 block EDGE EDGE EDGE EDGE v_w_z11 v_w_z12 side in
-region widom_bin13 block EDGE EDGE EDGE EDGE v_w_z12 v_w_z13 side in
-region widom_bin14 block EDGE EDGE EDGE EDGE v_w_z13 v_w_z14 side in
-region widom_bin15 block EDGE EDGE EDGE EDGE v_w_z14 v_w_z15 side in
-region widom_bin16 block EDGE EDGE EDGE EDGE v_w_z15 v_w_z16 side in
-region widom_bin17 block EDGE EDGE EDGE EDGE v_w_z16 v_w_z17 side in
-region widom_bin18 block EDGE EDGE EDGE EDGE v_w_z17 v_w_z18 side in
-region widom_bin19 block EDGE EDGE EDGE EDGE v_w_z18 v_w_z19 side in
-region widom_bin20 block EDGE EDGE EDGE EDGE v_w_z19 v_w_z20 side in
+# ----- z-slab regions (static: ${} substitution freezes bounds at creation time) -----
+# fix widom requires regions with a computable bounding box, which means the
+# bounds must be static numerics — not dynamic v_ variable references.
+# ${w_zN} evaluates the equal-style variable once when this line is reached
+# (after the NPT warm-up, so the box is at its equilibrated dimensions) and
+# substitutes the result as a literal number.  The region is therefore static
+# and fix widom can compute its bounding box without error.
+# Note: NPT box fluctuations during the production run are small (<1%) for an
+# already-equilibrated system, so fixed bin boundaries are a good approximation.
+region widom_bin1  block EDGE EDGE EDGE EDGE ${w_z0}  ${w_z1}  side in
+region widom_bin2  block EDGE EDGE EDGE EDGE ${w_z1}  ${w_z2}  side in
+region widom_bin3  block EDGE EDGE EDGE EDGE ${w_z2}  ${w_z3}  side in
+region widom_bin4  block EDGE EDGE EDGE EDGE ${w_z3}  ${w_z4}  side in
+region widom_bin5  block EDGE EDGE EDGE EDGE ${w_z4}  ${w_z5}  side in
+region widom_bin6  block EDGE EDGE EDGE EDGE ${w_z5}  ${w_z6}  side in
+region widom_bin7  block EDGE EDGE EDGE EDGE ${w_z6}  ${w_z7}  side in
+region widom_bin8  block EDGE EDGE EDGE EDGE ${w_z7}  ${w_z8}  side in
+region widom_bin9  block EDGE EDGE EDGE EDGE ${w_z8}  ${w_z9}  side in
+region widom_bin10 block EDGE EDGE EDGE EDGE ${w_z9}  ${w_z10} side in
+region widom_bin11 block EDGE EDGE EDGE EDGE ${w_z10} ${w_z11} side in
+region widom_bin12 block EDGE EDGE EDGE EDGE ${w_z11} ${w_z12} side in
+region widom_bin13 block EDGE EDGE EDGE EDGE ${w_z12} ${w_z13} side in
+region widom_bin14 block EDGE EDGE EDGE EDGE ${w_z13} ${w_z14} side in
+region widom_bin15 block EDGE EDGE EDGE EDGE ${w_z14} ${w_z15} side in
+region widom_bin16 block EDGE EDGE EDGE EDGE ${w_z15} ${w_z16} side in
+region widom_bin17 block EDGE EDGE EDGE EDGE ${w_z16} ${w_z17} side in
+region widom_bin18 block EDGE EDGE EDGE EDGE ${w_z17} ${w_z18} side in
+region widom_bin19 block EDGE EDGE EDGE EDGE ${w_z18} ${w_z19} side in
+region widom_bin20 block EDGE EDGE EDGE EDGE ${w_z19} ${w_z20} side in
 
 # ----- fix widom: one per z-slab, unique seed per fix -----
 # Group = all: ghost particle interacts with all atom types (polymer,
