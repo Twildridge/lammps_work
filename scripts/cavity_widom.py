@@ -13,12 +13,11 @@ as cavities (no real atom within r_cavity of the insertion point).
 Usage
 -----
     python cavity_widom.py  --traj widom_run.lammpstrj  \\
-                            --lz-file box_dimensions.dat \\
                             --eps-sp 1.0  --eps-ss 1.0   \\
                             --n-bins 20  --n-trial 2000  \\
                             --r-cavity 0.5  --temperature 1.0
 
-Outputs (written next to the trajectory file):
+Outputs (written to --out-dir, named with --out-stem):
     mu_z_cavity_<stem>.dat          — one row per frame per bin
     mu_z_cavity_summary_<stem>.dat  — time-averaged μ_ex(z) with stderr and p_cav
 
@@ -30,6 +29,16 @@ Atom-type → epsilon mapping (solvent ghost = type 3):
     type 5  piston              → 1.0     (WCA with solvent)
 
 All units are LJ reduced units (sigma=1, mass=1, epsilon=1 sets the scale).
+
+Performance notes
+-----------------
+For large systems (400 k atoms) the two main costs per frame are:
+  1. Trajectory I/O     — mitigated by bulk np.fromstring reads
+  2. WCA energy         — mitigated by KD-tree neighbor lookup (only ~3–5
+                          atoms within the 1.122σ WCA cutoff contribute;
+                          O(N) full-distance loops are avoided)
+eps_arr and the atom coordinate array are pre-computed once per frame and
+reused across all bins and all cavity insertions.
 """
 
 import argparse
@@ -51,10 +60,14 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def iter_frames(traj_path):
-    """Yield (timestep, box, atoms) tuples from a LAMMPS dump file.
+    """Yield (timestep, box, atoms_xyz, atom_types) tuples from a LAMMPS dump file.
 
-    box   : dict with keys xlo, xhi, ylo, yhi, zlo, zhi (floats)
-    atoms : structured ndarray with fields  id, type, x, y, z
+    Returns
+    -------
+    timestep   : int
+    box        : dict  xlo xhi ylo yhi zlo zhi
+    atoms_xyz  : (N, 3) float64 array of (x, y, z) positions
+    atom_types : (N,)   int32   array of atom types
     """
     with open(traj_path) as fh:
         while True:
@@ -67,31 +80,34 @@ def iter_frames(traj_path):
             timestep = int(fh.readline().strip())
 
             # ITEM: NUMBER OF ATOMS
-            fh.readline()  # "ITEM: NUMBER OF ATOMS"
+            fh.readline()
             n_atoms = int(fh.readline().strip())
 
             # ITEM: BOX BOUNDS
-            fh.readline()  # "ITEM: BOX BOUNDS ..."
+            fh.readline()
             xlo, xhi = map(float, fh.readline().split())
             ylo, yhi = map(float, fh.readline().split())
             zlo, zhi = map(float, fh.readline().split())
             box = dict(xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi, zlo=zlo, zhi=zhi)
 
             # ITEM: ATOMS id type x y z
-            header = fh.readline()  # "ITEM: ATOMS ..."
-            cols = header.split()[2:]  # ['id', 'type', 'x', 'y', 'z']
+            header = fh.readline()
+            cols = header.split()[2:]   # e.g. ['id', 'type', 'x', 'y', 'z']
 
-            dtype = np.dtype([(c, np.float64) for c in cols])
-            rows = []
-            for _ in range(n_atoms):
-                rows.append(tuple(float(v) for v in fh.readline().split()))
-            atoms = np.array(rows, dtype=dtype)
+            # Bulk-read all atom lines — much faster than per-line readline for
+            # large N because it avoids 400k+ Python function calls.
+            raw = ''.join(fh.readline() for _ in range(n_atoms))
+            data = np.fromstring(raw, sep=' ').reshape(n_atoms, len(cols))
 
-            yield timestep, box, atoms
+            col_idx = {c: i for i, c in enumerate(cols)}
+            atoms_xyz  = data[:, [col_idx['x'], col_idx['y'], col_idx['z']]]
+            atom_types = data[:, col_idx['type']].astype(np.int32)
+
+            yield timestep, box, atoms_xyz, atom_types
 
 
 # ---------------------------------------------------------------------------
-# WCA energy calculation
+# WCA energy calculation — fully vectorized, KD-tree-aware
 # ---------------------------------------------------------------------------
 
 def wca_energy_vectorized(r2, eps, sigma=1.0, cutoff=1.122):
@@ -103,52 +119,29 @@ def wca_energy_vectorized(r2, eps, sigma=1.0, cutoff=1.122):
     mask = r2 < rc2
     U = np.zeros_like(r2)
     if mask.any():
-        inv_r2 = (sigma ** 2) / r2[mask]
-        inv_r6  = inv_r2 ** 3
-        inv_r12 = inv_r6 ** 2
+        inv_r2  = (sigma * sigma) / r2[mask]
+        inv_r6  = inv_r2 * inv_r2 * inv_r2
+        inv_r12 = inv_r6 * inv_r6
         U[mask] = 4.0 * eps[mask] * (inv_r12 - inv_r6) + eps[mask]
     return U
 
 
-def insertion_energy(pos, atoms, eps_map, sigma=1.0, cutoff=1.122):
-    """Total WCA insertion energy for a ghost solvent atom at `pos`.
-
-    Parameters
-    ----------
-    pos    : (3,) array  — insertion point (x, y, z)
-    atoms  : structured array with fields type, x, y, z
-    eps_map: dict {atom_type(int): epsilon(float)}
-    sigma  : LJ sigma
-    cutoff : WCA cutoff (= 2^(1/6) sigma)
-
-    Returns
-    -------
-    float — total insertion energy in kT/epsilon units
-    """
-    dx = atoms['x'] - pos[0]
-    dy = atoms['y'] - pos[1]
-    dz = atoms['z'] - pos[2]
-    r2 = dx*dx + dy*dy + dz*dz
-
-    eps_arr = np.array([eps_map.get(int(t), 0.0) for t in atoms['type']])
-    # zero out zero-epsilon types to skip them
-    active = eps_arr > 0.0
-    if not active.any():
-        return 0.0
-
-    U_pairs = wca_energy_vectorized(r2[active], eps_arr[active], sigma, cutoff)
-    return float(U_pairs.sum())
-
-
 # ---------------------------------------------------------------------------
-# Per-frame processing
+# Per-frame processing (optimized)
 # ---------------------------------------------------------------------------
 
-def process_frame(timestep, box, atoms, eps_map,
+def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
                   n_bins, n_trial, r_cavity,
                   temperature, sigma=1.0, cutoff=1.122,
                   rng=None):
     """Run cavity-biased Widom for one snapshot.
+
+    Parameters
+    ----------
+    atoms_xyz  : (N, 3) float64  — atom positions (world coordinates)
+    atom_types : (N,)   int32    — atom types (unused here; eps_arr pre-computed)
+    eps_arr    : (N,)   float64  — epsilon for each atom vs. ghost solvent,
+                                   PRE-COMPUTED once per frame in main()
 
     Returns list of dicts, one per z-bin:
         z_lo, z_hi, z_center, n_trial, n_cavity, p_cav,
@@ -162,40 +155,40 @@ def process_frame(timestep, box, atoms, eps_map,
     lz = box['zhi'] - box['zlo']
     boxsize = np.array([lx, ly, lz])
 
-    # Build KD-tree over all atoms (wrapped to [0, L) for PBC)
-    xyz = np.column_stack([
-        atoms['x'] - box['xlo'],
-        atoms['y'] - box['ylo'],
-        atoms['z'] - box['zlo'],
-    ]) % boxsize  # minimum-image wrap
+    # Wrap atom positions to [0, L) for PBC-aware KD-tree
+    xyz_wrapped = (atoms_xyz - np.array([box['xlo'], box['ylo'], box['zlo']])) % boxsize
 
-    tree = cKDTree(xyz, boxsize=boxsize)
+    # Build KD-tree ONCE per frame (reused for all bins)
+    tree = cKDTree(xyz_wrapped, boxsize=boxsize)
 
-    kT = temperature  # kB = 1 in LJ units
+    kT   = temperature
     beta = 1.0 / kT
 
     bin_edges = np.linspace(box['zlo'], box['zhi'], n_bins + 1)
-    results = []
+    results   = []
 
     for ib in range(n_bins):
-        z_lo = bin_edges[ib]
-        z_hi = bin_edges[ib + 1]
+        z_lo     = bin_edges[ib]
+        z_hi     = bin_edges[ib + 1]
         z_center = 0.5 * (z_lo + z_hi)
 
-        # Generate trial positions uniformly inside this z-slab
+        # --- Generate trial positions uniformly in this z-slab ---------------
         xs = rng.uniform(box['xlo'], box['xhi'], n_trial)
         ys = rng.uniform(box['ylo'], box['yhi'], n_trial)
-        zs = rng.uniform(z_lo, z_hi, n_trial)
-        trial_pts = np.column_stack([xs - box['xlo'],
-                                     ys - box['ylo'],
-                                     zs - box['zlo']]) % boxsize
+        zs = rng.uniform(z_lo, z_hi,            n_trial)
 
-        # Cavity detection: find trials with no atom within r_cavity
-        nearby = tree.query_ball_point(trial_pts, r=r_cavity, workers=1)
-        cavity_mask = np.array([len(nb) == 0 for nb in nearby])
+        # Wrap to [0, L) for the KD-tree query
+        trial_pts = np.column_stack([
+            (xs - box['xlo']) % lx,
+            (ys - box['ylo']) % ly,
+            (zs - box['zlo']) % lz,
+        ])
 
-        n_cav = int(cavity_mask.sum())
-        p_cav = n_cav / n_trial
+        # --- Cavity detection: batch query (fast, workers=-1 = all cores) ----
+        nearby       = tree.query_ball_point(trial_pts, r=r_cavity, workers=-1)
+        cavity_mask  = np.array([len(nb) == 0 for nb in nearby], dtype=bool)
+        n_cav        = int(cavity_mask.sum())
+        p_cav        = n_cav / n_trial
 
         if n_cav == 0:
             results.append(dict(
@@ -205,25 +198,43 @@ def process_frame(timestep, box, atoms, eps_map,
             ))
             continue
 
-        # Compute WCA insertion energy only at cavity positions
-        cav_idx = np.where(cavity_mask)[0]
+        # --- WCA energy at cavity positions only -----------------------------
+        # Use KD-tree to find only the ~3–5 atoms within WCA cutoff.
+        # This is the key optimisation: avoids O(N_atoms) loops per insertion.
+        cav_pts   = trial_pts[cavity_mask]         # (n_cav, 3) in [0,L) space
+        nbr_lists = tree.query_ball_point(cav_pts, r=cutoff, workers=-1)
+
         beta_dU = np.empty(n_cav)
 
-        for k, idx in enumerate(cav_idx):
-            pos_world = np.array([xs[idx], ys[idx], zs[idx]])
-            dU = insertion_energy(pos_world, atoms, eps_map, sigma, cutoff)
-            beta_dU[k] = beta * dU
+        for k, nbrs in enumerate(nbr_lists):
+            if len(nbrs) == 0:
+                beta_dU[k] = 0.0
+                continue
 
-        # Clamp to avoid overflow in exp (underflow → 0 is fine and correct)
+            nbrs_arr   = np.asarray(nbrs, dtype=np.intp)
+            eps_nbr    = eps_arr[nbrs_arr]          # (m,)
+            active     = eps_nbr > 0.0
+            if not active.any():
+                beta_dU[k] = 0.0
+                continue
+
+            pos        = cav_pts[k]                 # (3,) in [0, L)
+            d          = xyz_wrapped[nbrs_arr[active]] - pos   # (m_act, 3)
+            # Minimum image convention
+            d         -= np.round(d / boxsize) * boxsize
+            r2         = (d * d).sum(axis=1)        # (m_act,)
+            U          = wca_energy_vectorized(r2, eps_nbr[active], sigma, cutoff)
+            beta_dU[k] = beta * float(U.sum())
+
+        # Clamp to avoid overflow in exp (underflow → 0 is correct and fine)
         beta_dU_clipped = np.minimum(beta_dU, 700.0)
-        exp_neg_bdU = np.exp(-beta_dU_clipped)
-
-        avg_exp = float(exp_neg_bdU.mean())
+        exp_neg_bdU     = np.exp(-beta_dU_clipped)
+        avg_exp         = float(exp_neg_bdU.mean())
 
         if avg_exp > 0.0 and p_cav > 0.0:
             mu_ex = -kT * np.log(p_cav * avg_exp)
         else:
-            mu_ex = np.nan  # still no signal even with cavity bias
+            mu_ex = np.nan
 
         results.append(dict(
             z_lo=z_lo, z_hi=z_hi, z_center=z_center,
@@ -260,9 +271,9 @@ def write_frame(fh, timestep, bin_results):
 
 def write_summary(path, all_results, n_bins):
     """Collect per-bin time series and write mean ± stderr."""
-    mu_series  = [[] for _ in range(n_bins)]
-    pc_series  = [[] for _ in range(n_bins)]
-    z_info     = [None] * n_bins
+    mu_series = [[] for _ in range(n_bins)]
+    pc_series = [[] for _ in range(n_bins)]
+    z_info    = [None] * n_bins
 
     for frame_bins in all_results:
         for ib, b in enumerate(frame_bins):
@@ -275,8 +286,8 @@ def write_summary(path, all_results, n_bins):
         fh.write(SUMMARY_HEADER)
         for ib in range(n_bins):
             zc, zlo, zhi = z_info[ib]
-            mus = np.array(mu_series[ib])
-            pcs = np.array(pc_series[ib])
+            mus  = np.array(mu_series[ib])
+            pcs  = np.array(pc_series[ib])
             n_ok = len(mus)
 
             if n_ok >= 2:
@@ -289,9 +300,9 @@ def write_summary(path, all_results, n_bins):
 
             pc_mean = float(pcs.mean()) if len(pcs) > 0 else np.nan
 
-            mu_str  = f"{mu_mean:.6f}"   if not np.isnan(mu_mean)   else "nan"
-            se_str  = f"{mu_stderr:.6f}" if not np.isnan(mu_stderr) else "nan"
-            pc_str  = f"{pc_mean:.5f}"   if not np.isnan(pc_mean)   else "nan"
+            mu_str = f"{mu_mean:.6f}"   if not np.isnan(mu_mean)   else "nan"
+            se_str = f"{mu_stderr:.6f}" if not np.isnan(mu_stderr) else "nan"
+            pc_str = f"{pc_mean:.5f}"   if not np.isnan(pc_mean)   else "nan"
 
             fh.write(
                 f"{zc:.4f}  {zlo:.4f}  {zhi:.4f}"
@@ -355,7 +366,7 @@ def main():
     out_dir = Path(args.out_dir) if args.out_dir else traj_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    stem = args.out_stem if args.out_stem else traj_path.stem
+    stem         = args.out_stem if args.out_stem else traj_path.stem
     frame_path   = out_dir / f"mu_z_cavity_{stem}.dat"
     summary_path = out_dir / f"mu_z_cavity_summary_{stem}.dat"
 
@@ -378,11 +389,19 @@ def main():
     with open(frame_path, 'w') as fh_frame:
         fh_frame.write(FRAME_HEADER)
 
-        for i_frame, (timestep, box, atoms) in enumerate(iter_frames(str(traj_path))):
-            print(f"  Frame {i_frame+1}  step {timestep}  n_atoms {len(atoms)} ...", end=" ", flush=True)
+        for i_frame, (timestep, box, atoms_xyz, atom_types) in \
+                enumerate(iter_frames(str(traj_path))):
+
+            print(f"  Frame {i_frame+1}  step {timestep}  "
+                  f"n_atoms {len(atoms_xyz)} ...", end=" ", flush=True)
+
+            # ── Pre-compute eps_arr ONCE per frame ──────────────────────────
+            # This avoids a Python loop over N_atoms inside every insertion.
+            eps_arr = np.array([eps_map.get(int(t), 0.0) for t in atom_types],
+                               dtype=np.float64)
 
             bin_results = process_frame(
-                timestep, box, atoms, eps_map,
+                timestep, box, atoms_xyz, atom_types, eps_arr,
                 n_bins      = args.n_bins,
                 n_trial     = args.n_trial,
                 r_cavity    = args.r_cavity,
@@ -395,8 +414,8 @@ def main():
             write_frame(fh_frame, timestep, bin_results)
             all_results.append(bin_results)
 
-            n_nan = sum(1 for b in bin_results if np.isnan(b['mu_ex']))
-            mean_pc = np.mean([b['p_cav'] for b in bin_results])
+            n_nan    = sum(1 for b in bin_results if np.isnan(b['mu_ex']))
+            mean_pc  = np.mean([b['p_cav'] for b in bin_results])
             print(f"done  (p_cav_mean={mean_pc:.3f}, {n_nan}/{args.n_bins} bins NaN)")
 
     write_summary(str(summary_path), all_results, args.n_bins)
@@ -408,13 +427,14 @@ def main():
     try:
         data = np.genfromtxt(str(summary_path), comments='#')
         if data.ndim == 2 and data.shape[1] >= 4:
-            mu = data[:, 3]
+            mu    = data[:, 3]
             valid = mu[~np.isnan(mu)]
             if len(valid):
                 print(f"\nμ_ex range: {valid.min():.4f} to {valid.max():.4f}  "
                       f"(Δμ_ex = {valid.max()-valid.min():.4f})")
                 if (valid.max() - valid.min()) > 0.05:
-                    print("  *** WARNING: Δμ_ex > 0.05 ε — significant chemical potential gradient ***")
+                    print("  *** WARNING: Δμ_ex > 0.05 ε — significant chemical "
+                          "potential gradient ***")
     except Exception:
         pass
 
