@@ -289,7 +289,6 @@ shell mkdir -p output_files/chemical_potential
 # NPT-equilibrated dimensions, so the 20 bins uniformly tile [zlo, zhi].
 variable w_dz  equal (zhi-zlo)/${N_widom_bins}
 
-variable w_z0  equal zlo+ 0.0*v_w_dz
 variable w_z1  equal zlo+ 1.0*v_w_dz
 variable w_z2  equal zlo+ 2.0*v_w_dz
 variable w_z3  equal zlo+ 3.0*v_w_dz
@@ -309,7 +308,6 @@ variable w_z16 equal zlo+16.0*v_w_dz
 variable w_z17 equal zlo+17.0*v_w_dz
 variable w_z18 equal zlo+18.0*v_w_dz
 variable w_z19 equal zlo+19.0*v_w_dz
-variable w_z20 equal zlo+20.0*v_w_dz
 
 # ----- z-slab regions (static: ${} substitution freezes bounds at creation time) -----
 # fix widom requires regions with a computable bounding box, which means the
@@ -320,7 +318,7 @@ variable w_z20 equal zlo+20.0*v_w_dz
 # and fix widom can compute its bounding box without error.
 # Note: NPT box fluctuations during the production run are small (<1%) for an
 # already-equilibrated system, so fixed bin boundaries are a good approximation.
-region widom_bin1  block EDGE EDGE EDGE EDGE ${w_z0}  ${w_z1}  side in
+region widom_bin1  block EDGE EDGE EDGE EDGE EDGE      ${w_z1}  side in
 region widom_bin2  block EDGE EDGE EDGE EDGE ${w_z1}  ${w_z2}  side in
 region widom_bin3  block EDGE EDGE EDGE EDGE ${w_z2}  ${w_z3}  side in
 region widom_bin4  block EDGE EDGE EDGE EDGE ${w_z3}  ${w_z4}  side in
@@ -339,7 +337,7 @@ region widom_bin16 block EDGE EDGE EDGE EDGE ${w_z15} ${w_z16} side in
 region widom_bin17 block EDGE EDGE EDGE EDGE ${w_z16} ${w_z17} side in
 region widom_bin18 block EDGE EDGE EDGE EDGE ${w_z17} ${w_z18} side in
 region widom_bin19 block EDGE EDGE EDGE EDGE ${w_z18} ${w_z19} side in
-region widom_bin20 block EDGE EDGE EDGE EDGE ${w_z19} ${w_z20} side in
+region widom_bin20 block EDGE EDGE EDGE EDGE ${w_z19} EDGE      side in
 
 # ----- fix widom: one per z-slab, unique seed per fix -----
 # Group = all: ghost particle interacts with all atom types (polymer,
