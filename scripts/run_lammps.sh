@@ -46,11 +46,14 @@ if [ ! -f "$LAMMPS_FILE" ]; then
 fi
 
 # Create a working directory for this run in home (for small files)
-WORK_DIR="$HOME/Documents/lammps_runs/${FOLDER}_${DATANAME}_${INTERACTION}_$(date +%Y%m%d_%H%M%S)"
+# Single timestamp captured once — both WORK_DIR and TRAJ_DIR use the same value
+# so the symlink traj_files -> TRAJ_DIR is never stale.
+RUN_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+WORK_DIR="$HOME/Documents/lammps_runs/${FOLDER}_${DATANAME}_${INTERACTION}_${RUN_TIMESTAMP}"
 mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data,piston_data,permeation_data,displacement_data,pair_data,chemical_potential},output_plots}
 
 # Create trajectory directory in scratch and symlink to it
-TRAJ_DIR="$SCRATCH_DIR/lammps_trajectories/${FOLDER}_${DATANAME}_${INTERACTION}_$(date +%Y%m%d_%H%M%S)"
+TRAJ_DIR="$SCRATCH_DIR/lammps_trajectories/${FOLDER}_${DATANAME}_${INTERACTION}_${RUN_TIMESTAMP}"
 mkdir -p "$TRAJ_DIR"
 ln -s "$TRAJ_DIR" "$WORK_DIR/traj_files"
 
@@ -159,12 +162,16 @@ python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTE
 #   mu_z_cavity_${DATANAME}_${INTERACTION}_${TOTSTEPS}.dat       (per-frame)
 #   mu_z_cavity_summary_${DATANAME}_${INTERACTION}_${TOTSTEPS}.dat (time-averaged ± stderr)
 WIDOM_TRAJ="${WORK_DIR}/traj_files/widom_${DATANAME}_${INTERACTION}_${TOTSTEPS}.lammpstrj"
+echo "======================================"
+echo "Cavity Widom check:"
+echo "  Looking for: $WIDOM_TRAJ"
+echo "  traj_files/ contents:"
+ls -lh "${WORK_DIR}/traj_files/" 2>&1 | head -20
+echo "======================================"
 if [ -f "$WIDOM_TRAJ" ]; then
-    echo "======================================"
     echo "Running cavity-biased Widom insertion..."
     echo "  Trajectory: $WIDOM_TRAJ"
     echo "  Output dir: output_files/chemical_potential/"
-    echo "======================================"
     python "$SCRIPT_DIR/cavity_widom.py" \
         --traj      "$WIDOM_TRAJ" \
         --out-dir   "output_files/chemical_potential" \
@@ -179,7 +186,13 @@ if [ -f "$WIDOM_TRAJ" ]; then
     echo "Re-generating convergence plot with cavity Widom panel..."
     python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
 else
-    echo "(No Widom trajectory found — skipping cavity_widom.py)"
+    echo "WARNING: Widom trajectory not found — skipping cavity_widom.py"
+    echo "  Expected path: $WIDOM_TRAJ"
+    echo "  TRAJ_DIR (scratch): $TRAJ_DIR"
+    echo "  If the file is missing, check that:"
+    echo "    1. The run completed without error"
+    echo "    2. dump widom_traj is in slab_with_support.lmp (check git pulled correctly)"
+    echo "    3. Scratch dir is accessible: ls $TRAJ_DIR"
 fi
 
 # Pure solvent P-sweep: run EOS plot instead of stress/piston/tracking scripts
