@@ -375,14 +375,23 @@ fix out_mu_z all print ${nfreq_widom} &
     ${restartFlag} output_files/chemical_potential/mu_z_${dataname}_${interaction}_${totsteps}.dat screen no
 
 # ----- Solvent number density profile (for V̄_s = 1/ρ_s estimation) -----
-# Uses the same nevery/nrepeat/nfreq as the existing stress output so the
-# density and μ_ex profiles can be compared on the same time axis.
 # V̄_s = 1/ρ_s(z) gives the local partial molar volume per bin.
 # In the incompressible limit V̄_s should be uniform; any deviation inside
 # the gel (reduced ρ_s from polymer exclusion) is expected and is the
 # quantity to compare between reservoir and gel regions.
+#
+# Timing: derived from nfreq_widom so the density snapshots align with the
+# μ_ex snapshots.  nevery_density=100 (near stress decorrelation time),
+# nrepeat_density=nfreq_widom/100, nfreq_density=nevery*nrepeat (exact).
+# This avoids reusing nevery_avg_stress/nfreq_avg_stress which are defined
+# for a different purpose and may not satisfy nfreq=nevery*nrepeat.
+variable nevery_density  equal 100
+variable nrepeat_density equal floor(v_nfreq_widom/v_nevery_density)
+variable nfreq_density   equal v_nevery_density*v_nrepeat_density
+print ">>> Density: nevery=${nevery_density} nrepeat=${nrepeat_density} nfreq=${nfreq_density}"
+
 compute chunk_z_solv_density solvent chunk/atom bin/1d z lower ${binWidth}
-fix avg_solv_density all ave/chunk ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} &
+fix avg_solv_density all ave/chunk ${nevery_density} ${nrepeat_density} ${nfreq_density} &
     chunk_z_solv_density density/number &
     file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${totsteps}.dat
 
