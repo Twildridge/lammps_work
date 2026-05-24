@@ -749,22 +749,32 @@ def plot_chempot_diagnostics(folder, run_id, output):
        of the box) where ρ_s ≈ ρ_s,bulk.  The plot annotates the reservoir
        estimate of ρ_s,bulk and the corresponding V̄_s.
 
+    3. Cavity-biased Widom μ_ex(z)  — time-averaged ± stderr with p_cav
+       colormap  (output_files/chemical_potential/mu_z_cavity_summary_*.dat).
+       Shown only when cavity_widom.py has been run on the trajectory.
+       p_cav = fraction of trial positions that are genuine voids; low p_cav
+       in gel bins confirms high polymer density (standard Widom fails there).
+
     File column reference
     ─────────────────────
-    mu_z_*.dat            (fix print)    : step | μ_ex bin1 … bin20
-    solvent_density_z_*.dat (fix ave/chunk) : chunk coord Ncount density/number
+    mu_z_*.dat              (fix print)      : step | μ_ex bin1 … bin20
+    solvent_density_z_*.dat (fix ave/chunk)  : chunk coord Ncount density/number
+    mu_z_cavity_summary_*.dat (cavity_widom) : z_center z_lo z_hi mu_ex_mean
+                                               mu_ex_stderr p_cav_mean n_frames
     """
-    chem_dir  = os.path.join(folder, 'output_files', 'chemical_potential')
-    mu_file   = os.path.join(chem_dir, f'mu_z_{run_id}.dat')
-    dens_file = os.path.join(chem_dir, f'solvent_density_z_{run_id}.dat')
+    chem_dir       = os.path.join(folder, 'output_files', 'chemical_potential')
+    mu_file        = os.path.join(chem_dir, f'mu_z_{run_id}.dat')
+    dens_file      = os.path.join(chem_dir, f'solvent_density_z_{run_id}.dat')
+    cavity_sum_file = os.path.join(chem_dir, f'mu_z_cavity_summary_{run_id}.dat')
 
-    has_mu   = os.path.exists(mu_file)
-    has_dens = os.path.exists(dens_file)
+    has_mu         = os.path.exists(mu_file)
+    has_dens       = os.path.exists(dens_file)
+    has_cavity_sum = os.path.exists(cavity_sum_file)
 
-    if not has_mu and not has_dens:
+    if not has_mu and not has_dens and not has_cavity_sum:
         return
 
-    n_panels = int(has_mu) + int(has_dens)
+    n_panels = int(has_mu) + int(has_dens) + int(has_cavity_sum)
     fig, axes = plt.subplots(n_panels, 1, figsize=(10, 4.5 * n_panels))
     if n_panels == 1:
         axes = [axes]
@@ -899,6 +909,83 @@ def plot_chempot_diagnostics(folder, run_id, output):
             ax.text(0.5, 0.5, 'No data in solvent_density_z file',
                     transform=ax.transAxes, ha='center', va='center')
 
+    # ── Panel 3: Cavity-biased Widom μ_ex(z) ± stderr ───────────────────────
+    if has_cavity_sum:
+        ax = axes[panel_idx]; panel_idx += 1
+        ax.grid(alpha=0.3)
+
+        try:
+            cav = np.genfromtxt(cavity_sum_file, comments='#')
+        except Exception:
+            cav = np.empty((0, 0))
+
+        if cav.ndim == 2 and cav.shape[0] >= 2 and cav.shape[1] >= 6:
+            # Columns: z_center z_lo z_hi mu_ex_mean mu_ex_stderr p_cav_mean n_frames
+            z_c    = cav[:, 0]
+            mu     = cav[:, 3]
+            se     = cav[:, 4]
+            p_cav  = cav[:, 5]
+
+            # Mask NaN rows (bins where no valid insertion occurred)
+            valid  = ~np.isnan(mu)
+
+            # Colour each error-bar segment by p_cav (viridis: purple=low, yellow=high)
+            cmap   = plt.cm.viridis
+            p_norm = plt.Normalize(vmin=0.0, vmax=max(float(p_cav[valid].max()) if valid.any() else 1.0, 0.01))
+
+            for j in np.where(valid)[0]:
+                color = cmap(p_norm(p_cav[j]))
+                se_j  = se[j] if not np.isnan(se[j]) else 0.0
+                ax.errorbar(z_c[j], mu[j], yerr=se_j,
+                            fmt='o', color=color, ecolor=color,
+                            capsize=3, markersize=5, lw=1.5)
+
+            # Overlay NaN bins as open grey markers (p_cav ≈ 0 — completely dense)
+            nan_idx = np.where(~valid)[0]
+            if len(nan_idx):
+                ax.scatter(z_c[nan_idx], np.zeros(len(nan_idx)),
+                           marker='x', color='grey', s=40, zorder=5,
+                           label=f'{len(nan_idx)} bins: no cavity (p_cav ≈ 0)')
+                ax.legend(fontsize=8, loc='upper right')
+
+            # Colorbar for p_cav
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=p_norm)
+            sm.set_array([])
+            plt.colorbar(sm, ax=ax, label='p_cav  (void fraction of trial points)',
+                         fraction=0.03, pad=0.02)
+
+            ax.set_xlabel('z  (σ)')
+            ax.set_ylabel('μ_ex  (ε)')
+            ax.set_title(
+                'Cavity-biased Widom  μ_ex(z)  ±  stderr\n'
+                'Colour = p_cav (void fraction).  Low p_cav inside gel = dense polymer network.\n'
+                'Valid where standard Widom returns zero (blue/purple bins).',
+                fontsize=9)
+
+            # Annotate Δμ_ex over valid bins
+            if valid.sum() >= 2:
+                mu_valid  = mu[valid]
+                dmu       = float(mu_valid.max() - mu_valid.min())
+                mu_mean   = float(mu_valid.mean())
+                ax.text(0.02, 0.05,
+                        f'Valid bins: {valid.sum()}/{len(mu)}'
+                        f'   mean μ_ex = {mu_mean:.4f} ε'
+                        f'   Δμ_ex = {dmu:.4f} ε',
+                        transform=ax.transAxes, fontsize=9, va='bottom',
+                        bbox=dict(boxstyle='round,pad=0.3',
+                                  facecolor='white', alpha=0.85))
+                if dmu > 0.05:
+                    ax.text(0.02, 0.92,
+                            f'⚠ Δμ_ex = {dmu:.4f} ε  (> 0.05 ε) — '
+                            'chemical potential gradient present',
+                            transform=ax.transAxes, fontsize=9, color='red', va='top',
+                            bbox=dict(boxstyle='round,pad=0.3',
+                                      facecolor='white', alpha=0.85))
+        else:
+            ax.text(0.5, 0.5,
+                    'No data in mu_z_cavity_summary file\n(cavity_widom.py may still be running)',
+                    transform=ax.transAxes, ha='center', va='center', fontsize=9)
+
     axes[-1].set_xlabel(axes[-1].get_xlabel() or 'Position')
     plt.tight_layout()
     plt.savefig(output, dpi=150)
@@ -967,7 +1054,8 @@ if __name__ == '__main__':
     chem_dir = os.path.join(args.folder, 'output_files', 'chemical_potential')
     chempot_files_present = (
         os.path.exists(os.path.join(chem_dir, f'mu_z_{run_id}.dat')) or
-        os.path.exists(os.path.join(chem_dir, f'solvent_density_z_{run_id}.dat'))
+        os.path.exists(os.path.join(chem_dir, f'solvent_density_z_{run_id}.dat')) or
+        os.path.exists(os.path.join(chem_dir, f'mu_z_cavity_summary_{run_id}.dat'))
     )
     if chempot_files_present:
         plot_chempot_diagnostics(args.folder, run_id,

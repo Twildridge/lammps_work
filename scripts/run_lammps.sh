@@ -47,7 +47,7 @@ fi
 
 # Create a working directory for this run in home (for small files)
 WORK_DIR="$HOME/Documents/lammps_runs/${FOLDER}_${DATANAME}_${INTERACTION}_$(date +%Y%m%d_%H%M%S)"
-mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data,piston_data,permeation_data,displacement_data,pair_data},output_plots}
+mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data,piston_data,permeation_data,displacement_data,pair_data,chemical_potential},output_plots}
 
 # Create trajectory directory in scratch and symlink to it
 TRAJ_DIR="$SCRATCH_DIR/lammps_trajectories/${FOLDER}_${DATANAME}_${INTERACTION}_$(date +%Y%m%d_%H%M%S)"
@@ -147,6 +147,40 @@ python -c "import numpy; print(numpy.__version__)"
 
 echo "Generating convergence plot..."
 python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
+
+# ── Cavity-biased Widom insertion (auto-detected: only runs if dump exists) ──
+# slab_with_support dumps an all-atom trajectory at nfreq_widom cadence for
+# post-processing by cavity_widom.py.  Standard Widom (fix widom) returns zero
+# inside the gel; cavity-biased Widom restricts insertions to void space and
+# applies a bias correction, giving valid μ_ex estimates even in dense regions.
+#
+# Output written to output_files/chemical_potential/ alongside the fix widom
+# and solvent density files, using the same dataname_interaction_totsteps stem:
+#   mu_z_cavity_${DATANAME}_${INTERACTION}_${TOTSTEPS}.dat       (per-frame)
+#   mu_z_cavity_summary_${DATANAME}_${INTERACTION}_${TOTSTEPS}.dat (time-averaged ± stderr)
+WIDOM_TRAJ="${WORK_DIR}/traj_files/widom_${DATANAME}_${INTERACTION}_${TOTSTEPS}.lammpstrj"
+if [ -f "$WIDOM_TRAJ" ]; then
+    echo "======================================"
+    echo "Running cavity-biased Widom insertion..."
+    echo "  Trajectory: $WIDOM_TRAJ"
+    echo "  Output dir: output_files/chemical_potential/"
+    echo "======================================"
+    python "$SCRIPT_DIR/cavity_widom.py" \
+        --traj      "$WIDOM_TRAJ" \
+        --out-dir   "output_files/chemical_potential" \
+        --out-stem  "${DATANAME}_${INTERACTION}_${TOTSTEPS}" \
+        --eps-sp    "$EPSSP" \
+        --eps-ss    "$EPSSS" \
+        --n-bins    20 \
+        --n-trial   2000 \
+        --r-cavity  0.5 \
+        --temperature 1.0
+
+    echo "Re-generating convergence plot with cavity Widom panel..."
+    python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
+else
+    echo "(No Widom trajectory found — skipping cavity_widom.py)"
+fi
 
 # Pure solvent P-sweep: run EOS plot instead of stress/piston/tracking scripts
 if [ "$FOLDER" = "solvent_phase" ]; then

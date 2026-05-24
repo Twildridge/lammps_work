@@ -393,6 +393,13 @@ fix avg_solv_density all ave/chunk ${nevery_density} ${nrepeat_density} ${nfreq_
     chunk_z_solv_density density/number &
     file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${totsteps}.dat
 
+# ----- All-atom trajectory for cavity-biased Widom post-processing -----
+# The standard polymer dump (poly_traj) saves only polymer_and_support atoms.
+# cavity_widom.py needs ALL atoms (including solvent) to compute WCA insertion
+# energies correctly, so we dump a separate all-atom trajectory at the same
+# cadence as the fix widom fires.
+dump widom_traj all custom ${nfreq_widom} traj_files/widom_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z
+
 # Production run
 fix remove_drift mobile momentum 1000 linear 1 1 1 angular
 run ${nsteps}
@@ -403,6 +410,7 @@ run ${nsteps}
 unfix 1
 unfix remove_drift
 undump poly_traj
+undump widom_traj
 
 # Widom / chemical potential cleanup
 unfix widom_b1
