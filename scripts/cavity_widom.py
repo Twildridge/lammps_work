@@ -220,8 +220,12 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
         z_hi     = bin_edges[ib + 1]
         z_center = 0.5 * (z_lo + z_hi)
 
-        # Skip bins fully inside the piston or fully inside the support
-        if z_lo >= z_piston_min or z_hi <= z_support_max:
+        # Skip bins whose centre is within r_cavity of the piston bottom or
+        # support top.  Using z_center (not z_lo/z_hi) means a bin that only
+        # partially overlaps the piston is also excluded — without this buffer
+        # the uppermost active bin gets artificially low p_cav because trial
+        # points in its upper half land too close to piston atoms.
+        if z_center >= z_piston_min - r_cavity or z_center <= z_support_max + r_cavity:
             results.append(dict(
                 z_lo=z_lo, z_hi=z_hi, z_center=z_center,
                 n_trial=0, n_cavity=0, p_cav=np.nan,
@@ -390,9 +394,9 @@ def main():
     )
     parser.add_argument("--traj",        required=True,
                         help="LAMMPS dump file (id type x y z)")
-    parser.add_argument("--n-bins",      type=int,   default=20,
+    parser.add_argument("--n-bins",      type=int,   default=40,
                         help="Number of z-bins")
-    parser.add_argument("--n-trial",     type=int,   default=2000,
+    parser.add_argument("--n-trial",     type=int,   default=5000,
                         help="Trial insertions per bin per frame")
     parser.add_argument("--r-cavity",    type=float, default=0.5,
                         help="Cavity radius in sigma units")

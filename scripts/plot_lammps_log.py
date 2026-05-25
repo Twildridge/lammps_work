@@ -731,202 +731,166 @@ def plot_flow_diagnostics(folder, run_id, output):
 # CHEMICAL POTENTIAL DIAGNOSTICS PLOT
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plot_chempot_diagnostics(folder, run_id, output):
-    """Widom excess chemical potential and solvent density diagnostics.
+def _read_cavity_frames(filepath):
+    """Read mu_z_cavity_{stem}.dat (per-frame cavity Widom output).
 
-    Auto-generated when output_files/chemical_potential/ files are present
-    (produced by slab_with_support runs with fix widom).
+    Columns: step  z_center  z_lo  z_hi  p_cav  n_cavity  n_trial  mu_ex
+
+    Returns OrderedDict  {timestep (int): {'z', 'mu_ex', 'p_cav'} arrays}
+    in chronological order.
+    """
+    from collections import OrderedDict
+    frames = OrderedDict()
+    with open(filepath) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split()
+            if len(parts) < 8:
+                continue
+            try:
+                step  = int(float(parts[0]))
+                z     = float(parts[1])
+                p_cav = float(parts[4]) if parts[4] != 'nan' else np.nan
+                mu    = float(parts[7]) if parts[7] != 'nan' else np.nan
+            except ValueError:
+                continue
+            if step not in frames:
+                frames[step] = {'z': [], 'mu_ex': [], 'p_cav': []}
+            frames[step]['z'].append(z)
+            frames[step]['mu_ex'].append(mu)
+            frames[step]['p_cav'].append(p_cav)
+    return {s: {k: np.array(v) for k, v in d.items()} for s, d in frames.items()}
+
+
+def plot_chempot_diagnostics(folder, run_id, output, thermo_data=None):
+    """Cavity-biased Widom chemical potential and pore pressure diagnostics.
+
+    Standard Widom (fix widom) is dropped — it fails for WCA fluids at liquid
+    densities.  All chemical-potential information comes from cavity_widom.py.
 
     Panels
     ──────
-    1. μ_ex(z) profiles  — one coloured curve per time snapshot (10 total).
-       x-axis: bin index (1 = bottom of box, N = top).
-       A flat profile confirms thermodynamic equilibrium (uniform μ).
-       Any spatial gradient is a driving force for solvent flow.
+    1. Solvent number density ρ_s(z) — one curve per output frame.
+       Reservoir ρ_s → V̄_s = 1/ρ_s,reservoir used in panels 2 & 3.
 
-    2. Solvent number density ρ_s(z)  — one curve per output frame.
-       From fix ave/chunk density/number  (output_files/chemical_potential/
-       solvent_density_z_*.dat).
-       V̄_s  ≈  1 / ρ_s  (partial molar volume, reduced LJ units).
-       Inside the gel ρ_s drops due to polymer exclusion, NOT compression —
-       V̄_s should be measured in the pure-solvent reservoir region (top/bottom
-       of the box) where ρ_s ≈ ρ_s,bulk.  The plot annotates the reservoir
-       estimate of ρ_s,bulk and the corresponding V̄_s.
+    2. Cavity-biased Widom μ_ex(z) — per-frame evolution curves (light,
+       connected) overlaid with time-averaged ± stderr (thick, p_cav coloured).
 
-    3. Cavity-biased Widom μ_ex(z)  — time-averaged ± stderr with p_cav
-       colormap  (output_files/chemical_potential/mu_z_cavity_summary_*.dat).
-       Shown only when cavity_widom.py has been run on the trajectory.
-       p_cav = fraction of trial positions that are genuine voids; low p_cav
-       in gel bins confirms high polymer density (standard Widom fails there).
+    3. Pore pressure profile p_p(z)/P_ext — evolution curves.
+       p_p(z) = μ_ex(z) / V̄_s = μ_ex(z) × ρ_s,reservoir
+       Normalized by the external (barostat) pressure P_ext so that the
+       reservoir value equals 1.  P_ext is taken from the mean thermo pressure
+       of the latter half of the production run (or 1.5 ε/σ³ if unavailable).
 
     File column reference
     ─────────────────────
-    mu_z_*.dat              (fix print)      : step | μ_ex bin1 … bin20
-    solvent_density_z_*.dat (fix ave/chunk)  : chunk coord Ncount density/number
-    mu_z_cavity_summary_*.dat (cavity_widom) : z_center z_lo z_hi mu_ex_mean
-                                               mu_ex_stderr p_cav_mean n_frames
+    solvent_density_z_*.dat  (fix ave/chunk) : timestep  n_chunks  total_count /
+                                               chunk  coord  Ncount  density
+    mu_z_cavity_*.dat        (cavity_widom)  : step z_center z_lo z_hi p_cav
+                                               n_cavity n_trial mu_ex
+    mu_z_cavity_summary_*.dat               : z_center z_lo z_hi mu_ex_mean
+                                              mu_ex_stderr p_cav_mean n_frames
     """
-    chem_dir       = os.path.join(folder, 'output_files', 'chemical_potential')
-    mu_file        = os.path.join(chem_dir, f'mu_z_{run_id}.dat')
-    dens_file      = os.path.join(chem_dir, f'solvent_density_z_{run_id}.dat')
-    cavity_sum_file = os.path.join(chem_dir, f'mu_z_cavity_summary_{run_id}.dat')
+    chem_dir         = os.path.join(folder, 'output_files', 'chemical_potential')
+    dens_file        = os.path.join(chem_dir, f'solvent_density_z_{run_id}.dat')
+    cavity_frame_file= os.path.join(chem_dir, f'mu_z_cavity_{run_id}.dat')
+    cavity_sum_file  = os.path.join(chem_dir, f'mu_z_cavity_summary_{run_id}.dat')
 
-    has_mu         = os.path.exists(mu_file)
-    has_dens       = os.path.exists(dens_file)
-    has_cavity_sum = os.path.exists(cavity_sum_file)
+    has_dens         = os.path.exists(dens_file)
+    has_cavity_frame = os.path.exists(cavity_frame_file)
+    has_cavity_sum   = os.path.exists(cavity_sum_file)
 
-    if not has_mu and not has_dens and not has_cavity_sum:
+    if not has_dens and not has_cavity_sum:
         return
 
-    n_panels = int(has_mu) + int(has_dens) + int(has_cavity_sum)
-    fig, axes = plt.subplots(n_panels, 1, figsize=(10, 4.5 * n_panels))
+    # ── Infer P_ext ──────────────────────────────────────────────────────────
+    # Use latter-half mean of thermo pressure; fall back to 1.5 LJ units.
+    press_ext = 1.5
+    if thermo_data is not None and 'Press' in thermo_data:
+        p_arr = np.asarray(thermo_data['Press'], dtype=float)
+        if len(p_arr) > 10:
+            press_ext = float(p_arr[len(p_arr) // 2:].mean())
+
+    # ── Determine which panels to draw ───────────────────────────────────────
+    show_density   = has_dens
+    show_cavity    = has_cavity_frame or has_cavity_sum
+    show_pore_pres = has_dens and has_cavity_frame   # need both for p_p
+
+    n_panels = int(show_density) + int(show_cavity) + int(show_pore_pres)
+    if n_panels == 0:
+        return
+
+    fig, axes = plt.subplots(n_panels, 1, figsize=(10, 4.5 * n_panels),
+                             sharex=False)
     if n_panels == 1:
         axes = [axes]
     fig.suptitle(f'{run_id}  —  chemical potential diagnostics',
                  fontsize=12, fontweight='bold')
     panel_idx = 0
 
-    # ── Panel 1: μ_ex(z) time evolution ──────────────────────────────────────
-    if has_mu:
-        arr = read_fix_print(mu_file)   # shape (n_frames, 1 + N_bins)
-        ax  = axes[panel_idx]; panel_idx += 1
+    # ── Shared state: reservoir ρ_s ──────────────────────────────────────────
+    rho_res  = None   # set in density panel; used by cavity & pore panels
+    vbar_res = None
+
+    # ── Panel 1: Solvent density ─────────────────────────────────────────────
+    if show_density:
+        dens_frames = read_ave_chunk(dens_file)
+        ax          = axes[panel_idx]; panel_idx += 1
         ax.grid(alpha=0.3)
 
-        if arr.size and arr.shape[1] >= 2:
-            n_bins   = arr.shape[1] - 1          # e.g. 20
-            n_frames = len(arr)
+        if dens_frames:
+            n_dens   = len(dens_frames)
+            colors_d = plt.cm.plasma(np.linspace(0, 1, max(n_dens, 1)))
+            rho_last = z_last = None
 
-            # Try to get actual lz from box_dimensions file so we can convert
-            # bin indices to real z coordinates (σ), making the x-axis
-            # comparable to the cavity Widom panel and the visualisation.
-            lz = None
-            box_dim_file = os.path.join(
-                folder, 'output_files', 'volume_data',
-                f'box_dimensions_{run_id}.dat')
-            if os.path.exists(box_dim_file):
-                try:
-                    bd = read_fix_print(box_dim_file)
-                    if bd.size and bd.shape[1] >= 4:
-                        lz = float(bd[-1, 3])  # columns: step lx ly lz
-                except Exception:
-                    pass
-            if lz is None or lz <= 0:
-                # fall back to bin indices
-                bin_x      = np.arange(1, n_bins + 1)
-                x_label    = f'z-bin  (1 = bottom, {n_bins} = top)'
-            else:
-                dz         = lz / n_bins
-                bin_x      = np.linspace(dz / 2, lz - dz / 2, n_bins)
-                x_label    = 'z  (σ)'
-
-            colors = plt.cm.viridis(np.linspace(0, 1, max(n_frames, 1)))
-            for i, row in enumerate(arr):
-                step    = int(row[0])
-                mu_vals = row[1:]
-                ax.plot(bin_x, mu_vals, color=colors[i], lw=1.5,
-                        marker='o', markersize=3,
-                        label=f'step {step:,}')
-
-            ax.set_xlabel(x_label)
-            ax.set_ylabel('μ_ex  (ε)')
-            ax.set_title(
-                'Widom excess chemical potential profile  μ_ex(z)\n'
-                'Flat → equilibrium;  gradient → driving force for solvent flow.\n'
-                'Pore pressure difference:  Δp = Δμ_ex / V̄_s  (use ρ_s panel below)',
-                fontsize=9)
-            ax.legend(fontsize=7, ncol=min(n_frames, 5),
-                      loc='upper right', framealpha=0.7)
-
-            # Annotate final-frame uniformity
-            if n_frames > 0:
-                final_mu  = arr[-1, 1:]
-                mu_range  = float(final_mu.max() - final_mu.min())
-                mu_mean   = float(final_mu.mean())
-                ax.text(0.02, 0.05,
-                        f'Final frame:  mean μ_ex = {mu_mean:.4f} ε'
-                        f'   Δμ_ex (max−min) = {mu_range:.4f} ε',
-                        transform=ax.transAxes, fontsize=9, va='bottom',
-                        bbox=dict(boxstyle='round,pad=0.3',
-                                  facecolor='white', alpha=0.85))
-                # Flag non-uniformity
-                if mu_range > 0.05:
-                    ax.text(0.02, 0.92,
-                            f'⚠ Δμ_ex = {mu_range:.4f} ε  (> 0.05 ε) — '
-                            'system may not be at full equilibrium',
-                            transform=ax.transAxes, fontsize=9, color='red', va='top',
-                            bbox=dict(boxstyle='round,pad=0.3',
-                                      facecolor='white', alpha=0.85))
-        else:
-            ax.text(0.5, 0.5, 'No data in mu_z file',
-                    transform=ax.transAxes, ha='center', va='center')
-
-    # ── Panel 2: Solvent density ρ_s(z) + V̄_s annotation ───────────────────
-    if has_dens:
-        frames = read_ave_chunk(dens_file)
-        ax     = axes[panel_idx]; panel_idx += 1
-        ax.grid(alpha=0.3)
-
-        if frames:
-            n_frames = len(frames)
-            colors   = plt.cm.plasma(np.linspace(0, 1, max(n_frames, 1)))
-            rho_res_last = None
-            z_last       = None
-
-            for i, (ts, coords, values) in enumerate(frames):
-                # values columns: Ncount (col 0),  density/number (col 1)
+            for i, (ts, coords, values) in enumerate(dens_frames):
                 if values.shape[1] < 2:
                     continue
-                rho = values[:, 1]   # density/number
-                ax.plot(coords, rho, color=colors[i], lw=1.5,
+                rho = values[:, 1]
+                ax.plot(coords, rho, color=colors_d[i], lw=1.5,
                         marker='o', markersize=2,
                         label=f'step {int(ts):,}')
-                if i == n_frames - 1:
-                    rho_res_last = rho
-                    z_last       = coords
+                if i == n_dens - 1:
+                    rho_last = rho
+                    z_last   = coords
 
-            ax.set_xlabel('z  (σ)')
             ax.set_ylabel('ρ_s  (σ⁻³)')
             ax.set_title(
                 'Solvent number density profile  ρ_s(z)\n'
                 'V̄_s = 1/ρ_s,reservoir  (partial molar volume, LJ units).\n'
                 'Dip inside gel = polymer exclusion, not solvent compression.',
                 fontsize=9)
-            ax.legend(fontsize=7, ncol=min(n_frames, 5),
+            ax.legend(fontsize=7, ncol=min(n_dens, 5),
                       loc='upper right', framealpha=0.7)
 
-            # Annotate V̄_s from the pure-solvent reservoir bins.
-            # Strategy: use bins where ρ_s > RHO_THRESH_FRAC * max(ρ_s).
-            # The gel depresses ρ_s by polymer exclusion, so reservoir bins
-            # (pure solvent) cluster at the top of the density distribution.
-            # This is purely data-driven and does not assume a fixed z-fraction,
-            # so it works regardless of where the gel sits in the box — consistent
-            # with how slab_with_flow uses Rg to locate the gel boundary.
-            RHO_THRESH_FRAC = 0.85   # bins below 85 % of max ρ_s are excluded
-            if rho_res_last is not None and z_last is not None and len(z_last) > 4:
-                rho_max      = float(rho_res_last.max())
-                res_mask     = rho_res_last >= RHO_THRESH_FRAC * rho_max
+            RHO_THRESH_FRAC = 0.85
+            if rho_last is not None and z_last is not None and len(z_last) > 4:
+                rho_max  = float(rho_last.max())
+                res_mask = rho_last >= RHO_THRESH_FRAC * rho_max
                 if res_mask.sum() >= 2 and rho_max > 1e-6:
-                    rho_res  = float(rho_res_last[res_mask].mean())
-                    vbar     = 1.0 / rho_res
-                    # Shade the identified reservoir bins
-                    res_z = z_last[res_mask]
+                    rho_res  = float(rho_last[res_mask].mean())
+                    vbar_res = 1.0 / rho_res
+                    res_z    = z_last[res_mask]
                     ax.axvspan(float(res_z.min()), float(res_z.max()),
                                alpha=0.10, color='steelblue',
-                               label=f'reservoir bins (ρ_s ≥ {RHO_THRESH_FRAC:.0%} × max)')
+                               label=f'reservoir bins (ρ_s ≥ {RHO_THRESH_FRAC:.0%}×max)')
                     ax.text(0.98, 0.92,
                             f'Reservoir  ρ_s = {rho_res:.4f} σ⁻³'
                             f'  ({res_mask.sum()} bins)\n'
-                            f'→  V̄_s = {vbar:.3f} σ³  per solvent atom',
+                            f'→  V̄_s = {vbar_res:.3f} σ³/atom'
+                            f'   P_ext = {press_ext:.3f} ε/σ³',
                             transform=ax.transAxes, fontsize=9,
                             ha='right', va='top',
                             bbox=dict(boxstyle='round,pad=0.3',
                                       facecolor='lightyellow', alpha=0.9))
-                    ax.legend(fontsize=7, ncol=min(n_frames, 5),
+                    ax.legend(fontsize=7, ncol=min(n_dens, 5),
                               loc='upper left', framealpha=0.7)
                 else:
                     ax.text(0.98, 0.92,
                             f'Could not isolate reservoir bins\n'
-                            f'(fewer than 2 bins above {RHO_THRESH_FRAC:.0%} × max ρ_s)',
+                            f'(< 2 bins above {RHO_THRESH_FRAC:.0%}×max ρ_s)',
                             transform=ax.transAxes, fontsize=9,
                             ha='right', va='top', color='red',
                             bbox=dict(boxstyle='round,pad=0.3',
@@ -935,84 +899,179 @@ def plot_chempot_diagnostics(folder, run_id, output):
             ax.text(0.5, 0.5, 'No data in solvent_density_z file',
                     transform=ax.transAxes, ha='center', va='center')
 
-    # ── Panel 3: Cavity-biased Widom μ_ex(z) ± stderr ───────────────────────
-    if has_cavity_sum:
+    # ── Panel 2: Cavity-biased Widom μ_ex(z) evolution + summary ─────────────
+    if show_cavity:
         ax = axes[panel_idx]; panel_idx += 1
         ax.grid(alpha=0.3)
 
-        try:
-            cav = np.genfromtxt(cavity_sum_file, comments='#')
-        except Exception:
-            cav = np.empty((0, 0))
+        # --- Per-frame evolution curves (light, connected lines) -------------
+        cav_frames = {}
+        if has_cavity_frame:
+            try:
+                cav_frames = _read_cavity_frames(cavity_frame_file)
+            except Exception:
+                cav_frames = {}
 
-        if cav.ndim == 2 and cav.shape[0] >= 2 and cav.shape[1] >= 6:
-            # Columns: z_center z_lo z_hi mu_ex_mean mu_ex_stderr p_cav_mean n_frames
-            z_c    = cav[:, 0]
-            mu     = cav[:, 3]
-            se     = cav[:, 4]
-            p_cav  = cav[:, 5]
+        if cav_frames:
+            steps       = sorted(cav_frames.keys())
+            n_cf        = len(steps)
+            colors_cf   = plt.cm.viridis(np.linspace(0, 1, max(n_cf, 1)))
+            for i, step in enumerate(steps):
+                d   = cav_frames[step]
+                z   = d['z']
+                mu  = d['mu_ex']
+                ok  = ~np.isnan(mu)
+                ax.plot(z[ok], mu[ok], color=colors_cf[i], lw=1.2,
+                        alpha=0.55, marker='o', markersize=3,
+                        label=f'step {step:,}')
 
-            # Mask NaN rows (bins where no valid insertion occurred)
-            valid  = ~np.isnan(mu)
+        # --- Time-averaged ± stderr (thick, p_cav coloured) ------------------
+        if has_cavity_sum:
+            try:
+                cav = np.genfromtxt(cavity_sum_file, comments='#')
+            except Exception:
+                cav = np.empty((0, 0))
 
-            # Colour each error-bar segment by p_cav (viridis: purple=low, yellow=high)
-            cmap   = plt.cm.viridis
-            p_norm = plt.Normalize(vmin=0.0, vmax=max(float(p_cav[valid].max()) if valid.any() else 1.0, 0.01))
+            if cav.ndim == 2 and cav.shape[0] >= 2 and cav.shape[1] >= 6:
+                z_c   = cav[:, 0]
+                mu    = cav[:, 3]
+                se    = cav[:, 4]
+                p_cav = cav[:, 5]
+                valid = ~np.isnan(mu)
 
-            for j in np.where(valid)[0]:
-                color = cmap(p_norm(p_cav[j]))
-                se_j  = se[j] if not np.isnan(se[j]) else 0.0
-                ax.errorbar(z_c[j], mu[j], yerr=se_j,
-                            fmt='o', color=color, ecolor=color,
-                            capsize=3, markersize=5, lw=1.5)
+                cmap   = plt.cm.viridis
+                p_norm = plt.Normalize(
+                    vmin=0.0,
+                    vmax=max(float(p_cav[valid].max()) if valid.any() else 1.0, 0.01))
 
-            # Overlay NaN bins as open grey markers (p_cav ≈ 0 — completely dense)
-            nan_idx = np.where(~valid)[0]
-            if len(nan_idx):
-                ax.scatter(z_c[nan_idx], np.zeros(len(nan_idx)),
-                           marker='x', color='grey', s=40, zorder=5,
-                           label=f'{len(nan_idx)} bins: no cavity (p_cav ≈ 0)')
-                ax.legend(fontsize=8, loc='upper right')
+                # Connected line through valid time-averaged points
+                ax.plot(z_c[valid], mu[valid], color='k', lw=1.0,
+                        alpha=0.4, zorder=3)
 
-            # Colorbar for p_cav
-            sm = plt.cm.ScalarMappable(cmap=cmap, norm=p_norm)
-            sm.set_array([])
-            plt.colorbar(sm, ax=ax, label='p_cav  (void fraction of trial points)',
-                         fraction=0.03, pad=0.02)
+                for j in np.where(valid)[0]:
+                    color = cmap(p_norm(p_cav[j]))
+                    se_j  = se[j] if not np.isnan(se[j]) else 0.0
+                    ax.errorbar(z_c[j], mu[j], yerr=se_j,
+                                fmt='o', color=color, ecolor=color,
+                                capsize=3, markersize=6, lw=2.0, zorder=4)
 
-            ax.set_xlabel('z  (σ)')
-            ax.set_ylabel('μ_ex  (ε)')
-            ax.set_title(
-                'Cavity-biased Widom  μ_ex(z)  ±  stderr\n'
-                'Colour = p_cav (void fraction).  Low p_cav inside gel = dense polymer network.\n'
-                'Valid where standard Widom returns zero (blue/purple bins).',
-                fontsize=9)
+                nan_idx = np.where(~valid)[0]
+                if len(nan_idx):
+                    ax.scatter(z_c[nan_idx],
+                               np.full(len(nan_idx), float(mu[valid].min()) if valid.any() else 0),
+                               marker='x', color='grey', s=50, zorder=5,
+                               label=f'{len(nan_idx)} skipped bins')
 
-            # Annotate Δμ_ex over valid bins
-            if valid.sum() >= 2:
-                mu_valid  = mu[valid]
-                dmu       = float(mu_valid.max() - mu_valid.min())
-                mu_mean   = float(mu_valid.mean())
-                ax.text(0.02, 0.05,
-                        f'Valid bins: {valid.sum()}/{len(mu)}'
-                        f'   mean μ_ex = {mu_mean:.4f} ε'
-                        f'   Δμ_ex = {dmu:.4f} ε',
-                        transform=ax.transAxes, fontsize=9, va='bottom',
-                        bbox=dict(boxstyle='round,pad=0.3',
-                                  facecolor='white', alpha=0.85))
-                if dmu > 0.05:
-                    ax.text(0.02, 0.92,
-                            f'⚠ Δμ_ex = {dmu:.4f} ε  (> 0.05 ε) — '
-                            'chemical potential gradient present',
-                            transform=ax.transAxes, fontsize=9, color='red', va='top',
+                # Colorbar
+                sm = plt.cm.ScalarMappable(cmap=cmap, norm=p_norm)
+                sm.set_array([])
+                plt.colorbar(sm, ax=ax,
+                             label='p_cav  (void fraction of trial points)',
+                             fraction=0.03, pad=0.02)
+
+                if valid.sum() >= 2:
+                    mu_v  = mu[valid]
+                    dmu   = float(mu_v.max() - mu_v.min())
+                    ax.text(0.02, 0.05,
+                            f'Valid bins: {valid.sum()}/{len(mu)}'
+                            f'   mean μ_ex = {float(mu_v.mean()):.4f} ε'
+                            f'   Δμ_ex = {dmu:.4f} ε',
+                            transform=ax.transAxes, fontsize=9, va='bottom',
                             bbox=dict(boxstyle='round,pad=0.3',
                                       facecolor='white', alpha=0.85))
-        else:
+                    if dmu > 0.05:
+                        ax.text(0.02, 0.92,
+                                f'⚠ Δμ_ex = {dmu:.4f} ε  (> 0.05 ε) — '
+                                'chemical potential gradient present',
+                                transform=ax.transAxes, fontsize=9,
+                                color='red', va='top',
+                                bbox=dict(boxstyle='round,pad=0.3',
+                                          facecolor='white', alpha=0.85))
+
+        if cav_frames:
+            ax.legend(fontsize=7, ncol=min(len(cav_frames), 5),
+                      loc='upper right', framealpha=0.7)
+
+        ax.set_ylabel('μ_ex  (ε)')
+        ax.set_title(
+            'Cavity-biased Widom  μ_ex(z)\n'
+            'Light curves = per-frame snapshots;  thick markers = time-avg ± stderr'
+            '  (colour = p_cav).\n'
+            'Flat profile → chemical equilibrium;  gradient → driving force for solvent flow.',
+            fontsize=9)
+
+    # ── Panel 3: Pore pressure p_p(z)/P_ext evolution ────────────────────────
+    if show_pore_pres:
+        ax = axes[panel_idx]; panel_idx += 1
+        ax.grid(alpha=0.3)
+
+        if cav_frames and rho_res is not None and press_ext > 0:
+            steps     = sorted(cav_frames.keys())
+            n_cf      = len(steps)
+            colors_pp = plt.cm.viridis(np.linspace(0, 1, max(n_cf, 1)))
+
+            for i, step in enumerate(steps):
+                d  = cav_frames[step]
+                z  = d['z']
+                mu = d['mu_ex']
+                ok = ~np.isnan(mu)
+                # p_p(z) = μ_ex(z) / V̄_s = μ_ex(z) × ρ_s,reservoir
+                # normalized by P_ext so reservoir → 1
+                pp = mu[ok] * rho_res / press_ext
+                ax.plot(z[ok], pp, color=colors_pp[i], lw=1.2,
+                        alpha=0.7, marker='o', markersize=3,
+                        label=f'step {step:,}')
+
+            # Time-averaged pore pressure from summary file
+            if has_cavity_sum:
+                try:
+                    cav = np.genfromtxt(cavity_sum_file, comments='#')
+                    if cav.ndim == 2 and cav.shape[0] >= 2 and cav.shape[1] >= 4:
+                        z_c   = cav[:, 0]
+                        mu_m  = cav[:, 3]
+                        valid = ~np.isnan(mu_m)
+                        pp_m  = mu_m[valid] * rho_res / press_ext
+                        ax.plot(z_c[valid], pp_m, color='k', lw=2.0,
+                                linestyle='--', marker='D', markersize=4,
+                                zorder=5, label='time-avg')
+                except Exception:
+                    pass
+
+            ax.axhline(1.0, color='gray', lw=1.0, ls=':', label='P_ext')
+            ax.set_ylabel(f'p_p(z) / P_ext')
+            ax.set_title(
+                f'Pore pressure profile  p_p(z) / P_ext\n'
+                f'p_p = μ_ex × ρ_s,reservoir = μ_ex / V̄_s;   '
+                f'P_ext = {press_ext:.3f} ε/σ³  (barostat).\n'
+                f'Dotted line = 1 (reservoir reference).  '
+                f'Deviation → osmotic pressure imbalance.',
+                fontsize=9)
+            ax.legend(fontsize=7, ncol=min(len(cav_frames) + 2, 6),
+                      loc='upper right', framealpha=0.7)
+
+            if has_cavity_sum:
+                try:
+                    pp_all = mu_m[valid] * rho_res / press_ext
+                    dp     = float(pp_all.max() - pp_all.min())
+                    ax.text(0.02, 0.05,
+                            f'Δ(p_p/P_ext) = {dp:.4f}  '
+                            f'(= {dp * press_ext:.4f} ε/σ³)',
+                            transform=ax.transAxes, fontsize=9, va='bottom',
+                            bbox=dict(boxstyle='round,pad=0.3',
+                                      facecolor='white', alpha=0.85))
+                except Exception:
+                    pass
+        elif rho_res is None:
             ax.text(0.5, 0.5,
-                    'No data in mu_z_cavity_summary file\n(cavity_widom.py may still be running)',
+                    'Reservoir ρ_s not available — cannot compute V̄_s.\n'
+                    'Check solvent_density_z file.',
+                    transform=ax.transAxes, ha='center', va='center', fontsize=9)
+        else:
+            ax.text(0.5, 0.5, 'No per-frame cavity data available.',
                     transform=ax.transAxes, ha='center', va='center', fontsize=9)
 
-    axes[-1].set_xlabel(axes[-1].get_xlabel() or 'Position')
+    # Shared x-label on bottom panel
+    axes[-1].set_xlabel('z  (σ)')
     plt.tight_layout()
     plt.savefig(output, dpi=150)
     print(f"Chempot diagnostics → {output}")
@@ -1074,16 +1133,17 @@ if __name__ == '__main__':
         plot_flow_diagnostics(args.folder, run_id,
                               os.path.join(out_dir, f'{run_id}_flow_diagnostics.png'))
 
-    # Chemical potential diagnostics (auto-triggered when mu_z or solvent_density_z
-    # files are present in output_files/chemical_potential/).
-    # Produced by slab_with_support runs that include fix widom.
+    # Chemical potential diagnostics (auto-triggered when solvent_density_z or
+    # cavity Widom files are present in output_files/chemical_potential/).
+    # Standard fix-widom output (mu_z_*.dat) is intentionally excluded —
+    # it fails for WCA fluids at liquid density.  Cavity Widom only.
     chem_dir = os.path.join(args.folder, 'output_files', 'chemical_potential')
     chempot_files_present = (
-        os.path.exists(os.path.join(chem_dir, f'mu_z_{run_id}.dat')) or
         os.path.exists(os.path.join(chem_dir, f'solvent_density_z_{run_id}.dat')) or
         os.path.exists(os.path.join(chem_dir, f'mu_z_cavity_summary_{run_id}.dat'))
     )
     if chempot_files_present:
         plot_chempot_diagnostics(args.folder, run_id,
                                  os.path.join(out_dir,
-                                              f'{run_id}_chempot_diagnostics.png'))
+                                              f'{run_id}_chempot_diagnostics.png'),
+                                 thermo_data=data)

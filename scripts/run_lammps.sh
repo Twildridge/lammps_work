@@ -178,8 +178,8 @@ if [ -f "$WIDOM_TRAJ" ]; then
         --out-stem  "${DATANAME}_${INTERACTION}_${TOTSTEPS}" \
         --eps-sp    "$EPSSP" \
         --eps-ss    "$EPSSS" \
-        --n-bins    20 \
-        --n-trial   2000 \
+        --n-bins    40 \
+        --n-trial   5000 \
         --r-cavity  0.5 \
         --temperature 1.0
 
