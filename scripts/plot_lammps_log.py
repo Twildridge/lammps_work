@@ -912,6 +912,18 @@ def plot_chempot_diagnostics(folder, run_id, output, thermo_data=None):
             except Exception:
                 cav_frames = {}
 
+        def _smooth(arr, w=3):
+            """Simple symmetric rolling mean; preserves array length with edge padding."""
+            if len(arr) < w:
+                return arr
+            out = np.convolve(arr, np.ones(w) / w, mode='same')
+            # edge bins get partial averages from convolution; correct padding
+            half = w // 2
+            for k in range(half):
+                out[k]         = arr[:k + half + 1].mean()
+                out[-(k + 1)]  = arr[-(k + half + 1):].mean()
+            return out
+
         if cav_frames:
             steps       = sorted(cav_frames.keys())
             n_cf        = len(steps)
@@ -921,7 +933,8 @@ def plot_chempot_diagnostics(folder, run_id, output, thermo_data=None):
                 z   = d['z']
                 mu  = d['mu_ex']
                 ok  = ~np.isnan(mu)
-                ax.plot(z[ok], mu[ok], color=colors_cf[i], lw=1.2,
+                mu_plot = _smooth(mu[ok])   # 3-bin rolling mean reduces spike noise
+                ax.plot(z[ok], mu_plot, color=colors_cf[i], lw=1.2,
                         alpha=0.55, marker='o', markersize=3,
                         label=f'step {step:,}')
 

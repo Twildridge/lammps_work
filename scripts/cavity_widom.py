@@ -396,7 +396,7 @@ def main():
                         help="LAMMPS dump file (id type x y z)")
     parser.add_argument("--n-bins",      type=int,   default=40,
                         help="Number of z-bins")
-    parser.add_argument("--n-trial",     type=int,   default=5000,
+    parser.add_argument("--n-trial",     type=int,   default=20000,
                         help="Trial insertions per bin per frame")
     parser.add_argument("--r-cavity",    type=float, default=0.5,
                         help="Cavity radius in sigma units")
