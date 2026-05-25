@@ -18,8 +18,26 @@ Usage
                             --r-cavity 0.5  --temperature 1.0
 
 Outputs (written to --out-dir, named with --out-stem):
-    mu_z_cavity_<stem>.dat          — one row per frame per bin
-    mu_z_cavity_summary_<stem>.dat  — time-averaged μ_ex(z) with stderr and p_cav
+    mu_z_cavity_<stem>.dat            — one row per frame per bin
+    mu_z_cavity_summary_<stem>.dat    — time-averaged μ_ex(z) with stderr and p_cav
+    mu_total_diagnostic_<stem>.png    — 4-panel chemical-equilibrium diagnostic
+                                         (rho_s, mu_ex, mu_total, p_p/P_ext)
+
+Diagnostic plot
+---------------
+For an inhomogeneous fluid mu_ex(z) need NOT be flat at equilibrium — what is
+flat is mu_total(z) = mu_ex(z) + kT*ln(rho_s(z)).  The script computes this
+automatically (rho_s is histogrammed from the trajectory itself in the same
+z-bins) and saves a 4-panel diagnostic:
+
+    panel 1   rho_s(z)                                 — solvent density
+    panel 2   mu_ex(z)                                 — what cavity-Widom returns
+    panel 3   mu_total = mu_ex + kT*ln(rho_s)           — should be FLAT
+    panel 4   p_p(z)/P_ext = 1 + (mu_total - mu_total,res)*rho_s,res/P_ext
+              — pore pressure, referenced so reservoir = P_ext by construction
+
+P_ext is set via --p-ext (LAMMPS barostat target; default 1.5 eps/sigma^3).
+Pass --no-plot to skip the plot if matplotlib isn't available.
 
 Atom-type → epsilon mapping (solvent ghost = type 3):
     type 1  polymer backbone    → eps_SP  (--eps-sp)
@@ -124,6 +142,31 @@ def wca_energy_vectorized(r2, eps, sigma=1.0, cutoff=1.122):
         inv_r12 = inv_r6 * inv_r6
         U[mask] = 4.0 * eps[mask] * (inv_r12 - inv_r6) + eps[mask]
     return U
+
+
+# ---------------------------------------------------------------------------
+# Solvent density binning — same z-grid as cavity-Widom
+# ---------------------------------------------------------------------------
+
+def bin_solvent_density(atoms_xyz, atom_types, box, n_bins, solvent_type=3):
+    """Histogram solvent (type-3) atoms in z-bins and divide by bin volume.
+
+    Uses the SAME z-bin grid as process_frame so the resulting rho_s(z)
+    can be added directly to mu_ex(z) to form mu_total(z) without
+    interpolation.
+
+    Returns
+    -------
+    rho_z : (n_bins,) float64  — number density per bin in sigma^-3
+    """
+    sol_mask  = atom_types == solvent_type
+    z_solv    = atoms_xyz[sol_mask, 2]
+    bin_edges = np.linspace(box['zlo'], box['zhi'], n_bins + 1)
+    counts, _ = np.histogram(z_solv, bins=bin_edges)
+    lx = box['xhi'] - box['xlo']
+    ly = box['yhi'] - box['ylo']
+    dz = (box['zhi'] - box['zlo']) / n_bins
+    return counts.astype(np.float64) / (lx * ly * dz)
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +348,243 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
 
 
 # ---------------------------------------------------------------------------
+# Diagnostic plot
+# ---------------------------------------------------------------------------
+
+def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
+                         p_ext, out_path, title="",
+                         res_thresh=0.85, gel_thresh=0.70):
+    """4-panel chemical-equilibrium diagnostic.
+
+    Panels (top→bottom):
+        1. rho_s(z)              solvent number density
+        2. mu_ex(z)              cavity-Widom excess chemical potential
+        3. mu_total(z)           = mu_ex + kT*ln(rho_s)   — should be FLAT
+        4. p_p(z)/P_ext          = mu_total * rho_s,res / P_ext
+
+    Parameters
+    ----------
+    all_results : list[list[dict]]
+        Per-frame bin results from process_frame.  Outer list length = n_frames,
+        inner list length = n_bins.
+    rho_per_frame : (n_frames, n_bins) float64
+        Solvent number density per bin per frame — must use the SAME bin grid
+        as all_results (use bin_solvent_density with the same n_bins).
+    steps : list[int]
+        LAMMPS timestep for each frame (for legend ordering).
+    kT : float
+        Reduced temperature.
+    p_ext : float
+        LAMMPS barostat target pressure (eps/sigma^3).  Used to normalize p_p.
+    out_path : str | Path
+        Where to save the PNG.
+    title : str
+        Plot title (typically the run stem).
+    res_thresh, gel_thresh : float
+        Reservoir is bins with rho >= res_thresh*rho_max.
+        Gel interior  is bins with rho <  gel_thresh*rho_max.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib not available — skipping diagnostic plot")
+        return
+
+    n_frames = len(all_results)
+    if n_frames == 0:
+        print("No frames in all_results — skipping diagnostic plot")
+        return
+
+    # ── Extract per-frame arrays ──────────────────────────────────────────────
+    z_centers = np.array([b['z_center'] for b in all_results[0]])
+    z_lo      = np.array([b['z_lo']     for b in all_results[0]])
+    z_hi      = np.array([b['z_hi']     for b in all_results[0]])
+
+    mu_per_frame = np.array(
+        [[b['mu_ex'] for b in frame] for frame in all_results],
+        dtype=np.float64,
+    )  # (n_frames, n_bins)  — NaN where bin was skipped or no cavity
+
+    # ── Time-averaged μ_ex (NaN-safe) ─────────────────────────────────────────
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        n_ok    = np.sum(~np.isnan(mu_per_frame), axis=0)
+        mu_mean = np.nanmean(mu_per_frame, axis=0)
+        mu_std  = np.nanstd(mu_per_frame, axis=0, ddof=1)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mu_se = np.where(n_ok >= 2, mu_std / np.sqrt(np.maximum(n_ok, 1)), np.nan)
+
+    rho_mean = rho_per_frame.mean(axis=0)
+    rho_se   = (rho_per_frame.std(axis=0, ddof=1) / np.sqrt(n_frames)
+                if n_frames >= 2 else np.zeros_like(rho_mean))
+
+    # ── Reservoir + gel regions ───────────────────────────────────────────────
+    rho_max  = rho_mean.max() if rho_mean.size else np.nan
+    res_mask = (rho_mean >= res_thresh * rho_max) & np.isfinite(mu_mean)
+    gel_mask = (rho_mean <  gel_thresh * rho_max) & np.isfinite(mu_mean)
+
+    rho_res = rho_mean[res_mask].mean() if res_mask.any() else np.nan
+    rho_gel = rho_mean[gel_mask].mean() if gel_mask.any() else np.nan
+    V_bar   = 1.0 / rho_res if rho_res and np.isfinite(rho_res) else np.nan
+
+    # ── μ_total = μ_ex + kT*ln(ρ_s) ───────────────────────────────────────────
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mu_total_mean      = mu_mean      + kT * np.log(rho_mean)
+        mu_total_se        = mu_se   # ρ uncertainty is negligible relative to μ_ex
+        mu_total_per_frame = mu_per_frame + kT * np.log(rho_per_frame)
+
+    # ── Summary numbers for annotations ───────────────────────────────────────
+    mu_ex_res    = np.nanmean(mu_mean[res_mask])       if res_mask.any() else np.nan
+    mu_ex_gel    = np.nanmean(mu_mean[gel_mask])       if gel_mask.any() else np.nan
+    mu_total_res = np.nanmean(mu_total_mean[res_mask]) if res_mask.any() else np.nan
+    mu_total_gel = np.nanmean(mu_total_mean[gel_mask]) if gel_mask.any() else np.nan
+
+    # ── Pore pressure (normalized, referenced to reservoir) ───────────────────
+    # Cavity-Widom mu_ex has an implicit Lambda=1 convention, so the absolute
+    # value of mu_total is convention-dependent.  Reference it to the reservoir
+    # so that p_p,res = P_ext by construction:
+    #   p_p(z) = P_ext + (mu_total(z) - mu_total_res) / V_bar
+    #   p_p(z) / P_ext = 1 + (mu_total(z) - mu_total_res) * rho_s,res / P_ext
+    pp_mean      = 1.0 + (mu_total_mean      - mu_total_res) * rho_res / p_ext
+    pp_per_frame = 1.0 + (mu_total_per_frame - mu_total_res) * rho_res / p_ext
+    pp_res       = np.nanmean(pp_mean[res_mask])       if res_mask.any() else np.nan
+    pp_gel       = np.nanmean(pp_mean[gel_mask])       if gel_mask.any() else np.nan
+    delta_mu_ex_meas = (mu_ex_gel - mu_ex_res) if np.isfinite(mu_ex_gel) and np.isfinite(mu_ex_res) else np.nan
+    delta_mu_ex_pred = (kT * np.log(rho_res / rho_gel)
+                        if np.isfinite(rho_res) and np.isfinite(rho_gel) and rho_gel > 0
+                        else np.nan)
+    delta_mu_total   = (mu_total_gel - mu_total_res) if np.isfinite(mu_total_gel) and np.isfinite(mu_total_res) else np.nan
+    delta_pp         = (pp_gel - pp_res) if np.isfinite(pp_gel) and np.isfinite(pp_res) else np.nan
+
+    # ── Build the figure ──────────────────────────────────────────────────────
+    fig, axes = plt.subplots(
+        4, 1, figsize=(10, 14), sharex=True,
+        gridspec_kw={'hspace': 0.10, 'height_ratios': [1, 1.2, 1.2, 1.2]},
+    )
+    cmap_t = plt.get_cmap('viridis')
+
+    def _frame_color(k):
+        return cmap_t(k / max(n_frames - 1, 1))
+
+    # Panel 1: ρ_s(z)
+    ax = axes[0]
+    ax.plot(z_centers, rho_mean, 'o-', color='steelblue',
+            markersize=3, lw=1.4, label=r"$\langle\rho_s(z)\rangle$")
+    if n_frames >= 2:
+        ax.fill_between(z_centers, rho_mean - rho_se, rho_mean + rho_se,
+                        color='steelblue', alpha=0.25, lw=0)
+    if np.isfinite(rho_res):
+        ax.axhline(rho_res, color='steelblue', ls=':', lw=1, alpha=0.7,
+                   label=fr"$\rho_{{s,\rm res}}={rho_res:.4f}\,\sigma^{{-3}}$")
+    for k in np.where(res_mask)[0]:
+        ax.axvspan(z_lo[k], z_hi[k], color='lightblue', alpha=0.15, lw=0)
+    ax.set_ylabel(r"$\rho_s$  ($\sigma^{-3}$)")
+    ax.set_title(
+        (title + "  —  " if title else "") +
+        r"cavity-Widom diagnostic  ($\mu_{\rm total}$ flat $\Rightarrow$ chemical equilibrium)",
+        fontsize=11,
+    )
+    ax.legend(loc='upper right', fontsize=9, framealpha=0.9)
+    ax.grid(alpha=0.25)
+
+    # Panel 2: μ_ex(z)
+    ax = axes[1]
+    for k in range(n_frames):
+        ax.plot(z_centers, mu_per_frame[k], '-', color=_frame_color(k),
+                lw=0.7, alpha=0.45, zorder=1,
+                label=f'step {steps[k]:,}' if n_frames <= 12 else None)
+    ok = np.isfinite(mu_mean)
+    ax.errorbar(z_centers[ok], mu_mean[ok], yerr=mu_se[ok],
+                fmt='o-', color='black', markersize=4, lw=1.6,
+                capsize=2, label='time-avg ± stderr', zorder=3)
+    if np.isfinite(mu_ex_res):
+        ax.axhline(mu_ex_res, color='steelblue', ls='--', lw=1, alpha=0.8,
+                   label=fr"$\langle\mu_{{ex}}\rangle_{{\rm res}}={mu_ex_res:.3f}\,\varepsilon$")
+    if np.isfinite(mu_ex_gel):
+        ax.axhline(mu_ex_gel, color='firebrick', ls='--', lw=1, alpha=0.8,
+                   label=fr"$\langle\mu_{{ex}}\rangle_{{\rm gel}}={mu_ex_gel:.3f}\,\varepsilon$")
+    ax.text(0.02, 0.04,
+            fr"$\Delta\mu_{{ex}}$(gel$-$res) measured = ${delta_mu_ex_meas:+.3f}\,\varepsilon$"
+            "\n"
+            fr"  equilibrium $kT\ln(\rho_{{\rm res}}/\rho_{{\rm gel}})$ = ${delta_mu_ex_pred:+.3f}\,\varepsilon$",
+            transform=ax.transAxes, fontsize=9, va='bottom',
+            bbox=dict(facecolor='white', edgecolor='gray', alpha=0.85))
+    ax.set_ylabel(r"$\mu_{ex}$  ($\varepsilon$)")
+    ax.legend(loc='lower right', fontsize=8, framealpha=0.9, ncol=2)
+    ax.grid(alpha=0.25)
+
+    # Panel 3: μ_total(z)
+    ax = axes[2]
+    for k in range(n_frames):
+        ax.plot(z_centers, mu_total_per_frame[k], '-', color=_frame_color(k),
+                lw=0.7, alpha=0.45, zorder=1)
+    ok_t = np.isfinite(mu_total_mean)
+    ax.errorbar(z_centers[ok_t], mu_total_mean[ok_t], yerr=mu_total_se[ok_t],
+                fmt='o-', color='black', markersize=4, lw=1.6,
+                capsize=2, label='time-avg ± stderr', zorder=3)
+    if np.isfinite(mu_total_res):
+        ax.axhline(mu_total_res, color='steelblue', ls='--', lw=1.2, alpha=0.9,
+                   label=fr"$\mu_{{\rm total,res}}={mu_total_res:.3f}\,\varepsilon$  (equilibrium ref)")
+    if np.isfinite(mu_total_gel):
+        ax.axhline(mu_total_gel, color='firebrick', ls='--', lw=1, alpha=0.7,
+                   label=fr"$\langle\mu_{{\rm total}}\rangle_{{\rm gel}}={mu_total_gel:.3f}\,\varepsilon$")
+
+    flat_threshold = 0.05  # eps
+    if np.isfinite(delta_mu_total):
+        flat_str   = ("FLAT  $\\Rightarrow$  in chemical equilibrium"
+                      if abs(delta_mu_total) < flat_threshold
+                      else f"NON-FLAT  $\\Rightarrow$  $\\sim{abs(delta_mu_total/kT):.2f}\\,kT$ residual driving force")
+        edge_color = 'green' if abs(delta_mu_total) < flat_threshold else 'red'
+    else:
+        flat_str, edge_color = "(insufficient data)", 'gray'
+    ax.text(0.02, 0.04,
+            fr"$\Delta\mu_{{\rm total}}$(gel$-$res) $= {delta_mu_total:+.3f}\,\varepsilon$"
+            "\n" + flat_str,
+            transform=ax.transAxes, fontsize=9, va='bottom',
+            bbox=dict(facecolor='white', edgecolor=edge_color, alpha=0.85))
+    ax.set_ylabel(r"$\mu_{\rm total} = \mu_{ex} + kT\ln\rho_s$" "\n" r"($\varepsilon$)")
+    ax.legend(loc='lower right', fontsize=9, framealpha=0.9)
+    ax.grid(alpha=0.25)
+
+    # Panel 4: p_p / P_ext
+    ax = axes[3]
+    for k in range(n_frames):
+        ax.plot(z_centers, pp_per_frame[k], '-', color=_frame_color(k),
+                lw=0.7, alpha=0.45, zorder=1)
+    ok_p = np.isfinite(pp_mean)
+    ax.plot(z_centers[ok_p], pp_mean[ok_p], 'o-', color='black',
+            markersize=4, lw=1.6, label='time-avg', zorder=3)
+    if np.isfinite(pp_res):
+        ax.axhline(pp_res, color='steelblue', ls='--', lw=1.2, alpha=0.9,
+                   label=fr"$\langle p_p/P_{{\rm ext}}\rangle_{{\rm res}}={pp_res:.3f}$")
+    if np.isfinite(pp_gel):
+        ax.axhline(pp_gel, color='firebrick', ls='--', lw=1, alpha=0.7,
+                   label=fr"$\langle p_p/P_{{\rm ext}}\rangle_{{\rm gel}}={pp_gel:.3f}$")
+    ax.text(0.02, 0.04,
+            fr"$\bar V_s = 1/\rho_{{s,\rm res}} = {V_bar:.3f}\,\sigma^3$"
+            "\n"
+            fr"$P_{{\rm ext}} = {p_ext}\,\varepsilon/\sigma^3$  (barostat target)"
+            "\n"
+            fr"$\Delta(p_p/P_{{\rm ext}})$(gel$-$res) $= {delta_pp:+.3f}$",
+            transform=ax.transAxes, fontsize=9, va='bottom',
+            bbox=dict(facecolor='white', edgecolor='gray', alpha=0.85))
+    ax.set_ylabel(r"$p_p / P_{\rm ext}$" "\n"
+                  r"$= 1 + (\mu_{\rm total}-\mu_{\rm total,res})\,\rho_{s,\rm res}/P_{\rm ext}$")
+    ax.set_xlabel(r"$z$  ($\sigma$)")
+    ax.legend(loc='lower right', fontsize=9, framealpha=0.9)
+    ax.grid(alpha=0.25)
+
+    fig.savefig(out_path, dpi=130, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Diagnostic plot   → {out_path}")
+    print(f"  Δμ_ex(gel-res)    measured  = {delta_mu_ex_meas:+.4f} eps   "
+          f"(equilibrium kT·ln(ρ_res/ρ_gel) = {delta_mu_ex_pred:+.4f} eps)")
+    print(f"  Δμ_total(gel-res) measured  = {delta_mu_total:+.4f} eps   "
+          f"(0.0 at equilibrium; |Δ| < 0.05 ε is flat)")
+    print(f"  Δ(p_p/P_ext)(gel-res)       = {delta_pp:+.4f}")
+
+
+# ---------------------------------------------------------------------------
 # Output helpers
 # ---------------------------------------------------------------------------
 
@@ -425,6 +705,16 @@ def main():
                              "Piston (type 5) and support (type 4) are excluded by "
                              "default so their lattice structure does not distort "
                              "void-fraction measurements.")
+    parser.add_argument("--p-ext",       type=float, default=1.5,
+                        help="LAMMPS barostat target pressure (eps/sigma^3). "
+                             "Used to normalize the pore-pressure panel "
+                             "(p_p / P_ext).  Default matches slab_with_support.lmp.")
+    parser.add_argument("--no-plot",     action="store_true",
+                        help="Skip the 4-panel diagnostic PNG (rho_s, mu_ex, "
+                             "mu_total, p_p/P_ext).")
+    parser.add_argument("--plot-path",   default=None,
+                        help="Override path for the diagnostic PNG.  Default: "
+                             "mu_total_diagnostic_{stem}.png in --out-dir.")
     args = parser.parse_args()
 
     traj_path = Path(args.traj)
@@ -437,6 +727,8 @@ def main():
     stem         = args.out_stem if args.out_stem else traj_path.stem
     frame_path   = out_dir / f"mu_z_cavity_{stem}.dat"
     summary_path = out_dir / f"mu_z_cavity_summary_{stem}.dat"
+    plot_path    = (Path(args.plot_path) if args.plot_path
+                    else out_dir / f"mu_total_diagnostic_{stem}.png")
 
     eps_map      = build_eps_map(args.eps_sp, args.eps_ss)
     rng          = np.random.default_rng(args.seed)
@@ -452,9 +744,14 @@ def main():
     print(f"cavity_types : {sorted(cavity_types)}  (piston/support excluded from void detection)")
     print(f"Frame file   : {frame_path}")
     print(f"Summary      : {summary_path}")
+    if not args.no_plot:
+        print(f"Plot         : {plot_path}")
+        print(f"P_ext        : {args.p_ext} eps/sigma^3")
     print()
 
     all_results = []
+    all_rho     = []   # per-frame rho_s(z) on the same bin grid as cavity-Widom
+    all_steps   = []   # LAMMPS timesteps, for plot legend
 
     with open(frame_path, 'w') as fh_frame:
         fh_frame.write(FRAME_HEADER)
@@ -482,8 +779,15 @@ def main():
                 cavity_types = cavity_types,
             )
 
+            # ── Solvent density on the SAME z-bins as cavity-Widom ──────────
+            # Used to form mu_total(z) = mu_ex(z) + kT*ln(rho_s(z)) in the
+            # diagnostic plot.  Cheap relative to the cavity insertions.
+            rho_z = bin_solvent_density(atoms_xyz, atom_types, box, args.n_bins)
+
             write_frame(fh_frame, timestep, bin_results)
             all_results.append(bin_results)
+            all_rho.append(rho_z)
+            all_steps.append(int(timestep))
 
             n_nan    = sum(1 for b in bin_results if np.isnan(b['mu_ex']))
             mean_pc  = np.mean([b['p_cav'] for b in bin_results])
@@ -493,6 +797,18 @@ def main():
 
     print(f"\nWrote {len(all_results)} frames → {frame_path.name}")
     print(f"Summary → {summary_path.name}")
+
+    # ── Diagnostic plot ────────────────────────────────────────────────────
+    if not args.no_plot and len(all_results) > 0:
+        make_diagnostic_plot(
+            all_results   = all_results,
+            rho_per_frame = np.array(all_rho),
+            steps         = all_steps,
+            kT            = args.temperature,
+            p_ext         = args.p_ext,
+            out_path      = plot_path,
+            title         = stem,
+        )
 
     # Quick sanity check: print μ_ex range from summary
     try:
