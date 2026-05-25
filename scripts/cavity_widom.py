@@ -384,16 +384,24 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
         Reservoir is bins with rho >= res_thresh*rho_max.
         Gel interior  is bins with rho <  gel_thresh*rho_max.
     """
+    # Force a non-interactive backend BEFORE importing pyplot.  On HPC nodes
+    # (Expanse, Bridges, POD) there is no display, and the default backend
+    # raises before plt.savefig() ever runs.
     try:
+        import matplotlib
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-    except ImportError:
-        print("matplotlib not available — skipping diagnostic plot")
+    except Exception as e:
+        print(f"[diagnostic plot] matplotlib unavailable / backend error: {e}")
+        print( "                  skipping plot (run again with --no-plot to suppress this)")
         return
 
     n_frames = len(all_results)
     if n_frames == 0:
-        print("No frames in all_results — skipping diagnostic plot")
+        print("[diagnostic plot] no frames in all_results — skipping")
         return
+    print(f"[diagnostic plot] building 4-panel figure: {n_frames} frames, "
+          f"{len(all_results[0])} bins → {out_path}")
 
     # ── Extract per-frame arrays ──────────────────────────────────────────────
     z_centers = np.array([b['z_center'] for b in all_results[0]])
@@ -799,16 +807,27 @@ def main():
     print(f"Summary → {summary_path.name}")
 
     # ── Diagnostic plot ────────────────────────────────────────────────────
-    if not args.no_plot and len(all_results) > 0:
-        make_diagnostic_plot(
-            all_results   = all_results,
-            rho_per_frame = np.array(all_rho),
-            steps         = all_steps,
-            kT            = args.temperature,
-            p_ext         = args.p_ext,
-            out_path      = plot_path,
-            title         = stem,
-        )
+    if args.no_plot:
+        print("[diagnostic plot] --no-plot set; skipping")
+    elif len(all_results) == 0:
+        print("[diagnostic plot] no frames processed; skipping")
+    else:
+        try:
+            make_diagnostic_plot(
+                all_results   = all_results,
+                rho_per_frame = np.array(all_rho),
+                steps         = all_steps,
+                kT            = args.temperature,
+                p_ext         = args.p_ext,
+                out_path      = plot_path,
+                title         = stem,
+            )
+        except Exception:
+            # Don't let a plotting bug throw away the simulation's .dat output.
+            # Print the full traceback so the cause is visible in the SLURM log.
+            import traceback
+            print("[diagnostic plot] FAILED — traceback follows; .dat outputs are unaffected")
+            traceback.print_exc()
 
     # Quick sanity check: print μ_ex range from summary
     try:
