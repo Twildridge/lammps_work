@@ -483,7 +483,7 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
                         color='steelblue', alpha=0.25, lw=0)
     if np.isfinite(rho_res):
         ax.axhline(rho_res, color='steelblue', ls=':', lw=1, alpha=0.7,
-                   label=fr"$\rho_{{s,\rm res}}={rho_res:.4f}\,\sigma^{{-3}}$")
+                   label=fr"$\rho_{{s,\rm res}}={rho_res:.3g}\,\sigma^{{-3}}$")
     for k in np.where(res_mask)[0]:
         ax.axvspan(z_lo[k], z_hi[k], color='lightblue', alpha=0.15, lw=0)
     ax.set_ylabel(r"$\rho_s$  ($\sigma^{-3}$)")
@@ -498,23 +498,23 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
     # Panel 2: μ_ex(z)
     ax = axes[1]
     for k in range(n_frames):
-        ax.plot(z_centers, mu_per_frame[k], '-', color=_frame_color(k),
-                lw=0.7, alpha=0.45, zorder=1,
+        is_last = (k == n_frames - 1)
+        ax.plot(z_centers, mu_per_frame[k], '-',
+                color='darkorange' if is_last else _frame_color(k),
+                lw=2.0 if is_last else 0.7,
+                alpha=1.0 if is_last else 0.45,
+                zorder=4 if is_last else 1,
                 label=f'step {steps[k]:,}' if n_frames <= 12 else None)
-    ok = np.isfinite(mu_mean)
-    ax.errorbar(z_centers[ok], mu_mean[ok], yerr=mu_se[ok],
-                fmt='o-', color='black', markersize=4, lw=1.6,
-                capsize=2, label='time-avg ± stderr', zorder=3)
     if np.isfinite(mu_ex_res):
         ax.axhline(mu_ex_res, color='steelblue', ls='--', lw=1, alpha=0.8,
-                   label=fr"$\langle\mu_{{ex}}\rangle_{{\rm res}}={mu_ex_res:.3f}\,\varepsilon$")
+                   label=fr"$\langle\mu_{{ex}}\rangle_{{\rm res}}={mu_ex_res:.3g}\,\varepsilon$")
     if np.isfinite(mu_ex_gel):
         ax.axhline(mu_ex_gel, color='firebrick', ls='--', lw=1, alpha=0.8,
-                   label=fr"$\langle\mu_{{ex}}\rangle_{{\rm gel}}={mu_ex_gel:.3f}\,\varepsilon$")
+                   label=fr"$\langle\mu_{{ex}}\rangle_{{\rm gel}}={mu_ex_gel:.3g}\,\varepsilon$")
     ax.text(0.02, 0.04,
-            fr"$\Delta\mu_{{ex}}$(gel$-$res) measured = ${delta_mu_ex_meas:+.3f}\,\varepsilon$"
+            fr"$\Delta\mu_{{ex}}$(gel$-$res) measured = ${delta_mu_ex_meas:+.3g}\,\varepsilon$"
             "\n"
-            fr"  equilibrium $kT\ln(\rho_{{\rm res}}/\rho_{{\rm gel}})$ = ${delta_mu_ex_pred:+.3f}\,\varepsilon$",
+            fr"  equilibrium $kT\ln(\rho_{{\rm res}}/\rho_{{\rm gel}})$ = ${delta_mu_ex_pred:+.3g}\,\varepsilon$",
             transform=ax.transAxes, fontsize=9, va='bottom',
             bbox=dict(facecolor='white', edgecolor='gray', alpha=0.85))
     ax.set_ylabel(r"$\mu_{ex}$  ($\varepsilon$)")
@@ -524,32 +524,23 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
     # Panel 3: μ_total(z)
     ax = axes[2]
     for k in range(n_frames):
-        ax.plot(z_centers, mu_total_per_frame[k], '-', color=_frame_color(k),
-                lw=0.7, alpha=0.45, zorder=1)
-    ok_t = np.isfinite(mu_total_mean)
-    ax.errorbar(z_centers[ok_t], mu_total_mean[ok_t], yerr=mu_total_se[ok_t],
-                fmt='o-', color='black', markersize=4, lw=1.6,
-                capsize=2, label='time-avg ± stderr', zorder=3)
+        is_last = (k == n_frames - 1)
+        ax.plot(z_centers, mu_total_per_frame[k], '-',
+                color='darkorange' if is_last else _frame_color(k),
+                lw=2.0 if is_last else 0.7,
+                alpha=1.0 if is_last else 0.45,
+                zorder=4 if is_last else 1)
     if np.isfinite(mu_total_res):
         ax.axhline(mu_total_res, color='steelblue', ls='--', lw=1.2, alpha=0.9,
-                   label=fr"$\mu_{{\rm total,res}}={mu_total_res:.3f}\,\varepsilon$  (equilibrium ref)")
+                   label=fr"$\mu_{{\rm total,res}}={mu_total_res:.3g}\,\varepsilon$  (equilibrium ref)")
     if np.isfinite(mu_total_gel):
         ax.axhline(mu_total_gel, color='firebrick', ls='--', lw=1, alpha=0.7,
-                   label=fr"$\langle\mu_{{\rm total}}\rangle_{{\rm gel}}={mu_total_gel:.3f}\,\varepsilon$")
+                   label=fr"$\langle\mu_{{\rm total}}\rangle_{{\rm gel}}={mu_total_gel:.3g}\,\varepsilon$")
 
-    flat_threshold = 0.05  # eps
-    if np.isfinite(delta_mu_total):
-        flat_str   = ("FLAT  $\\Rightarrow$  in chemical equilibrium"
-                      if abs(delta_mu_total) < flat_threshold
-                      else f"NON-FLAT  $\\Rightarrow$  $\\sim{abs(delta_mu_total/kT):.2f}\\,kT$ residual driving force")
-        edge_color = 'green' if abs(delta_mu_total) < flat_threshold else 'red'
-    else:
-        flat_str, edge_color = "(insufficient data)", 'gray'
     ax.text(0.02, 0.04,
-            fr"$\Delta\mu_{{\rm total}}$(gel$-$res) $= {delta_mu_total:+.3f}\,\varepsilon$"
-            "\n" + flat_str,
+            fr"$\Delta\mu_{{\rm total}}$(gel$-$res) $= {delta_mu_total:+.3g}\,\varepsilon$",
             transform=ax.transAxes, fontsize=9, va='bottom',
-            bbox=dict(facecolor='white', edgecolor=edge_color, alpha=0.85))
+            bbox=dict(facecolor='white', edgecolor='gray', alpha=0.85))
     ax.set_ylabel(r"$\mu_{\rm total} = \mu_{ex} + kT\ln\rho_s$" "\n" r"($\varepsilon$)")
     ax.legend(loc='lower right', fontsize=9, framealpha=0.9)
     ax.grid(alpha=0.25)
@@ -557,23 +548,24 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
     # Panel 4: p_p / P_ext
     ax = axes[3]
     for k in range(n_frames):
-        ax.plot(z_centers, pp_per_frame[k], '-', color=_frame_color(k),
-                lw=0.7, alpha=0.45, zorder=1)
-    ok_p = np.isfinite(pp_mean)
-    ax.plot(z_centers[ok_p], pp_mean[ok_p], 'o-', color='black',
-            markersize=4, lw=1.6, label='time-avg', zorder=3)
+        is_last = (k == n_frames - 1)
+        ax.plot(z_centers, pp_per_frame[k], '-',
+                color='darkorange' if is_last else _frame_color(k),
+                lw=2.0 if is_last else 0.7,
+                alpha=1.0 if is_last else 0.45,
+                zorder=4 if is_last else 1)
     if np.isfinite(pp_res):
         ax.axhline(pp_res, color='steelblue', ls='--', lw=1.2, alpha=0.9,
-                   label=fr"$\langle p_p/P_{{\rm ext}}\rangle_{{\rm res}}={pp_res:.3f}$")
+                   label=fr"$\langle p_p/P_{{\rm ext}}\rangle_{{\rm res}}={pp_res:.3g}$")
     if np.isfinite(pp_gel):
         ax.axhline(pp_gel, color='firebrick', ls='--', lw=1, alpha=0.7,
-                   label=fr"$\langle p_p/P_{{\rm ext}}\rangle_{{\rm gel}}={pp_gel:.3f}$")
+                   label=fr"$\langle p_p/P_{{\rm ext}}\rangle_{{\rm gel}}={pp_gel:.3g}$")
     ax.text(0.02, 0.04,
-            fr"$\bar V_s = 1/\rho_{{s,\rm res}} = {V_bar:.3f}\,\sigma^3$"
+            fr"$\bar V_s = 1/\rho_{{s,\rm res}} = {V_bar:.3g}\,\sigma^3$"
             "\n"
-            fr"$P_{{\rm ext}} = {p_ext}\,\varepsilon/\sigma^3$  (barostat target)"
+            fr"$P_{{\rm ext}} = {p_ext:.3g}\,\varepsilon/\sigma^3$  (barostat target)"
             "\n"
-            fr"$\Delta(p_p/P_{{\rm ext}})$(gel$-$res) $= {delta_pp:+.3f}$",
+            fr"$\Delta(p_p/P_{{\rm ext}})$(gel$-$res) $= {delta_pp:+.3g}$",
             transform=ax.transAxes, fontsize=9, va='bottom',
             bbox=dict(facecolor='white', edgecolor='gray', alpha=0.85))
     ax.set_ylabel(r"$p_p / P_{\rm ext}$" "\n"
