@@ -71,6 +71,12 @@ variable dump_freq_setup equal 10000      # frequent dumps during Phase 1
 variable dump_freq_prod  equal 200000 # 5000 # 100000     # sparse dumps during Phase 2
 variable volume_freq     equal 5000 # 1000 # 5000
 
+# Cavity Widom dump cadence — all-atom frames for cavity_widom.py post-processing.
+# More frames → lower noise in time-averaged μ_ex(z): noise ∝ 1/√num_widom_frames.
+# Dump starts after the ε=0 reference recording block (production phase only).
+variable num_widom_frames equal 50
+variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
+
 # ======================================================================
 
 # ----- Time Averaging (stress) -----
@@ -1109,6 +1115,37 @@ fix avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_str
 
 
 # ==========================================================================
+#        OUTPUT: SOLVENT DENSITY PROFILE + CAVITY-WIDOM TRAJECTORY
+# ==========================================================================
+# Solvent density profile: z-binned number density, time-averaged over
+# windows aligned to nfreq_widom_dump.  Used by plot_lammps_log.py's
+# plot_chempot_diagnostics to form mu_total(z) = mu_ex + kT*ln(rho_s).
+#
+# Cavity-Widom trajectory: all-atom snapshot at nfreq_widom_dump cadence.
+# cavity_widom.py reads this to compute mu_ex(z) via test-particle insertion.
+#
+# Both are defined here (after ref_ teardown) so all frames come from the
+# production phase. Active for the full run ${nsteps} + relax/perm_relax runs.
+# NOTE: output_files/chemical_potential/ must exist before the run.
+#       run_lammps.sh creates it automatically; for direct LAMMPS invocation:
+shell mkdir -p output_files/chemical_potential
+
+variable nevery_density  equal 100
+variable nrepeat_density equal floor(v_nfreq_widom_dump/v_nevery_density)
+variable nfreq_density   equal v_nevery_density*v_nrepeat_density
+print ">>> Density: nevery=${nevery_density} nrepeat=${nrepeat_density} nfreq=${nfreq_density}"
+
+compute chunk_z_solv_density solvent chunk/atom bin/1d z lower ${binWidth}
+fix avg_solv_density all ave/chunk ${nevery_density} ${nrepeat_density} ${nfreq_density} &
+    chunk_z_solv_density density/number &
+    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${totsteps}.dat
+
+# All-atom trajectory for cavity_widom.py (solvent type 3 + all others for WCA energy)
+dump widom_traj all custom ${nfreq_widom_dump} &
+    traj_files/widom_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z
+
+
+# ==========================================================================
 #         COMPRESSION MODE: HALT AT comp_percent STRAIN
 # ==========================================================================
 # fix halt stops the current run command (error continue = no abort).
@@ -1245,6 +1282,8 @@ if "${compression_mode} == 0" then "unfix out_permeate_flux"
 undump traj_flow
 undump pairlocal_dump
 undump traj_stress_sync
+undump widom_traj
+unfix avg_solv_density
 
 print "========================================"
 print "Simulation complete"

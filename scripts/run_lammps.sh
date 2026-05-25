@@ -191,7 +191,7 @@ else
     echo "  TRAJ_DIR (scratch): $TRAJ_DIR"
     echo "  If the file is missing, check that:"
     echo "    1. The run completed without error"
-    echo "    2. dump widom_traj is in slab_with_support.lmp (check git pulled correctly)"
+    echo "    2. dump widom_traj is in slab_with_support.lmp or slab_with_flow.lmp (check git pulled correctly)"
     echo "    3. Scratch dir is accessible: ls $TRAJ_DIR"
 fi
 

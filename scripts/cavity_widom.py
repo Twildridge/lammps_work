@@ -657,13 +657,18 @@ def write_summary(path, all_results, n_bins):
 # ---------------------------------------------------------------------------
 
 def build_eps_map(eps_sp, eps_ss):
-    """Return dict mapping atom type → epsilon for WCA with ghost solvent."""
+    """Return dict mapping atom type → epsilon for WCA with ghost solvent.
+
+    Type 6 (walls, slab_with_flow only): WCA repulsion with solvent (eps=1.0).
+    Absent from slab_with_support trajectories — harmless if type 6 never appears.
+    """
     return {
         1: eps_sp,  # polymer backbone
         2: eps_sp,  # crosslinker
         3: eps_ss,  # solvent
         4: 0.0,     # support (no interaction with solvent)
         5: 1.0,     # piston (WCA with solvent)
+        6: 1.0,     # walls — slab_with_flow lateral enclosure (WCA with solvent)
     }
 
 
