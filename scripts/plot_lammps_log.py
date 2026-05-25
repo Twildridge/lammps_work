@@ -104,14 +104,17 @@ def read_ave_time(filepath):
 def read_ave_chunk(filepath):
     """Parse LAMMPS fix ave/chunk output.
 
-    The file format is:
-        # comment lines
-        # comment lines
-        timestep  n_chunks
-        chunk_id  coord  Ncount  val1  val2 ...
+    The file format written by LAMMPS is:
+        # comment lines (start with #, skipped)
+        timestep  n_chunks  total_count       ← 3 numeric tokens (block header)
+        chunk_id  coord  Ncount  val1 ...
         ...
-        timestep  n_chunks
+        timestep  n_chunks  total_count
         ...
+
+    Note: the block header has THREE fields (timestep, n_chunks, total_count),
+    not two — a previous version of this reader incorrectly checked len==2 and
+    therefore never matched any header, producing an empty frame list.
 
     Returns a list of (timestep, coords, values) tuples where:
         timestep : float — the output step
@@ -125,11 +128,12 @@ def read_ave_chunk(filepath):
     i = 0
     while i < len(lines):
         parts = lines[i].split()
-        # Block header: exactly two tokens, both numeric (timestep + n_chunks)
-        if len(parts) == 2:
+        # Block header: exactly THREE tokens (timestep  n_chunks  total_count)
+        if len(parts) == 3:
             try:
                 ts    = float(parts[0])
                 nrows = int(parts[1])
+                # parts[2] is total_count — read but not used
                 i += 1
                 coords, values = [], []
                 for _ in range(nrows):
@@ -791,17 +795,39 @@ def plot_chempot_diagnostics(folder, run_id, output):
         if arr.size and arr.shape[1] >= 2:
             n_bins   = arr.shape[1] - 1          # e.g. 20
             n_frames = len(arr)
-            bin_idx  = np.arange(1, n_bins + 1)  # 1 … N_bins
+
+            # Try to get actual lz from box_dimensions file so we can convert
+            # bin indices to real z coordinates (σ), making the x-axis
+            # comparable to the cavity Widom panel and the visualisation.
+            lz = None
+            box_dim_file = os.path.join(
+                folder, 'output_files', 'volume_data',
+                f'box_dimensions_{run_id}.dat')
+            if os.path.exists(box_dim_file):
+                try:
+                    bd = read_fix_print(box_dim_file)
+                    if bd.size and bd.shape[1] >= 4:
+                        lz = float(bd[-1, 3])  # columns: step lx ly lz
+                except Exception:
+                    pass
+            if lz is None or lz <= 0:
+                # fall back to bin indices
+                bin_x      = np.arange(1, n_bins + 1)
+                x_label    = f'z-bin  (1 = bottom, {n_bins} = top)'
+            else:
+                dz         = lz / n_bins
+                bin_x      = np.linspace(dz / 2, lz - dz / 2, n_bins)
+                x_label    = 'z  (σ)'
 
             colors = plt.cm.viridis(np.linspace(0, 1, max(n_frames, 1)))
             for i, row in enumerate(arr):
                 step    = int(row[0])
                 mu_vals = row[1:]
-                ax.plot(bin_idx, mu_vals, color=colors[i], lw=1.5,
+                ax.plot(bin_x, mu_vals, color=colors[i], lw=1.5,
                         marker='o', markersize=3,
                         label=f'step {step:,}')
 
-            ax.set_xlabel(f'z-bin  (1 = bottom of box, {n_bins} = top)')
+            ax.set_xlabel(x_label)
             ax.set_ylabel('μ_ex  (ε)')
             ax.set_title(
                 'Widom excess chemical potential profile  μ_ex(z)\n'

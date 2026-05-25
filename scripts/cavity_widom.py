@@ -133,19 +133,30 @@ def wca_energy_vectorized(r2, eps, sigma=1.0, cutoff=1.122):
 def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
                   n_bins, n_trial, r_cavity,
                   temperature, sigma=1.0, cutoff=1.122,
-                  rng=None):
+                  rng=None,
+                  cavity_types=None):
     """Run cavity-biased Widom for one snapshot.
 
     Parameters
     ----------
-    atoms_xyz  : (N, 3) float64  — atom positions (world coordinates)
-    atom_types : (N,)   int32    — atom types (unused here; eps_arr pre-computed)
-    eps_arr    : (N,)   float64  — epsilon for each atom vs. ghost solvent,
-                                   PRE-COMPUTED once per frame in main()
+    atoms_xyz    : (N, 3) float64  — atom positions (world coordinates)
+    atom_types   : (N,)   int32    — atom types
+    eps_arr      : (N,)   float64  — epsilon for each atom vs. ghost solvent,
+                                     PRE-COMPUTED once per frame in main()
+    cavity_types : set of int or None
+        Atom types that count as cavity-blockers (default: all types with
+        eps > 0).  Use this to exclude piston (type 5) and support (type 4)
+        from void detection so that boundary beads do not spuriously reduce
+        p_cav or drag μ_ex toward the piston's lattice structure.
+
+        Energy is ALWAYS computed from all atoms whose eps > 0, regardless
+        of cavity_types — the ghost particle still feels piston WCA repulsion
+        if inserted near a piston bead, which is physically correct.
 
     Returns list of dicts, one per z-bin:
         z_lo, z_hi, z_center, n_trial, n_cavity, p_cav,
-        mu_ex (NaN if no cavity insertions), beta_dU_mean
+        mu_ex (NaN if no cavity insertions), beta_dU_mean,
+        skipped (bool) — True if the bin is outside the active fluid region
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -158,8 +169,45 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
     # Wrap atom positions to [0, L) for PBC-aware KD-tree
     xyz_wrapped = (atoms_xyz - np.array([box['xlo'], box['ylo'], box['zlo']])) % boxsize
 
-    # Build KD-tree ONCE per frame (reused for all bins)
-    tree = cKDTree(xyz_wrapped, boxsize=boxsize)
+    # ── Separate cavity-detection atoms from energy atoms ──────────────────
+    # Cavity detection uses only fluid atoms (types 1,2,3 by default) so that
+    # piston (type 5) and support (type 4) beads do not falsely reduce the
+    # void fraction.  Energy calculation uses all atoms with eps > 0, so the
+    # ghost particle still feels WCA repulsion from piston if it's close.
+    if cavity_types is None:
+        # Default: any type with non-zero epsilon counts as a cavity blocker
+        cav_mask = eps_arr > 0.0
+    else:
+        cav_mask = np.isin(atom_types, list(cavity_types))
+
+    xyz_cav     = xyz_wrapped[cav_mask]   # (N_cav, 3)
+    eps_nz_mask = eps_arr > 0.0           # for energy: all interacting atoms
+
+    # Build KD-trees — one for cavity detection, one for energy lookup
+    # (same tree if cavity_types covers all eps>0 atoms)
+    if cav_mask.sum() == 0:
+        tree_cav = None
+    else:
+        tree_cav = cKDTree(xyz_cav, boxsize=boxsize)
+
+    if eps_nz_mask.sum() == 0:
+        tree_en = None
+    else:
+        tree_en  = cKDTree(xyz_wrapped[eps_nz_mask], boxsize=boxsize)
+        eps_en   = eps_arr[eps_nz_mask]
+        xyz_en   = xyz_wrapped[eps_nz_mask]
+
+    # ── Active z-range: skip bins that are inside piston or support ─────────
+    # Piston (type 5): piston beads sit at the top of the box.
+    #   → exclude bins where z_lo >= min z of piston atoms
+    # Support (type 4): support beads sit at the bottom of the box.
+    #   → exclude bins where z_hi <= max z of support atoms
+    PISTON_TYPE  = 5
+    SUPPORT_TYPE = 4
+    piston_mask  = atom_types == PISTON_TYPE
+    support_mask = atom_types == SUPPORT_TYPE
+    z_piston_min = float(atoms_xyz[piston_mask,  2].min()) if piston_mask.any()  else box['zhi']
+    z_support_max= float(atoms_xyz[support_mask, 2].max()) if support_mask.any() else box['zlo']
 
     kT   = temperature
     beta = 1.0 / kT
@@ -171,6 +219,15 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
         z_lo     = bin_edges[ib]
         z_hi     = bin_edges[ib + 1]
         z_center = 0.5 * (z_lo + z_hi)
+
+        # Skip bins fully inside the piston or fully inside the support
+        if z_lo >= z_piston_min or z_hi <= z_support_max:
+            results.append(dict(
+                z_lo=z_lo, z_hi=z_hi, z_center=z_center,
+                n_trial=0, n_cavity=0, p_cav=np.nan,
+                mu_ex=np.nan, beta_dU_mean=np.nan, skipped=True,
+            ))
+            continue
 
         # --- Generate trial positions uniformly in this z-slab ---------------
         xs = rng.uniform(box['xlo'], box['xhi'], n_trial)
@@ -184,47 +241,45 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
             (zs - box['zlo']) % lz,
         ])
 
-        # --- Cavity detection: batch query (fast, workers=-1 = all cores) ----
-        nearby       = tree.query_ball_point(trial_pts, r=r_cavity, workers=-1)
-        cavity_mask  = np.array([len(nb) == 0 for nb in nearby], dtype=bool)
-        n_cav        = int(cavity_mask.sum())
-        p_cav        = n_cav / n_trial
+        # --- Cavity detection: use fluid-only tree (excludes piston/support) -
+        if tree_cav is None:
+            cavity_mask = np.ones(n_trial, dtype=bool)
+        else:
+            nearby      = tree_cav.query_ball_point(trial_pts, r=r_cavity, workers=-1)
+            cavity_mask = np.array([len(nb) == 0 for nb in nearby], dtype=bool)
+
+        n_cav = int(cavity_mask.sum())
+        p_cav = n_cav / n_trial
 
         if n_cav == 0:
             results.append(dict(
                 z_lo=z_lo, z_hi=z_hi, z_center=z_center,
                 n_trial=n_trial, n_cavity=0, p_cav=0.0,
-                mu_ex=np.nan, beta_dU_mean=np.nan,
+                mu_ex=np.nan, beta_dU_mean=np.nan, skipped=False,
             ))
             continue
 
         # --- WCA energy at cavity positions only -----------------------------
         # Use KD-tree to find only the ~3–5 atoms within WCA cutoff.
-        # This is the key optimisation: avoids O(N_atoms) loops per insertion.
-        cav_pts   = trial_pts[cavity_mask]         # (n_cav, 3) in [0,L) space
-        nbr_lists = tree.query_ball_point(cav_pts, r=cutoff, workers=-1)
-
+        # Energy tree includes all atoms with eps > 0 (including piston type 5).
+        cav_pts = trial_pts[cavity_mask]         # (n_cav, 3) in [0,L) space
         beta_dU = np.empty(n_cav)
 
-        for k, nbrs in enumerate(nbr_lists):
-            if len(nbrs) == 0:
-                beta_dU[k] = 0.0
-                continue
-
-            nbrs_arr   = np.asarray(nbrs, dtype=np.intp)
-            eps_nbr    = eps_arr[nbrs_arr]          # (m,)
-            active     = eps_nbr > 0.0
-            if not active.any():
-                beta_dU[k] = 0.0
-                continue
-
-            pos        = cav_pts[k]                 # (3,) in [0, L)
-            d          = xyz_wrapped[nbrs_arr[active]] - pos   # (m_act, 3)
-            # Minimum image convention
-            d         -= np.round(d / boxsize) * boxsize
-            r2         = (d * d).sum(axis=1)        # (m_act,)
-            U          = wca_energy_vectorized(r2, eps_nbr[active], sigma, cutoff)
-            beta_dU[k] = beta * float(U.sum())
+        if tree_en is None:
+            beta_dU[:] = 0.0
+        else:
+            nbr_lists = tree_en.query_ball_point(cav_pts, r=cutoff, workers=-1)
+            for k, nbrs in enumerate(nbr_lists):
+                if len(nbrs) == 0:
+                    beta_dU[k] = 0.0
+                    continue
+                nbrs_arr = np.asarray(nbrs, dtype=np.intp)
+                pos      = cav_pts[k]                    # (3,) in [0, L)
+                d        = xyz_en[nbrs_arr] - pos        # (m, 3)
+                d       -= np.round(d / boxsize) * boxsize
+                r2       = (d * d).sum(axis=1)
+                U        = wca_energy_vectorized(r2, eps_en[nbrs_arr], sigma, cutoff)
+                beta_dU[k] = beta * float(U.sum())
 
         # Clamp to avoid overflow in exp (underflow → 0 is correct and fine)
         beta_dU_clipped = np.minimum(beta_dU, 700.0)
@@ -239,7 +294,7 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
         results.append(dict(
             z_lo=z_lo, z_hi=z_hi, z_center=z_center,
             n_trial=n_trial, n_cavity=n_cav, p_cav=p_cav,
-            mu_ex=mu_ex, beta_dU_mean=float(beta_dU.mean()),
+            mu_ex=mu_ex, beta_dU_mean=float(beta_dU.mean()), skipped=False,
         ))
 
     return results
@@ -262,10 +317,13 @@ SUMMARY_HEADER = (
 
 def write_frame(fh, timestep, bin_results):
     for b in bin_results:
-        mu_str = f"{b['mu_ex']:.6f}" if not np.isnan(b['mu_ex']) else "nan"
+        if b.get('skipped', False):
+            continue   # piston/support bins — don't write to frame file
+        mu_str  = f"{b['mu_ex']:.6f}"  if not np.isnan(b['mu_ex'])  else "nan"
+        pcav_str= f"{b['p_cav']:.5f}"  if not np.isnan(b['p_cav'])  else "nan"
         fh.write(
             f"{timestep}  {b['z_center']:.4f}  {b['z_lo']:.4f}  {b['z_hi']:.4f}"
-            f"  {b['p_cav']:.5f}  {b['n_cavity']}  {b['n_trial']}  {mu_str}\n"
+            f"  {pcav_str}  {b['n_cavity']}  {b['n_trial']}  {mu_str}\n"
         )
 
 
@@ -357,6 +415,12 @@ def main():
                              "Produces mu_z_cavity_{stem}.dat and "
                              "mu_z_cavity_summary_{stem}.dat.  "
                              "Defaults to the trajectory filename stem.")
+    parser.add_argument("--cavity-types", default="1,2,3",
+                        help="Comma-separated atom types that count as cavity blockers "
+                             "(default: '1,2,3' = polymer + solvent only). "
+                             "Piston (type 5) and support (type 4) are excluded by "
+                             "default so their lattice structure does not distort "
+                             "void-fraction measurements.")
     args = parser.parse_args()
 
     traj_path = Path(args.traj)
@@ -370,18 +434,20 @@ def main():
     frame_path   = out_dir / f"mu_z_cavity_{stem}.dat"
     summary_path = out_dir / f"mu_z_cavity_summary_{stem}.dat"
 
-    eps_map = build_eps_map(args.eps_sp, args.eps_ss)
-    rng     = np.random.default_rng(args.seed)
+    eps_map      = build_eps_map(args.eps_sp, args.eps_ss)
+    rng          = np.random.default_rng(args.seed)
+    cavity_types = set(int(t) for t in args.cavity_types.split(','))
 
-    print(f"Trajectory : {traj_path}")
-    print(f"z-bins     : {args.n_bins}")
-    print(f"trials/bin : {args.n_trial}")
-    print(f"r_cavity   : {args.r_cavity} σ")
-    print(f"kT         : {args.temperature}")
-    print(f"eps_SP     : {args.eps_sp}   eps_SS : {args.eps_ss}")
-    print(f"WCA cutoff : {args.cutoff} σ")
-    print(f"Frame file : {frame_path}")
-    print(f"Summary    : {summary_path}")
+    print(f"Trajectory   : {traj_path}")
+    print(f"z-bins       : {args.n_bins}")
+    print(f"trials/bin   : {args.n_trial}")
+    print(f"r_cavity     : {args.r_cavity} σ")
+    print(f"kT           : {args.temperature}")
+    print(f"eps_SP       : {args.eps_sp}   eps_SS : {args.eps_ss}")
+    print(f"WCA cutoff   : {args.cutoff} σ")
+    print(f"cavity_types : {sorted(cavity_types)}  (piston/support excluded from void detection)")
+    print(f"Frame file   : {frame_path}")
+    print(f"Summary      : {summary_path}")
     print()
 
     all_results = []
@@ -402,13 +468,14 @@ def main():
 
             bin_results = process_frame(
                 timestep, box, atoms_xyz, atom_types, eps_arr,
-                n_bins      = args.n_bins,
-                n_trial     = args.n_trial,
-                r_cavity    = args.r_cavity,
-                temperature = args.temperature,
-                sigma       = args.sigma,
-                cutoff      = args.cutoff,
-                rng         = rng,
+                n_bins       = args.n_bins,
+                n_trial      = args.n_trial,
+                r_cavity     = args.r_cavity,
+                temperature  = args.temperature,
+                sigma        = args.sigma,
+                cutoff       = args.cutoff,
+                rng          = rng,
+                cavity_types = cavity_types,
             )
 
             write_frame(fh_frame, timestep, bin_results)
