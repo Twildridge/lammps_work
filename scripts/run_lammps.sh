@@ -179,7 +179,7 @@ if [ -f "$WIDOM_TRAJ" ]; then
         --eps-sp    "$EPSSP" \
         --eps-ss    "$EPSSS" \
         --n-bins    40 \
-        --n-trial   20000 \
+        --n-trial   50000 \
         --r-cavity  0.5 \
         --temperature 1.0
 

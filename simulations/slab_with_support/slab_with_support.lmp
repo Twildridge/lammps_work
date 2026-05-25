@@ -50,9 +50,9 @@ variable nfreq_widom      equal floor(${nsteps}/v_num_widom_curves)
 # Cavity Widom dump cadence — decoupled from fix widom so we can write more
 # frames for cavity_widom.py without changing fix widom averaging windows.
 # More frames → lower noise in time-averaged μ_ex(z): noise ∝ 1/√num_widom_frames.
-# 25 frames (vs 10) gives ~58% noise reduction at no additional compute cost;
-# only I/O increases (~300 MB for 400k-atom system over 25 frames).
-variable num_widom_frames equal 25
+# 50 frames (vs 25) gives ~29% additional noise reduction at no additional compute cost;
+# only I/O increases (~600 MB for 400k-atom system over 50 frames).
+variable num_widom_frames equal 50
 variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
 
 # Equilibration parameters
