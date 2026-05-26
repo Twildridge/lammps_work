@@ -149,7 +149,12 @@ module load anaconda3/2021.05/q4munrg
 python -c "import numpy; print(numpy.__version__)"
 
 echo "Generating convergence plot..."
-python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
+# Pass --p-ext for slab_with_flow so the pore-pressure panel uses the barostat target
+if [ "$FOLDER" = "slab_with_flow" ]; then
+    python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" --p-ext 1.8
+else
+    python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
+fi
 
 # ── Cavity-biased Widom insertion (auto-detected: only runs if dump exists) ──
 # slab_with_support dumps an all-atom trajectory at nfreq_widom cadence for
@@ -172,6 +177,22 @@ if [ -f "$WIDOM_TRAJ" ]; then
     echo "Running cavity-biased Widom insertion..."
     echo "  Trajectory: $WIDOM_TRAJ"
     echo "  Output dir: output_files/chemical_potential/"
+
+    # slab_with_flow: use 1 bin-width exclusion buffer (binWidth=2.0) to exclude
+    # moving-piston and support interface bins; set P_ext to barostat target.
+    if [ "$FOLDER" = "slab_with_flow" ]; then
+        WIDOM_PEXT="1.8"
+        WIDOM_EXCL="2.0"
+    else
+        WIDOM_PEXT="1.5"
+        WIDOM_EXCL=""     # default = r_cavity
+    fi
+
+    WIDOM_EXCL_ARGS=()
+    if [ -n "$WIDOM_EXCL" ]; then
+        WIDOM_EXCL_ARGS=(--exclusion-buffer "$WIDOM_EXCL")
+    fi
+
     python "$SCRIPT_DIR/cavity_widom.py" \
         --traj      "$WIDOM_TRAJ" \
         --out-dir   "output_files/chemical_potential" \
@@ -181,10 +202,13 @@ if [ -f "$WIDOM_TRAJ" ]; then
         --n-bins    40 \
         --n-trial   50000 \
         --r-cavity  0.5 \
-        --temperature 1.0
+        --temperature 1.0 \
+        --p-ext     "$WIDOM_PEXT" \
+        "${WIDOM_EXCL_ARGS[@]}"
 
     echo "Re-generating convergence plot with cavity Widom panel..."
-    python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
+    python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" \
+        --p-ext "$WIDOM_PEXT"
 else
     echo "WARNING: Widom trajectory not found — skipping cavity_widom.py"
     echo "  Expected path: $WIDOM_TRAJ"

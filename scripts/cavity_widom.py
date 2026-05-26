@@ -177,7 +177,8 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
                   n_bins, n_trial, r_cavity,
                   temperature, sigma=1.0, cutoff=1.122,
                   rng=None,
-                  cavity_types=None):
+                  cavity_types=None,
+                  exclusion_buffer=None):
     """Run cavity-biased Widom for one snapshot.
 
     Parameters
@@ -195,6 +196,13 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
         Energy is ALWAYS computed from all atoms whose eps > 0, regardless
         of cavity_types — the ghost particle still feels piston WCA repulsion
         if inserted near a piston bead, which is physically correct.
+    exclusion_buffer : float or None
+        Half-width of the dead zone (in sigma) around the piston bottom and
+        support top.  Bins whose z_center falls within this buffer of either
+        boundary are marked skipped=True and returned as NaN.
+        Defaults to r_cavity if None, but should be set to at least one bin
+        width (e.g. 2.0 sigma) to prevent interface-contaminated reservoir
+        bins from corrupting the chemical-potential profile.
 
     Returns list of dicts, one per z-bin:
         z_lo, z_hi, z_center, n_trial, n_cavity, p_cav,
@@ -255,6 +263,10 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
     kT   = temperature
     beta = 1.0 / kT
 
+    # exclusion_buffer is decoupled from r_cavity so it can be widened without
+    # affecting the cavity-detection radius.  Default: same as r_cavity.
+    excl_buf = exclusion_buffer if exclusion_buffer is not None else r_cavity
+
     bin_edges = np.linspace(box['zlo'], box['zhi'], n_bins + 1)
     results   = []
 
@@ -263,12 +275,11 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
         z_hi     = bin_edges[ib + 1]
         z_center = 0.5 * (z_lo + z_hi)
 
-        # Skip bins whose centre is within r_cavity of the piston bottom or
-        # support top.  Using z_center (not z_lo/z_hi) means a bin that only
-        # partially overlaps the piston is also excluded — without this buffer
-        # the uppermost active bin gets artificially low p_cav because trial
-        # points in its upper half land too close to piston atoms.
-        if z_center >= z_piston_min - r_cavity or z_center <= z_support_max + r_cavity:
+        # Skip bins whose centre is within excl_buf of the piston bottom or
+        # support top.  Set --exclusion-buffer >= one bin width to prevent
+        # interface-contaminated bins (moving piston, support beads) from
+        # corrupting the reservoir reference.
+        if z_center >= z_piston_min - excl_buf or z_center <= z_support_max + excl_buf:
             results.append(dict(
                 z_lo=z_lo, z_hi=z_hi, z_center=z_center,
                 n_trial=0, n_cavity=0, p_cav=np.nan,
@@ -685,6 +696,13 @@ def main():
                         help="Trial insertions per bin per frame")
     parser.add_argument("--r-cavity",    type=float, default=0.5,
                         help="Cavity radius in sigma units")
+    parser.add_argument("--exclusion-buffer", type=float, default=None,
+                        dest="exclusion_buffer",
+                        help="Dead-zone half-width (sigma) around piston/support "
+                             "boundaries.  Bins within this distance of either "
+                             "boundary are skipped.  Defaults to r_cavity if "
+                             "omitted; set to ~one bin width (e.g. 2.0) for "
+                             "slab_with_flow to eliminate moving-piston spikes.")
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="kT in LJ units")
     parser.add_argument("--eps-sp",      type=float, default=1.0,
@@ -739,10 +757,13 @@ def main():
     rng          = np.random.default_rng(args.seed)
     cavity_types = set(int(t) for t in args.cavity_types.split(','))
 
+    excl_buf_display = args.exclusion_buffer if args.exclusion_buffer is not None else args.r_cavity
     print(f"Trajectory   : {traj_path}")
     print(f"z-bins       : {args.n_bins}")
     print(f"trials/bin   : {args.n_trial}")
     print(f"r_cavity     : {args.r_cavity} σ")
+    print(f"excl_buffer  : {excl_buf_display} σ  "
+          f"({'explicit' if args.exclusion_buffer is not None else 'default = r_cavity'})")
     print(f"kT           : {args.temperature}")
     print(f"eps_SP       : {args.eps_sp}   eps_SS : {args.eps_ss}")
     print(f"WCA cutoff   : {args.cutoff} σ")
@@ -774,14 +795,15 @@ def main():
 
             bin_results = process_frame(
                 timestep, box, atoms_xyz, atom_types, eps_arr,
-                n_bins       = args.n_bins,
-                n_trial      = args.n_trial,
-                r_cavity     = args.r_cavity,
-                temperature  = args.temperature,
-                sigma        = args.sigma,
-                cutoff       = args.cutoff,
-                rng          = rng,
-                cavity_types = cavity_types,
+                n_bins            = args.n_bins,
+                n_trial           = args.n_trial,
+                r_cavity          = args.r_cavity,
+                temperature       = args.temperature,
+                sigma             = args.sigma,
+                cutoff            = args.cutoff,
+                rng               = rng,
+                cavity_types      = cavity_types,
+                exclusion_buffer  = args.exclusion_buffer,
             )
 
             # ── Solvent density on the SAME z-bins as cavity-Widom ──────────

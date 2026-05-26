@@ -768,7 +768,7 @@ def _read_cavity_frames(filepath):
     return {s: {k: np.array(v) for k, v in d.items()} for s, d in frames.items()}
 
 
-def plot_chempot_diagnostics(folder, run_id, output, thermo_data=None):
+def plot_chempot_diagnostics(folder, run_id, output, thermo_data=None, p_ext=None):
     """Cavity-biased Widom chemical-potential and pore-pressure diagnostics.
 
     4-panel diagnostic (same logic as cavity_widom.py's own output):
@@ -778,8 +778,11 @@ def plot_chempot_diagnostics(folder, run_id, output, thermo_data=None):
         panel 3   mu_total(z) = mu_ex + kT*ln(rho_s)     should be FLAT
         panel 4   p_p(z)/P_ext (referenced so reservoir = 1 by construction)
 
-    P_ext is taken from the latter half of the LAMMPS thermo pressure (via
-    `thermo_data`) when available, falling back to 1.5 eps/sigma^3.
+    P_ext is set by the `p_ext` argument (LAMMPS barostat target).  When
+    p_ext is None the function falls back to inferring it from the latter half
+    of the LAMMPS thermo pressure (via `thermo_data`), or 1.5 eps/sigma^3 if
+    that is also unavailable.  Pass p_ext explicitly to avoid the unreliable
+    thermo inference (e.g. for slab_with_flow compression runs).
 
     Inputs read from <folder>/output_files/chemical_potential/:
         mu_z_cavity_<run_id>.dat            per-frame cavity-Widom
@@ -859,12 +862,17 @@ def plot_chempot_diagnostics(folder, run_id, output, thermo_data=None):
         rho_per_frame.append(np.interp(z_center_canon, z_chunk, rho_z))
     rho_per_frame = np.asarray(rho_per_frame)
 
-    # ── External pressure from thermo (latter-half mean) ──────────────────
-    p_ext = 1.5
-    if thermo_data is not None and 'Press' in thermo_data:
-        p_arr = np.asarray(thermo_data['Press'], dtype=float)
-        if len(p_arr) > 10:
-            p_ext = float(p_arr[len(p_arr) // 2:].mean())
+    # ── External pressure ──────────────────────────────────────────────────
+    # Prefer explicit argument (LAMMPS barostat target) over thermo inference.
+    # Thermo 'Press' is unreliable for compression runs where the mechanical
+    # pressure diverges from the equilibration target.
+    if p_ext is None:
+        p_ext = 1.5
+        if thermo_data is not None and 'Press' in thermo_data:
+            p_arr = np.asarray(thermo_data['Press'], dtype=float)
+            if len(p_arr) > 10:
+                p_ext = float(p_arr[len(p_arr) // 2:].mean())
+                print(f"[chempot] P_ext inferred from thermo Press: {p_ext:.4f} eps/sigma^3")
 
     print(f"[chempot] driving 4-panel diagnostic: {len(steps)} frames, "
           f"{n_bins} bins, P_ext = {p_ext:.4f} eps/sigma^3")
@@ -896,6 +904,11 @@ if __name__ == '__main__':
                         help='Full output-file suffix for shear_slab runs: '
                              'dataname_interaction_nsteps.  '
                              'Defaults to <dataname> if omitted.')
+    parser.add_argument('--p-ext', dest='p_ext', type=float, default=None,
+                        help='LAMMPS barostat target pressure (eps/sigma^3) for '
+                             'the pore-pressure panel (p_p/P_ext).  Pass 1.8 for '
+                             'slab_with_flow compression runs.  Defaults to 1.5 '
+                             'when omitted (or falls back to thermo Press mean).')
     args = parser.parse_args()
 
     run_id  = args.run_id or args.dataname
@@ -949,4 +962,5 @@ if __name__ == '__main__':
         plot_chempot_diagnostics(args.folder, run_id,
                                  os.path.join(out_dir,
                                               f'{run_id}_chempot_diagnostics.png'),
-                                 thermo_data=data)
+                                 thermo_data=data,
+                                 p_ext=args.p_ext)
