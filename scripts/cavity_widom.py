@@ -282,14 +282,17 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
 
         # Skip bins that are:
         #   (a) within excl_buf of the support top, OR
-        #   (b) within the piston exclusion window [z_piston_min-excl_buf,
-        #       z_piston_max+excl_buf].
-        # Bins above z_piston_max + excl_buf (reservoir above piston in
-        # slab_with_flow) are intentionally kept active.
-        near_support = z_center <= z_support_max + excl_buf
-        near_piston  = (z_center >= z_piston_min - excl_buf and
-                        z_center <= z_piston_max + excl_buf)
-        if near_support or near_piston:
+        #   (b) in the gel-side interface buffer [z_piston_min-excl_buf, z_piston_min), OR
+        #   (c) in the reservoir-side interface buffer (z_piston_max, z_piston_max+excl_buf].
+        #
+        # Bins INSIDE the piston body [z_piston_min, z_piston_max] are kept active so
+        # that μ_ex can be measured there.  Set --piston-eps 0.0 for compression
+        # mode (solvent transparent to piston) so the ghost particle does not
+        # artificially see WCA repulsion from piston beads in the energy calc.
+        near_support      = z_center <= z_support_max + excl_buf
+        gel_side_iface    = (z_piston_min - excl_buf <= z_center < z_piston_min)
+        res_side_iface    = (z_piston_max < z_center <= z_piston_max + excl_buf)
+        if near_support or gel_side_iface or res_side_iface:
             results.append(dict(
                 z_lo=z_lo, z_hi=z_hi, z_center=z_center,
                 n_trial=0, n_cavity=0, p_cav=np.nan,
@@ -485,6 +488,46 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
     delta_mu_total   = (mu_total_gel - mu_total_res) if np.isfinite(mu_total_gel) and np.isfinite(mu_total_res) else np.nan
     delta_pp         = (pp_gel - pp_res) if np.isfinite(pp_gel) and np.isfinite(pp_res) else np.nan
 
+    # ── Helper: linear interpolation across NaN gaps ──────────────────────────
+    def _interp_gap(z, y):
+        """Return list of (z_seg, y_seg) linearly interpolated across each NaN
+        gap in y.  Each segment includes the flanking non-NaN endpoints so the
+        dashed bridge meets the solid line seamlessly."""
+        finite = np.isfinite(y)
+        segs = []
+        n = len(z)
+        i = 0
+        while i < n:
+            if not finite[i]:
+                j = i
+                while j < n and not finite[j]:
+                    j += 1
+                if i > 0 and j < n:
+                    z_seg = np.concatenate([[z[i - 1]], z[i:j], [z[j]]])
+                    y_seg = np.interp(z_seg, [z[i - 1], z[j]],
+                                              [y[i - 1], y[j]])
+                    segs.append((z_seg, y_seg))
+                i = max(j, i + 1)
+            else:
+                i += 1
+        return segs
+
+    # ── Identify piston zone: NaN gap in mu_mean flanked by data on both sides ─
+    # (excludes support region which is NaN only at one edge)
+    piston_spans = []
+    finite_mean = np.isfinite(mu_mean)
+    _i = 0
+    while _i < len(mu_mean):
+        if not finite_mean[_i]:
+            _j = _i
+            while _j < len(mu_mean) and not finite_mean[_j]:
+                _j += 1
+            if _i > 0 and _j < len(mu_mean):   # internal NaN gap = piston zone
+                piston_spans.append((z_lo[_i], z_hi[_j - 1]))
+            _i = max(_j, _i + 1)
+        else:
+            _i += 1
+
     # ── Build the figure ──────────────────────────────────────────────────────
     fig, axes = plt.subplots(
         4, 1, figsize=(10, 14), sharex=True,
@@ -518,14 +561,23 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
 
     # Panel 2: μ_ex(z)
     ax = axes[1]
+    for zlo_p, zhi_p in piston_spans:
+        ax.axvspan(zlo_p, zhi_p, color='lightgray', alpha=0.35, lw=0,
+                   label='piston zone (interpolated)')
     for k in range(n_frames):
         is_last = (k == n_frames - 1)
+        color = 'darkorange' if is_last else _frame_color(k)
         ax.plot(z_centers, mu_per_frame[k], '-',
-                color='darkorange' if is_last else _frame_color(k),
+                color=color,
                 lw=2.0 if is_last else 0.7,
                 alpha=1.0 if is_last else 0.45,
                 zorder=4 if is_last else 1,
                 label=f'step {steps[k]:,}' if n_frames <= 12 else None)
+        for z_seg, y_seg in _interp_gap(z_centers, mu_per_frame[k]):
+            ax.plot(z_seg, y_seg, '--', color=color,
+                    lw=1.6 if is_last else 0.5,
+                    alpha=0.75 if is_last else 0.25,
+                    zorder=4 if is_last else 0)
     if np.isfinite(mu_ex_res):
         ax.axhline(mu_ex_res, color='steelblue', ls='--', lw=1, alpha=0.8,
                    label=fr"$\langle\mu_{{ex}}\rangle_{{\rm res}}={mu_ex_res:.3g}\,\varepsilon$")
@@ -544,13 +596,21 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
 
     # Panel 3: μ_total(z)
     ax = axes[2]
+    for zlo_p, zhi_p in piston_spans:
+        ax.axvspan(zlo_p, zhi_p, color='lightgray', alpha=0.35, lw=0)
     for k in range(n_frames):
         is_last = (k == n_frames - 1)
+        color = 'darkorange' if is_last else _frame_color(k)
         ax.plot(z_centers, mu_total_per_frame[k], '-',
-                color='darkorange' if is_last else _frame_color(k),
+                color=color,
                 lw=2.0 if is_last else 0.7,
                 alpha=1.0 if is_last else 0.45,
                 zorder=4 if is_last else 1)
+        for z_seg, y_seg in _interp_gap(z_centers, mu_total_per_frame[k]):
+            ax.plot(z_seg, y_seg, '--', color=color,
+                    lw=1.6 if is_last else 0.5,
+                    alpha=0.75 if is_last else 0.25,
+                    zorder=4 if is_last else 0)
     if np.isfinite(mu_total_res):
         ax.axhline(mu_total_res, color='steelblue', ls='--', lw=1.2, alpha=0.9,
                    label=fr"$\mu_{{\rm total,res}}={mu_total_res:.3g}\,\varepsilon$  (equilibrium ref)")
@@ -568,13 +628,22 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
 
     # Panel 4: p_p / P_ext
     ax = axes[3]
+    for zlo_p, zhi_p in piston_spans:
+        ax.axvspan(zlo_p, zhi_p, color='lightgray', alpha=0.35, lw=0,
+                   label='piston zone (interpolated)')
     for k in range(n_frames):
         is_last = (k == n_frames - 1)
+        color = 'darkorange' if is_last else _frame_color(k)
         ax.plot(z_centers, pp_per_frame[k], '-',
-                color='darkorange' if is_last else _frame_color(k),
+                color=color,
                 lw=2.0 if is_last else 0.7,
                 alpha=1.0 if is_last else 0.45,
                 zorder=4 if is_last else 1)
+        for z_seg, y_seg in _interp_gap(z_centers, pp_per_frame[k]):
+            ax.plot(z_seg, y_seg, '--', color=color,
+                    lw=1.6 if is_last else 0.5,
+                    alpha=0.75 if is_last else 0.25,
+                    zorder=4 if is_last else 0)
     if np.isfinite(pp_res):
         ax.axhline(pp_res, color='steelblue', ls='--', lw=1.2, alpha=0.9,
                    label=fr"$\langle p_p/P_{{\rm ext}}\rangle_{{\rm res}}={pp_res:.3g}$")
@@ -677,19 +746,24 @@ def write_summary(path, all_results, n_bins):
 # Main
 # ---------------------------------------------------------------------------
 
-def build_eps_map(eps_sp, eps_ss):
+def build_eps_map(eps_sp, eps_ss, piston_eps=1.0):
     """Return dict mapping atom type → epsilon for WCA with ghost solvent.
+
+    piston_eps controls how the ghost test particle interacts with piston beads:
+      1.0  — piston repels ghost (use for slab_with_support or permeation mode)
+      0.0  — piston is transparent to ghost (use for compression mode, where the
+             real solvent does NOT interact with the piston via WCA)
 
     Type 6 (walls, slab_with_flow only): WCA repulsion with solvent (eps=1.0).
     Absent from slab_with_support trajectories — harmless if type 6 never appears.
     """
     return {
-        1: eps_sp,  # polymer backbone
-        2: eps_sp,  # crosslinker
-        3: eps_ss,  # solvent
-        4: 0.0,     # support (no interaction with solvent)
-        5: 1.0,     # piston (WCA with solvent)
-        6: 1.0,     # walls — slab_with_flow lateral enclosure (WCA with solvent)
+        1: eps_sp,     # polymer backbone
+        2: eps_sp,     # crosslinker
+        3: eps_ss,     # solvent
+        4: 0.0,        # support (no interaction with solvent)
+        5: piston_eps, # piston — see docstring
+        6: 1.0,        # walls — slab_with_flow lateral enclosure (WCA with solvent)
     }
 
 
@@ -720,6 +794,15 @@ def main():
                         help="Solvent–polymer epsilon")
     parser.add_argument("--eps-ss",      type=float, default=1.0,
                         help="Solvent–solvent epsilon")
+    parser.add_argument("--piston-eps",  type=float, default=1.0,
+                        dest="piston_eps",
+                        help="Epsilon for ghost-particle WCA with piston beads. "
+                             "Use 1.0 for slab_with_support or permeation mode "
+                             "(piston repels solvent). Use 0.0 for compression "
+                             "mode (piston is transparent to solvent). With 0.0 "
+                             "the piston interior bins are physically meaningful "
+                             "and reveal whether μ_total is continuous across the "
+                             "piston.")
     parser.add_argument("--sigma",       type=float, default=1.0,
                         help="LJ sigma")
     parser.add_argument("--cutoff",      type=float, default=1.122,
@@ -764,7 +847,7 @@ def main():
     plot_path    = (Path(args.plot_path) if args.plot_path
                     else out_dir / f"mu_total_diagnostic_{stem}.png")
 
-    eps_map      = build_eps_map(args.eps_sp, args.eps_ss)
+    eps_map      = build_eps_map(args.eps_sp, args.eps_ss, args.piston_eps)
     rng          = np.random.default_rng(args.seed)
     cavity_types = set(int(t) for t in args.cavity_types.split(','))
 
@@ -776,7 +859,9 @@ def main():
     print(f"excl_buffer  : {excl_buf_display} σ  "
           f"({'explicit' if args.exclusion_buffer is not None else 'default = r_cavity'})")
     print(f"kT           : {args.temperature}")
-    print(f"eps_SP       : {args.eps_sp}   eps_SS : {args.eps_ss}")
+    print(f"eps_SP       : {args.eps_sp}   eps_SS : {args.eps_ss}   "
+          f"piston_eps : {args.piston_eps} "
+          f"({'phantom — piston interior bins active' if args.piston_eps == 0.0 else 'repulsive'})")
     print(f"WCA cutoff   : {args.cutoff} σ")
     print(f"cavity_types : {sorted(cavity_types)}  (piston/support excluded from void detection)")
     print(f"Frame file   : {frame_path}")

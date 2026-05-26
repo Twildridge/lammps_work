@@ -179,13 +179,17 @@ if [ -f "$WIDOM_TRAJ" ]; then
     echo "  Output dir: output_files/chemical_potential/"
 
     # slab_with_flow: use 1 bin-width exclusion buffer (binWidth=2.0) to exclude
-    # moving-piston and support interface bins; set P_ext to barostat target.
+    # gel-side and reservoir-side piston interface bins; set P_ext to barostat
+    # target; set piston-eps=0 (compression mode — solvent transparent to piston)
+    # so bins inside the piston body give physically meaningful μ_ex.
     if [ "$FOLDER" = "slab_with_flow" ]; then
         WIDOM_PEXT="1.8"
         WIDOM_EXCL="2.0"
+        WIDOM_PISTON_EPS="0.0"
     else
         WIDOM_PEXT="1.5"
         WIDOM_EXCL=""     # default = r_cavity
+        WIDOM_PISTON_EPS="1.0"
     fi
 
     WIDOM_EXCL_ARGS=()
@@ -204,6 +208,7 @@ if [ -f "$WIDOM_TRAJ" ]; then
         --r-cavity  0.5 \
         --temperature 1.0 \
         --p-ext     "$WIDOM_PEXT" \
+        --piston-eps "$WIDOM_PISTON_EPS" \
         "${WIDOM_EXCL_ARGS[@]}"
 
     echo "Re-generating convergence plot with cavity Widom panel..."
