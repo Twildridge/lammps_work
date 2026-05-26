@@ -197,12 +197,13 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
         of cavity_types — the ghost particle still feels piston WCA repulsion
         if inserted near a piston bead, which is physically correct.
     exclusion_buffer : float or None
-        Half-width of the dead zone (in sigma) around the piston bottom and
-        support top.  Bins whose z_center falls within this buffer of either
-        boundary are marked skipped=True and returned as NaN.
-        Defaults to r_cavity if None, but should be set to at least one bin
-        width (e.g. 2.0 sigma) to prevent interface-contaminated reservoir
-        bins from corrupting the chemical-potential profile.
+        Buffer (in sigma) applied around the piston extent and support top.
+        Bins whose z_center falls within this distance of the support top OR
+        within the window [z_piston_min - buffer, z_piston_max + buffer] are
+        marked skipped=True and returned as NaN.  Bins above z_piston_max +
+        buffer (i.e. the reservoir above the piston in slab_with_flow) are
+        kept active.  Defaults to r_cavity if None; set to at least one bin
+        width (e.g. 2.0 sigma) for slab_with_flow to avoid interface spikes.
 
     Returns list of dicts, one per z-bin:
         z_lo, z_hi, z_center, n_trial, n_cavity, p_cav,
@@ -248,16 +249,20 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
         eps_en   = eps_arr[eps_nz_mask]
         xyz_en   = xyz_wrapped[eps_nz_mask]
 
-    # ── Active z-range: skip bins that are inside piston or support ─────────
-    # Piston (type 5): piston beads sit at the top of the box.
-    #   → exclude bins where z_lo >= min z of piston atoms
-    # Support (type 4): support beads sit at the bottom of the box.
-    #   → exclude bins where z_hi <= max z of support atoms
+    # ── Active z-range: skip bins inside/near the piston or support ──────────
+    # Support (type 4): sits at the bottom; exclude bins ≤ support_top + excl_buf.
+    # Piston  (type 5): can be mid-box (slab_with_flow) or at the ceiling
+    #   (slab_with_support).  We exclude a window AROUND the piston extent
+    #   [z_piston_min - excl_buf, z_piston_max + excl_buf] rather than
+    #   everything above z_piston_min.  This is critical for slab_with_flow
+    #   where a solvent reservoir sits ABOVE the piston: bins clearly above the
+    #   piston top (z_center > z_piston_max + excl_buf) must remain active.
     PISTON_TYPE  = 5
     SUPPORT_TYPE = 4
     piston_mask  = atom_types == PISTON_TYPE
     support_mask = atom_types == SUPPORT_TYPE
     z_piston_min = float(atoms_xyz[piston_mask,  2].min()) if piston_mask.any()  else box['zhi']
+    z_piston_max = float(atoms_xyz[piston_mask,  2].max()) if piston_mask.any()  else box['zhi']
     z_support_max= float(atoms_xyz[support_mask, 2].max()) if support_mask.any() else box['zlo']
 
     kT   = temperature
@@ -275,11 +280,16 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
         z_hi     = bin_edges[ib + 1]
         z_center = 0.5 * (z_lo + z_hi)
 
-        # Skip bins whose centre is within excl_buf of the piston bottom or
-        # support top.  Set --exclusion-buffer >= one bin width to prevent
-        # interface-contaminated bins (moving piston, support beads) from
-        # corrupting the reservoir reference.
-        if z_center >= z_piston_min - excl_buf or z_center <= z_support_max + excl_buf:
+        # Skip bins that are:
+        #   (a) within excl_buf of the support top, OR
+        #   (b) within the piston exclusion window [z_piston_min-excl_buf,
+        #       z_piston_max+excl_buf].
+        # Bins above z_piston_max + excl_buf (reservoir above piston in
+        # slab_with_flow) are intentionally kept active.
+        near_support = z_center <= z_support_max + excl_buf
+        near_piston  = (z_center >= z_piston_min - excl_buf and
+                        z_center <= z_piston_max + excl_buf)
+        if near_support or near_piston:
             results.append(dict(
                 z_lo=z_lo, z_hi=z_hi, z_center=z_center,
                 n_trial=0, n_cavity=0, p_cav=np.nan,
@@ -698,11 +708,12 @@ def main():
                         help="Cavity radius in sigma units")
     parser.add_argument("--exclusion-buffer", type=float, default=None,
                         dest="exclusion_buffer",
-                        help="Dead-zone half-width (sigma) around piston/support "
-                             "boundaries.  Bins within this distance of either "
-                             "boundary are skipped.  Defaults to r_cavity if "
-                             "omitted; set to ~one bin width (e.g. 2.0) for "
-                             "slab_with_flow to eliminate moving-piston spikes.")
+                        help="Buffer (sigma) excluded around the piston extent "
+                             "[z_piston_min-buf, z_piston_max+buf] and around "
+                             "the support top.  Bins clearly above the piston "
+                             "(reservoir in slab_with_flow) are kept active. "
+                             "Defaults to r_cavity if omitted; set to ~one bin "
+                             "width (e.g. 2.0) for slab_with_flow.")
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="kT in LJ units")
     parser.add_argument("--eps-sp",      type=float, default=1.0,
