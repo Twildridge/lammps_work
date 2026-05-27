@@ -744,7 +744,7 @@ FRAME_HEADER = (
 
 SUMMARY_HEADER = (
     "# Cavity-biased Widom — time-averaged summary\n"
-    "# z_center  z_lo  z_hi  mu_ex_mean  mu_ex_stderr  p_cav_mean  n_frames\n"
+    "# z_center  z_lo  z_hi  mu_ex_mean  mu_ex_stderr  p_cav_mean  n_frames  rho_s_mean\n"
 )
 
 
@@ -760,11 +760,25 @@ def write_frame(fh, timestep, bin_results):
         )
 
 
-def write_summary(path, all_results, n_bins):
-    """Collect per-bin time series and write mean ± stderr."""
-    mu_series = [[] for _ in range(n_bins)]
-    pc_series = [[] for _ in range(n_bins)]
-    z_info    = [None] * n_bins
+def write_summary(path, all_results, n_bins, rho_per_frame=None):
+    """Collect per-bin time series and write mean ± stderr.
+
+    Parameters
+    ----------
+    path : str | Path
+    all_results : list[list[dict]]
+        Per-frame bin dicts from process_frame.
+    n_bins : int
+    rho_per_frame : (n_frames, n_bins) float64 or None
+        Solvent number density per bin per frame (from bin_solvent_density).
+        When supplied, the time-averaged rho_s is written as an 8th column
+        so analysis notebooks can use the widom-trajectory ρ_s instead of
+        an external packing-fraction estimate (which can have piston-face
+        density spikes not present in the widom grid).
+    """
+    mu_series  = [[] for _ in range(n_bins)]
+    pc_series  = [[] for _ in range(n_bins)]
+    z_info     = [None] * n_bins
 
     for frame_bins in all_results:
         for ib, b in enumerate(frame_bins):
@@ -772,6 +786,13 @@ def write_summary(path, all_results, n_bins):
             if not np.isnan(b['mu_ex']):
                 mu_series[ib].append(b['mu_ex'])
             pc_series[ib].append(b['p_cav'])
+
+    # Time-averaged ρ_s per bin when rho_per_frame is available
+    rho_arr = np.asarray(rho_per_frame) if rho_per_frame is not None else None
+    if rho_arr is not None and rho_arr.ndim == 2:
+        rho_mean_per_bin = rho_arr.mean(axis=0)   # (n_bins,)
+    else:
+        rho_mean_per_bin = None
 
     with open(path, 'w') as fh:
         fh.write(SUMMARY_HEADER)
@@ -791,13 +812,20 @@ def write_summary(path, all_results, n_bins):
 
             pc_mean = float(pcs.mean()) if len(pcs) > 0 else np.nan
 
-            mu_str = f"{mu_mean:.6f}"   if not np.isnan(mu_mean)   else "nan"
-            se_str = f"{mu_stderr:.6f}" if not np.isnan(mu_stderr) else "nan"
-            pc_str = f"{pc_mean:.5f}"   if not np.isnan(pc_mean)   else "nan"
+            mu_str  = f"{mu_mean:.6f}"   if not np.isnan(mu_mean)   else "nan"
+            se_str  = f"{mu_stderr:.6f}" if not np.isnan(mu_stderr) else "nan"
+            pc_str  = f"{pc_mean:.5f}"   if not np.isnan(pc_mean)   else "nan"
+
+            # 8th column: mean ρ_s on the Widom trajectory z-grid
+            if rho_mean_per_bin is not None:
+                rho_val = float(rho_mean_per_bin[ib])
+                rho_str = f"{rho_val:.6f}" if np.isfinite(rho_val) else "nan"
+            else:
+                rho_str = "nan"
 
             fh.write(
                 f"{zc:.4f}  {zlo:.4f}  {zhi:.4f}"
-                f"  {mu_str}  {se_str}  {pc_str}  {n_ok}\n"
+                f"  {mu_str}  {se_str}  {pc_str}  {n_ok}  {rho_str}\n"
             )
 
 
@@ -1026,7 +1054,8 @@ def main():
             mean_pc  = np.mean([b['p_cav'] for b in bin_results])
             print(f"done  (p_cav_mean={mean_pc:.3f}, {n_nan}/{args.n_bins} bins NaN)")
 
-    write_summary(str(summary_path), all_results, args.n_bins)
+    write_summary(str(summary_path), all_results, args.n_bins,
+                  rho_per_frame=np.array(all_rho) if all_rho else None)
 
     print(f"\nWrote {len(all_results)} frames → {frame_path.name}")
     print(f"Summary → {summary_path.name}")
