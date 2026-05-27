@@ -178,7 +178,10 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
                   temperature, sigma=1.0, cutoff=1.122,
                   rng=None,
                   cavity_types=None,
-                  exclusion_buffer=None):
+                  exclusion_buffer=None,
+                  xy_extent=None,
+                  xy_buffer=None,
+                  wall_type=6):
     """Run cavity-biased Widom for one snapshot.
 
     Parameters
@@ -204,6 +207,26 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
         buffer (i.e. the reservoir above the piston in slab_with_flow) are
         kept active.  Defaults to r_cavity if None; set to at least one bin
         width (e.g. 2.0 sigma) for slab_with_flow to avoid interface spikes.
+    xy_extent : (x_lo, x_hi, y_lo, y_hi) or None
+        Lateral sampling box for trial-point insertions.  When None,
+        auto-detected: if any atoms of type ``wall_type`` are present in this
+        frame, xs/ys are restricted to the wall interior with an inward buffer
+        of ``xy_buffer`` (so trial points cannot land in the empty vacuum
+        OUTSIDE a lateral wall tube — that void otherwise inflates p_cav with
+        zero-energy "cavities" and creates a spurious μ_ex floor at
+        −kT ln(void_fraction)).  If no wall atoms are present (e.g.
+        slab_with_support), the full box [xlo, xhi] × [ylo, yhi] is used and
+        behavior is identical to pre-patch.
+    xy_buffer : float or None
+        Inward buffer (σ) subtracted from the wall extent when auto-detecting
+        xy_extent.  Defaults to ``cutoff`` (1.122 σ for WCA), which keeps trial
+        points at least one WCA cutoff away from the wall plane so a ghost
+        solvent never overlaps a wall bead.  Ignored if xy_extent is given
+        explicitly.
+    wall_type : int
+        Atom type used for the lateral wall (default 6, matching
+        slab_with_flow.lmp).  Set to a value that does not appear in the
+        trajectory to disable auto-detection.
 
     Returns list of dicts, one per z-bin:
         z_lo, z_hi, z_center, n_trial, n_cavity, p_cav,
@@ -272,6 +295,39 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
     # affecting the cavity-detection radius.  Default: same as r_cavity.
     excl_buf = exclusion_buffer if exclusion_buffer is not None else r_cavity
 
+    # ── Lateral (x, y) sampling box for trial-point insertions ─────────────
+    # Auto-detect wall confinement from atoms of `wall_type` (default 6).  This
+    # is essential for slab_with_flow.lmp, where a hollow tube of wall beads
+    # confines polymer + solvent to the interior; sampling trial points in the
+    # full periodic box would place ~30 % of insertions in the empty vacuum
+    # outside the tube, where cavity detection trivially passes and the WCA
+    # energy is zero — producing a spurious μ_ex floor at −kT ln(void_fraction)
+    # that wipes out the gel/reservoir contrast.
+    #
+    # slab_with_support.lmp has no wall atoms; auto-detection then falls back
+    # to the full box, reproducing pre-patch behavior bit-for-bit.
+    xy_buf_eff = xy_buffer if xy_buffer is not None else cutoff
+    if xy_extent is not None:
+        x_lo_s, x_hi_s, y_lo_s, y_hi_s = (float(v) for v in xy_extent)
+    else:
+        wall_mask = atom_types == wall_type
+        if wall_mask.any():
+            xw = atoms_xyz[wall_mask, 0]
+            yw = atoms_xyz[wall_mask, 1]
+            x_lo_s = float(xw.min()) + xy_buf_eff
+            x_hi_s = float(xw.max()) - xy_buf_eff
+            y_lo_s = float(yw.min()) + xy_buf_eff
+            y_hi_s = float(yw.max()) - xy_buf_eff
+            # Degenerate-buffer guard: if the user passed a buffer wider than
+            # the tube, fall back to the raw wall extent (no inward shrink).
+            if x_hi_s <= x_lo_s:
+                x_lo_s, x_hi_s = float(xw.min()), float(xw.max())
+            if y_hi_s <= y_lo_s:
+                y_lo_s, y_hi_s = float(yw.min()), float(yw.max())
+        else:
+            x_lo_s, x_hi_s = box['xlo'], box['xhi']
+            y_lo_s, y_hi_s = box['ylo'], box['yhi']
+
     bin_edges = np.linspace(box['zlo'], box['zhi'], n_bins + 1)
     results   = []
 
@@ -301,9 +357,12 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
             continue
 
         # --- Generate trial positions uniformly in this z-slab ---------------
-        xs = rng.uniform(box['xlo'], box['xhi'], n_trial)
-        ys = rng.uniform(box['ylo'], box['yhi'], n_trial)
-        zs = rng.uniform(z_lo, z_hi,            n_trial)
+        # xs/ys are sampled inside the lateral wall tube (x_lo_s..x_hi_s, etc.)
+        # when walls are present; otherwise the full box.  See the xy_extent
+        # auto-detect block above for why this matters in slab_with_flow.
+        xs = rng.uniform(x_lo_s, x_hi_s, n_trial)
+        ys = rng.uniform(y_lo_s, y_hi_s, n_trial)
+        zs = rng.uniform(z_lo,   z_hi,   n_trial)
 
         # Wrap to [0, L) for the KD-tree query
         trial_pts = np.column_stack([
@@ -816,12 +875,40 @@ def main():
                              "Produces mu_z_cavity_{stem}.dat and "
                              "mu_z_cavity_summary_{stem}.dat.  "
                              "Defaults to the trajectory filename stem.")
-    parser.add_argument("--cavity-types", default="1,2,3",
+    parser.add_argument("--cavity-types", default="1,2,3,6",
                         help="Comma-separated atom types that count as cavity blockers "
-                             "(default: '1,2,3' = polymer + solvent only). "
+                             "(default: '1,2,3,6' = polymer + solvent + walls). "
                              "Piston (type 5) and support (type 4) are excluded by "
                              "default so their lattice structure does not distort "
-                             "void-fraction measurements.")
+                             "void-fraction measurements. Walls (type 6) are included "
+                             "as a defensive backstop: with the wall-interior trial-"
+                             "point sampling (see --xy-extent / --wall-type), trial "
+                             "points should never come near a wall plane anyway, but "
+                             "this guards against partial-buffer setups.  If the "
+                             "trajectory has no type-6 atoms (slab_with_support) the "
+                             "extra entry is harmless.")
+    parser.add_argument("--xy-extent", default=None,
+                        help="Lateral sampling box for trial-point insertions, given "
+                             "as four floats 'x_lo x_hi y_lo y_hi' (space- or comma-"
+                             "separated, σ units, in world coordinates).  Overrides "
+                             "the auto-detection below.  Use this if the wall type is "
+                             "not 6 or if you want to restrict sampling to a polymer-"
+                             "COM-tracked sub-region (e.g. mirroring reg_x / reg_y in "
+                             "the LAMMPS chunk computes).")
+    parser.add_argument("--xy-buffer", type=float, default=None,
+                        dest="xy_buffer",
+                        help="Inward buffer (σ) subtracted from the wall extent when "
+                             "auto-detecting the lateral sampling box.  Default = "
+                             "--cutoff (one WCA cutoff), which keeps trial points "
+                             "from overlapping a wall bead.  Has no effect when "
+                             "--xy-extent is specified or when no wall atoms exist.")
+    parser.add_argument("--wall-type", type=int, default=6,
+                        dest="wall_type",
+                        help="Atom type used for the lateral wall tube (default 6, "
+                             "matching slab_with_flow.lmp).  Set to a type that does "
+                             "not appear in the trajectory to disable wall auto-"
+                             "detection (full-box sampling), regardless of whether "
+                             "type 6 is present.")
     parser.add_argument("--p-ext",       type=float, default=1.5,
                         help="LAMMPS barostat target pressure (eps/sigma^3). "
                              "Used to normalize the pore-pressure panel "
@@ -851,6 +938,19 @@ def main():
     rng          = np.random.default_rng(args.seed)
     cavity_types = set(int(t) for t in args.cavity_types.split(','))
 
+    # Parse --xy-extent: accept either comma- or whitespace-separated.  None
+    # means auto-detect from `wall_type` atoms in each frame.
+    if args.xy_extent is None:
+        xy_extent = None
+    else:
+        tokens = args.xy_extent.replace(',', ' ').split()
+        if len(tokens) != 4:
+            parser.error("--xy-extent requires exactly four floats: "
+                         "x_lo x_hi y_lo y_hi")
+        xy_extent = tuple(float(t) for t in tokens)
+        if xy_extent[0] >= xy_extent[1] or xy_extent[2] >= xy_extent[3]:
+            parser.error("--xy-extent must satisfy x_lo<x_hi and y_lo<y_hi")
+
     excl_buf_display = args.exclusion_buffer if args.exclusion_buffer is not None else args.r_cavity
     print(f"Trajectory   : {traj_path}")
     print(f"z-bins       : {args.n_bins}")
@@ -864,6 +964,13 @@ def main():
           f"({'phantom — piston interior bins active' if args.piston_eps == 0.0 else 'repulsive'})")
     print(f"WCA cutoff   : {args.cutoff} σ")
     print(f"cavity_types : {sorted(cavity_types)}  (piston/support excluded from void detection)")
+    if xy_extent is None:
+        xy_buf_print = args.xy_buffer if args.xy_buffer is not None else args.cutoff
+        print(f"xy_extent    : auto (wall_type={args.wall_type}, buffer={xy_buf_print:.3f} σ; "
+              f"falls back to full box if no walls)")
+    else:
+        print(f"xy_extent    : explicit  x:[{xy_extent[0]:.3f},{xy_extent[1]:.3f}] "
+              f"y:[{xy_extent[2]:.3f},{xy_extent[3]:.3f}]")
     print(f"Frame file   : {frame_path}")
     print(f"Summary      : {summary_path}")
     if not args.no_plot:
@@ -900,6 +1007,9 @@ def main():
                 rng               = rng,
                 cavity_types      = cavity_types,
                 exclusion_buffer  = args.exclusion_buffer,
+                xy_extent         = xy_extent,
+                xy_buffer         = args.xy_buffer,
+                wall_type         = args.wall_type,
             )
 
             # ── Solvent density on the SAME z-bins as cavity-Widom ──────────
