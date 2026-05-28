@@ -31,8 +31,9 @@
 # Phase 2 (production):
 #   COMPRESSION: constant-velocity piston (v_piston_prod) to comp_percent strain,
 #                then freeze + relax.
-#   PERMEATION:  piston force ramp → P_perm = P_target, then constant force;
-#                records feed/permeate reservoir pressures and permeate flux.
+#   PERMEATION:  piston moves at constant velocity v_piston_perm (= 5% of
+#                v_piston_prod); records feed/permeate reservoir pressures
+#                and permeate flux.  Halts when feed ≤ feed_halt_thick.
 
 
 # ==========================================================================
@@ -59,9 +60,9 @@ variable comp_percent    equal 0.1      # strain threshold for halt
 variable v_piston_prod   equal 0.04     # σ/τ (= 1σ per 5000 steps at dt=0.005)
 
 # ----- Permeation Phase 2 -----
-# perm_piston_force: constant downward force per piston atom (negative = -z).
-# ΔP ≈ |force| × N_piston / (Lx × Ly) — set to drive measurable flow.
-variable perm_piston_force equal -0.05  # ε/σ per atom; ΔP ≈ 0.64 above P_target
+# v_piston_perm: constant piston velocity (negative = -z direction, toward gel).
+# Set to 5% of the compression-mode velocity for a slow, steady-state-friendly drive.
+variable v_piston_perm     equal 0.05*${v_piston_prod}  # σ/τ
 variable feed_halt_thick   equal 2.0    # halt when feed reservoir ≤ this (σ)
 variable flux_freq         equal 1000   # permeate bead count output interval (steps)
 
@@ -136,7 +137,7 @@ print "Flow/Compression simulation: ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
 print "Production steps: ${nsteps}"
 print "Compression piston velocity: ${v_piston_prod} sigma/tau"
-print "Permeation piston force: ${perm_piston_force} eps/sigma per atom"
+print "Permeation piston velocity: ${v_piston_perm} sigma/tau (= 5% of compression velocity)"
 print "========================================"
 
 
@@ -510,17 +511,23 @@ compute myTemp mobile temp/partial 1 1 0
 fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
 fix_modify nvt_prod temp myTemp
 
-# ----- Permeation: piston force ramp from 0 → perm_piston_force -----
-# Force ramps from zero to the target over nsteps.  Halt fires when the
-# permeate-reservoir pressure (P_res_perm, defined below after computes are
-# ready) reaches P_target, marking the reference state for ΔP measurements.
-# After that halt the script switches to constant force for steady-state
-# measurement of flux and ΔP = P_res_feed − P_res_perm.
+# ----- Permeation: constant-velocity piston (v_piston_perm = 5% of v_piston_prod) -----
+# Re-fix piston with all forces off and prescribe velocity, matching the
+# compression-mode approach.  The halt_perm condition (feed ≤ feed_halt_thick)
+# is the sole termination condition — no ramp/equilibration phase needed.
+if "${compression_mode} == 0" then "unfix rigid_piston"
 if "${compression_mode} == 0" then &
-    "variable perm_force_ramp equal ramp(0.0,${perm_piston_force})"
+    "fix rigid_piston piston rigid single force * off off off torque * off off off"
 if "${compression_mode} == 0" then &
-    "fix push_piston piston addforce 0.0 0.0 v_perm_force_ramp"
-if "${compression_mode} == 0" then "fix piston_drag piston viscous 0.014"
+    "velocity piston set 0.0 0.0 -${v_piston_perm}"
+
+# ----- Permeation: start displacement recording at Phase 2 onset -----
+# Reference positions reset here so u_z(z,0) = 0 at the start of the drive.
+if "${compression_mode} == 0" then "uncompute displace_poly"
+if "${compression_mode} == 0" then "compute displace_poly polymer displace/atom"
+if "${compression_mode} == 0" then "variable uz_poly atom c_displace_poly[3]"
+if "${compression_mode} == 0" then &
+    "fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} chunk_z_polymer v_uz_poly file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat"
 
 # ----- Production Trajectory (sparse sampling) -----
 dump traj_flow gel_system custom ${dump_freq_prod} &
@@ -767,12 +774,9 @@ if "${compression_mode} == 0" then "variable vol_perm equal lx*ly*(lz-v_piston_z
 if "${compression_mode} == 0" then "variable P_res_feed equal c_pv_feed/v_vol_feed"
 if "${compression_mode} == 0" then "variable P_res_perm equal c_pv_perm/v_vol_perm"
 
-# Halt when the permeate-reservoir pressure reaches P_target.
-# At this point the gel reference state is P_perm = P_target; the feed side
-# is at P_feed > P_target, driving flow.  Script then switches to constant
-# force for steady-state ΔP and flux measurement.
-if "${compression_mode} == 0" then &
-    "fix halt_p_target all halt ${volume_freq} v_P_res_perm >= ${P_target} error continue"
+# halt_p_target removed: velocity-controlled permeation does not need a
+# ramp-to-equilibrium phase.  halt_perm (feed ≤ feed_halt_thick) is the
+# sole termination condition for the permeation run.
 
 
 # ==========================================================================
@@ -1150,7 +1154,8 @@ dump widom_traj all custom ${nfreq_widom_dump} &
 # ==========================================================================
 # fix halt stops the current run command (error continue = no abort).
 # After the run exits the script continues to the relaxation block below.
-# In permeation mode this fix is not created, so the run simply goes to nsteps.
+# In permeation mode this fix is not created; the run ends via halt_perm
+# (feed ≤ feed_halt_thick) or exhausts nsteps.
 
 if "${compression_mode} == 1" then &
     "fix halt_compress all halt ${volume_freq} v_gel_strain >= ${comp_percent} error continue"
@@ -1183,31 +1188,12 @@ run ${nsteps}
 if "${compression_mode} == 1" then "unfix halt_compress"
 
 # ==========================================================================
-#   PERMEATION — SWITCH TO CONSTANT FORCE FOR STEADY-STATE MEASUREMENT
+#   PERMEATION — POST-RUN CLEANUP
 # ==========================================================================
-# The ramp phase just ended (either halt_p_target fired at P_perm = P_target,
-# or nsteps ran out).  Switch to constant force perm_piston_force and run the
-# remaining steps so that ΔP = P_feed − P_perm is held constant while the
-# flux and reservoir pressures are measured at steady state.
-if "${compression_mode} == 0" then "unfix halt_p_target"
-if "${compression_mode} == 0" then "unfix push_piston"
-if "${compression_mode} == 0" then &
-    "fix push_piston piston addforce 0.0 0.0 ${perm_piston_force}"
-variable perm_phase2_end equal $(step)
-variable perm_relax_steps equal ${nsteps}-(${perm_phase2_end}-${phase2_start})
-if "${compression_mode} == 0" then &
-    "print '>>> P_perm target reached — constant force. Remaining steps: ${perm_relax_steps}'"
-
-# ----- Permeation: start displacement recording at constant-force onset -----
-# Reference is reset here so u_z(z, 0) = 0 when the piston begins driving
-# solvent through the gel at constant ΔP.
-if "${compression_mode} == 0" then "uncompute displace_poly"
-if "${compression_mode} == 0" then "compute displace_poly polymer displace/atom"
-if "${compression_mode} == 0" then "variable uz_poly atom c_displace_poly[3]"
-if "${compression_mode} == 0" then &
-    "fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} chunk_z_polymer v_uz_poly file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat"
-
-if "${compression_mode} == 0" then "run ${perm_relax_steps}"
+# The main run ended because halt_perm fired (feed ≤ feed_halt_thick) or
+# nsteps were exhausted.  Velocity-controlled permeation has no second run
+# phase; simply unfix the halt and fall through to compression relaxation /
+# final cleanup below.
 if "${compression_mode} == 0" then "unfix halt_perm"
 
 variable phase2_end   equal $(step)
@@ -1275,8 +1261,6 @@ unfix out_piston_force
 if "${compression_mode} == 0" then "unfix out_piston_force_perm"
 
 # Unfix permeation-mode fixes
-if "${compression_mode} == 0" then "unfix push_piston"
-if "${compression_mode} == 0" then "unfix piston_drag"
 if "${compression_mode} == 0" then "unfix out_permeate_flux"
 
 undump traj_flow

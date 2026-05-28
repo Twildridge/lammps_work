@@ -272,8 +272,9 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
         eps_en   = eps_arr[eps_nz_mask]
         xyz_en   = xyz_wrapped[eps_nz_mask]
 
-    # ── Active z-range: skip bins inside/near the piston or support ──────────
-    # Support (type 4): sits at the bottom; exclude bins ≤ support_top + excl_buf.
+    # ── Active z-range: skip only the thin interface buffers ─────────────────
+    # Support (type 4): only the buffer ABOVE the support top is skipped;
+    #   bins inside the support body (z_center ≤ z_support_max) are active.
     # Piston  (type 5): can be mid-box (slab_with_flow) or at the ceiling
     #   (slab_with_support).  We exclude a window AROUND the piston extent
     #   [z_piston_min - excl_buf, z_piston_max + excl_buf] rather than
@@ -820,10 +821,9 @@ def write_summary(path, all_results, n_bins, rho_per_frame=None):
     n_bins : int
     rho_per_frame : (n_frames, n_bins) float64 or None
         Solvent number density per bin per frame (from bin_solvent_density).
-        When supplied, the time-averaged rho_s is written as an 8th column
-        so analysis notebooks can use the widom-trajectory ρ_s instead of
-        an external packing-fraction estimate (which can have piston-face
-        density spikes not present in the widom grid).
+        Pass only the final N frames (controlled by --n-rho-final) so that
+        the summary rho_s column reflects the equilibrium density profile
+        rather than the non-equilibrated early compression frames.
     """
     mu_series  = [[] for _ in range(n_bins)]
     pc_series  = [[] for _ in range(n_bins)]
@@ -996,6 +996,13 @@ def main():
     parser.add_argument("--plot-path",   default=None,
                         help="Override path for the diagnostic PNG.  Default: "
                              "mu_total_diagnostic_{stem}.png in --out-dir.")
+    parser.add_argument("--n-rho-final", type=int, default=1,
+                        dest="n_rho_final",
+                        help="Number of final frames used to compute the "
+                             "summary rho_s_mean column (column 8).  Default=1 "
+                             "uses only the last frame, which best reflects the "
+                             "equilibrium density profile (early frames can be "
+                             "curved / non-equilibrated).")
     args = parser.parse_args()
 
     traj_path = Path(args.traj)
@@ -1103,8 +1110,9 @@ def main():
             mean_pc  = np.mean([b['p_cav'] for b in bin_results])
             print(f"done  (p_cav_mean={mean_pc:.3f}, {n_nan}/{args.n_bins} bins NaN)")
 
+    _n_rho = min(args.n_rho_final, len(all_rho)) if all_rho else 0
     write_summary(str(summary_path), all_results, args.n_bins,
-                  rho_per_frame=np.array(all_rho) if all_rho else None)
+                  rho_per_frame=np.array(all_rho[-_n_rho:]) if _n_rho > 0 else None)
 
     print(f"\nWrote {len(all_results)} frames → {frame_path.name}")
     print(f"Summary → {summary_path.name}")
