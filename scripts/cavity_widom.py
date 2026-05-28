@@ -336,16 +336,24 @@ def process_frame(timestep, box, atoms_xyz, atom_types, eps_arr,
         z_hi     = bin_edges[ib + 1]
         z_center = 0.5 * (z_lo + z_hi)
 
-        # Skip bins that are:
-        #   (a) within excl_buf of the support top, OR
-        #   (b) in the gel-side interface buffer [z_piston_min-excl_buf, z_piston_min), OR
-        #   (c) in the reservoir-side interface buffer (z_piston_max, z_piston_max+excl_buf].
+        # Skip bins that are interface-buffer zones around solid boundaries:
+        #   (a) the thin buffer ABOVE the support top
+        #       [z_support_max, z_support_max + excl_buf]
+        #   (b) gel-side buffer below the piston
+        #       [z_piston_min - excl_buf, z_piston_min)
+        #   (c) reservoir-side buffer above the piston
+        #       (z_piston_max, z_piston_max + excl_buf]
         #
-        # Bins INSIDE the piston body [z_piston_min, z_piston_max] are kept active so
-        # that μ_ex can be measured there.  Set --piston-eps 0.0 for compression
-        # mode (solvent transparent to piston) so the ghost particle does not
-        # artificially see WCA repulsion from piston beads in the energy calc.
-        near_support      = z_center <= z_support_max + excl_buf
+        # Bins INSIDE the support body (z_center <= z_support_max) and INSIDE
+        # the piston body [z_piston_min, z_piston_max] are kept ACTIVE.
+        # Both structures have eps=0 and are excluded from cavity_types, so
+        # the ghost particle is completely blind to them — μ_ex is measured
+        # from polymer/solvent atoms only, exactly as in the gel interior.
+        # Solvent also passes through both structures freely (no WCA pair
+        # interaction), so ρ_s is non-zero and μ_total is well-defined there.
+        # Measuring directly avoids the need for post-hoc extrapolation and
+        # gives a continuously smooth μ_total profile across the full z-domain.
+        near_support      = (z_support_max < z_center <= z_support_max + excl_buf)
         gel_side_iface    = (z_piston_min - excl_buf <= z_center < z_piston_min)
         res_side_iface    = (z_piston_max < z_center <= z_piston_max + excl_buf)
         if near_support or gel_side_iface or res_side_iface:
