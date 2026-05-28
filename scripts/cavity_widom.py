@@ -549,9 +549,11 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
 
     # ── Helper: linear interpolation across NaN gaps ──────────────────────────
     def _interp_gap(z, y):
-        """Return list of (z_seg, y_seg) linearly interpolated across each NaN
-        gap in y.  Each segment includes the flanking non-NaN endpoints so the
-        dashed bridge meets the solid line seamlessly."""
+        """Return list of (z_seg, y_seg) filling each NaN gap in y:
+        - Interior gap (valid data on both sides): linear interpolation
+        - Left-edge gap (NaN at start, valid to right): constant from first valid
+        - Right-edge gap (NaN at end, valid to left): constant from last valid
+        Each interior segment includes the flanking non-NaN endpoints."""
         finite = np.isfinite(y)
         segs = []
         n = len(z)
@@ -562,18 +564,43 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
                 while j < n and not finite[j]:
                     j += 1
                 if i > 0 and j < n:
+                    # Interior gap (piston zone): linear interpolation
                     z_seg = np.concatenate([[z[i - 1]], z[i:j], [z[j]]])
                     y_seg = np.interp(z_seg, [z[i - 1], z[j]],
                                               [y[i - 1], y[j]])
+                    segs.append((z_seg, y_seg))
+                elif i == 0 and j < n:
+                    # Left-edge gap (support region): constant from first valid
+                    z_seg = np.concatenate([z[0:j], [z[j]]])
+                    y_seg = np.full(len(z_seg), y[j])
+                    segs.append((z_seg, y_seg))
+                elif i > 0 and j == n:
+                    # Right-edge gap: constant from last valid
+                    z_seg = np.concatenate([[z[i - 1]], z[i:]])
+                    y_seg = np.full(len(z_seg), y[i - 1])
                     segs.append((z_seg, y_seg))
                 i = max(j, i + 1)
             else:
                 i += 1
         return segs
 
-    # ── Identify piston zone: NaN gap in mu_mean flanked by data on both sides ─
-    # (excludes support region which is NaN only at one edge)
+    def _fill_edge_nan(y):
+        """Constant-extrapolate NaN at either edge; interior NaN left as-is."""
+        y = y.copy()
+        valid = np.where(np.isfinite(y))[0]
+        if len(valid) == 0:
+            return y
+        if valid[0] > 0:
+            y[:valid[0]] = y[valid[0]]
+        if valid[-1] < len(y) - 1:
+            y[valid[-1] + 1:] = y[valid[-1]]
+        return y
+
+    # ── Identify NaN zones in mu_mean ───────────────────────────────────────
+    # piston_spans: internal NaN gaps flanked by valid data on both sides
+    # support_span: left-edge NaN gap (NaN at z_lo end, valid data above)
     piston_spans = []
+    support_span = None
     finite_mean = np.isfinite(mu_mean)
     _i = 0
     while _i < len(mu_mean):
@@ -583,6 +610,8 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
                 _j += 1
             if _i > 0 and _j < len(mu_mean):   # internal NaN gap = piston zone
                 piston_spans.append((z_lo[_i], z_hi[_j - 1]))
+            elif _i == 0 and _j < len(mu_mean):  # left-edge NaN = support zone
+                support_span = (z_lo[0], z_hi[_j - 1])
             _i = max(_j, _i + 1)
         else:
             _i += 1
@@ -599,6 +628,9 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
 
     # Panel 1: ρ_s(z)
     ax = axes[0]
+    if support_span is not None:
+        ax.axvspan(support_span[0], support_span[1],
+                   color='wheat', alpha=0.45, lw=0, label='support (extrapolated)')
     ax.plot(z_centers, rho_mean, 'o-', color='steelblue',
             markersize=3, lw=1.4, label=r"$\langle\rho_s(z)\rangle$")
     if n_frames >= 2:
@@ -620,6 +652,9 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
 
     # Panel 2: μ_ex(z)
     ax = axes[1]
+    if support_span is not None:
+        ax.axvspan(support_span[0], support_span[1],
+                   color='wheat', alpha=0.45, lw=0, label='support (extrapolated)')
     for zlo_p, zhi_p in piston_spans:
         ax.axvspan(zlo_p, zhi_p, color='lightgray', alpha=0.35, lw=0,
                    label='piston zone (interpolated)')
@@ -655,6 +690,9 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
 
     # Panel 3: μ_total(z)
     ax = axes[2]
+    if support_span is not None:
+        ax.axvspan(support_span[0], support_span[1],
+                   color='wheat', alpha=0.45, lw=0)
     for zlo_p, zhi_p in piston_spans:
         ax.axvspan(zlo_p, zhi_p, color='lightgray', alpha=0.35, lw=0)
     for k in range(n_frames):
@@ -687,6 +725,9 @@ def make_diagnostic_plot(all_results, rho_per_frame, steps, kT,
 
     # Panel 4: p_p / P_ext
     ax = axes[3]
+    if support_span is not None:
+        ax.axvspan(support_span[0], support_span[1],
+                   color='wheat', alpha=0.45, lw=0, label='support (extrapolated)')
     for zlo_p, zhi_p in piston_spans:
         ax.axvspan(zlo_p, zhi_p, color='lightgray', alpha=0.35, lw=0,
                    label='piston zone (interpolated)')
