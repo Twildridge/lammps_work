@@ -520,7 +520,7 @@ if "${compression_mode} == 0" then &
     "variable perm_force_ramp equal ramp(0.0,${perm_piston_force})"
 if "${compression_mode} == 0" then &
     "fix push_piston piston addforce 0.0 0.0 v_perm_force_ramp"
-if "${compression_mode} == 0" then "fix piston_drag piston viscous 0.01"
+if "${compression_mode} == 0" then "fix piston_drag piston viscous 0.014"
 
 # ----- Production Trajectory (sparse sampling) -----
 dump traj_flow gel_system custom ${dump_freq_prod} &
