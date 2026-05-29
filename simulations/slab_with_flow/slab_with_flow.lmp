@@ -45,6 +45,20 @@
 # 1 = compression (solvent-piston OFF, piston loads gel directly)
 variable compression_mode equal 1
 
+# ----- Continuation flag -----
+# 0 = fresh start (default)
+# 1 = continuation from a final .data file (via continue_sim.sh)
+#
+# When cont=1 the following phases are skipped:
+#   Phase 0    — NVT equilibration run (box volume/piston position stay as-is)
+#   Phase 0.5  — Langevin+NPH isotropic pressure equilibration (compression only)
+#   Phase 2 compression piston setup — piston stays frozen; halt_compress fires
+#                                      immediately and the run becomes pure relaxation
+#   ε=0 reference recording          — reference already exists from the original run
+# Permeation mode: Phase 0 is skipped but Phase 2 piston velocity is re-applied,
+#   so the piston resumes moving at v_piston_perm from the current position.
+variable cont equal 0
+
 # ----- Physical Parameters -----
 variable sigma         equal 1.0
 variable temp_target   equal 1.0
@@ -283,6 +297,9 @@ timestep ${timestep_prod}
 # Brief minimize to clean up any residual overlaps from wall insertion
 minimize 1.0e-4 1.0e-6 1000 10000
 
+# ----- cont=1: jump over Phase 0 NVT (positions/velocities come from data file) -----
+if "${cont} == 1" then "jump SELF label_after_phase0"
+
 # Setup trajectory
 dump traj_setup gel_system custom ${dump_freq_setup} &
    traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
@@ -303,6 +320,8 @@ if "${compression_mode} == 1" then "run ${comp_setup_freq}"
 
 print ">>> Post-Phase-0 NVT: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
 unfix nvt_equil
+
+label label_after_phase0
 
 
 # ==========================================================================
@@ -332,6 +351,9 @@ variable npt_p05_steps equal 120000  # run length; increase if mobile_press not 
 # at NPH convergence, set npt_P05_target ≈ P_target + 0.41.
 # Re-calibrate if the system size or density changes significantly.
 variable npt_P05_target equal ${P_target}+0.41   # ≈ 1.91
+
+# ----- cont=1 + compression: jump over Phase 0.5 (box already at equilibrium pressure) -----
+if "${compression_mode} == 1 && ${cont} == 1" then "jump SELF label_after_phase05"
 
 if "${compression_mode} == 1" then "print '========================================'"
 if "${compression_mode} == 1" then &
@@ -396,8 +418,11 @@ if "${compression_mode} == 1" then &
 if "${compression_mode} == 1" then "run 50000"
 if "${compression_mode} == 1" then "unfix nvt_p05_eq"
 
+label label_after_phase05
+
 print ">>> Pre-production: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
-undump traj_setup
+# traj_setup dump only exists when cont=0 (Phase 0 ran)
+if "${cont} == 0" then "undump traj_setup"
 
 
 # ==========================================================================
@@ -499,12 +524,18 @@ print "========================================"
 # The piston was re-frozen after Phase 0.5 Langevin+NPH (rigid + setforce 0).
 # Unfreeze, then re-fix with force*off off off so the prescribed velocity
 # is maintained exactly (no force-driven acceleration from the gel).
+#
+# cont=1 compression: piston stays frozen (already at ~comp_percent strain).
+#   halt_compress fires immediately on the first volume_freq check, and the
+#   entire run becomes a pure stress-relaxation measurement.
+if "${compression_mode} == 1 && ${cont} == 1" then "jump SELF label_skip_comp_piston_setup"
 if "${compression_mode} == 1" then "unfix freeze_piston"
 if "${compression_mode} == 1" then "unfix rigid_piston"
 if "${compression_mode} == 1" then &
     "fix rigid_piston piston rigid single force * off off off torque * off off off"
 if "${compression_mode} == 1" then &
     "velocity piston set 0.0 0.0 -${v_piston_prod}"
+label label_skip_comp_piston_setup
 
 # ----- Thermostat (x,y only — z is flow/compression direction) -----
 compute myTemp mobile temp/partial 1 1 0
@@ -515,11 +546,19 @@ fix_modify nvt_prod temp myTemp
 # Re-fix piston with all forces off and prescribe velocity, matching the
 # compression-mode approach.  The halt_perm condition (feed ≤ feed_halt_thick)
 # is the sole termination condition — no ramp/equilibration phase needed.
+# cont=1 permeation: piston velocity is re-applied from current position, resuming
+#   the drive at v_piston_perm exactly as if the run had not been interrupted.
 if "${compression_mode} == 0" then "unfix rigid_piston"
 if "${compression_mode} == 0" then &
     "fix rigid_piston piston rigid single force * off off off torque * off off off"
 if "${compression_mode} == 0" then &
     "velocity piston set 0.0 0.0 -${v_piston_perm}"
+
+# Permeation piston force output.  For fresh starts (cont=0) this was already
+# defined in Phase 0 (to capture the zero-pressure baseline); for continuations
+# (cont=1) Phase 0 was skipped, so define it here at Phase 2 onset.
+if "${compression_mode} == 0 && ${cont} == 1" then &
+    "fix out_piston_force all print ${volume_freq} '$(step) $(c_piston_fz)' file output_files/piston_data/piston_force_${dataname}_${interaction}_${nsteps}.dat screen no"
 
 # ----- Permeation: start displacement recording at Phase 2 onset -----
 # Reference positions reset here so u_z(z,0) = 0 at the start of the drive.
@@ -949,6 +988,10 @@ fix out_polymer_com all print ${volume_freq} &
 # ==========================================================================
 #  COMPRESSION MODE: REFERENCE-STATE (ε=0) STRESS RECORDING
 # ==========================================================================
+# Skipped for cont=1: the reference files already exist from the original run.
+# The production stress fixes below use those same reference files in analysis.
+if "${compression_mode} == 1 && ${cont} == 1" then "jump SELF label_after_ref_rec"
+
 # The main fix ave/time stress fixes above start sampling at the moment they
 # are defined and emit their first output `nfreq_stress` steps later — long
 # after compression has already happened.  That means the first snapshot in
@@ -1052,6 +1095,8 @@ if "${compression_mode} == 1" then "velocity piston set 0.0 0.0 -${v_piston_prod
 
 if "${compression_mode} == 1" then &
     "print '>>> Reference recording done.  step=$(step)  gel_strain=$(v_gel_strain)'"
+
+label label_after_ref_rec
 
 
 # ==========================================================================
@@ -1235,6 +1280,9 @@ if "${compression_mode} == 1" then "uncompute minz"
 if "${compression_mode} == 1" then "uncompute maxz"
 
 # Freeze piston (velocity control: no force fixes to unfix)
+# cont=1: freeze_piston (setforce 0) was never removed (Phase 2 setup was skipped),
+#   so unfix it here before redefining rigid_piston.
+if "${compression_mode} == 1 && ${cont} == 1" then "unfix freeze_piston"
 if "${compression_mode} == 1" then "velocity piston set 0.0 0.0 0.0"
 if "${compression_mode} == 1" then "unfix rigid_piston"
 if "${compression_mode} == 1" then &

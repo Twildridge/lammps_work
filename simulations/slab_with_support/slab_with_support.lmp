@@ -42,6 +42,12 @@ variable volume_freq equal 10000
 #   (used to estimate partial molar volume V̄_s = 1/ρ_s per bin)
 #
 # NOTE: create output_files/chemical_potential/ before the run.
+# ----- Continuation flag -----
+# 0 = fresh start (default)  1 = continuation from a final .data file
+# When cont=1 the push-off, minimization, gentle NVT thermalization, and NPT
+# warm-up are all skipped — the data file already holds an equilibrated config.
+variable cont equal 0
+
 variable num_widom_curves equal 10     # time-snapshots of μ(z) for fix widom / fix print output
 variable M_widom          equal 1000   # ghost-particle insertions per bin per snapshot
 variable N_widom_bins     equal 20     # number of equal-width z-slabs
@@ -115,7 +121,7 @@ group polymer_and_support type 1 2 4 5
 # Harmonic bonds pull beads to r₀ = 0.96σ without any divergence
 # Soft pairs prevent pair overlaps with finite, bounded forces
 
-if "${is_restart} == 0" then &
+if "${is_restart} == 0 && ${cont} == 0" then &
     "pair_style soft 1.122"              &
     "pair_coeff * * 50.0"              &
     "pair_coeff 4 4 0.0"              &
@@ -135,7 +141,7 @@ fix freeze_piston piston setforce 0.0 0.0 0.0
 thermo_style custom step temp pe ke etotal press vol lx ly lz
 thermo 1000
 
-if "${is_restart} == 0" then &
+if "${is_restart} == 0 && ${cont} == 0" then &
     "velocity mobile create 0.01 12345 mom yes rot no"   &
     "fix pushoff mobile nve/limit 0.05"                   &
     "fix lang_pushoff mobile langevin 0.01 0.01 ${tdamp} 904297" &
@@ -191,7 +197,7 @@ neigh_modify exclude type 4 5   # support-piston
 # Now safe — bonds are near 0.96σ (after push-off) or at equilibrium
 # (after restart). Piston/support still frozen via setforce.
 
-if "${is_restart} == 0" then &
+if "${is_restart} == 0 && ${cont} == 0" then &
     "minimize 1.0e-4 1.0e-6 10000 100000"
 
 # Release piston: switch from setforce freeze to z-free rigid body
@@ -211,14 +217,14 @@ dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${data
 # =====================================================================
 #   PHASE 3: GENTLE NVT THERMALIZATION
 # =====================================================================
-if "${is_restart} == 0" then "reset_timestep 0"
-if "${is_restart} == 0" then "velocity mobile create 0.01 12345 mom yes rot no"
-if "${is_restart} == 0" then "fix 1 mobile nve/limit 0.05"
-if "${is_restart} == 0" then "fix 2 mobile langevin 0.01 ${temp_target} ${tdamp} 904297"
-if "${is_restart} == 0" then "timestep ${timestep_gentle}"
-if "${is_restart} == 0" then "run ${nsteps_gentle}"
-if "${is_restart} == 0" then "unfix 1"
-if "${is_restart} == 0" then "unfix 2"
+if "${is_restart} == 0 && ${cont} == 0" then "reset_timestep 0"
+if "${is_restart} == 0 && ${cont} == 0" then "velocity mobile create 0.01 12345 mom yes rot no"
+if "${is_restart} == 0 && ${cont} == 0" then "fix 1 mobile nve/limit 0.05"
+if "${is_restart} == 0 && ${cont} == 0" then "fix 2 mobile langevin 0.01 ${temp_target} ${tdamp} 904297"
+if "${is_restart} == 0 && ${cont} == 0" then "timestep ${timestep_gentle}"
+if "${is_restart} == 0 && ${cont} == 0" then "run ${nsteps_gentle}"
+if "${is_restart} == 0 && ${cont} == 0" then "unfix 1"
+if "${is_restart} == 0 && ${cont} == 0" then "unfix 2"
 
 
 # ========== Gel Volume Calculations ==========
@@ -252,7 +258,7 @@ variable box_lz equal lz
 #if "${is_restart} == 0" then "reset_timestep 0"
 fix 1 mobile npt temp ${temp_target} ${temp_target} ${tdamp} iso ${press_target} ${press_target} ${pdamp} # dilate mobile fixedpoint $(lx/2) $(ly/2) 0
 timestep ${timestep_prod}
-if "${is_restart} == 0" then "run ${nsteps_gentle}"
+if "${is_restart} == 0 && ${cont} == 0" then "run ${nsteps_gentle}"
 
 
 
