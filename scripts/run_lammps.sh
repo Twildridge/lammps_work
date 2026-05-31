@@ -1,12 +1,14 @@
 #!/bin/bash
 if [ $# -lt 4 ]; then
-    echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [oldsteps] [type]"
+    echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [oldsteps] [type] [press_target]"
     echo "Example (fresh run):  ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000"
     echo "Example (continuation): ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000 20000"
     echo "Example (pure solvent P-sweep): ./run_lammps.sh pure_solvent pure_solvent_1000 1p0 0"
+    echo "Example (pressure sweep): ./run_lammps.sh slab_with_support slab_support_pstar0.8 1.0_1.0 600000 0 \"\" 0.8"
     echo "  interaction format: epsSS_epsSP (e.g., 1.5_0.4), or epsSS only for pure_solvent (e.g., 1p0)"
     echo "  oldsteps: total timesteps from previous run (defaults to 0 for fresh runs)"
     echo "  type: optional, 'stress' (adds 1), 'volume' (adds 2), or 'stressvol' (adds 3) to dataname"
+    echo "  press_target: optional, overrides press_target in .lmp file (default: 1.5)"
     exit 1
 fi
 
@@ -16,6 +18,8 @@ INTERACTION=$3
 NSTEPS=$4
 OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
 TOTSTEPS=$((OLDSTEPS + NSTEPS))
+PRESS_TARGET=${7:-1.5}  # Default pressure; overrides press_target in .lmp file
+SKIP_WIDOM=${SKIP_WIDOM:-0}  # Set to 1 (via env) to minimize Widom output and skip cavity_widom.py
 
 # P-sweep parameters (only used for pure_solvent; ignored by other scripts)
 NSTEPS_EQ=200000    # equilibration steps per state point
@@ -80,6 +84,7 @@ echo "Running LAMMPS in $FOLDER with:"
 echo "  dataname=$DATANAME"
 echo "  epsSS=$EPSSS, epsSP=$EPSSP"
 echo "  nsteps=$NSTEPS, oldsteps=$OLDSTEPS, totsteps=$TOTSTEPS"
+echo "  press_target=$PRESS_TARGET"
 echo "SLURM tasks per node: $SLURM_NTASKS_PER_NODE"
 echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
 echo "DEBUG: SLURM_NTASKS_PER_NODE: $SLURM_NTASKS_PER_NODE"
@@ -117,6 +122,8 @@ mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM
     -var totsteps $TOTSTEPS \
     -var nsteps_eq $NSTEPS_EQ \
     -var nsteps_prod $NSTEPS_PROD \
+    -var press_target $PRESS_TARGET \
+    $([ "$SKIP_WIDOM" = "1" ] && echo "-var num_widom_curves 1 -var num_widom_frames 1") \
     -in $LAMMPS_FILE
 
 
@@ -166,6 +173,10 @@ fi
 # and solvent density files, using the same dataname_interaction_totsteps stem:
 #   mu_z_cavity_${DATANAME}_${INTERACTION}_${TOTSTEPS}.dat       (per-frame)
 #   mu_z_cavity_summary_${DATANAME}_${INTERACTION}_${TOTSTEPS}.dat (time-averaged ± stderr)
+if [ "$SKIP_WIDOM" = "1" ]; then
+    echo "SKIP_WIDOM=1: skipping cavity Widom post-processing."
+else
+
 WIDOM_TRAJ="${WORK_DIR}/traj_files/widom_${DATANAME}_${INTERACTION}_${TOTSTEPS}.lammpstrj"
 echo "======================================"
 echo "Cavity Widom check:"
@@ -187,7 +198,7 @@ if [ -f "$WIDOM_TRAJ" ]; then
         WIDOM_EXCL="2.0"
         WIDOM_PISTON_EPS="0.0"
     else
-        WIDOM_PEXT="1.5"
+        WIDOM_PEXT="$PRESS_TARGET"
         WIDOM_EXCL=""     # default = r_cavity
         WIDOM_PISTON_EPS="1.0"
     fi
@@ -223,6 +234,8 @@ else
     echo "    2. dump widom_traj is in slab_with_support.lmp or slab_with_flow.lmp (check git pulled correctly)"
     echo "    3. Scratch dir is accessible: ls $TRAJ_DIR"
 fi
+
+fi  # end SKIP_WIDOM=0 block
 
 # Pure solvent P-sweep: run EOS plot instead of stress/piston/tracking scripts
 if [ "$FOLDER" = "solvent_phase" ]; then
