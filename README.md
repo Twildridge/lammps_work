@@ -160,6 +160,23 @@ cd lammps_work
 chmod +x scripts/*.sh
 ```
 
+**Activate the Python environment** (required for post-processing scripts):
+
+The run scripts load Python differently depending on the cluster. No extra steps are needed on Expanse or Bridges-2 — `module load anaconda3/...` is called automatically inside `run_lammps.sh`. On **Pod**, you need to activate a conda environment once before submitting jobs:
+
+```bash
+# Pod only — one-time setup (and any time you open a new terminal):
+module load miniconda
+conda activate lammps_analysis
+```
+
+If `lammps_analysis` doesn't exist yet on Pod, create it:
+```bash
+module load miniconda
+conda create -n lammps_analysis python=3.11 numpy scipy matplotlib pandas -y
+conda activate lammps_analysis
+```
+
 **Configure git credentials** (so `git pull` works without a password prompt):
 ```bash
 git config --global user.name "Twildridge"
@@ -507,14 +524,117 @@ python ~/Documents/lammps_work/scripts/write_tracking.py \
 
 Open these on your MacBook in JupyterLab (`jupyter lab`), pointing them at data files in `flow_data_local/<sim_type>/<RUN_ID>/`. Each notebook has a config cell near the top — only `RUN_ID` and `sim_name` change between runs; all paths derive from those.
 
-**`compression_analysis.ipynb`** ← *Current: Milestone 3 (M) + Milestone 5 (Dc)*
+**`compression_analysis.ipynb`**
 Reads partial stress, volume fraction, and pore pressure data from a `slab_with_flow` compression run (`compression_mode = 1`). Extracts: longitudinal modulus M (both from network-stress integration and Voronoi-tessellated φ_p/φ_s decomposition), cooperative diffusivity Dc from φ_p(z,t) relaxation, and pore-pressure profiles. Inputs: `stress_tensor_polymer_*.dat`, `stress_profile_z_*.dat`, trajectory file. Supersedes `longitudinal_modulus_analysis.ipynb` (still present for reference).
 
-**`permeation_analysis.ipynb`** ← *Current: Milestones 5–6*
+**`permeation_analysis.ipynb`**
 Reads volume fraction and stress profiles from `slab_with_flow` permeation runs (`compression_mode = 0`). Extracts pore-pressure profiles φ_p(z), φ_s(z), p_p(z), network stress σ'(z), and solvent flux. Plots each trajectory dump as a separate curve to show temporal evolution. Supersedes `flow_poroelasticity_analysis.ipynb` (still present for reference).
 
-**`shear_analysis.ipynb`** ← *Current: Milestone 4 (G)*
+**`shear_analysis.ipynb`**
 Reads the bulk-region polymer stress tensor from a `shear_slab` Phase 3 production run and extracts G = ⟨σ_p,xz⟩ / γ_cm, plus normal stress differences N1 / N2, x-profile stress plots, and a polymer/solvent poroelastic decomposition. Inputs: `stress_tensor_polymer_*.dat`, `stress_profile_x_polymer_*.dat`, `shear_strain_*.dat`. Atoms within 3σ of either plate are excluded from all stress computes.
+
+---
+
+### 7c. Running Python scripts manually on a cluster
+
+You may want to rerun post-processing after a job without relaunching LAMMPS — for example, after updating an analysis script, or to run `cavity_widom.py` which is not called automatically on Bridges-2.
+
+All scripts below assume you are **inside the run's working directory** on the cluster:
+
+```bash
+cd ~/Documents/lammps_runs/<run_dir>
+# e.g. cd ~/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_tall_rho04_p1.52_1.0_1.0_600000_1.0_1.0_20250601_120000
+```
+
+Set these variables once at the top of your shell session — everything else is derived from them:
+
+```bash
+DATANAME="walled_slab_support_5beads_tall_rho04_p1.52_1.0_1.0_600000"
+INTERACTION="1.0_1.0"
+TOTSTEPS=4000000
+EPSSS="${INTERACTION%%_*}"   # first part:  e.g. 1.0
+EPSSP="${INTERACTION##*_}"   # second part: e.g. 1.0
+SCRIPTS=~/Documents/lammps_work/scripts
+```
+
+#### Load Python — Expanse
+
+```bash
+module load anaconda3/2021.05/q4munrg
+```
+
+#### Load Python — Bridges-2
+
+```bash
+module load anaconda3/2024.10-1
+```
+
+---
+
+#### `cavity_widom.py` — excess chemical potential μ_ex(z)
+
+This is the main script to run manually, especially on Bridges-2 where it is not called automatically by `run_lammps_bridges.sh`.
+
+**`slab_with_flow` (compression mode — piston-eps 0, exclusion buffer 2σ):**
+
+```bash
+python "$SCRIPTS/cavity_widom.py" \
+  --traj "traj_files/widom_${DATANAME}_${INTERACTION}_${TOTSTEPS}.lammpstrj" \
+  --out-dir "output_files/chemical_potential" \
+  --out-stem "${DATANAME}_${INTERACTION}_${TOTSTEPS}" \
+  --eps-sp "$EPSSP" --eps-ss "$EPSSS" \
+  --n-bins 40 --n-trial 50000 --r-cavity 0.5 \
+  --exclusion-buffer 2.0 --piston-eps 0.0 \
+  --p-ext 1.8 --temperature 1.0
+```
+
+**`slab_with_support` (no piston forcing — piston-eps 1, no exclusion buffer):**
+
+```bash
+python "$SCRIPTS/cavity_widom.py" \
+  --traj "traj_files/widom_${DATANAME}_${INTERACTION}_${TOTSTEPS}.lammpstrj" \
+  --out-dir "output_files/chemical_potential" \
+  --out-stem "${DATANAME}_${INTERACTION}_${TOTSTEPS}" \
+  --eps-sp "$EPSSP" --eps-ss "$EPSSS" \
+  --n-bins 40 --n-trial 50000 --r-cavity 0.5 \
+  --piston-eps 1.0 \
+  --p-ext 1.5 --temperature 1.0
+```
+
+The trajectory file is in `traj_files/` (symlink to scratch). If scratch has been purged, you will need to re-download it from the cluster or rerun the simulation.
+
+---
+
+#### `plot_lammps_log.py` — T, P, volume convergence + μ_ex diagnostics
+
+**Expanse (`slab_with_flow`):**
+```bash
+python "$SCRIPTS/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" --p-ext 1.8
+```
+
+**Bridges-2 / `slab_with_support`** (no `--p-ext` needed):
+```bash
+python "$SCRIPTS/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
+```
+
+Output saved to `./output_plots/`.
+
+---
+
+#### `plot_stress_profiles.py` — partial stress and volume fraction profiles
+
+```bash
+OLDSTEPS=0   # set to previous totsteps if this was a continuation run
+python "$SCRIPTS/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+```
+
+---
+
+#### `plot_piston_data.py` — piston position, velocity, force (`slab_with_flow` only)
+
+```bash
+python "$SCRIPTS/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+```
 
 ---
 
