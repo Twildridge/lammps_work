@@ -309,23 +309,64 @@ htop                # live CPU/memory usage per core
 tail -f ~/Documents/lammps_runs/slab_with_flow_*/log.lammps
 ```
 
-### 5e. Continuing a run from a restart file
+### 5e. Continuing a run with `continue_sim.sh`
 
-LAMMPS writes `.restart` files at regular intervals so you can pick up where you left off if a job times out or you need more steps.
+`continue_sim.sh` picks up from where a finished run left off — no restart files, no editing batch scripts. It reads the SLURM output file to find the original working directory and auto-detects all run parameters from there.
 
-1. Find the restart file in the run's working directory:
+**When to use it:** you want more steps from a completed `slab_with_flow` or `slab_with_support` job — either to extend relaxation/measurement, or to continue a permeation drive.
+
+#### What it does
+
+The script jumps directly to the production phase, skipping all setup:
+
+| Script | Skipped | Runs |
+|--------|---------|------|
+| `slab_with_flow` compression | Phase 0 NVT, Phase 0.5 pressure equilibration, compression drive, ε=0 reference recording | All analysis computes and output fixes; stress-relaxation run with piston frozen |
+| `slab_with_flow` permeation | Phase 0 NVT | Piston velocity re-applied, all observables, halts when feed reservoir empties |
+| `slab_with_support` | Soft push-off, minimize, NVT ramp, NPT warm-up | NPT production with Widom, stress, and volume outputs |
+
+All the same output files are produced (stress profiles, chemical potential, piston data, trajectories, `log.lammps`). The only intentional omissions are the setup trajectory (`gel_setup_*.lammpstrj`) and the ε=0 reference stress files — these already exist from the original run.
+
+#### How to run it
+
+1. **Navigate to the simulation folder** where you submitted the original job:
    ```bash
-   ls ~/Documents/lammps_runs/slab_*_latest/restart*.restart
-   # The number at the end is the timestep: e.g. restart_..._4000000.restart → OLDSTEPS=4000000
+   cd ~/Documents/lammps_work/simulations/slab_with_flow
+   # or: simulations/slab_with_support
    ```
 
-2. Edit the batch file:
+2. **Run the continuation** using the SLURM job ID from the output file name and your desired extra steps:
    ```bash
-   NSTEPS=4000000     # additional steps you want to run
-   OLDSTEPS=4000000   # total steps completed so far
+   ~/Documents/lammps_work/scripts/continue_sim.sh <job_id> <nsteps>
+   ```
+   For example, if your output file is `slab_flow.o49772594.exp-14-05`:
+   ```bash
+   ~/Documents/lammps_work/scripts/continue_sim.sh 49772594 500000
+   ```
+   That's it — no other arguments needed. Compression vs. permeation mode is detected automatically.
+
+   > **Tip:** Add `~/Documents/lammps_work/scripts` to your `$PATH` in `~/.bashrc` so you can just type `continue_sim.sh 49772594 500000` directly.
+
+3. **Results appear** in a `continuation_{timestamp}/` subfolder inside the original run's working directory:
+   ```
+   ~/Documents/lammps_runs/slab_with_flow_{dataname}_{interaction}_{timestamp}/
+   ├── output_files/           ← original run outputs
+   ├── log.lammps              ← original log
+   └── continuation_20250602_143012/
+       ├── output_files/       ← continuation outputs (stress, chempot, etc.)
+       ├── traj_files/         ← symlink to scratch
+       └── log.lammps          ← continuation log
    ```
 
-3. Submit again with `sbatch`. LAMMPS will find the restart file automatically.
+#### What the script actually does under the hood
+
+1. Finds `*.o{job_id}.*` in the current directory (the SLURM output file).
+2. Reads the line `Working directory: /path/...` that `run_lammps.sh` printed when the job ran — this gives the original output folder.
+3. Finds `final_flow_*.data` (or `final_config_*.data`) inside that folder.
+4. Parses `dataname`, `epsSS`, `epsSP` from the filename.
+5. Reads `>>> Mode: compression_mode=N` from the output file to detect permeation vs. compression.
+6. Creates `continuation_{timestamp}/` inside the original folder and symlinks the data file in.
+7. Passes `-var cont 1` to LAMMPS, which triggers the `jump` commands that bypass setup phases.
 
 ### 5f. SLURM resource guidelines
 
