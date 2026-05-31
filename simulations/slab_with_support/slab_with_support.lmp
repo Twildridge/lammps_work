@@ -46,7 +46,7 @@ variable volume_freq equal 10000
 # 0 = fresh start (default)  1 = continuation from a final .data file
 # When cont=1 the push-off, minimization, gentle NVT thermalization, and NPT
 # warm-up are all skipped — the data file already holds an equilibrated config.
-variable cont equal 0
+variable cont index 0
 
 variable num_widom_curves equal 10     # time-snapshots of μ(z) for fix widom / fix print output
 variable M_widom          equal 1000   # ghost-particle insertions per bin per snapshot

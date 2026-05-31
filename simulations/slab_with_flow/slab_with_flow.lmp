@@ -57,7 +57,7 @@ variable compression_mode equal 1
 #   ε=0 reference recording          — reference already exists from the original run
 # Permeation mode: Phase 0 is skipped but Phase 2 piston velocity is re-applied,
 #   so the piston resumes moving at v_piston_perm from the current position.
-variable cont equal 0
+variable cont index 0
 
 # ----- Physical Parameters -----
 variable sigma         equal 1.0
