@@ -39,6 +39,45 @@
 
 set -e
 
+# ── Self-submit via SLURM if run from a login node ────────────────────────────
+if [ -z "$SLURM_JOB_ID" ]; then
+    # Locate the simulation's .batch file to borrow SLURM resource settings
+    SELF="$(realpath "${BASH_SOURCE[0]}")"
+    BATCH_FILE="$(pwd)/$(basename "$(pwd)").batch"
+    if [ ! -f "$BATCH_FILE" ]; then
+        echo "Error: not inside a SLURM job and no .batch file found at $BATCH_FILE"
+        echo "  Either run from inside the simulation folder, or submit via sbatch manually."
+        exit 1
+    fi
+
+    # Extract #SBATCH directives (skip --output so we set our own)
+    SBATCH_LINES=$(grep '^#SBATCH' "$BATCH_FILE" | grep -v -- '--output' | grep -v -- '--error')
+
+    # Build module-load lines from the .batch file
+    MODULE_LINES=$(grep '^module' "$BATCH_FILE" || true)
+    ENV_LINES=$(grep '^declare' "$BATCH_FILE" || true)
+
+    TMPBATCH=$(mktemp /tmp/cont_XXXXXX.sh)
+    cat > "$TMPBATCH" << BATCHEOF
+#!/bin/bash
+${SBATCH_LINES}
+#SBATCH --job-name=cont_$1
+#SBATCH --output=%x.o%j.%N
+
+${ENV_LINES}
+
+${MODULE_LINES}
+
+cd "$(pwd)"
+"$SELF" "$1" "$2"
+BATCHEOF
+
+    echo "Submitting continuation as SLURM batch job..."
+    sbatch "$TMPBATCH"
+    rm -f "$TMPBATCH"
+    exit 0
+fi
+
 # ── Arguments ─────────────────────────────────────────────────────────────────
 if [ $# -ne 2 ]; then
     echo "Usage: continue_sim.sh <job_id> <nsteps>"
