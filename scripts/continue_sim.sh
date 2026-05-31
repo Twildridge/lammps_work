@@ -249,9 +249,10 @@ LAMMPS_VARS=(
     -var cont        1
 )
 
-if [ -n "$COMPRESSION_MODE" ]; then
-    LAMMPS_VARS+=(-var compression_mode "$COMPRESSION_MODE")
-fi
+# Note: compression_mode is defined as an "equal"-style variable inside the LAMMPS
+# script and must NOT be passed via -var (which creates an index-style variable —
+# LAMMPS will error on the style mismatch). The auto-detected value above is used
+# only for logging.
 
 # ── Run LAMMPS ────────────────────────────────────────────────────────────────
 echo "Running LAMMPS continuation ($SLURM_NTASKS tasks)..."
