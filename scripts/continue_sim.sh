@@ -125,12 +125,26 @@ echo "SLURM output file : $OUTPUT_FILE"
 # run_lammps.sh prints: "Working directory: /path/to/work_dir"
 WORK_DIR=$(grep "^Working directory:" "$OUTPUT_FILE" | awk '{print $NF}' | head -1)
 
-if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then
-    echo "Error: could not find (or access) working directory from output file."
+if [ -z "$WORK_DIR" ]; then
+    echo "Error: could not find working directory line in output file."
     echo "  Looked for line: 'Working directory: /path/...'"
-    echo "  Got: '$WORK_DIR'"
-    echo "  Check that the job completed and the directory still exists."
+    echo "  Check that the job completed and the output file is intact."
     exit 1
+fi
+
+# New layout: lammps_runs/{FOLDER}/{FOLDER}_... — fall back if old flat path not found
+if [ ! -d "$WORK_DIR" ]; then
+    WORK_DIR_SUB="$(dirname "$WORK_DIR")/${FOLDER}/$(basename "$WORK_DIR")"
+    if [ -d "$WORK_DIR_SUB" ]; then
+        echo "Note: path in log was flat; found run dir under ${FOLDER}/ subfolder."
+        WORK_DIR="$WORK_DIR_SUB"
+    else
+        echo "Error: could not find working directory."
+        echo "  From log  : $WORK_DIR"
+        echo "  Also tried: $WORK_DIR_SUB"
+        echo "  Check that the job completed and the directory still exists."
+        exit 1
+    fi
 fi
 
 echo "Original work dir : $WORK_DIR"

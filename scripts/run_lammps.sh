@@ -53,7 +53,7 @@ fi
 # Single timestamp captured once — both WORK_DIR and TRAJ_DIR use the same value
 # so the symlink traj_files -> TRAJ_DIR is never stale.
 RUN_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORK_DIR="$HOME/Documents/lammps_runs/${FOLDER}_${DATANAME}_${INTERACTION}_${RUN_TIMESTAMP}"
+WORK_DIR="$HOME/Documents/lammps_runs/${FOLDER}/${FOLDER}_${DATANAME}_${INTERACTION}_${RUN_TIMESTAMP}"
 mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data,piston_data,permeation_data,displacement_data,pair_data,chemical_potential},output_plots}
 
 # Create trajectory directory in scratch and symlink to it
