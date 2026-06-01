@@ -282,9 +282,12 @@ else
     python "$SCRIPT_DIR/plot_lammps_log.py" "." "$STEM"
 fi
 
+WIDOM_MIN_STEPS=500000
 WIDOM_TRAJ="${CONT_DIR}/traj_files/widom_${STEM}.lammpstrj"
-if [ -f "$WIDOM_TRAJ" ]; then
+if [ -f "$WIDOM_TRAJ" ] && [ "$NSTEPS" -ge "$WIDOM_MIN_STEPS" ]; then
     echo "Running cavity-biased Widom insertion..."
+elif [ -f "$WIDOM_TRAJ" ]; then
+    echo "Skipping cavity_widom.py — only ${NSTEPS} steps (need >=${WIDOM_MIN_STEPS} for decorrelated frames)."
     if [ "$FOLDER" = "slab_with_flow" ]; then
         WIDOM_PEXT="1.8"; WIDOM_EXCL="2.0"; WIDOM_PISTON_EPS="0.0"
     else
