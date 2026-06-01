@@ -115,7 +115,8 @@ for (( i=FROM; i<END; i++ )); do
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=5:00:00
-#SBATCH --output=${LOG_DIR}/slab_p${P}.o%j.%N
+#SBATCH --output=${LOG_DIR}/volmix_sweep.log
+#SBATCH --open-mode=append
 
 declare -xr OMPI_UNIT='core'
 declare -xr OMPI_MCA_btl='self,vader'
@@ -130,6 +131,7 @@ module load gcc/10.2.0
 module load openmpi/4.1.3
 module load python/3.8.12
 
+echo ""; echo "====== slab_p${P} | \$(date) | \$(hostname) ======"
 export SKIP_WIDOM=1
 
 cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
@@ -169,12 +171,14 @@ HEREDOC
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --time=0:30:00
-#SBATCH --output=${LOG_DIR}/split_p${P}.o%j.%N
+#SBATCH --output=${LOG_DIR}/volmix_sweep.log
+#SBATCH --open-mode=append
 
 module reset
 module load gcc/10.2.0
 module load python/3.8.12
 
+echo ""; echo "====== split_p${P} | \$(date) | \$(hostname) ======"
 INPUT_FILE="${SLAB_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}.data"
 if [ ! -f "\$INPUT_FILE" ]; then
     echo "ERROR: Input file not found: \$INPUT_FILE"
@@ -182,12 +186,12 @@ if [ ! -f "\$INPUT_FILE" ]; then
 fi
 
 python3 "${SCRIPTS_DIR}/split_gel.py" "\$INPUT_FILE" \
-    --polymer-dir "${POL_DATA_DIR}" \
-    --solvent-dir "${SOL_DATA_DIR}"
+    --polymer-dir "${LAMMPS_DATA}/input_data" \
+    --solvent-dir "${LAMMPS_DATA}/input_data"
 
 echo "Split complete:"
-ls -lh "${POL_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_polymer_only.data"
-ls -lh "${SOL_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_solvent_only.data"
+ls -lh "${LAMMPS_DATA}/input_data/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_polymer_only.data"
+ls -lh "${LAMMPS_DATA}/input_data/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_solvent_only.data"
 HEREDOC
 
     SPLIT_JID=$(sbatch --parsable --dependency=afterok:${SLAB_JID} "$SPLIT_BATCH")
@@ -207,7 +211,8 @@ HEREDOC
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=1:00:00
-#SBATCH --output=${LOG_DIR}/solvent_p${P}.o%j.%N
+#SBATCH --output=${LOG_DIR}/volmix_sweep.log
+#SBATCH --open-mode=append
 
 declare -xr OMPI_UNIT='core'
 declare -xr OMPI_MCA_btl='self,vader'
@@ -222,6 +227,7 @@ module load gcc/10.2.0
 module load openmpi/4.1.3
 module load python/3.8.12
 
+echo ""; echo "====== sol_p${P} | \$(date) | \$(hostname) ======"
 cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
 ./run_lammps.sh "solvent_pure" "${SOL_DATANAME}" "${PURE_INTERACTION}" \
     "${PURE_STEPS}" "0" "" "${P}"
@@ -240,13 +246,9 @@ HEREDOC
     POL_BATCH=$(mktemp /tmp/polymer_volmix_p${P}_XXXX.batch)
     NEXT_FROM=$END   # value at script-write time
 
-    # Build the optional next-batch trigger lines (expanded now, embedded literally)
-    if [ "$IS_LAST_IN_BATCH" = "yes" ] && [ "$NEXT_FROM" -lt "$TOTAL" ]; then
-        NEXT_BATCH_TRIGGER="echo \"Submitting next batch (--from ${NEXT_FROM})...\"
-bash \"${SCRIPT_DIR}/volmix_sweep.sh\" --from ${NEXT_FROM}"
-    else
-        NEXT_BATCH_TRIGGER=""
-    fi
+    # No next-batch trigger embedded in the job body — a launcher job is submitted
+    # from the login node below (after POL_JID is known), avoiding sbatch-from-compute issues.
+    NEXT_BATCH_TRIGGER=""
 
     cat > "$POL_BATCH" << HEREDOC
 #!/usr/bin/env bash
@@ -258,7 +260,8 @@ bash \"${SCRIPT_DIR}/volmix_sweep.sh\" --from ${NEXT_FROM}"
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=5:00:00
-#SBATCH --output=${LOG_DIR}/polymer_p${P}.o%j.%N
+#SBATCH --output=${LOG_DIR}/volmix_sweep.log
+#SBATCH --open-mode=append
 
 declare -xr OMPI_UNIT='core'
 declare -xr OMPI_MCA_btl='self,vader'
@@ -273,6 +276,7 @@ module load gcc/10.2.0
 module load openmpi/4.1.3
 module load python/3.8.12
 
+echo ""; echo "====== pol_p${P} | \$(date) | \$(hostname) ======"
 cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
 ./run_lammps.sh "polymer_pure" "${POL_DATANAME}" "${PURE_INTERACTION}" \
     "${PURE_STEPS}" "0" "" "${P}"
@@ -284,7 +288,32 @@ ${NEXT_BATCH_TRIGGER}
 HEREDOC
 
     POL_JID=$(sbatch --parsable --dependency=afterok:${SPLIT_JID} "$POL_BATCH")
-    echo "P=${P}: submitted polymer_pure         JID=${POL_JID}   (after ${SPLIT_JID})${IS_LAST_IN_BATCH:+ [triggers next batch]}"
+    echo "P=${P}: submitted polymer_pure         JID=${POL_JID}   (after ${SPLIT_JID})"
+
+    # If this is the last pipeline in the batch, submit a lightweight launcher job
+    # that depends on pol finishing and re-invokes this script for the next batch.
+    # Submitted from the login node here (avoids sbatch-from-compute-node issues).
+    if [ "$IS_LAST_IN_BATCH" = "yes" ] && [ "$NEXT_FROM" -lt "$TOTAL" ]; then
+        LAUNCH_BATCH=$(mktemp /tmp/volmix_launch_XXXX.batch)
+        cat > "$LAUNCH_BATCH" << HEREDOC
+#!/usr/bin/env bash
+#SBATCH --job-name=volmix_launch
+#SBATCH --partition=shared
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=1G
+#SBATCH --time=0:05:00
+#SBATCH --output=${LOG_DIR}/volmix_sweep.log
+#SBATCH --open-mode=append
+
+module reset
+bash "${SCRIPT_DIR}/volmix_sweep.sh" --from ${NEXT_FROM}
+HEREDOC
+        LAUNCH_JID=$(sbatch --parsable --dependency=afterok:${POL_JID} "$LAUNCH_BATCH")
+        echo "P=${P}: submitted next-batch launcher JID=${LAUNCH_JID}  (after ${POL_JID}, will submit --from ${NEXT_FROM})"
+    fi
 
     echo "--------------------------------------"
 done
