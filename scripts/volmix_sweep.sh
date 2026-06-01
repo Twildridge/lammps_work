@@ -9,9 +9,10 @@
 #
 # Pipeline per pressure:
 #   [1] slab_with_support   (600k steps, NPT at P*)
-#         → copies final_config to lammps_data/input_data/
+#         → copies final_config to lammps_data/slab_with_support/
 #   [2] split_gel.py        (splits polymer-only and solvent-only .data files)
-#         → writes both files to lammps_data/input_data/
+#         → polymer_only → lammps_data/polymer_pure/
+#         → solvent_only → lammps_data/solvent_pure/
 #   [3a] solvent_pure       (100k steps, NPT at same P*)
 #   [3b] polymer_pure       (100k steps, NPT at same P*)
 #         [3a] and [3b] run concurrently after [2]
@@ -34,8 +35,11 @@ PURE_INTERACTION="1.0_0.0"
 SLAB_STEPS=600000
 PURE_STEPS=100000
 
-INPUT_DATA_DIR="$HOME/Documents/lammps_data/input_data"
-MANIFEST_DIR="$HOME/Documents/lammps_data/sweep_manifest"
+LAMMPS_DATA="$HOME/Documents/lammps_data"
+SLAB_DATA_DIR="${LAMMPS_DATA}/slab_with_support"
+SOL_DATA_DIR="${LAMMPS_DATA}/solvent_pure"
+POL_DATA_DIR="${LAMMPS_DATA}/polymer_pure"
+MANIFEST_DIR="${LAMMPS_DATA}/sweep_manifest"
 LOG_DIR="$HOME/Documents/lammps_runs/volmix_sweep_logs"
 
 mkdir -p "$MANIFEST_DIR" "$LOG_DIR"
@@ -60,8 +64,8 @@ for P in "${PRESSURES[@]}"; do
     POL_DATANAME="final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_polymer_only"
 
     # Create a pressure-unique symlink for the input data file
-    SRC_DATA="${INPUT_DATA_DIR}/${BASE_DATANAME}.data"
-    LNK_DATA="${INPUT_DATA_DIR}/${DATANAME}.data"
+    SRC_DATA="${SLAB_DATA_DIR}/${BASE_DATANAME}.data"
+    LNK_DATA="${SLAB_DATA_DIR}/${DATANAME}.data"
     if [ ! -e "$LNK_DATA" ]; then
         ln -s "$SRC_DATA" "$LNK_DATA"
         echo "Created symlink: ${DATANAME}.data -> ${BASE_DATANAME}.data"
@@ -102,7 +106,7 @@ cd "${SCRIPT_DIR}" || exit 1
 ./run_lammps.sh "slab_with_support" "${DATANAME}" "${INTERACTION}" \
     "${SLAB_STEPS}" "0" "" "${P}"
 
-# Copy final config to input_data/ for the split step
+# Copy final config to slab_with_support/ for the split step
 WORK_DIR=\$(ls -dt "\$HOME/Documents/lammps_runs/slab_with_support_${DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
 if [ -z "\$WORK_DIR" ]; then
     echo "ERROR: Could not find slab work directory for ${DATANAME}"
@@ -115,8 +119,8 @@ if [ ! -f "\$FINAL_CONFIG" ]; then
     exit 1
 fi
 
-cp "\$FINAL_CONFIG" "${INPUT_DATA_DIR}/"
-echo "Copied final config to ${INPUT_DATA_DIR}/"
+cp "\$FINAL_CONFIG" "${SLAB_DATA_DIR}/"
+echo "Copied final config to ${SLAB_DATA_DIR}/"
 
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_slab.workdir"
 echo "Manifest written: ${MANIFEST_DIR}/p${P}_slab.workdir"
@@ -145,17 +149,20 @@ module reset
 module load gcc/10.2.0
 module load python/3.8.12
 
-INPUT_FILE="${INPUT_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}.data"
+INPUT_FILE="${SLAB_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}.data"
 if [ ! -f "\$INPUT_FILE" ]; then
     echo "ERROR: Input file not found: \$INPUT_FILE"
     exit 1
 fi
 
 echo "Running split_gel.py on \$INPUT_FILE"
-python3 "${SCRIPT_DIR}/split_gel.py" "\$INPUT_FILE" --output-dir "${INPUT_DATA_DIR}"
+python3 "${SCRIPT_DIR}/split_gel.py" "\$INPUT_FILE" \
+    --polymer-dir "${POL_DATA_DIR}" \
+    --solvent-dir "${SOL_DATA_DIR}"
 
 echo "Split complete. Output files:"
-ls -lh "${INPUT_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_"*.data
+ls -lh "${POL_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_polymer_only.data"
+ls -lh "${SOL_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_solvent_only.data"
 HEREDOC
 
     SPLIT_JID=$(sbatch --parsable --dependency=afterok:${SLAB_JID} "$SPLIT_BATCH")

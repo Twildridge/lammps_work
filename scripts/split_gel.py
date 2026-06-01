@@ -175,7 +175,20 @@ def write_data_file(path, title, box, atom_types_info, atoms, bonds=None):
 # Main splitting logic
 # ---------------------------------------------------------------------------
 
-def split_gel(input_path, output_stem=None):
+def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None):
+    """
+    Split a slab-with-support data file into polymer-only and solvent-only files.
+
+    Parameters
+    ----------
+    input_path    : path to the combined .data file
+    output_stem   : base stem for both outputs (overridden per-species below)
+    polymer_stem  : override stem for the polymer_only file (e.g. different directory)
+    solvent_stem  : override stem for the solvent_only file (e.g. different directory)
+
+    If polymer_stem / solvent_stem are None, output_stem is used for both.
+    If output_stem is also None, defaults to input path without extension.
+    """
     print(f"Reading: {input_path}")
     data = parse_data_file(input_path)
 
@@ -188,6 +201,12 @@ def split_gel(input_path, output_stem=None):
 
     if output_stem is None:
         output_stem = os.path.splitext(input_path)[0]
+
+    # Per-species stems (fall back to shared output_stem if not specified)
+    if polymer_stem is None:
+        polymer_stem = output_stem
+    if solvent_stem is None:
+        solvent_stem = output_stem
 
     orig_masses = {t: (m, c) for t, m, c in data['masses']}
 
@@ -219,7 +238,7 @@ def split_gel(input_path, output_stem=None):
 
     poly_type_info = [(t, *orig_masses.get(t, (1.0, ''))) for t in sorted(POLYMER_TYPES)]
 
-    poly_out = f"{output_stem}_polymer_only.data"
+    poly_out = f"{polymer_stem}_polymer_only.data"
     write_data_file(
         poly_out,
         title="LAMMPS data file — polymer only (crosslinks + chain beads)",
@@ -260,7 +279,7 @@ def split_gel(input_path, output_stem=None):
         for new_t in present_new_types
     ]
 
-    solv_out = f"{output_stem}_solvent_only.data"
+    solv_out = f"{solvent_stem}_solvent_only.data"
     write_data_file(
         solv_out,
         title="LAMMPS data file — solvent only (+ support/piston if present)",
@@ -293,18 +312,33 @@ if __name__ == "__main__":
     parser.add_argument("input", help="Input .data file path")
     parser.add_argument(
         "--output-dir", default=None,
-        help="Directory for output files (default: same directory as input)"
+        help="Directory for both output files (default: same directory as input)"
     )
     parser.add_argument(
         "--output-stem", default=None,
-        help="Override output filename stem (takes precedence over --output-dir)"
+        help="Override output filename stem for both files (takes precedence over --output-dir)"
+    )
+    parser.add_argument(
+        "--polymer-dir", default=None,
+        help="Directory for the polymer_only file (overrides --output-dir for polymer)"
+    )
+    parser.add_argument(
+        "--solvent-dir", default=None,
+        help="Directory for the solvent_only file (overrides --output-dir for solvent)"
     )
     args = parser.parse_args()
 
-    output_stem = args.output_stem
-    if output_stem is None:
-        basename = os.path.splitext(os.path.basename(args.input))[0]
-        out_dir  = args.output_dir if args.output_dir else os.path.dirname(args.input)
-        output_stem = os.path.join(out_dir, basename)
+    basename = os.path.splitext(os.path.basename(args.input))[0]
 
-    split_gel(args.input, output_stem)
+    # Shared stem (fallback for both species)
+    if args.output_stem is not None:
+        shared_stem = args.output_stem
+    else:
+        out_dir = args.output_dir if args.output_dir else os.path.dirname(args.input)
+        shared_stem = os.path.join(out_dir, basename)
+
+    # Per-species stems override shared stem when a specific dir is given
+    polymer_stem = os.path.join(args.polymer_dir, basename) if args.polymer_dir else None
+    solvent_stem = os.path.join(args.solvent_dir, basename) if args.solvent_dir else None
+
+    split_gel(args.input, shared_stem, polymer_stem=polymer_stem, solvent_stem=solvent_stem)

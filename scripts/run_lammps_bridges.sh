@@ -55,10 +55,10 @@ echo "Trajectory directory (scratch): $TRAJ_DIR"
 echo "======================================"
 
 # Copy or link the data file
-DATA_FILE_SOURCE="$HOME/Documents/lammps_data/input_data/${DATANAME}.data"
+DATA_FILE_SOURCE="$HOME/Documents/lammps_data/${FOLDER}/${DATANAME}.data"
 if [ ! -f "$DATA_FILE_SOURCE" ]; then
     echo "Error: Data file $DATA_FILE_SOURCE not found"
-    echo "Please ensure your .data file is in ~/Documents/lammps_data/input_data/"
+    echo "Please ensure your .data file is in ~/Documents/lammps_data/$FOLDER/"
     exit 1
 fi
 
