@@ -90,6 +90,8 @@ for P in "${PRESSURES[@]}"; do
 
     # Create a pressure-unique symlink for the input data file.
     # Note: symlink to a nonexistent source is allowed (source may not exist yet).
+    mkdir -p "$SLAB_DATA_DIR" "$SOL_DATA_DIR" "$POL_DATA_DIR"
+    echo "[DEBUG] Ensured data subdirs exist"
     SRC_DATA="${SLAB_DATA_DIR}/${BASE_DATANAME}.data"
     LNK_DATA="${SLAB_DATA_DIR}/${DATANAME}.data"
     if [ ! -e "$LNK_DATA" ]; then
