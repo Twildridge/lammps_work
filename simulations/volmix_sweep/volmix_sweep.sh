@@ -66,11 +66,8 @@ fi
 echo "[DEBUG] sbatch found at: $(command -v sbatch)"
 
 # 11 pressures: 1.0, 1.1, ..., 2.0
-PRESSURES=($(python3 -c "
-import numpy as np
-for p in np.arange(1.0, 2.1, 0.1):
-    print(f'{p:.1f}')
-"))
+# Hardcoded to avoid numpy dependency on the login node (no module loaded yet)
+PRESSURES=(1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0)
 echo "[DEBUG] Pressures array has ${#PRESSURES[@]} entries: ${PRESSURES[*]}"
 
 echo "======================================"
