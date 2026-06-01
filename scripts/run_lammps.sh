@@ -123,7 +123,7 @@ mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM
     -var nsteps_eq $NSTEPS_EQ \
     -var nsteps_prod $NSTEPS_PROD \
     -var press_target $PRESS_TARGET \
-    $([ "$SKIP_WIDOM" = "1" ] && echo "-var num_widom_curves 1 -var num_widom_frames 1") \
+    \
     -in $LAMMPS_FILE
 
 
