@@ -93,9 +93,10 @@ for (( i=FROM; i<END; i++ )); do
     SOL_DATANAME="final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_solvent_only"
     POL_DATANAME="final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_polymer_only"
 
-    # Symlink so run_lammps.sh finds the right input file by DATANAME
-    SRC_DATA="${SLAB_DATA_DIR}/${BASE_DATANAME}.data"
-    LNK_DATA="${SLAB_DATA_DIR}/${DATANAME}.data"
+    # Symlink pstar-specific DATANAME → base file so run_lammps.sh finds it in input_data/
+    INPUT_DATA_DIR="${LAMMPS_DATA}/input_data"
+    SRC_DATA="${INPUT_DATA_DIR}/${BASE_DATANAME}.data"
+    LNK_DATA="${INPUT_DATA_DIR}/${DATANAME}.data"
     if [ ! -e "$LNK_DATA" ] && [ ! -L "$LNK_DATA" ]; then
         ln -s "$SRC_DATA" "$LNK_DATA"
     fi
