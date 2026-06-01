@@ -28,9 +28,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPTS_DIR="$(cd "${SCRIPT_DIR}/../scripts" 2>/dev/null && pwd || echo "${SCRIPT_DIR}")"
-# SCRIPTS_DIR resolves to lammps_work/scripts/ whether this file lives in
-# simulations/ (one level up) or scripts/ itself (same dir, fallback).
+SCRIPTS_DIR="$(cd "${SCRIPT_DIR}/../../scripts" 2>/dev/null && pwd || echo "${SCRIPT_DIR}")"
+# SCRIPTS_DIR resolves to lammps_work/scripts/ from simulations/volmix_sweep/ (two levels up).
 
 BASE_DATANAME="slab_support_5beads_tall_rho04"
 INTERACTION="1.0_1.0"
@@ -43,9 +42,9 @@ SLAB_DATA_DIR="${LAMMPS_DATA}/slab_with_support"
 SOL_DATA_DIR="${LAMMPS_DATA}/solvent_pure"
 POL_DATA_DIR="${LAMMPS_DATA}/polymer_pure"
 MANIFEST_DIR="${LAMMPS_DATA}/sweep_manifest"
-LOG_DIR="$HOME/Documents/lammps_runs/volmix_sweep_logs"
+LOG_DIR="${SCRIPT_DIR}"  # SLURM logs land alongside this script in simulations/volmix_sweep/
 
-mkdir -p "$MANIFEST_DIR" "$LOG_DIR"
+mkdir -p "$MANIFEST_DIR"
 
 # 11 pressures: 1.0, 1.1, ..., 2.0
 PRESSURES=($(python3 -c "
