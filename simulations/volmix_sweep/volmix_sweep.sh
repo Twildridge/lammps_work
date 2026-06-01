@@ -78,7 +78,7 @@ for i in "${!PRESSURES[@]}"; do
     # Symlink so run_lammps.sh finds the right input file by DATANAME
     SRC_DATA="${SLAB_DATA_DIR}/${BASE_DATANAME}.data"
     LNK_DATA="${SLAB_DATA_DIR}/${DATANAME}.data"
-    if [ ! -e "$LNK_DATA" ]; then
+    if [ ! -e "$LNK_DATA" ] && [ ! -L "$LNK_DATA" ]; then
         ln -s "$SRC_DATA" "$LNK_DATA"
     fi
 
