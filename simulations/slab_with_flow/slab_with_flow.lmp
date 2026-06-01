@@ -323,6 +323,10 @@ unfix nvt_equil
 
 label label_after_phase0
 
+# run 0 initializes all computes so their values can be referenced in
+# variable formulas and print statements below (required when cont=1 skips
+# the minimize that previously served this purpose).
+run 0
 
 # ==========================================================================
 #    PHASE 0.5 (COMPRESSION ONLY): ISOTROPIC LANGEVIN + NPH

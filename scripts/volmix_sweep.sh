@@ -17,11 +17,13 @@
 #   [3b] polymer_pure       (100k steps, NPT at same P*)
 #         [3a] and [3b] run concurrently after [2]
 #
-# Concurrency: at most 3 pressure pipelines run simultaneously.
-# slab_p{n} is gated on afterok of sol_p{n-3} and pol_p{n-3}.
+# Batch submission: submits WINDOW=1 pipelines (12 jobs) at a time.
+# The last polymer job in each batch re-invokes this script with --from N
+# to submit the next batch automatically.
 #
-# Run from scripts/ on the Expanse login node:
-#   bash volmix_sweep.sh
+# Usage:
+#   bash volmix_sweep.sh              # start from P=1.0
+#   bash volmix_sweep.sh --from 6    # resume from index 6 (P=1.6)
 #
 # Job logs  → ~/Documents/lammps_runs/volmix_sweep_logs/
 # Manifests → ~/Documents/lammps_runs/sweep_manifest/
@@ -55,21 +57,37 @@ if ! command -v sbatch &>/dev/null; then
     exit 1
 fi
 
+# Parse --from N argument (defaults to 0)
+FROM=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --from) FROM="$2"; shift 2 ;;
+        *) echo "Unknown argument: $1"; exit 1 ;;
+    esac
+done
+
 PRESSURES=(1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0)
-WINDOW=3   # max concurrent pressure pipelines
+WINDOW=1
+TOTAL=${#PRESSURES[@]}
 
-# Track sol/pol JIDs in order so we can gate later pipelines on them
-SOL_JIDS=()
-POL_JIDS=()
+# Clamp END to array bounds
+END=$(( FROM + WINDOW ))
+if [ "$END" -gt "$TOTAL" ]; then END=$TOTAL; fi
+
+if [ "$FROM" -ge "$TOTAL" ]; then
+    echo "All pressures already submitted."
+    exit 0
+fi
 
 echo "======================================"
-echo "Volume of mixing sweep submission"
-echo "Pressures: ${PRESSURES[*]}"
-echo "Window: ${WINDOW} concurrent pipelines"
+echo "Volume of mixing sweep — batch submission"
+echo "Submitting indices ${FROM}–$((END-1)): ${PRESSURES[*]:$FROM:$((END-FROM))}"
+echo "Remaining after this batch: $((TOTAL - END)) pressure(s)"
 echo "======================================"
 
-for i in "${!PRESSURES[@]}"; do
+for (( i=FROM; i<END; i++ )); do
     P="${PRESSURES[$i]}"
+    IS_LAST_IN_BATCH=$([ "$i" -eq "$((END-1))" ] && echo "yes" || echo "no")
 
     DATANAME="${BASE_DATANAME}_pstar${P}"
     TOTSTEPS=$SLAB_STEPS
@@ -81,16 +99,6 @@ for i in "${!PRESSURES[@]}"; do
     LNK_DATA="${SLAB_DATA_DIR}/${DATANAME}.data"
     if [ ! -e "$LNK_DATA" ] && [ ! -L "$LNK_DATA" ]; then
         ln -s "$SRC_DATA" "$LNK_DATA"
-    fi
-
-    # ------------------------------------------------------------------
-    # Sliding-window gate: slab[i] waits for sol[i-WINDOW] and pol[i-WINDOW]
-    # ------------------------------------------------------------------
-    SLAB_DEP=""
-    if [ "$i" -ge "$WINDOW" ]; then
-        GATE_SOL="${SOL_JIDS[$((i - WINDOW))]}"
-        GATE_POL="${POL_JIDS[$((i - WINDOW))]}"
-        SLAB_DEP="--dependency=afterok:${GATE_SOL}:${GATE_POL}"
     fi
 
     # ------------------------------------------------------------------
@@ -128,7 +136,7 @@ cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
 ./run_lammps.sh "slab_with_support" "${DATANAME}" "${INTERACTION}" \
     "${SLAB_STEPS}" "0" "" "${P}"
 
-WORK_DIR=\$(ls -dt "\$HOME/Documents/lammps_runs/slab_with_support_${DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
+WORK_DIR=\$(ls -dt "\$HOME/Documents/lammps_runs/slab_with_support/slab_with_support_${DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
 if [ -z "\$WORK_DIR" ]; then
     echo "ERROR: Could not find slab work directory for ${DATANAME}"
     exit 1
@@ -144,9 +152,8 @@ cp "\$FINAL_CONFIG" "${SLAB_DATA_DIR}/"
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_slab.workdir"
 HEREDOC
 
-    # shellcheck disable=SC2086
-    SLAB_JID=$(sbatch --parsable $SLAB_DEP "$SLAB_BATCH")
-    echo "P=${P}: submitted slab_with_support  JID=${SLAB_JID}${SLAB_DEP:+  (gated on ${SLAB_DEP#--dependency=afterok:})}"
+    SLAB_JID=$(sbatch --parsable "$SLAB_BATCH")
+    echo "P=${P}: submitted slab_with_support  JID=${SLAB_JID}"
 
     # ------------------------------------------------------------------
     # Job 2: split_gel.py  (depends on slab)
@@ -219,7 +226,7 @@ cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
 ./run_lammps.sh "solvent_pure" "${SOL_DATANAME}" "${PURE_INTERACTION}" \
     "${PURE_STEPS}" "0" "" "${P}"
 
-WORK_DIR=\$(ls -dt "\$HOME/Documents/lammps_runs/solvent_pure_${SOL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
+WORK_DIR=\$(ls -dt "\$HOME/Documents/lammps_runs/solvent_pure/solvent_pure_${SOL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_solvent.workdir"
 HEREDOC
 
@@ -228,8 +235,19 @@ HEREDOC
 
     # ------------------------------------------------------------------
     # Job 3b: polymer_pure  (depends on split, concurrent with solvent_pure)
+    # If this is the last job in the batch, trigger next batch on completion.
     # ------------------------------------------------------------------
     POL_BATCH=$(mktemp /tmp/polymer_volmix_p${P}_XXXX.batch)
+    NEXT_FROM=$END   # value at script-write time
+
+    # Build the optional next-batch trigger lines (expanded now, embedded literally)
+    if [ "$IS_LAST_IN_BATCH" = "yes" ] && [ "$NEXT_FROM" -lt "$TOTAL" ]; then
+        NEXT_BATCH_TRIGGER="echo \"Submitting next batch (--from ${NEXT_FROM})...\"
+bash \"${SCRIPT_DIR}/volmix_sweep.sh\" --from ${NEXT_FROM}"
+    else
+        NEXT_BATCH_TRIGGER=""
+    fi
+
     cat > "$POL_BATCH" << HEREDOC
 #!/usr/bin/env bash
 #SBATCH --job-name=pol_p${P}
@@ -259,23 +277,23 @@ cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
 ./run_lammps.sh "polymer_pure" "${POL_DATANAME}" "${PURE_INTERACTION}" \
     "${PURE_STEPS}" "0" "" "${P}"
 
-WORK_DIR=\$(ls -dt "\$HOME/Documents/lammps_runs/polymer_pure_${POL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
+WORK_DIR=\$(ls -dt "\$HOME/Documents/lammps_runs/polymer_pure/polymer_pure_${POL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_polymer.workdir"
+
+${NEXT_BATCH_TRIGGER}
 HEREDOC
 
     POL_JID=$(sbatch --parsable --dependency=afterok:${SPLIT_JID} "$POL_BATCH")
-    echo "P=${P}: submitted polymer_pure         JID=${POL_JID}   (after ${SPLIT_JID})"
-
-    # Record JIDs for sliding-window gating of future pressures
-    SOL_JIDS+=("$SOL_JID")
-    POL_JIDS+=("$POL_JID")
+    echo "P=${P}: submitted polymer_pure         JID=${POL_JID}   (after ${SPLIT_JID})${IS_LAST_IN_BATCH:+ [triggers next batch]}"
 
     echo "--------------------------------------"
 done
 
 echo "======================================"
-echo "All jobs submitted."
+echo "Batch submitted: ${PRESSURES[*]:$FROM:$((END-FROM))}"
+if [ "$END" -lt "$TOTAL" ]; then
+    echo "Next batch (indices ${END}+) will auto-submit when this batch completes."
+fi
 echo "Monitor with: squeue -u \$USER"
 echo "Results manifest: ${MANIFEST_DIR}/"
-echo "Volume of mixing analysis: volume_of_mixing.ipynb"
 echo "======================================"
