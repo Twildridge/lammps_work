@@ -53,7 +53,13 @@ fi
 # Single timestamp captured once — both WORK_DIR and TRAJ_DIR use the same value
 # so the symlink traj_files -> TRAJ_DIR is never stale.
 RUN_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORK_DIR="$HOME/Documents/lammps_runs/${FOLDER}/${FOLDER}_${DATANAME}_${INTERACTION}_${RUN_TIMESTAMP}"
+# LAMMPS_RUNS_OVERRIDE: when set, all run dirs go flat into that folder (no /${FOLDER}/ subdir).
+# Used by volmix_sweep.sh to consolidate everything into lammps_runs/volmix_sweep/.
+if [ -n "${LAMMPS_RUNS_OVERRIDE:-}" ]; then
+    WORK_DIR="${LAMMPS_RUNS_OVERRIDE}/${FOLDER}_${DATANAME}_${INTERACTION}_${RUN_TIMESTAMP}"
+else
+    WORK_DIR="$HOME/Documents/lammps_runs/${FOLDER}/${FOLDER}_${DATANAME}_${INTERACTION}_${RUN_TIMESTAMP}"
+fi
 mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data,piston_data,permeation_data,displacement_data,pair_data,chemical_potential},output_plots}
 
 # Create trajectory directory in scratch and symlink to it

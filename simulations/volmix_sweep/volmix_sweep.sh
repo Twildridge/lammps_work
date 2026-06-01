@@ -9,24 +9,25 @@
 #
 # Pipeline per pressure:
 #   [1] slab_with_support   (600k steps, NPT at P*)
-#         → copies final_config to lammps_data/slab_with_support/
-#   [2] split_gel.py        (splits polymer-only and solvent-only .data files)
-#         → polymer_only → lammps_data/polymer_pure/
-#         → solvent_only → lammps_data/solvent_pure/
+#         → copies final_config to lammps_data/input_data/
+#   [2] split_gel.py        (writes polymer_only and solvent_only to lammps_data/input_data/)
 #   [3a] solvent_pure       (100k steps, NPT at same P*)
 #   [3b] polymer_pure       (100k steps, NPT at same P*)
 #         [3a] and [3b] run concurrently after [2]
 #
-# Batch submission: submits WINDOW=1 pipelines (12 jobs) at a time.
-# The last polymer job in each batch re-invokes this script with --from N
-# to submit the next batch automatically.
+# All run directories land in ~/Documents/lammps_runs/volmix_sweep/
+# (via LAMMPS_RUNS_OVERRIDE exported in each job script).
+#
+# Batch submission: WINDOW=1 pipeline at a time.  The last polymer job triggers
+# the next batch via a lightweight shared-partition launcher job.
 #
 # Usage:
 #   bash volmix_sweep.sh              # start from P=1.0
 #   bash volmix_sweep.sh --from 6    # resume from index 6 (P=1.6)
 #
-# Job logs  → ~/Documents/lammps_runs/volmix_sweep_logs/
-# Manifests → ~/Documents/lammps_runs/sweep_manifest/
+# SLURM log  → simulations/volmix_sweep/volmix_sweep.log  (this directory)
+# Run data   → ~/Documents/lammps_runs/volmix_sweep/
+# Manifests  → ~/Documents/lammps_runs/volmix_sweep/sweep_manifest/
 # =============================================================================
 
 set -euo pipefail
@@ -43,13 +44,15 @@ PURE_STEPS=100000
 
 LAMMPS_DATA="$HOME/Documents/lammps_data"
 LAMMPS_RUNS="$HOME/Documents/lammps_runs"
+INPUT_DATA_DIR="${LAMMPS_DATA}/input_data"
 SLAB_DATA_DIR="${LAMMPS_DATA}/slab_with_support"
-SOL_DATA_DIR="${LAMMPS_DATA}/solvent_pure"
-POL_DATA_DIR="${LAMMPS_DATA}/polymer_pure"
-MANIFEST_DIR="${LAMMPS_RUNS}/sweep_manifest"
-LOG_DIR="${LAMMPS_RUNS}/volmix_sweep_logs"
 
-mkdir -p "$MANIFEST_DIR" "$LOG_DIR" "$SLAB_DATA_DIR" "$SOL_DATA_DIR" "$POL_DATA_DIR"
+# All volmix run dirs, manifests, and the single SLURM log go here
+VOLMIX_RUNS="${LAMMPS_RUNS}/volmix_sweep"
+MANIFEST_DIR="${VOLMIX_RUNS}/sweep_manifest"
+LOG_DIR="${SCRIPT_DIR}"   # SLURM log lives alongside this script in simulations/volmix_sweep/
+
+mkdir -p "$VOLMIX_RUNS" "$MANIFEST_DIR" "$SLAB_DATA_DIR" "$INPUT_DATA_DIR"
 
 if ! command -v sbatch &>/dev/null; then
     echo "ERROR: sbatch not found. Are you on the Expanse login node?"
@@ -69,7 +72,6 @@ PRESSURES=(1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0)
 WINDOW=1
 TOTAL=${#PRESSURES[@]}
 
-# Clamp END to array bounds
 END=$(( FROM + WINDOW ))
 if [ "$END" -gt "$TOTAL" ]; then END=$TOTAL; fi
 
@@ -82,6 +84,8 @@ echo "======================================"
 echo "Volume of mixing sweep — batch submission"
 echo "Submitting indices ${FROM}–$((END-1)): ${PRESSURES[*]:$FROM:$((END-FROM))}"
 echo "Remaining after this batch: $((TOTAL - END)) pressure(s)"
+echo "Run data  → ${VOLMIX_RUNS}/"
+echo "SLURM log → ${LOG_DIR}/volmix_sweep.log"
 echo "======================================"
 
 for (( i=FROM; i<END; i++ )); do
@@ -94,7 +98,6 @@ for (( i=FROM; i<END; i++ )); do
     POL_DATANAME="final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_polymer_only"
 
     # Symlink pstar-specific DATANAME → base file so run_lammps.sh finds it in input_data/
-    INPUT_DATA_DIR="${LAMMPS_DATA}/input_data"
     SRC_DATA="${INPUT_DATA_DIR}/${BASE_DATANAME}.data"
     LNK_DATA="${INPUT_DATA_DIR}/${DATANAME}.data"
     if [ ! -e "$LNK_DATA" ] && [ ! -L "$LNK_DATA" ]; then
@@ -133,12 +136,13 @@ module load python/3.8.12
 
 echo ""; echo "====== slab_p${P} | \$(date) | \$(hostname) ======"
 export SKIP_WIDOM=1
+export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
 cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
 ./run_lammps.sh "slab_with_support" "${DATANAME}" "${INTERACTION}" \
     "${SLAB_STEPS}" "0" "" "${P}"
 
-WORK_DIR=\$(ls -dt "\$HOME/Documents/lammps_runs/slab_with_support/slab_with_support_${DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
+WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/slab_with_support_${DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
 if [ -z "\$WORK_DIR" ]; then
     echo "ERROR: Could not find slab work directory for ${DATANAME}"
     exit 1
@@ -186,12 +190,12 @@ if [ ! -f "\$INPUT_FILE" ]; then
 fi
 
 python3 "${SCRIPTS_DIR}/split_gel.py" "\$INPUT_FILE" \
-    --polymer-dir "${LAMMPS_DATA}/input_data" \
-    --solvent-dir "${LAMMPS_DATA}/input_data"
+    --polymer-dir "${INPUT_DATA_DIR}" \
+    --solvent-dir "${INPUT_DATA_DIR}"
 
 echo "Split complete:"
-ls -lh "${LAMMPS_DATA}/input_data/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_polymer_only.data"
-ls -lh "${LAMMPS_DATA}/input_data/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_solvent_only.data"
+ls -lh "${INPUT_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_polymer_only.data"
+ls -lh "${INPUT_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_solvent_only.data"
 HEREDOC
 
     SPLIT_JID=$(sbatch --parsable --dependency=afterok:${SLAB_JID} "$SPLIT_BATCH")
@@ -228,11 +232,13 @@ module load openmpi/4.1.3
 module load python/3.8.12
 
 echo ""; echo "====== sol_p${P} | \$(date) | \$(hostname) ======"
+export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
+
 cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
 ./run_lammps.sh "solvent_pure" "${SOL_DATANAME}" "${PURE_INTERACTION}" \
     "${PURE_STEPS}" "0" "" "${P}"
 
-WORK_DIR=\$(ls -dt "\$HOME/Documents/lammps_runs/solvent_pure/solvent_pure_${SOL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
+WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/solvent_pure_${SOL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_solvent.workdir"
 HEREDOC
 
@@ -241,14 +247,9 @@ HEREDOC
 
     # ------------------------------------------------------------------
     # Job 3b: polymer_pure  (depends on split, concurrent with solvent_pure)
-    # If this is the last job in the batch, trigger next batch on completion.
     # ------------------------------------------------------------------
     POL_BATCH=$(mktemp /tmp/polymer_volmix_p${P}_XXXX.batch)
-    NEXT_FROM=$END   # value at script-write time
-
-    # No next-batch trigger embedded in the job body — a launcher job is submitted
-    # from the login node below (after POL_JID is known), avoiding sbatch-from-compute issues.
-    NEXT_BATCH_TRIGGER=""
+    NEXT_FROM=$END
 
     cat > "$POL_BATCH" << HEREDOC
 #!/usr/bin/env bash
@@ -277,22 +278,20 @@ module load openmpi/4.1.3
 module load python/3.8.12
 
 echo ""; echo "====== pol_p${P} | \$(date) | \$(hostname) ======"
+export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
+
 cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
 ./run_lammps.sh "polymer_pure" "${POL_DATANAME}" "${PURE_INTERACTION}" \
     "${PURE_STEPS}" "0" "" "${P}"
 
-WORK_DIR=\$(ls -dt "\$HOME/Documents/lammps_runs/polymer_pure/polymer_pure_${POL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
+WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/polymer_pure_${POL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_polymer.workdir"
-
-${NEXT_BATCH_TRIGGER}
 HEREDOC
 
     POL_JID=$(sbatch --parsable --dependency=afterok:${SPLIT_JID} "$POL_BATCH")
     echo "P=${P}: submitted polymer_pure         JID=${POL_JID}   (after ${SPLIT_JID})"
 
-    # If this is the last pipeline in the batch, submit a lightweight launcher job
-    # that depends on pol finishing and re-invokes this script for the next batch.
-    # Submitted from the login node here (avoids sbatch-from-compute-node issues).
+    # Submit launcher for next batch (from login node, avoids sbatch-from-compute issues)
     if [ "$IS_LAST_IN_BATCH" = "yes" ] && [ "$NEXT_FROM" -lt "$TOTAL" ]; then
         LAUNCH_BATCH=$(mktemp /tmp/volmix_launch_XXXX.batch)
         cat > "$LAUNCH_BATCH" << HEREDOC
@@ -308,11 +307,12 @@ HEREDOC
 #SBATCH --output=${LOG_DIR}/volmix_sweep.log
 #SBATCH --open-mode=append
 
+echo ""; echo "====== launcher --from ${NEXT_FROM} | \$(date) | \$(hostname) ======"
 module reset
 bash "${SCRIPT_DIR}/volmix_sweep.sh" --from ${NEXT_FROM}
 HEREDOC
         LAUNCH_JID=$(sbatch --parsable --dependency=afterok:${POL_JID} "$LAUNCH_BATCH")
-        echo "P=${P}: submitted next-batch launcher JID=${LAUNCH_JID}  (after ${POL_JID}, will submit --from ${NEXT_FROM})"
+        echo "P=${P}: submitted next-batch launcher JID=${LAUNCH_JID}  (after ${POL_JID}, --from ${NEXT_FROM})"
     fi
 
     echo "--------------------------------------"
@@ -324,5 +324,5 @@ if [ "$END" -lt "$TOTAL" ]; then
     echo "Next batch (indices ${END}+) will auto-submit when this batch completes."
 fi
 echo "Monitor with: squeue -u \$USER"
-echo "Results manifest: ${MANIFEST_DIR}/"
+echo "Run data: ${VOLMIX_RUNS}/"
 echo "======================================"
