@@ -294,11 +294,11 @@ print "========================================"
 reset_timestep 0
 timestep ${timestep_prod}
 
+# ----- cont=1: skip minimize + Phase 0 NVT (data file already holds equilibrated config) -----
+if "${cont} == 1" then "jump SELF label_after_phase0"
+
 # Brief minimize to clean up any residual overlaps from wall insertion
 minimize 1.0e-4 1.0e-6 1000 10000
-
-# ----- cont=1: jump over Phase 0 NVT (positions/velocities come from data file) -----
-if "${cont} == 1" then "jump SELF label_after_phase0"
 
 # Setup trajectory
 dump traj_setup gel_system custom ${dump_freq_setup} &
@@ -1207,6 +1207,7 @@ if "${compression_mode} == 1" then &
 
 print ">>> Starting Phase 2 production run (nsteps = ${nsteps})"
 print ">>> compression_mode = ${compression_mode}"
+if "${cont} == 1" then "print '>>> Continuing after ${oldsteps} timesteps'"
 
 variable phase2_start equal $(step)
 
@@ -1243,8 +1244,10 @@ if "${compression_mode} == 0" then "unfix halt_perm"
 
 variable phase2_end   equal $(step)
 variable relax_steps  equal ${nsteps}-(${phase2_end}-${phase2_start})
-if "${compression_mode} == 1 && ${relax_steps} <= 0" then &
+if "${compression_mode} == 1 && ${cont} == 0 && ${relax_steps} <= 0" then &
     "print 'WARNING: COMPRESSION TARGET NOT REACHED WITHIN nsteps — NO RELAXATION STEPS REMAINING'"
+if "${compression_mode} == 1 && ${cont} == 1 && ${relax_steps} <= 0" then &
+    "print '>>> Continuation: piston held fixed for full ${nsteps} steps (no relaxation phase)'"
 if "${compression_mode} == 1" then "print '>>> Compression halted — relaxation steps remaining: ${relax_steps}'"
 if "${compression_mode} == 1" then "print '>>> Freezing piston and starting stress relaxation'"
 

@@ -415,6 +415,7 @@ fix avg_solv_density all ave/chunk ${nevery_density} ${nrepeat_density} ${nfreq_
 dump widom_traj all custom ${nfreq_widom_dump} traj_files/widom_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z
 
 # Production run
+if "${cont} == 1" then "print '>>> Continuing after ${oldsteps} timesteps'"
 fix remove_drift mobile momentum 1000 linear 1 1 1 angular
 run ${nsteps}
 
