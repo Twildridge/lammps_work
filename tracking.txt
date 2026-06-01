@@ -138,3 +138,4 @@ pure_polymer_5beads_8x8x8_1.0_0.0_0                                    38.40    
 isolated_slab_support_5beads_tall_rho04_1.0_1.0_500000_solvent_only_1.0_0.0_100000 52.76      51.21      116.56     58884      N/A
 isolated_slab_support_5beads_tall_rho04_1.0_1.0_500000_solvent_only_1.0_1.0_100000 52.76      51.21      116.56     58884      N/A
 isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_with_plates_1.0_1.0_100000 51.57      51.22      113.50     165922     N/A
+slab_support_5beads_tall_rho04_pstar1.0_1.0_1.0_600000                 61.20      61.20      131.80     293671     N/A            
