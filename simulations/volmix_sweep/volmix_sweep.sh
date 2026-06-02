@@ -139,8 +139,24 @@ export SKIP_WIDOM=1
 export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
 cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
-./run_lammps.sh "slab_with_support" "${DATANAME}" "${INTERACTION}" \
-    "${SLAB_STEPS}" "0" "" "${P}"
+
+# Retry loop — transient node OOM failures are retried up to 3 times.
+# Each attempt creates a fresh timestamped work dir; the glob below picks the latest.
+MAX_ATTEMPTS=3
+for attempt in \$(seq 1 \$MAX_ATTEMPTS); do
+    echo "slab_p${P}: attempt \$attempt of \$MAX_ATTEMPTS"
+    if ./run_lammps.sh "slab_with_support" "${DATANAME}" "${INTERACTION}" \
+            "${SLAB_STEPS}" "0" "" "${P}"; then
+        echo "slab_p${P}: succeeded on attempt \$attempt"
+        break
+    fi
+    if [ "\$attempt" -eq "\$MAX_ATTEMPTS" ]; then
+        echo "ERROR: slab_p${P} failed after \$MAX_ATTEMPTS attempts"
+        exit 1
+    fi
+    echo "slab_p${P}: attempt \$attempt failed, retrying in 60s..."
+    sleep 60
+done
 
 WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/slab_with_support_${DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
 if [ -z "\$WORK_DIR" ]; then
