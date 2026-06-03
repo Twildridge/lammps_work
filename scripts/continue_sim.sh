@@ -298,10 +298,12 @@ fi
 
 WIDOM_MIN_STEPS=500000
 WIDOM_TRAJ="${CONT_DIR}/traj_files/widom_${STEM}.lammpstrj"
-if [ -f "$WIDOM_TRAJ" ] && [ "$NSTEPS" -ge "$WIDOM_MIN_STEPS" ]; then
-    echo "Running cavity-biased Widom insertion..."
-elif [ -f "$WIDOM_TRAJ" ]; then
+if [ ! -f "$WIDOM_TRAJ" ]; then
+    echo "WARNING: Widom trajectory not found — skipping cavity_widom.py"
+elif [ "$NSTEPS" -lt "$WIDOM_MIN_STEPS" ]; then
     echo "Skipping cavity_widom.py — only ${NSTEPS} steps (need >=${WIDOM_MIN_STEPS} for decorrelated frames)."
+else
+    echo "Running cavity-biased Widom insertion..."
     if [ "$FOLDER" = "slab_with_flow" ]; then
         WIDOM_PEXT="1.8"; WIDOM_EXCL="2.0"; WIDOM_PISTON_EPS="0.0"
     else
@@ -309,7 +311,7 @@ elif [ -f "$WIDOM_TRAJ" ]; then
     fi
     WIDOM_EXCL_ARGS=()
     [ -n "$WIDOM_EXCL" ] && WIDOM_EXCL_ARGS=(--exclusion-buffer "$WIDOM_EXCL")
-    python "$SCRIPT_DIR/cavity_widom.py" \
+    python -u "$SCRIPT_DIR/cavity_widom.py" \
         --traj        "$WIDOM_TRAJ" \
         --out-dir     "output_files/chemical_potential" \
         --out-stem    "$STEM" \
@@ -323,8 +325,6 @@ elif [ -f "$WIDOM_TRAJ" ]; then
         --piston-eps  "$WIDOM_PISTON_EPS" \
         "${WIDOM_EXCL_ARGS[@]}"
     python "$SCRIPT_DIR/plot_lammps_log.py" "." "$STEM" --p-ext "$WIDOM_PEXT"
-else
-    echo "WARNING: Widom trajectory not found — skipping cavity_widom.py"
 fi
 
 python "$SCRIPT_DIR/plot_stress_profiles.py"  "." "$STEM" "$OLDSTEPS"
