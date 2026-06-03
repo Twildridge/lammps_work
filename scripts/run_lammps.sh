@@ -131,7 +131,11 @@ mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM
     -var press_target $PRESS_TARGET \
     \
     -in $LAMMPS_FILE
-
+LAMMPS_RC=$?
+if [ $LAMMPS_RC -ne 0 ]; then
+    echo "LAMMPS failed with exit code ${LAMMPS_RC} — skipping post-processing"
+    exit $LAMMPS_RC
+fi
 
 # Determine suffix based on 6th argument (type) - moved from 7th position
 SUFFIX=""
