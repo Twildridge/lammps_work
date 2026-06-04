@@ -94,6 +94,14 @@ for (( i=FROM; i<END; i++ )); do
 
     DATANAME="${BASE_DATANAME}_pstar${P}"
     TOTSTEPS=$SLAB_STEPS
+
+    # --- Adaptive rank packing -------------------------------------------
+    # High P* (iso-NPT) compresses the box: more atoms + fatter ghost shells
+    # per subdomain, which OOM-kills the densest rank at 128/node. Halve to
+    # 64/node above P*=1.5 (4x64=256 ranks for slab) so each rank gets ~2x
+    # RAM. Node count is unchanged, so inter-node communication stays put.
+    TPN=$(awk -v p="$P" 'BEGIN{print (p>=1.6)?64:128}')
+
     SOL_DATANAME="final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_solvent_only"
     POL_DATANAME="final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_polymer_only"
 
@@ -114,7 +122,7 @@ for (( i=FROM; i<END; i++ )); do
 #SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=4
-#SBATCH --ntasks-per-node=128
+#SBATCH --ntasks-per-node=${TPN}
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=5:00:00
@@ -227,7 +235,7 @@ HEREDOC
 #SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=128
+#SBATCH --ntasks-per-node=${TPN}
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=1:00:00
@@ -273,7 +281,7 @@ HEREDOC
 #SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=128
+#SBATCH --ntasks-per-node=${TPN}
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=5:00:00
