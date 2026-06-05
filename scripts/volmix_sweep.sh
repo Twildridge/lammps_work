@@ -321,12 +321,12 @@ HEREDOC
         cat > "$LAUNCH_BATCH" << HEREDOC
 #!/usr/bin/env bash
 #SBATCH --job-name=volmix_launch
-#SBATCH --partition=shared
+#SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
+#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=1G
+#SBATCH --mem=0
 #SBATCH --time=0:05:00
 #SBATCH --output=${LOG_DIR}/volmix_sweep.log
 #SBATCH --open-mode=append
