@@ -74,6 +74,7 @@ lammps_work/                    ← This git repository
 │   ├── permeation_analysis.ipynb            ← Flow profiles & pore pressure evolution (compression_mode=0)
 │   ├── flow_poroelasticity_analysis.ipynb   ← Older flow notebook (superseded by permeation_analysis)
 │   ├── shear_analysis.ipynb                 ← G, N1/N2, stress profiles (shear_slab output)
+│   ├── volume_of_mixing.ipynb               ← ΔV_mix(P*) across pressure sweep (syncs from Expanse via paramiko)
 │   ├── compression_analysis_backup.ipynb    ← Frozen snapshot of compression notebook
 │   ├── plot_lammps_log.py      ← Plot T, P, volume convergence from log.lammps (+ shear diagnostics)
 │   ├── plot_stress_profiles.py ← Plot stress and volume fraction profiles
@@ -530,6 +531,9 @@ Reads partial stress, volume fraction, and pore pressure data from a `slab_with_
 **`permeation_analysis.ipynb`**
 Reads volume fraction and stress profiles from `slab_with_flow` permeation runs (`compression_mode = 0`). Extracts pore-pressure profiles φ_p(z), φ_s(z), p_p(z), network stress σ'(z), and solvent flux. Plots each trajectory dump as a separate curve to show temporal evolution. Supersedes `flow_poroelasticity_analysis.ipynb` (still present for reference).
 
+**`volume_of_mixing.ipynb`**
+Computes ΔV_mix(P*) = V_mixed − V_pure_solvent − V_pure_polymer across the pressure sweep (P* = 1.0–2.0). Cell 2 syncs `box_dimensions_*.dat` files directly from Expanse via `paramiko` SFTP — no SSH keys required; prompts for password and TOTP code in the notebook. Subsequent cells parse the box dimension files, time-average volumes over the last 50% of each run, and plot both ΔV_mix and the individual component volumes vs P*. Requires `paramiko` (`pip install paramiko`). Data lands in `flow_data_local/volmix_sweep/p{P}/`.
+
 **`shear_analysis.ipynb`**
 Reads the bulk-region polymer stress tensor from a `shear_slab` Phase 3 production run and extracts G = ⟨σ_p,xz⟩ / γ_cm, plus normal stress differences N1 / N2, x-profile stress plots, and a polymer/solvent poroelastic decomposition. Inputs: `stress_tensor_polymer_*.dat`, `stress_profile_x_polymer_*.dat`, `shear_strain_*.dat`. Atoms within 3σ of either plate are excluded from all stress computes.
 
@@ -873,4 +877,4 @@ Full details are in `lj_units_cheat_sheet.md`. Key conversions for PEG/water:
 
 ---
 
-*Last updated: 2026-05-15. For questions, contact Dylan Pollard (pollard@ucsb.edu).*
+*Last updated: 2026-06-06. For questions, contact Dylan Pollard (pollard@ucsb.edu).*
