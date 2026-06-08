@@ -102,8 +102,9 @@ for (( i=FROM; i<END; i++ )); do
     # RAM. Node count is unchanged, so inter-node communication stays put.
     TPN=$(awk -v p="$P" 'BEGIN{print (p>=1.6)?64:128}')
 
-    SOL_DATANAME="final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_solvent_only"
-    POL_DATANAME="final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_polymer_only"
+    ISOLATED_DATANAME="isolated_${DATANAME}_${INTERACTION}_${TOTSTEPS}"
+    SOL_DATANAME="${ISOLATED_DATANAME}_solvent_only"
+    POL_DATANAME="${ISOLATED_DATANAME}_polymer_only"
 
     # Symlink pstar-specific DATANAME → base file so run_lammps.sh finds it in input_data/
     SRC_DATA="${INPUT_DATA_DIR}/${BASE_DATANAME}.data"
@@ -186,7 +187,56 @@ HEREDOC
     echo "P=${P}: submitted slab_with_support  JID=${SLAB_JID}"
 
     # ------------------------------------------------------------------
-    # Job 2: split_gel.py  (depends on slab)
+    # Job 2: isolate_gel.py  (depends on slab)
+    #   Strips bath solvent, support, piston → isolated_*.data
+    #   Output does NOT overwrite final_config_*.data
+    # ------------------------------------------------------------------
+    ISOLATE_BATCH=$(mktemp /tmp/isolate_volmix_p${P}_XXXX.batch)
+    cat > "$ISOLATE_BATCH" << HEREDOC
+#!/usr/bin/env bash
+#SBATCH --job-name=isolate_p${P}
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --time=0:30:00
+#SBATCH --output=${LOG_DIR}/volmix_sweep.log
+#SBATCH --open-mode=append
+
+module reset
+module load gcc/10.2.0
+module load python/3.8.12
+
+echo ""; echo "====== isolate_p${P} | \$(date) | \$(hostname) ======"
+FINAL_CONFIG="${SLAB_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}.data"
+ISOLATED_OUT="${SLAB_DATA_DIR}/${ISOLATED_DATANAME}.data"
+
+if [ ! -f "\$FINAL_CONFIG" ]; then
+    echo "ERROR: final_config not found: \$FINAL_CONFIG"
+    exit 1
+fi
+if [ -f "\$ISOLATED_OUT" ]; then
+    echo "WARNING: isolated file already exists, skipping: \$ISOLATED_OUT"
+    exit 0
+fi
+
+python3 "${SCRIPTS_DIR}/isolate_gel.py" \
+    --input  "\$FINAL_CONFIG" \
+    --output "\$ISOLATED_OUT"
+
+echo "Isolated gel written: \$ISOLATED_OUT"
+echo "\$ISOLATED_OUT" > "${MANIFEST_DIR}/p${P}_isolated.path"
+HEREDOC
+
+    ISOLATE_JID=$(sbatch --parsable --dependency=afterok:${SLAB_JID} "$ISOLATE_BATCH")
+    echo "P=${P}: submitted isolate_gel          JID=${ISOLATE_JID} (after ${SLAB_JID})"
+
+    # ------------------------------------------------------------------
+    # Job 3: split_gel.py  (depends on isolate; uses isolated_*.data)
+    #   Writes isolated_*_polymer_only.data and isolated_*_solvent_only.data
+    #   Does NOT touch final_config_*.data
     # ------------------------------------------------------------------
     SPLIT_BATCH=$(mktemp /tmp/split_volmix_p${P}_XXXX.batch)
     cat > "$SPLIT_BATCH" << HEREDOC
@@ -207,26 +257,26 @@ module load gcc/10.2.0
 module load python/3.8.12
 
 echo ""; echo "====== split_p${P} | \$(date) | \$(hostname) ======"
-INPUT_FILE="${SLAB_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}.data"
-if [ ! -f "\$INPUT_FILE" ]; then
-    echo "ERROR: Input file not found: \$INPUT_FILE"
+ISOLATED_FILE="${SLAB_DATA_DIR}/${ISOLATED_DATANAME}.data"
+if [ ! -f "\$ISOLATED_FILE" ]; then
+    echo "ERROR: Isolated file not found: \$ISOLATED_FILE"
     exit 1
 fi
 
-python3 "${SCRIPTS_DIR}/split_gel.py" "\$INPUT_FILE" \
+python3 "${SCRIPTS_DIR}/split_gel.py" "\$ISOLATED_FILE" \
     --polymer-dir "${INPUT_DATA_DIR}" \
     --solvent-dir "${INPUT_DATA_DIR}"
 
 echo "Split complete:"
-ls -lh "${INPUT_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_polymer_only.data"
-ls -lh "${INPUT_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_solvent_only.data"
+ls -lh "${INPUT_DATA_DIR}/${ISOLATED_DATANAME}_polymer_only.data"
+ls -lh "${INPUT_DATA_DIR}/${ISOLATED_DATANAME}_solvent_only.data"
 HEREDOC
 
-    SPLIT_JID=$(sbatch --parsable --dependency=afterok:${SLAB_JID} "$SPLIT_BATCH")
-    echo "P=${P}: submitted split_gel           JID=${SPLIT_JID}  (after ${SLAB_JID})"
+    SPLIT_JID=$(sbatch --parsable --dependency=afterok:${ISOLATE_JID} "$SPLIT_BATCH")
+    echo "P=${P}: submitted split_gel           JID=${SPLIT_JID}  (after ${ISOLATE_JID})"
 
     # ------------------------------------------------------------------
-    # Job 3a: solvent_pure  (depends on split)
+    # Job 4a: solvent_pure  (depends on split)
     # ------------------------------------------------------------------
     SOL_BATCH=$(mktemp /tmp/solvent_volmix_p${P}_XXXX.batch)
     cat > "$SOL_BATCH" << HEREDOC
@@ -270,7 +320,7 @@ HEREDOC
     echo "P=${P}: submitted solvent_pure         JID=${SOL_JID}   (after ${SPLIT_JID})"
 
     # ------------------------------------------------------------------
-    # Job 3b: polymer_pure  (depends on split, concurrent with solvent_pure)
+    # Job 4b: polymer_pure  (depends on split, concurrent with solvent_pure)
     # ------------------------------------------------------------------
     POL_BATCH=$(mktemp /tmp/polymer_volmix_p${P}_XXXX.batch)
     NEXT_FROM=$END
