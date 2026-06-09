@@ -1,7 +1,7 @@
 # ========== Compression Modulus Simulation — Plate-Driven (Isotropic) ==========
 # Input: isolated gel WITH six plates attached (from add_more_plates_to_gel.ipynb).
 # Atom types: 1=polymer, 2=crosslinker, 3=solvent, 4=plate
-# Bond types:  1=FENE (polymer-polymer), 2=harmonic (plate-polymer, k=30, r0=1)
+# Bond types:  1=FENE (polymer-polymer only; plates interact via WCA, no bonds)
 #
 # Compression method: fix move linear on all six plate groups simultaneously.
 #   Top   plate (+z face): vz = -vcompress_z   Bot   plate (-z face): vz = +vcompress_z
@@ -107,7 +107,7 @@ atom_style molecular
 atom_modify map array
 
 pair_style lj/cut 1.122
-bond_style hybrid fene harmonic
+bond_style fene
 
 read_data data_files/${dataname}.data nocoeff
 
@@ -160,8 +160,7 @@ pair_coeff 2 4 1.0 ${sigma} 1.122             # crosslinker-plate WCA
 pair_coeff 3 4 1.0 ${sigma} 1.122             # solvent-plate WCA
 
 # Bond coefficients
-bond_coeff 1 fene     30.0 1.5 1.0 1.0   # polymer-polymer FENE (Kremer-Grest)
-bond_coeff 2 harmonic 30.0 1.0            # plate-polymer harmonic (k=30, r0=1)
+bond_coeff 1 30.0 1.5 1.0 1.0   # polymer-polymer FENE (Kremer-Grest)
 
 special_bonds fene
 neigh_modify delay 0 every 1 check yes
