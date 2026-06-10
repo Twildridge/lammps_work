@@ -22,14 +22,35 @@ Output atom types
 """
 
 import argparse
-import numpy as np
+
+try:
+    import numpy as np
+    _NUMPY_AVAILABLE = True
+except ImportError:
+    _NUMPY_AVAILABLE = False
+    print("WARNING: numpy not available — using pure-Python fallback (no rotation)")
 
 try:
     from scipy.spatial import ConvexHull
     _SCIPY_AVAILABLE = True
 except ImportError:
     _SCIPY_AVAILABLE = False
-    print("WARNING: scipy not available — skipping slab rotation (bounding box will be axis-aligned)")
+
+
+# ---------------------------------------------------------------------------
+# Pure-Python percentile (matches numpy's linear interpolation default)
+# ---------------------------------------------------------------------------
+def _percentile(data, pct):
+    s = sorted(data)
+    n = len(s)
+    if n == 0:
+        raise ValueError("Empty sequence for percentile")
+    idx = (pct / 100.0) * (n - 1)
+    lo = int(idx)
+    hi = lo + 1
+    if hi >= n:
+        return s[-1]
+    return s[lo] * (1 - (idx - lo)) + s[hi] * (idx - lo)
 
 
 # ---------------------------------------------------------------------------
@@ -67,8 +88,8 @@ def find_min_bounding_rect_angle(hull_points):
 
 
 def rotate_mobile_atoms(atoms):
-    if not _SCIPY_AVAILABLE:
-        print("  Skipping rotation (scipy unavailable) — using axis-aligned bounding box")
+    if not (_NUMPY_AVAILABLE and _SCIPY_AVAILABLE):
+        print("  Skipping rotation (numpy/scipy unavailable) — using axis-aligned bounding box")
         return atoms
     poly = [a for a in atoms if a['type'] in POLYMER_TYPES]
     if not poly:
@@ -89,12 +110,16 @@ def rotate_mobile_atoms(atoms):
 
 def find_gel_extent(atoms, clearance, percentile=0.1):
     poly = [a for a in atoms if a['type'] in POLYMER_TYPES]
-    xs = np.array([a['x'] for a in poly])
-    ys = np.array([a['y'] for a in poly])
-    zs = np.array([a['z'] for a in poly])
-    xmin, xmax = np.percentile(xs, percentile),     np.percentile(xs, 100-percentile)
-    ymin, ymax = np.percentile(ys, percentile),     np.percentile(ys, 100-percentile)
-    zmin, zmax = np.percentile(zs, percentile),     np.percentile(zs, 100-percentile)
+    xs = [a['x'] for a in poly]
+    ys = [a['y'] for a in poly]
+    zs = [a['z'] for a in poly]
+    if _NUMPY_AVAILABLE:
+        pct = lambda arr, p: float(np.percentile(arr, p))
+    else:
+        pct = _percentile
+    xmin, xmax = pct(xs, percentile),     pct(xs, 100-percentile)
+    ymin, ymax = pct(ys, percentile),     pct(ys, 100-percentile)
+    zmin, zmax = pct(zs, percentile),     pct(zs, 100-percentile)
     print(f"  Polymer extent  x: {xmin:.2f}–{xmax:.2f}  "
           f"y: {ymin:.2f}–{ymax:.2f}  z: {zmin:.2f}–{zmax:.2f}")
     return dict(xmin=xmin-clearance, xmax=xmax+clearance,
