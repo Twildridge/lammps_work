@@ -25,7 +25,7 @@
 #   bash volmix_sweep.sh              # start from P=1.0
 #   bash volmix_sweep.sh --from 6    # resume from index 6 (P=1.6)
 #
-# SLURM log  → scripts/volmix_sweep.log  (this directory)
+# SLURM log  → simulations/volmix_sweep/volmix_sweep_YYYYMMDD_HHMMSS.log  (new file per run)
 # Run data   → ~/Documents/lammps_runs/volmix_sweep/
 # Manifests  → ~/Documents/lammps_runs/volmix_sweep/sweep_manifest/
 # =============================================================================
@@ -33,8 +33,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPTS_DIR="$(cd "${SCRIPT_DIR}/../scripts" 2>/dev/null && pwd || echo "${SCRIPT_DIR}")"
-# SCRIPTS_DIR resolves to lammps_work/scripts/ (one level up, or this dir itself as fallback)
+SCRIPTS_DIR="$(cd "${SCRIPT_DIR}/../../scripts" 2>/dev/null && pwd || echo "${SCRIPT_DIR}")"
+# SCRIPTS_DIR resolves to lammps_work/scripts/ (two levels up from simulations/volmix_sweep/)
 
 BASE_DATANAME="slab_support_5beads_tall_rho04"
 INTERACTION="1.0_1.0"
@@ -53,6 +53,10 @@ MANIFEST_DIR="${VOLMIX_RUNS}/sweep_manifest"
 LOG_DIR="${SCRIPT_DIR}"   # SLURM log lives alongside this script in simulations/volmix_sweep/
 
 mkdir -p "$VOLMIX_RUNS" "$MANIFEST_DIR" "$SLAB_DATA_DIR" "$INPUT_DATA_DIR"
+
+# Unique log file per sweep run so reruns never intermix
+SWEEP_TS="$(date +%Y%m%d_%H%M%S)"
+SWEEP_LOG="${LOG_DIR}/volmix_sweep_${SWEEP_TS}.log"
 
 if ! command -v sbatch &>/dev/null; then
     echo "ERROR: sbatch not found. Are you on the Expanse login node?"
@@ -85,7 +89,7 @@ echo "Volume of mixing sweep — batch submission"
 echo "Submitting indices ${FROM}–$((END-1)): ${PRESSURES[*]:$FROM:$((END-FROM))}"
 echo "Remaining after this batch: $((TOTAL - END)) pressure(s)"
 echo "Run data  → ${VOLMIX_RUNS}/"
-echo "SLURM log → ${LOG_DIR}/volmix_sweep.log"
+echo "SLURM log → ${SWEEP_LOG}"
 echo "======================================"
 
 for (( i=FROM; i<END; i++ )); do
@@ -127,8 +131,7 @@ for (( i=FROM; i<END; i++ )); do
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=5:00:00
-#SBATCH --output=${LOG_DIR}/volmix_sweep.log
-#SBATCH --open-mode=append
+#SBATCH --output=${SWEEP_LOG}
 
 declare -xr OMPI_UNIT='core'
 declare -xr OMPI_MCA_btl='self,vader'
@@ -147,14 +150,12 @@ echo ""; echo "====== slab_p${P} | \$(date) | \$(hostname) ======"
 export SKIP_WIDOM=1
 export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
-cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
-
 # Retry loop — transient node OOM failures are retried up to 3 times.
 # Each attempt creates a fresh timestamped work dir; the glob below picks the latest.
 MAX_ATTEMPTS=6
 for attempt in \$(seq 1 \$MAX_ATTEMPTS); do
     echo "slab_p${P}: attempt \$attempt of \$MAX_ATTEMPTS"
-    if ./run_lammps.sh "slab_with_support" "${DATANAME}" "${INTERACTION}" \
+    if bash "${SCRIPTS_DIR}/run_lammps.sh" "slab_with_support" "${DATANAME}" "${INTERACTION}" \
             "${SLAB_STEPS}" "0" "" "${P}"; then
         echo "slab_p${P}: succeeded on attempt \$attempt"
         break
@@ -202,8 +203,7 @@ HEREDOC
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --time=0:30:00
-#SBATCH --output=${LOG_DIR}/volmix_sweep.log
-#SBATCH --open-mode=append
+#SBATCH --output=${SWEEP_LOG}
 
 module reset
 module load gcc/10.2.0
@@ -249,8 +249,7 @@ HEREDOC
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --time=0:30:00
-#SBATCH --output=${LOG_DIR}/volmix_sweep.log
-#SBATCH --open-mode=append
+#SBATCH --output=${SWEEP_LOG}
 
 module reset
 module load gcc/10.2.0
@@ -289,8 +288,7 @@ HEREDOC
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=1:00:00
-#SBATCH --output=${LOG_DIR}/volmix_sweep.log
-#SBATCH --open-mode=append
+#SBATCH --output=${SWEEP_LOG}
 
 declare -xr OMPI_UNIT='core'
 declare -xr OMPI_MCA_btl='self,vader'
@@ -308,8 +306,7 @@ module load python/3.8.12
 echo ""; echo "====== sol_p${P} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
-cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
-./run_lammps.sh "solvent_pure" "${SOL_DATANAME}" "${PURE_INTERACTION}" \
+bash "${SCRIPTS_DIR}/run_lammps.sh" "solvent_pure" "${SOL_DATANAME}" "${PURE_INTERACTION}" \
     "${PURE_STEPS}" "0" "" "${P}"
 
 WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/solvent_pure_${SOL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
@@ -335,8 +332,7 @@ HEREDOC
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=5:00:00
-#SBATCH --output=${LOG_DIR}/volmix_sweep.log
-#SBATCH --open-mode=append
+#SBATCH --output=${SWEEP_LOG}
 
 declare -xr OMPI_UNIT='core'
 declare -xr OMPI_MCA_btl='self,vader'
@@ -354,8 +350,7 @@ module load python/3.8.12
 echo ""; echo "====== pol_p${P} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
-cd "${SCRIPTS_DIR}" || { echo "ERROR: cd to SCRIPTS_DIR failed"; exit 1; }
-./run_lammps.sh "polymer_pure" "${POL_DATANAME}" "${PURE_INTERACTION}" \
+bash "${SCRIPTS_DIR}/run_lammps.sh" "polymer_pure" "${POL_DATANAME}" "${PURE_INTERACTION}" \
     "${PURE_STEPS}" "0" "" "${P}"
 
 WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/polymer_pure_${POL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
@@ -378,8 +373,7 @@ HEREDOC
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=0:05:00
-#SBATCH --output=${LOG_DIR}/volmix_sweep.log
-#SBATCH --open-mode=append
+#SBATCH --output=${SWEEP_LOG}
 
 echo ""; echo "====== launcher --from ${NEXT_FROM} | \$(date) | \$(hostname) ======"
 module reset
