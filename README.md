@@ -57,6 +57,7 @@ lammps_work/                    ← This git repository
 │   ├── run_lammps_pod_old.sh   ← Legacy Pod runner (kept for reference)
 │   ├── build_lammps.sh         ← One-shot LAMMPS build script (Expanse-style cmake)
 │   ├── git_sync.sh             ← One-command GitHub sync (MacBook + clusters)
+│   ├── isolate_gel.py          ← CLI: strip bath solvent/walls from slab final_config (used by volmix_sweep)
 │   ├── add_walls_to_slab.ipynb         ← Build slab data file (no angles)
 │   ├── add_walls_with_angles.ipynb     ← Build slab data file (with angles)
 │   ├── slab_with_support.ipynb         ← Build basic slab geometry
@@ -74,7 +75,7 @@ lammps_work/                    ← This git repository
 │   ├── permeation_analysis.ipynb            ← Flow profiles & pore pressure evolution (compression_mode=0)
 │   ├── flow_poroelasticity_analysis.ipynb   ← Older flow notebook (superseded by permeation_analysis)
 │   ├── shear_analysis.ipynb                 ← G, N1/N2, stress profiles (shear_slab output)
-│   ├── volume_of_mixing.ipynb               ← ΔV_mix(P*) across pressure sweep (syncs from Expanse via paramiko)
+│   ├── volume_of_mixing.ipynb               ← ΔV_mix(P*) and φ(P*) across pressure sweep (syncs from Expanse via paramiko; requires isolated_* data files)
 │   ├── compression_analysis_backup.ipynb    ← Frozen snapshot of compression notebook
 │   ├── plot_lammps_log.py      ← Plot T, P, volume convergence from log.lammps (+ shear diagnostics)
 │   ├── plot_stress_profiles.py ← Plot stress and volume fraction profiles
