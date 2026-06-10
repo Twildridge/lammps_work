@@ -23,7 +23,13 @@ Output atom types
 
 import argparse
 import numpy as np
-from scipy.spatial import ConvexHull
+
+try:
+    from scipy.spatial import ConvexHull
+    _SCIPY_AVAILABLE = True
+except ImportError:
+    _SCIPY_AVAILABLE = False
+    print("WARNING: scipy not available — skipping slab rotation (bounding box will be axis-aligned)")
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +67,9 @@ def find_min_bounding_rect_angle(hull_points):
 
 
 def rotate_mobile_atoms(atoms):
+    if not _SCIPY_AVAILABLE:
+        print("  Skipping rotation (scipy unavailable) — using axis-aligned bounding box")
+        return atoms
     poly = [a for a in atoms if a['type'] in POLYMER_TYPES]
     if not poly:
         raise ValueError("No polymer atoms found in input file.")
