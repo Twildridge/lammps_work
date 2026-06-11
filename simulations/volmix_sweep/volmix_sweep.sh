@@ -229,13 +229,61 @@ python3 "${SCRIPTS_DIR}/isolate_gel.py" \
 
 echo "Isolated gel written: \$ISOLATED_OUT"
 echo "\$ISOLATED_OUT" > "${MANIFEST_DIR}/p${P}_isolated.path"
+
+# Symlink isolated file into input_data/ so run_lammps.sh can find it for gel_mixed
+ln -sf "\$ISOLATED_OUT" "${INPUT_DATA_DIR}/${ISOLATED_DATANAME}.data"
+echo "Symlinked: ${INPUT_DATA_DIR}/${ISOLATED_DATANAME}.data"
 HEREDOC
 
     ISOLATE_JID=$(sbatch --parsable --dependency=afterok:${SLAB_JID} "$ISOLATE_BATCH")
     echo "P=${P}: submitted isolate_gel          JID=${ISOLATE_JID} (after ${SLAB_JID})"
 
     # ------------------------------------------------------------------
-    # Job 3: split_gel.py  (depends on isolate; uses isolated_*.data)
+    # Job 3a: gel_mixed  (depends on isolate; runs isolated gel at NPT P*)
+    #   Provides V_mix = equilibrium volume of gel + internal solvent.
+    #   Runs concurrently with split/solvent/polymer.
+    # ------------------------------------------------------------------
+    GEL_BATCH=$(mktemp /tmp/gel_volmix_p${P}_XXXX.batch)
+    cat > "$GEL_BATCH" << HEREDOC
+#!/usr/bin/env bash
+#SBATCH --job-name=gel_p${P}
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=${TPN}
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=1:00:00
+#SBATCH --output=${SWEEP_LOG}
+
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+declare -xir OMP_NUM_THREADS="\${SLURM_CPUS_PER_TASK}"
+
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+echo ""; echo "====== gel_p${P} | \$(date) | \$(hostname) ======"
+export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
+
+bash "${SCRIPTS_DIR}/run_lammps.sh" "gel_mixed" "${ISOLATED_DATANAME}" "${INTERACTION}" \
+    "${PURE_STEPS}" "0" "" "${P}"
+
+WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/gel_mixed_${ISOLATED_DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
+echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_gel_mixed.workdir"
+HEREDOC
+
+    GEL_JID=$(sbatch --parsable --dependency=afterok:${ISOLATE_JID} "$GEL_BATCH")
+    echo "P=${P}: submitted gel_mixed            JID=${GEL_JID}   (after ${ISOLATE_JID})"
+
+    # ------------------------------------------------------------------
+    # Job 3c: split_gel.py  (depends on isolate; uses isolated_*.data)
     #   Writes isolated_*_polymer_only.data and isolated_*_solvent_only.data
     #   Does NOT touch final_config_*.data
     # ------------------------------------------------------------------
@@ -276,7 +324,7 @@ HEREDOC
     echo "P=${P}: submitted split_gel           JID=${SPLIT_JID}  (after ${ISOLATE_JID})"
 
     # ------------------------------------------------------------------
-    # Job 4a: solvent_pure  (depends on split)
+    # Job 4a: solvent_pure  (depends on split; runs concurrently with gel_mixed)
     # ------------------------------------------------------------------
     SOL_BATCH=$(mktemp /tmp/solvent_volmix_p${P}_XXXX.batch)
     cat > "$SOL_BATCH" << HEREDOC
