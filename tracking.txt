@@ -32,7 +32,10 @@ isolated_slab_support_5beads_tall_rho04_pstar1.6_1.0_1.0_600000_solvent_only_1.0
 isolated_slab_support_5beads_tall_rho04_pstar1.9_1.0_1.0_600000_solvent_only_1.0_0.0_100000 51.80      50.90      111.02     77368      1:38
 isolated_slab_support_5beads_tall_rho04_pstar2.0_1.0_1.0_600000_solvent_only_1.0_0.0_100000 52.19      50.84      111.95     82038      1:44
 isolated_slab_support_5beads_tall_rho04_pstar1.0_1.0_1.0_600000_1.0_1.0_100000 51.69      51.98      116.68     153952     1:59
+isolated_slab_support_5beads_tall_rho04_pstar1.1_1.0_1.0_600000_1.0_1.0_100000 51.96      51.92      114.32     156158     2:01
+isolated_slab_support_5beads_tall_rho04_pstar1.4_1.0_1.0_600000_1.0_1.0_100000 51.71      52.01      114.14     165959     2:09
 isolated_slab_support_5beads_tall_rho04_pstar1.5_1.0_1.0_600000_1.0_1.0_100000 51.52      51.74      114.08     167977     2:11
+isolated_slab_support_5beads_tall_rho04_pstar1.2_1.0_1.0_600000_1.0_1.0_100000 54.99      52.17      115.20     168638     2:11
 slab_support_5beads_tall_rho02_1.0_1.2_50000                           55.80      55.80      131.80     178287     2:15
 isolated_slab_support_5beads_tall_rho04_pstar1.3_1.0_1.0_600000_1.0_1.0_100000 55.36      56.14      114.28     182261     2:19
 slab_support_5beads_tall_rho02_1.0_1.0_50000                           55.80      55.80      131.80     178287     2:51
@@ -73,7 +76,7 @@ final_config_slab_support_5beads_tall_rho04_1.0_1.0_500000_solvent_only_1.0_0.0_
 isolated_slab_support_5beads_tall_rho04_pstar1.7_1.0_1.0_600000_polymer_only_1.0_0.0_100000 51.29      51.20      112.05     95826      7:00
 walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_30001     77.27      77.27      132.76     1152000    7:08
 isolated_slab_support_5beads_tall_rho04_pstar1.8_1.0_1.0_600000_polymer_only_1.0_0.0_100000 51.13      50.81      111.97     95823      7:09
-isolated_slab_support_5beads_tall_rho04_pstar1.6_1.0_1.0_600000_polymer_only_1.0_0.0_100000 53.53      52.42      113.00     95807      7:09           
+isolated_slab_support_5beads_tall_rho04_pstar1.6_1.0_1.0_600000_polymer_only_1.0_0.0_100000 53.53      52.42      113.00     95807      7:09
 slab_support_5beads_10x10x5_rho6_extra_padding43_1.5_1.4_20000         87.00      87.00      55.50      547168     7:10
 slab_support_5beads_tall_rho04_1.2_1.0_100000                          57.60      57.60      131.80     271124     7:12
 isolated_slab_support_5beads_tall_rho04_pstar2.0_1.0_1.0_600000_polymer_only_1.0_0.0_100000 52.19      50.84      111.95     95804      7:12
