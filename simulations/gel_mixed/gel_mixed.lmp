@@ -98,15 +98,36 @@ thermo ${thermo_freq}
 
 
 # =====================================================================
-#   STAGE 0 — Gentle Langevin NVT to bring isolated gel to T*=1.0
+#   STAGE 0a — Harmonic pre-relaxation (WCA + harmonic bonds, NVE/limit)
 #
-#   The gel is already equilibrated in the slab, so a short NVT at
-#   T*=1.0 is sufficient before NPT.
+#   The isolated gel can have polymer bonds stretched beyond FENE r0=1.5
+#   due to periodic-image atoms being remapped into a smaller box.
+#   Using harmonic bonds (no divergence) at very low T with tiny max
+#   displacement relaxes those bonds safely before FENE is activated.
 # =====================================================================
+bond_style harmonic
+bond_coeff 1 30.0 0.96
+
 reset_timestep 0
-velocity mobile create ${temp_target} 48291 mom yes rot no
-fix gentle mobile nve/limit 0.05
-fix lang   mobile langevin ${temp_target} ${temp_target} ${tdamp} 904297
+velocity mobile create 0.01 48291 mom yes rot no
+fix pre  mobile nve/limit 0.01
+fix lang mobile langevin 0.01 0.01 ${tdamp} 904297
+timestep ${timestep_gentle}
+run 10000
+unfix pre
+unfix lang
+
+
+
+# =====================================================================
+#   STAGE 0b — Switch to FENE, gentle Langevin NVT ramp to T*=1.0
+# =====================================================================
+bond_style fene
+bond_coeff 1 30.0 1.5 1.0 1.0
+
+reset_timestep 0
+fix gentle mobile nve/limit 0.01
+fix lang   mobile langevin 0.01 ${temp_target} ${tdamp} 904297
 timestep ${timestep_gentle}
 run ${nsteps_gentle}
 unfix gentle
