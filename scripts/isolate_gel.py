@@ -36,6 +36,8 @@ try:
 except ImportError:
     _SCIPY_AVAILABLE = False
 
+from collections import deque
+
 
 # ---------------------------------------------------------------------------
 # Pure-Python percentile (matches numpy's linear interpolation default)
@@ -67,6 +69,76 @@ BOX_CLEARANCE = 0.2
 # ---------------------------------------------------------------------------
 # Geometry helpers
 # ---------------------------------------------------------------------------
+def unwrap_atoms_via_bonds(atoms, bonds, box):
+    """
+    Unwrap polymer atoms using BFS over the bond graph so that the
+    entire gel network lands in one continuous piece (no periodic splits).
+    Then fold solvent atoms to the nearest image of the polymer COM.
+
+    Without this step, a gel that straddles a periodic boundary (common
+    at lower pressures / larger boxes) produces a convex hull that spans
+    the whole simulation box, corrupting the MABR angle and the gel-extent
+    bounding box — leaving the gel rotated and retaining bath solvent.
+    """
+    if not _NUMPY_AVAILABLE:
+        print("  Skipping PBC unwrap (numpy unavailable)")
+        return atoms
+
+    lx = box['xhi'] - box['xlo']
+    ly = box['yhi'] - box['ylo']
+    lz = box['zhi'] - box['zlo']
+
+    atom_by_id   = {a['id']: a for a in atoms}
+    polymer_ids  = {a['id'] for a in atoms if a['type'] in POLYMER_TYPES}
+
+    # Build adjacency list for polymer only
+    adj = {pid: [] for pid in polymer_ids}
+    for b in bonds:
+        a1, a2 = b['atom1'], b['atom2']
+        if a1 in polymer_ids and a2 in polymer_ids:
+            adj[a1].append(a2)
+            adj[a2].append(a1)
+
+    # BFS: place each bonded neighbour in the same image as its parent
+    visited = set()
+    seed    = next(iter(polymer_ids))
+    queue   = deque([seed])
+    visited.add(seed)
+
+    while queue:
+        curr_id = queue.popleft()
+        curr    = atom_by_id[curr_id]
+        for nb_id in adj[curr_id]:
+            if nb_id in visited:
+                continue
+            nb = atom_by_id[nb_id]
+            nb['x'] -= lx * round((nb['x'] - curr['x']) / lx)
+            nb['y'] -= ly * round((nb['y'] - curr['y']) / ly)
+            nb['z'] -= lz * round((nb['z'] - curr['z']) / lz)
+            visited.add(nb_id)
+            queue.append(nb_id)
+
+    if len(visited) < len(polymer_ids):
+        print(f"  WARNING: bond graph has {len(polymer_ids) - len(visited)} "
+              f"disconnected polymer atoms — they keep their wrapped positions")
+
+    # Fold solvent to nearest image of polymer COM
+    poly_atoms = [atom_by_id[pid] for pid in polymer_ids]
+    cx = float(np.mean([a['x'] for a in poly_atoms]))
+    cy = float(np.mean([a['y'] for a in poly_atoms]))
+    cz = float(np.mean([a['z'] for a in poly_atoms]))
+
+    for a in atoms:
+        if a['type'] in SOLVENT_TYPES:
+            a['x'] -= lx * round((a['x'] - cx) / lx)
+            a['y'] -= ly * round((a['y'] - cy) / ly)
+            a['z'] -= lz * round((a['z'] - cz) / lz)
+
+    print(f"  Unwrapped {len(visited)} polymer atoms; "
+          f"folded solvent near COM ({cx:.1f}, {cy:.1f}, {cz:.1f})")
+    return atoms
+
+
 def find_min_bounding_rect_angle(hull_points):
     n = len(hull_points)
     min_area  = float('inf')
@@ -241,6 +313,7 @@ def isolate_gel(input_file, output_file, clearance=BOX_CLEARANCE, percentile=0.1
     print(f"Clearance: {clearance}  |  Percentile: {percentile}")
     atoms, bonds, box, masses = parse_lammps_data(input_file)
     print(f"Read {len(atoms)} atoms, {len(bonds)} bonds")
+    atoms = unwrap_atoms_via_bonds(atoms, bonds, box)
     atoms = rotate_mobile_atoms(atoms)
     ext   = find_gel_extent(atoms, clearance, percentile)
     atoms = remove_non_gel_atoms(atoms, ext)
