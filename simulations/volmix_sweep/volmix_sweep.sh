@@ -63,11 +63,13 @@ if ! command -v sbatch &>/dev/null; then
     exit 1
 fi
 
-# Parse --from N argument (defaults to 0)
+# Parse arguments
 FROM=0
+SKIP_SLAB=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --from) FROM="$2"; shift 2 ;;
+        --from)      FROM="$2"; shift 2 ;;
+        --skip-slab) SKIP_SLAB=1; shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -184,8 +186,20 @@ cp "\$FINAL_CONFIG" "${SLAB_DATA_DIR}/"
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_slab.workdir"
 HEREDOC
 
-    SLAB_JID=$(sbatch --parsable "$SLAB_BATCH")
-    echo "P=${P}: submitted slab_with_support  JID=${SLAB_JID}"
+    if [ "$SKIP_SLAB" = "1" ]; then
+        FINAL_CHECK="${SLAB_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}.data"
+        if [ ! -f "$FINAL_CHECK" ]; then
+            echo "ERROR: --skip-slab set but final_config not found: $FINAL_CHECK"
+            exit 1
+        fi
+        echo "P=${P}: --skip-slab: using existing $(basename "$FINAL_CHECK")"
+        SLAB_DEP=""
+        rm -f "$SLAB_BATCH"
+    else
+        SLAB_JID=$(sbatch --parsable "$SLAB_BATCH")
+        echo "P=${P}: submitted slab_with_support  JID=${SLAB_JID}"
+        SLAB_DEP="--dependency=afterok:${SLAB_JID}"
+    fi
 
     # ------------------------------------------------------------------
     # Job 2: isolate_gel.py  (depends on slab)
@@ -235,7 +249,7 @@ ln -sf "\$ISOLATED_OUT" "${INPUT_DATA_DIR}/${ISOLATED_DATANAME}.data"
 echo "Symlinked: ${INPUT_DATA_DIR}/${ISOLATED_DATANAME}.data"
 HEREDOC
 
-    ISOLATE_JID=$(sbatch --parsable --dependency=afterok:${SLAB_JID} "$ISOLATE_BATCH")
+    ISOLATE_JID=$(sbatch --parsable ${SLAB_DEP} "$ISOLATE_BATCH")
     echo "P=${P}: submitted isolate_gel          JID=${ISOLATE_JID} (after ${SLAB_JID})"
 
     # ------------------------------------------------------------------
@@ -426,7 +440,8 @@ HEREDOC
 
 echo ""; echo "====== launcher --from ${NEXT_FROM} | \$(date) | \$(hostname) ======"
 module reset
-bash "${SCRIPT_DIR}/volmix_sweep.sh" --from ${NEXT_FROM}
+SKIP_FLAG=$([ "${SKIP_SLAB}" = "1" ] && echo "--skip-slab" || echo "")
+bash "${SCRIPT_DIR}/volmix_sweep.sh" --from ${NEXT_FROM} \${SKIP_FLAG}
 HEREDOC
         LAUNCH_JID=$(sbatch --parsable --dependency=afterok:${POL_JID} "$LAUNCH_BATCH")
         echo "P=${P}: submitted next-batch launcher JID=${LAUNCH_JID}  (after ${POL_JID}, --from ${NEXT_FROM})"
