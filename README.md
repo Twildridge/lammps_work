@@ -57,7 +57,7 @@ lammps_work/                    ← This git repository
 │   ├── run_lammps_pod_old.sh   ← Legacy Pod runner (kept for reference)
 │   ├── build_lammps.sh         ← One-shot LAMMPS build script (Expanse-style cmake)
 │   ├── git_sync.sh             ← One-command GitHub sync (MacBook + clusters)
-│   ├── isolate_gel.py          ← CLI: strip bath solvent/walls from slab final_config (used by volmix_sweep)
+│   ├── isolate_gel.py          ← CLI: strip bath/walls and define interior control volume (used by volmix_sweep)
 │   ├── add_walls_to_slab.ipynb         ← Build slab data file (no angles)
 │   ├── add_walls_with_angles.ipynb     ← Build slab data file (with angles)
 │   ├── slab_with_support.ipynb         ← Build basic slab geometry
@@ -401,6 +401,38 @@ All the same output files are produced (stress profiles, chemical potential, pis
 - 2 nodes (256 cores, Expanse): ~5–6 hours
 
 Benchmarks across system sizes are in `documenting_pod_runs.md`.
+
+### 5g. Volume-of-mixing sweep (`volmix_sweep.sh`)
+
+Computes ΔV_mix(P*) = V_gel_mixed − V_polymer_pure − V_solvent_pure across 11 pressures (P* = 1.0–2.0, step 0.1).
+
+**Pipeline per pressure** (SLURM chain):
+
+1. **`slab_with_support`** — 600k-step NPT equilibration (3 nodes, 128–64 tasks/node). Copies `final_config_*.data` to `~/Documents/lammps_data/slab_with_support/`.
+2. **`isolate_gel.py`** — strips support/piston and bath solvent; defines a control volume as the inner 88% of the polymer distribution (cv_percentile = 6%) in all three axes; writes `isolated_*.data` with box = CV bounds.
+3. **`gel_mixed`** and **`split_gel.py`** — run concurrently after isolate. `split_gel.py` splits the isolated gel into `_polymer_only.data` and `_solvent_only.data`.
+4. **`solvent_pure`** and **`polymer_pure`** — 100k-step NPT runs of the split components; run concurrently.
+
+The sweep processes one pressure at a time (WINDOW = 1). The last `polymer_pure` job auto-submits the next pressure via a lightweight launcher job.
+
+**Submit commands:**
+
+```bash
+cd ~/Documents/lammps_work/simulations/volmix_sweep
+
+# Full sweep (slab runs not yet done):
+bash volmix_sweep.sh
+
+# Skip slab step if final_configs already exist in lammps_data/slab_with_support/:
+bash volmix_sweep.sh --skip-slab
+
+# Resume from a specific pressure index (e.g. P*=1.6 = index 6):
+bash volmix_sweep.sh --from 6 --skip-slab
+```
+
+**Control volume note:** `isolate_gel.py --cv-percentile` overrides the 6% default at runtime if you want to test a different inset without editing the script.
+
+**Analysis:** `volume_of_mixing.ipynb` (§7b) syncs `box_dimensions_*.dat` files from Expanse and computes ΔV_mix(P*).
 
 ---
 
