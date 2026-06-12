@@ -69,7 +69,7 @@ SOLVENT_TYPES = {3}
 SUPPORT_TYPES = {4}
 PISTON_TYPES  = {5}
 ROTATE_TYPES  = POLYMER_TYPES | SOLVENT_TYPES
-CV_PERCENTILE = 3.0   # inner 94 % of polymer distribution per axis
+CV_PERCENTILE = 6.0   # inner 88 % of polymer distribution per axis
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +353,6 @@ if __name__ == '__main__':
     parser.add_argument('--cv-percentile', type=float, default=CV_PERCENTILE,
                         help=f"Percentile inset for control volume on each axis "
                              f"(default {CV_PERCENTILE}). "
-                             f"E.g. 3.0 keeps the inner 94%% of the polymer distribution.")
+                             f"E.g. 6.0 keeps the inner 88%% of the polymer distribution.")
     args = parser.parse_args()
     isolate_gel(args.input, args.output, args.cv_percentile)
