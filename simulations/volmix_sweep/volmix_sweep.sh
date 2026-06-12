@@ -250,7 +250,7 @@ echo "Symlinked: ${INPUT_DATA_DIR}/${ISOLATED_DATANAME}.data"
 HEREDOC
 
     ISOLATE_JID=$(sbatch --parsable ${SLAB_DEP} "$ISOLATE_BATCH")
-    echo "P=${P}: submitted isolate_gel          JID=${ISOLATE_JID} (after ${SLAB_JID})"
+    echo "P=${P}: submitted isolate_gel          JID=${ISOLATE_JID} (dep: ${SLAB_DEP:-none})"
 
     # ------------------------------------------------------------------
     # Job 3a: gel_mixed  (depends on isolate; runs isolated gel at NPT P*)
