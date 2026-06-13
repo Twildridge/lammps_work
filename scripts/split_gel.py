@@ -32,6 +32,7 @@ Atom types in the original file
 import sys
 import os
 import re
+import json
 import argparse
 
 try:
@@ -271,9 +272,20 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
     orig_masses = {t: (m, c) for t, m, c in data['masses']}
 
     # -----------------------------------------------------------------------
-    # 1.  POLYMER-ONLY  (types 1 and 2; no remapping)
+    # Pre-trim counts and isolated-gel box volume (needed for ΔV_mix manifest)
     # -----------------------------------------------------------------------
     POLYMER_TYPES = {1, 2}
+    SOLVENT_TYPES = {3, 4, 5}
+
+    N_pol_isolated = sum(1 for a in atoms if a['type'] in POLYMER_TYPES)
+    N_sol_isolated = sum(1 for a in atoms if a['type'] in SOLVENT_TYPES)
+    V_mix_isolated = ((header['xhi'] - header['xlo']) *
+                      (header['yhi'] - header['ylo']) *
+                      (header['zhi'] - header['zlo']))
+
+    # -----------------------------------------------------------------------
+    # 1.  POLYMER-ONLY  (types 1 and 2; no remapping)
+    # -----------------------------------------------------------------------
 
     poly_atoms_raw  = [a for a in atoms if a['type'] in POLYMER_TYPES]
 
@@ -316,7 +328,6 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
     # -----------------------------------------------------------------------
     # 2.  SOLVENT-ONLY  (type 3 only; support/piston already stripped by isolate_gel)
     # -----------------------------------------------------------------------
-    SOLVENT_TYPES   = {3, 4, 5}
     TYPE_REMAP      = {3: 1, 4: 2, 5: 3}
     TYPE_LABELS_NEW = {
         1: 'Solvent (was type 3)',
@@ -357,6 +368,37 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
         bonds=None,
     )
     print(f"Wrote: {solv_out}  ({len(solv_atoms)} atoms)")
+
+    # -----------------------------------------------------------------------
+    # Manifest for volume-of-mixing calculation
+    #
+    # The notebook computes:
+    #   ΔV_mix = V_mix_isolated
+    #            - V_pol_eq × (N_pol_isolated / N_pol_trimmed)
+    #            - V_sol_eq × (N_sol_isolated / N_sol_trimmed)
+    #
+    # where V_pol_eq and V_sol_eq are the equilibrated box volumes from the
+    # polymer_pure and solvent_pure NPT runs (which used the trimmed inputs).
+    # Scaling by N_isolated/N_trimmed converts per-atom volumes back to the
+    # full isolated-gel atom count so all three volumes are on the same basis.
+    # -----------------------------------------------------------------------
+    N_pol_trimmed = len(poly_atoms_raw)
+    N_sol_trimmed = len(solv_atoms_raw)
+    manifest = {
+        'V_mix_isolated':  round(V_mix_isolated, 4),
+        'N_pol_isolated':  N_pol_isolated,
+        'N_sol_isolated':  N_sol_isolated,
+        'N_pol_trimmed':   N_pol_trimmed,
+        'N_sol_trimmed':   N_sol_trimmed,
+        'scale_pol':       round(N_pol_isolated / N_pol_trimmed, 6) if N_pol_trimmed else None,
+        'scale_sol':       round(N_sol_isolated / N_sol_trimmed, 6) if N_sol_trimmed else None,
+    }
+    manifest_path = f"{polymer_stem}_volmix_manifest.json"
+    with open(manifest_path, 'w') as mf:
+        json.dump(manifest, mf, indent=2)
+    print(f"Manifest: {manifest_path}")
+    for k, v in manifest.items():
+        print(f"  {k}: {v}")
 
     return poly_out, solv_out
 
