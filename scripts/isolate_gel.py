@@ -5,26 +5,24 @@ isolate_gel.py
 CLI wrapper for isolating an equilibrated gel slab from a slab_with_support
 LAMMPS data file.
 
-Removes support (type 4) and piston (type 5) atoms, defines a control volume
-strictly inside the polymer network using a percentile inset, and writes a new
-data file containing only the atoms within that interior region.
+Removes support (type 4) and piston (type 5) atoms, trims any solvent/polymer
+outside a tight bounding box around the polymer network, and writes a new data
+file containing only gel-internal atoms (types 1=crosslink, 2=chain, 3=solvent).
 
-The control volume is the inner (cv_percentile, 100-cv_percentile) percentile
-of the polymer atom distribution along each axis.  No outward clearance is
-added, so the box is guaranteed to lie inside the gel regardless of pressure.
-This removes the variability in bath-solvent retention that arose when the
-old clearance-based planes coincided with the gel face.
+Species-level homogeneity trimming (CV inset) is handled downstream by
+split_gel.py, which applies a per-species percentile trim to the polymer-only
+and solvent-only outputs.
 
 Usage
 -----
   python3 isolate_gel.py --input <final_config.data> --output <isolated.data>
-                         [--cv-percentile 5.0]
+                         [--clearance 0.2] [--percentile 0.1]
 
 Output atom types
 -----------------
   1  Crosslink   (unchanged)
   2  Chain bead  (unchanged)
-  3  Solvent     (gel-interior only; bath solvent and surface atoms trimmed)
+  3  Solvent     (gel-internal only; bath solvent trimmed)
 """
 
 import argparse
@@ -69,7 +67,7 @@ SOLVENT_TYPES = {3}
 SUPPORT_TYPES = {4}
 PISTON_TYPES  = {5}
 ROTATE_TYPES  = POLYMER_TYPES | SOLVENT_TYPES
-CV_PERCENTILE = 6.0   # inner 88 % of polymer distribution per axis
+BOX_CLEARANCE = 0.2
 
 
 # ---------------------------------------------------------------------------
@@ -186,13 +184,7 @@ def rotate_mobile_atoms(atoms):
     return atoms
 
 
-def find_gel_extent(atoms, cv_percentile=CV_PERCENTILE):
-    """
-    Return a control volume defined by the inner (cv_percentile, 100-cv_percentile)
-    percentile of polymer atom positions along each axis.  The bounds are strictly
-    inside the gel — no outward clearance is added — so bath solvent can never
-    leak in regardless of how the gel face sits relative to the box edge.
-    """
+def find_gel_extent(atoms, clearance, percentile=0.1):
     poly = [a for a in atoms if a['type'] in POLYMER_TYPES]
     xs = [a['x'] for a in poly]
     ys = [a['y'] for a in poly]
@@ -201,17 +193,14 @@ def find_gel_extent(atoms, cv_percentile=CV_PERCENTILE):
         pct = lambda arr, p: float(np.percentile(arr, p))
     else:
         pct = _percentile
-    xmin, xmax = pct(xs, cv_percentile), pct(xs, 100 - cv_percentile)
-    ymin, ymax = pct(ys, cv_percentile), pct(ys, 100 - cv_percentile)
-    zmin, zmax = pct(zs, cv_percentile), pct(zs, 100 - cv_percentile)
-    lx = xmax - xmin;  ly = ymax - ymin;  lz = zmax - zmin
-    print(f"  Control volume  x: {xmin:.2f}–{xmax:.2f}  "
+    xmin, xmax = pct(xs, percentile),     pct(xs, 100-percentile)
+    ymin, ymax = pct(ys, percentile),     pct(ys, 100-percentile)
+    zmin, zmax = pct(zs, percentile),     pct(zs, 100-percentile)
+    print(f"  Polymer extent  x: {xmin:.2f}–{xmax:.2f}  "
           f"y: {ymin:.2f}–{ymax:.2f}  z: {zmin:.2f}–{zmax:.2f}")
-    print(f"  CV dimensions   Lx={lx:.2f}  Ly={ly:.2f}  Lz={lz:.2f}  "
-          f"V={lx*ly*lz:.1f} σ³  (cv_percentile={cv_percentile})")
-    return dict(xmin=xmin, xmax=xmax,
-                ymin=ymin, ymax=ymax,
-                zmin=zmin, zmax=zmax)
+    return dict(xmin=xmin-clearance, xmax=xmax+clearance,
+                ymin=ymin-clearance, ymax=ymax+clearance,
+                zmin=zmin-clearance, zmax=zmax+clearance)
 
 
 def remove_non_gel_atoms(atoms, ext):
@@ -226,7 +215,7 @@ def remove_non_gel_atoms(atoms, ext):
             n_outside += 1;  continue
         kept.append(a)
     print(f"  Removed {n_walls} support/piston atoms, "
-          f"{n_outside} atoms outside control volume")
+          f"{n_outside} atoms outside gel bounds")
     return kept
 
 
@@ -322,19 +311,24 @@ def write_lammps_data(path, atoms, bonds, box, masses):
 # ---------------------------------------------------------------------------
 # Main driver
 # ---------------------------------------------------------------------------
-def isolate_gel(input_file, output_file, cv_percentile=CV_PERCENTILE):
-    print(f"Input:        {input_file}")
-    print(f"Output:       {output_file}")
-    print(f"cv_percentile: {cv_percentile}  (inner {100 - 2*cv_percentile:.0f}% of polymer distribution)")
+def isolate_gel(input_file, output_file, clearance=BOX_CLEARANCE, percentile=0.1):
+    print(f"Input:     {input_file}")
+    print(f"Output:    {output_file}")
+    print(f"Clearance: {clearance}  |  Percentile: {percentile}")
     atoms, bonds, box, masses = parse_lammps_data(input_file)
     print(f"Read {len(atoms)} atoms, {len(bonds)} bonds")
     atoms = unwrap_atoms_via_bonds(atoms, bonds, box)
     atoms = rotate_mobile_atoms(atoms)
-    ext   = find_gel_extent(atoms, cv_percentile)
+    ext   = find_gel_extent(atoms, clearance, percentile)
     atoms = remove_non_gel_atoms(atoms, ext)
     new_box = {'xlo': ext['xmin'], 'xhi': ext['xmax'],
                'ylo': ext['ymin'], 'yhi': ext['ymax'],
                'zlo': ext['zmin'], 'zhi': ext['zmax']}
+    lx = new_box['xhi']-new_box['xlo']
+    ly = new_box['yhi']-new_box['ylo']
+    lz = new_box['zhi']-new_box['zlo']
+    print(f"  New box: Lx={lx:.2f}  Ly={ly:.2f}  Lz={lz:.2f}  "
+          f"V={lx*ly*lz:.1f} σ³")
     write_lammps_data(output_file, atoms, bonds, new_box, masses)
     print(f"Wrote {len(atoms)} atoms → {output_file}")
 
@@ -346,13 +340,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="Isolate gel interior from slab_with_support data file "
                     "(removes bath solvent, support, piston, and gel surface layer).")
-    parser.add_argument('--input',         required=True,
+    parser.add_argument('--input',      required=True,
                         help="Input LAMMPS data file (final_config_*.data)")
-    parser.add_argument('--output',        required=True,
+    parser.add_argument('--output',     required=True,
                         help="Output LAMMPS data file (isolated_*.data)")
-    parser.add_argument('--cv-percentile', type=float, default=CV_PERCENTILE,
-                        help=f"Percentile inset for control volume on each axis "
-                             f"(default {CV_PERCENTILE}). "
-                             f"E.g. 6.0 keeps the inner 88%% of the polymer distribution.")
+    parser.add_argument('--clearance',  type=float, default=BOX_CLEARANCE,
+                        help=f"Box clearance around gel (default {BOX_CLEARANCE})")
+    parser.add_argument('--percentile', type=float, default=0.1,
+                        help="Percentile for outlier exclusion (default 0.1)")
     args = parser.parse_args()
-    isolate_gel(args.input, args.output, args.cv_percentile)
+    isolate_gel(args.input, args.output, args.clearance, args.percentile)

@@ -34,6 +34,59 @@ import os
 import re
 import argparse
 
+try:
+    import numpy as np
+    _NUMPY = True
+except ImportError:
+    _NUMPY = False
+
+
+# ---------------------------------------------------------------------------
+# Percentile helper (numpy or pure-Python fallback)
+# ---------------------------------------------------------------------------
+def _pct(data, p):
+    if _NUMPY:
+        return float(np.percentile(data, p))
+    s = sorted(data)
+    n = len(s)
+    if n == 0:
+        raise ValueError("Empty sequence")
+    idx = (p / 100.0) * (n - 1)
+    lo = int(idx)
+    hi = min(lo + 1, n - 1)
+    return s[lo] * (1 - (idx - lo)) + s[hi] * (idx - lo)
+
+
+def trim_to_cv(atoms, cv_percentile, label=""):
+    """
+    Trim *atoms* to the inner (cv_percentile, 100-cv_percentile) percentile
+    of their own x/y/z distribution.  Returns (trimmed_atoms, cv_box).
+    cv_box is a dict with xlo/xhi/ylo/yhi/zlo/zhi keys.
+    """
+    if not atoms or cv_percentile <= 0:
+        xs = [a['x'] for a in atoms]
+        ys = [a['y'] for a in atoms]
+        zs = [a['z'] for a in atoms]
+        box = {'xlo': min(xs), 'xhi': max(xs),
+               'ylo': min(ys), 'yhi': max(ys),
+               'zlo': min(zs), 'zhi': max(zs)}
+        return atoms, box
+
+    xs = [a['x'] for a in atoms]
+    ys = [a['y'] for a in atoms]
+    zs = [a['z'] for a in atoms]
+    xlo = _pct(xs, cv_percentile);  xhi = _pct(xs, 100 - cv_percentile)
+    ylo = _pct(ys, cv_percentile);  yhi = _pct(ys, 100 - cv_percentile)
+    zlo = _pct(zs, cv_percentile);  zhi = _pct(zs, 100 - cv_percentile)
+    kept = [a for a in atoms
+            if xlo <= a['x'] <= xhi and ylo <= a['y'] <= yhi and zlo <= a['z'] <= zhi]
+    cv_box = {'xlo': xlo, 'xhi': xhi, 'ylo': ylo, 'yhi': yhi, 'zlo': zlo, 'zhi': zhi}
+    lx = xhi - xlo;  ly = yhi - ylo;  lz = zhi - zlo
+    tag = f" ({label})" if label else ""
+    print(f"  CV trim {cv_percentile}%{tag}: {len(kept)}/{len(atoms)} atoms  "
+          f"Lx={lx:.2f} Ly={ly:.2f} Lz={lz:.2f} V={lx*ly*lz:.1f} σ³")
+    return kept, cv_box
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -175,9 +228,17 @@ def write_data_file(path, title, box, atom_types_info, atoms, bonds=None):
 # Main splitting logic
 # ---------------------------------------------------------------------------
 
-def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None):
+CV_PERCENTILE = 8.0   # inner 84 % of each species' distribution per axis
+
+
+def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None,
+              cv_percentile=CV_PERCENTILE):
     """
     Split a slab-with-support data file into polymer-only and solvent-only files.
+
+    An 8 % percentile trim is applied independently to each species so that the
+    output files sample the homogeneous interior — avoiding the solvent-rich shell
+    around the finite gel and the polymer-depleted periphery.
 
     Parameters
     ----------
@@ -185,19 +246,18 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
     output_stem   : base stem for both outputs (overridden per-species below)
     polymer_stem  : override stem for the polymer_only file (e.g. different directory)
     solvent_stem  : override stem for the solvent_only file (e.g. different directory)
+    cv_percentile : percentile inset applied to each species (default 8.0)
 
     If polymer_stem / solvent_stem are None, output_stem is used for both.
     If output_stem is also None, defaults to input path without extension.
     """
     print(f"Reading: {input_path}")
+    print(f"CV trim: {cv_percentile}% per face per species")
     data = parse_data_file(input_path)
 
     header = data['header']
     atoms  = data['atoms']
     bonds  = data['bonds']
-
-    atom_by_id = {a['id']: a for a in atoms}
-    box = {k: header[k] for k in ('xlo', 'xhi', 'ylo', 'yhi', 'zlo', 'zhi')}
 
     if output_stem is None:
         output_stem = os.path.splitext(input_path)[0]
@@ -216,6 +276,10 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
     POLYMER_TYPES = {1, 2}
 
     poly_atoms_raw  = [a for a in atoms if a['type'] in POLYMER_TYPES]
+
+    # Trim to inner CV before renumbering so bonds to trimmed atoms are dropped
+    poly_atoms_raw, poly_box = trim_to_cv(poly_atoms_raw, cv_percentile, "polymer")
+
     poly_ids_old    = {a['id'] for a in poly_atoms_raw}
     poly_bonds_raw  = [b for b in bonds
                        if b['atom1'] in poly_ids_old and b['atom2'] in poly_ids_old]
@@ -242,7 +306,7 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
     write_data_file(
         poly_out,
         title="LAMMPS data file — polymer only (crosslinks + chain beads)",
-        box=box,
+        box=poly_box,
         atom_types_info=poly_type_info,
         atoms=poly_atoms,
         bonds=poly_bonds,
@@ -250,7 +314,7 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
     print(f"Wrote: {poly_out}  ({len(poly_atoms)} atoms, {len(poly_bonds)} bonds)")
 
     # -----------------------------------------------------------------------
-    # 2.  SOLVENT-ONLY  (types 3, 4, 5; remap 3→1, 4→2, 5→3)
+    # 2.  SOLVENT-ONLY  (type 3 only; support/piston already stripped by isolate_gel)
     # -----------------------------------------------------------------------
     SOLVENT_TYPES   = {3, 4, 5}
     TYPE_REMAP      = {3: 1, 4: 2, 5: 3}
@@ -261,6 +325,10 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
     }
 
     solv_atoms_raw = [a for a in atoms if a['type'] in SOLVENT_TYPES]
+
+    # Trim solvent to its own inner CV for homogeneous density
+    solv_atoms_raw, solv_box = trim_to_cv(solv_atoms_raw, cv_percentile, "solvent")
+
     solv_id_map = {a['id']: new_id for new_id, a in enumerate(solv_atoms_raw, start=1)}
 
     present_orig_types = sorted({a['type'] for a in solv_atoms_raw})
@@ -282,20 +350,13 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
     solv_out = f"{solvent_stem}_solvent_only.data"
     write_data_file(
         solv_out,
-        title="LAMMPS data file — solvent only (+ support/piston if present)",
-        box=box,
+        title="LAMMPS data file — solvent only",
+        box=solv_box,
         atom_types_info=solv_type_info,
         atoms=solv_atoms,
         bonds=None,
     )
     print(f"Wrote: {solv_out}  ({len(solv_atoms)} atoms)")
-
-    # Sanity check
-    n_orig = len(atoms)
-    n_poly = len(poly_atoms)
-    n_solv = len(solv_atoms)
-    status = "OK" if n_poly + n_solv == n_orig else "WARNING: counts don't add up"
-    print(f"Sanity: {n_poly} + {n_solv} = {n_poly + n_solv}  (original: {n_orig})  {status}")
 
     return poly_out, solv_out
 
@@ -326,6 +387,11 @@ if __name__ == "__main__":
         "--solvent-dir", default=None,
         help="Directory for the solvent_only file (overrides --output-dir for solvent)"
     )
+    parser.add_argument(
+        "--cv-percentile", type=float, default=CV_PERCENTILE,
+        help=f"Percentile trim applied independently to each species (default {CV_PERCENTILE}). "
+             f"E.g. 8.0 keeps the inner 84%% of each species' distribution."
+    )
     args = parser.parse_args()
 
     basename = os.path.splitext(os.path.basename(args.input))[0]
@@ -341,4 +407,5 @@ if __name__ == "__main__":
     polymer_stem = os.path.join(args.polymer_dir, basename) if args.polymer_dir else None
     solvent_stem = os.path.join(args.solvent_dir, basename) if args.solvent_dir else None
 
-    split_gel(args.input, shared_stem, polymer_stem=polymer_stem, solvent_stem=solvent_stem)
+    split_gel(args.input, shared_stem, polymer_stem=polymer_stem, solvent_stem=solvent_stem,
+              cv_percentile=args.cv_percentile)
