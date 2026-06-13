@@ -9,11 +9,11 @@
 #
 # Pipeline per pressure:
 #   [1] slab_with_support   (600k steps, NPT at P*)
-#         → copies final_config to lammps_data/input_data/
-#   [2] split_gel.py        (writes polymer_only and solvent_only to lammps_data/input_data/)
-#   [3a] solvent_pure       (100k steps, NPT at same P*)
-#   [3b] polymer_pure       (100k steps, NPT at same P*)
-#         [3a] and [3b] run concurrently after [2]
+#         → copies final_config to lammps_data/slab_with_support/
+#   [2] isolate_gel.py      (strips bath solvent, support, piston → isolated_*.data)
+#   [3] split_gel.py        (8% CV trim per species → polymer_only and solvent_only)
+#   [3a] solvent_pure       (100k steps, NPT at same P*)  ┐ concurrent
+#   [3b] polymer_pure       (100k steps, NPT at same P*)  ┘
 #
 # All run directories land in ~/Documents/lammps_runs/volmix_sweep/
 # (via LAMMPS_RUNS_OVERRIDE exported in each job script).
@@ -22,8 +22,10 @@
 # the next batch via a lightweight shared-partition launcher job.
 #
 # Usage:
-#   bash volmix_sweep.sh              # start from P=1.0
-#   bash volmix_sweep.sh --from 6    # resume from index 6 (P=1.6)
+#   bash volmix_sweep.sh                    # full pipeline from P=1.0
+#   bash volmix_sweep.sh --skip-slab        # skip slab runs (final_configs must exist)
+#   bash volmix_sweep.sh --from 6           # resume from index 6 (P=1.6)
+#   bash volmix_sweep.sh --from 6 --skip-slab
 #
 # SLURM log  → simulations/volmix_sweep/volmix_sweep_YYYYMMDD_HHMMSS.log  (new file per run)
 # Run data   → ~/Documents/lammps_runs/volmix_sweep/
@@ -291,7 +293,7 @@ HEREDOC
     echo "P=${P}: submitted split_gel           JID=${SPLIT_JID}  (after ${ISOLATE_JID})"
 
     # ------------------------------------------------------------------
-    # Job 4a: solvent_pure  (depends on split; runs concurrently with gel_mixed)
+    # Job 3a: solvent_pure  (depends on split; concurrent with polymer_pure)
     # ------------------------------------------------------------------
     SOL_BATCH=$(mktemp /tmp/solvent_volmix_p${P}_XXXX.batch)
     cat > "$SOL_BATCH" << HEREDOC
@@ -333,7 +335,7 @@ HEREDOC
     echo "P=${P}: submitted solvent_pure         JID=${SOL_JID}   (after ${SPLIT_JID})"
 
     # ------------------------------------------------------------------
-    # Job 4b: polymer_pure  (depends on split, concurrent with solvent_pure)
+    # Job 3b: polymer_pure  (depends on split; concurrent with solvent_pure)
     # ------------------------------------------------------------------
     POL_BATCH=$(mktemp /tmp/polymer_volmix_p${P}_XXXX.batch)
     NEXT_FROM=$END
