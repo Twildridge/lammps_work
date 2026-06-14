@@ -75,8 +75,8 @@ thermo ${thermo_freq}
 #   A harmonic spring (r0=0.96σ) under WCA-only non-bonded interactions
 #   expands them safely before FENE is activated.
 # =====================================================================
-pair_style lj/cut 1.1225
-pair_coeff * * ${epsSS} ${sigma} 1.1225
+pair_style lj/cut 1.122
+pair_coeff * * ${epsSS} ${sigma} 1.122
 
 bond_style harmonic
 bond_coeff 1 30.0 0.96
@@ -92,8 +92,8 @@ run 10000
 unfix pre
 unfix lang
 
-pair_style lj/cut 2.5
-pair_coeff * * ${epsSS} ${sigma} 2.5
+pair_style lj/cut 1.122
+pair_coeff * * ${epsSS} ${sigma} 1.122
 
 bond_style fene
 bond_coeff 1 30.0 1.5 1.0 1.0
