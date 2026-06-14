@@ -68,15 +68,24 @@ fi
 # Parse arguments
 FROM=0
 SKIP_SLAB=0
+ONLY=""            # --only <P>: smoke-test a single pressure (no auto-chaining)
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --from)      FROM="$2"; shift 2 ;;
         --skip-slab) SKIP_SLAB=1; shift ;;
+        --only)      ONLY="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
 
 PRESSURES=(1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0)
+
+# Smoke test: run exactly one pressure and skip the next-batch launcher.
+if [ -n "$ONLY" ]; then
+    PRESSURES=("$ONLY")
+    FROM=0
+    echo ">>> --only ${ONLY}: single-pressure smoke test (auto-chaining disabled)"
+fi
 WINDOW=1
 TOTAL=${#PRESSURES[@]}
 
@@ -250,6 +259,61 @@ HEREDOC
 
     ISOLATE_JID=$(sbatch --parsable ${SLAB_DEP} "$ISOLATE_BATCH")
     echo "P=${P}: submitted isolate_gel          JID=${ISOLATE_JID} (dep: ${SLAB_DEP:-none})"
+
+    # ------------------------------------------------------------------
+    # Job 2b: mixed-gel NPT  (depends on isolate)
+    #   Re-equilibrates the isolated gel (polymer + solvent, fully periodic)
+    #   under NPT at P* via the generic polymer_pure engine.  Its box volume
+    #   IS V_mix — measured the same way (NPT box_dimensions) as the pure
+    #   references, replacing the old geometric bounding box.
+    # ------------------------------------------------------------------
+    MIX_BATCH=$(mktemp /tmp/mix_volmix_p${P}_XXXX.batch)
+    cat > "$MIX_BATCH" << HEREDOC
+#!/usr/bin/env bash
+#SBATCH --job-name=mix_p${P}
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=${TPN}
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=5:00:00
+#SBATCH --output=${SWEEP_LOG}
+
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+declare -xir OMP_NUM_THREADS="\${SLURM_CPUS_PER_TASK}"
+
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+echo ""; echo "====== mix_p${P} | \$(date) | \$(hostname) ======"
+export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
+
+# run_lammps.sh reads inputs from input_data/; isolate wrote the mixed gel to
+# SLAB_DATA_DIR, so expose it there via a symlink (idempotent).
+ISO_SRC="${SLAB_DATA_DIR}/${ISOLATED_DATANAME}.data"
+ISO_LNK="${INPUT_DATA_DIR}/${ISOLATED_DATANAME}.data"
+if [ ! -f "\$ISO_SRC" ]; then echo "ERROR: isolated gel not found: \$ISO_SRC"; exit 1; fi
+[ -e "\$ISO_LNK" ] || ln -s "\$ISO_SRC" "\$ISO_LNK"
+
+# interaction=${INTERACTION} (1.0_1.0): epsSS=1.0 is applied as WCA to ALL pairs,
+# so the mix is athermal and consistent with the pure runs.
+bash "${SCRIPTS_DIR}/run_lammps.sh" "polymer_pure" "${ISOLATED_DATANAME}" "${INTERACTION}" \
+    "${PURE_STEPS}" "0" "" "${P}"
+
+WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/polymer_pure_${ISOLATED_DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
+echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_mixed.workdir"
+HEREDOC
+
+    MIX_JID=$(sbatch --parsable --dependency=afterok:${ISOLATE_JID} "$MIX_BATCH")
+    echo "P=${P}: submitted mixed_gel NPT         JID=${MIX_JID}  (after ${ISOLATE_JID})"
 
     # ------------------------------------------------------------------
     # Job 3: split_gel.py  (depends on isolate; uses isolated_*.data)

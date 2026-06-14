@@ -9,14 +9,25 @@ Removes support (type 4) and piston (type 5) atoms, trims any solvent/polymer
 outside a tight bounding box around the polymer network, and writes a new data
 file containing only gel-internal atoms (types 1=crosslink, 2=chain, 3=solvent).
 
-Species-level homogeneity trimming (CV inset) is handled downstream by
-split_gel.py, which applies a per-species percentile trim to the polymer-only
-and solvent-only outputs.
+This isolated file is now used as a *fully periodic mixed-gel* input: it is
+re-equilibrated under NPT (via polymer_pure.lmp) so that V_mix is a true
+thermodynamic box volume, measured on the same footing as the pure-species
+references. The box written here is only an initial condition.
+
+Why the redesign (volume-of-mixing pipeline, 2026-06):
+  * V_mix used to be THIS geometric bounding box, while V_pol/V_sol were NPT
+    box volumes — subtracting two different kinds of volume is not a valid
+    ΔV_mix. V_mix is now an NPT volume too.
+  * Clearance was shown (sensitivity sweep) to be a near-constant additive
+    offset (~0.018 in ΔV_mix/(V_sol+V_pol) at every P*), not the source of the
+    pressure trend. So clearance here no longer feeds the result; it is purely
+    a PBC-safe initial gap and is raised 0.2 -> 0.5σ so periodic images of edge
+    atoms start ~1σ apart (no self-overlap at t=0).
 
 Usage
 -----
   python3 isolate_gel.py --input <final_config.data> --output <isolated.data>
-                         [--clearance 0.2] [--percentile 0.1]
+                         [--clearance 0.5] [--percentile 0.1]
 
 Output atom types
 -----------------
@@ -67,7 +78,11 @@ SOLVENT_TYPES = {3}
 SUPPORT_TYPES = {4}
 PISTON_TYPES  = {5}
 ROTATE_TYPES  = POLYMER_TYPES | SOLVENT_TYPES
-BOX_CLEARANCE = 0.2
+# PBC-safe initial gap (per face). NOT a result-affecting parameter anymore:
+# V_mix is set by the downstream NPT run, so this only places periodic images
+# of edge atoms ~1σ apart at t=0 to avoid self-overlap. (Was 0.2 when this box
+# WAS the reported V_mix.)
+BOX_CLEARANCE = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -204,17 +219,21 @@ def find_gel_extent(atoms, clearance, percentile=0.1):
 
 
 def remove_non_gel_atoms(atoms, ext):
+    # Whitelist gel types (1,2,3): drop support/piston AND any other stray type
+    # so the isolated mixed file is always exactly polymer+solvent. This keeps
+    # the mixed-gel NPT atom counts identical to the split pure-species files.
+    gel_types = POLYMER_TYPES | SOLVENT_TYPES
     kept = []
-    n_walls = n_outside = 0
+    n_nongel = n_outside = 0
     for a in atoms:
-        if a['type'] in SUPPORT_TYPES | PISTON_TYPES:
-            n_walls += 1;  continue
+        if a['type'] not in gel_types:
+            n_nongel += 1;  continue
         if (a['x'] < ext['xmin'] or a['x'] > ext['xmax'] or
             a['y'] < ext['ymin'] or a['y'] > ext['ymax'] or
             a['z'] < ext['zmin'] or a['z'] > ext['zmax']):
             n_outside += 1;  continue
         kept.append(a)
-    print(f"  Removed {n_walls} support/piston atoms, "
+    print(f"  Removed {n_nongel} non-gel atoms (support/piston/other), "
           f"{n_outside} atoms outside gel bounds")
     return kept
 
@@ -345,7 +364,8 @@ if __name__ == '__main__':
     parser.add_argument('--output',     required=True,
                         help="Output LAMMPS data file (isolated_*.data)")
     parser.add_argument('--clearance',  type=float, default=BOX_CLEARANCE,
-                        help=f"Box clearance around gel (default {BOX_CLEARANCE})")
+                        help=f"PBC-safe initial gap per face (default {BOX_CLEARANCE}); "
+                             f"only an initial condition — V_mix comes from the NPT run")
     parser.add_argument('--percentile', type=float, default=0.1,
                         help="Percentile for outlier exclusion (default 0.1)")
     args = parser.parse_args()

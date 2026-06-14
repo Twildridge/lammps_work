@@ -12,6 +12,17 @@ and writes two new data files:
                                positions unchanged; no bonds
                                type remapping: 3→1, 4→2, 5→3
 
+Volume-of-mixing redesign (2026-06)
+-----------------------------------
+The per-species percentile (CV) trim has been REMOVED (CV_PERCENTILE = 0).
+Rationale: the new pipeline measures V_mix by NPT-equilibrating the *same*
+isolated gel (all polymer + all solvent), so the pure-species boxes must
+contain exactly those same atoms. With no trim, N_pol and N_sol here equal the
+mixed-gel counts, the scale factors are identically 1, and ΔV_mix is a clean
+three-NPT-volume difference with no density-extrapolation assumption. Each
+output box is padded by a small PBC-safe gap so periodic images start ~1σ
+apart; the final pure volumes come from the NPT runs, not these boxes.
+
 Usage
 -----
   python split_gel.py <input.data> [--output-dir DIR] [--output-stem STEM]
@@ -229,7 +240,15 @@ def write_data_file(path, title, box, atom_types_info, atoms, bonds=None):
 # Main splitting logic
 # ---------------------------------------------------------------------------
 
-CV_PERCENTILE = 8.0   # inner 84 % of each species' distribution per axis
+CV_PERCENTILE = 0.0   # trimming disabled (see header); keep all atoms
+PBC_CLEARANCE = 0.5   # per-face padding so periodic images start ~1σ apart
+
+
+def _pad_box(box, pad):
+    """Return a copy of *box* expanded by *pad* on every face."""
+    return {'xlo': box['xlo'] - pad, 'xhi': box['xhi'] + pad,
+            'ylo': box['ylo'] - pad, 'yhi': box['yhi'] + pad,
+            'zlo': box['zlo'] - pad, 'zhi': box['zhi'] + pad}
 
 
 def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None,
@@ -290,7 +309,9 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
     poly_atoms_raw  = [a for a in atoms if a['type'] in POLYMER_TYPES]
 
     # Trim to inner CV before renumbering so bonds to trimmed atoms are dropped
+    # (CV_PERCENTILE=0 by default → no trim, box = exact atom extent)
     poly_atoms_raw, poly_box = trim_to_cv(poly_atoms_raw, cv_percentile, "polymer")
+    poly_box = _pad_box(poly_box, PBC_CLEARANCE)   # PBC-safe init gap
 
     poly_ids_old    = {a['id'] for a in poly_atoms_raw}
     poly_bonds_raw  = [b for b in bonds
@@ -338,7 +359,9 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
     solv_atoms_raw = [a for a in atoms if a['type'] in SOLVENT_TYPES]
 
     # Trim solvent to its own inner CV for homogeneous density
+    # (CV_PERCENTILE=0 by default → no trim, box = exact atom extent)
     solv_atoms_raw, solv_box = trim_to_cv(solv_atoms_raw, cv_percentile, "solvent")
+    solv_box = _pad_box(solv_box, PBC_CLEARANCE)   # PBC-safe init gap
 
     solv_id_map = {a['id']: new_id for new_id, a in enumerate(solv_atoms_raw, start=1)}
 
@@ -372,15 +395,16 @@ def split_gel(input_path, output_stem=None, polymer_stem=None, solvent_stem=None
     # -----------------------------------------------------------------------
     # Manifest for volume-of-mixing calculation
     #
-    # The notebook computes:
-    #   ΔV_mix = V_mix_isolated
-    #            - V_pol_eq × (N_pol_isolated / N_pol_trimmed)
-    #            - V_sol_eq × (N_sol_isolated / N_sol_trimmed)
+    # Current (no-trim) pipeline:
+    #   ΔV_mix = V_mix_NPT - V_pol_eq - V_sol_eq
+    # where ALL three are NPT-equilibrated box volumes and the atom counts are
+    # identical across the mix and the two pure runs (no trim → scale = 1).
     #
-    # where V_pol_eq and V_sol_eq are the equilibrated box volumes from the
-    # polymer_pure and solvent_pure NPT runs (which used the trimmed inputs).
-    # Scaling by N_isolated/N_trimmed converts per-atom volumes back to the
-    # full isolated-gel atom count so all three volumes are on the same basis.
+    # The fields below are kept for bookkeeping / sanity checks:
+    #   scale_pol, scale_sol are now identically 1.0 (N_isolated == N_trimmed).
+    #   V_mix_isolated is the GEOMETRIC box volume and is NO LONGER the result —
+    #   the notebook reads V_mix from the mixed-gel NPT box_dimensions instead.
+    #   It is retained only as a rough reference / diagnostic.
     # -----------------------------------------------------------------------
     N_pol_trimmed = len(poly_atoms_raw)
     N_sol_trimmed = len(solv_atoms_raw)
