@@ -26,14 +26,18 @@ module load openmpi5
 
 # Set simulation parameters
 FOLDER="compress_slab"
-DATANAME="isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_with_six_plates"
+DATANAME="isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600001_with_six_plates"
 INTERACTION="1.0_1.0"
 NSTEPS=70000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
 # Sync latest scripts from GitHub before running so run_lammps_pod.sh is up-to-date
-git -C ~/Documents/lammps_work pull --rebase --autostash || true
+if command -v git &>/dev/null; then
+    git -C ~/Documents/lammps_work pull --rebase --autostash || true
+else
+    echo ">>> git not available on this node — skipping sync"
+fi
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1
