@@ -112,7 +112,11 @@ echo "GPUs allocated: $SLURM_GPUS"
 
 # Pull latest scripts from GitHub before running (safe: skips if no network/conflict)
 echo ">>> Syncing lammps_work from GitHub..."
-git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+if command -v git &>/dev/null; then
+    git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+else
+    echo ">>> git not available on this node — skipping sync"
+fi
 
 # CPU-only mode (NOT USING OMP FOR NOW (not on Expanse 2021 version)
 echo "Running CPU-only with $SLURM_NTASKS tasks"
