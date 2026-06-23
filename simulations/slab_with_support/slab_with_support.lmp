@@ -64,7 +64,7 @@ variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
 # Equilibration parameters
 variable temp_target equal 1.0
 variable press_target index 1.5 # APPROPRIATE VALUE IMPORTANT — overridden by -var on command line
-variable vel_seed     equal 12345  # RNG seed for create_velocity; overridden by -var for replica sweeps
+variable vel_seed     index 12345  # RNG seed for create_velocity; overridden by -var for replica sweeps
 variable tdamp equal 1.0
 variable pdamp equal 1.0
 variable timestep_gentle equal 0.001
