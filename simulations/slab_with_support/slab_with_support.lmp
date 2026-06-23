@@ -415,10 +415,23 @@ fix avg_solv_density all ave/chunk ${nevery_density} ${nrepeat_density} ${nfreq_
 # cadence as the fix widom fires.
 dump widom_traj all custom ${nfreq_widom_dump} traj_files/widom_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z
 
-# Production run
+# Production run — split into n_snaps sequential blocks; write a data snapshot after each.
+# Snapshot files: final_config_${dataname}_${interaction}_${totsteps}_snap<N>.data
+# volmix_sweep isolates each snapshot independently so ΔV_mix error bars capture
+# both snapshot-to-snapshot composition variance AND thermal (NPT-replica) variance.
+variable n_snaps        index 3   # snapshots per run; override with -var n_snaps N
+variable steps_per_snap equal round(${nsteps}/${n_snaps})
+
 if "${cont} == 1" then "print '>>> Continuing after ${oldsteps} timesteps'"
 fix remove_drift mobile momentum 1000 linear 1 1 1 angular
-run ${nsteps}
+
+variable snap_i loop ${n_snaps}
+label snap_loop
+    run ${steps_per_snap}
+    write_data final_config_${dataname}_${interaction}_${totsteps}_snap${snap_i}.data
+    print ">>> Wrote snapshot ${snap_i}/${n_snaps} at step $(step)"
+    next snap_i
+    jump SELF snap_loop
 
 
 
@@ -458,3 +471,4 @@ uncompute chunk_z_solv_density
 # ========== Save Final Configuration ==========
 write_restart restart_${dataname}_${interaction}_${totsteps}.restart
 write_data final_config_${dataname}_${interaction}_${totsteps}.data
+# (identical to snap${n_snaps}; retained for backward compatibility)
