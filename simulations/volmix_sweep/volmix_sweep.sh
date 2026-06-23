@@ -7,7 +7,7 @@
 #
 # Widom/chempot is suppressed for all sweep runs (SKIP_WIDOM=1).
 #
-# Pipeline per pressure:
+# Pipeline per pressure (run NREPS times with independent random seeds):
 #   [1] slab_with_support   (600k steps, NPT at P*)
 #         → copies final_config to lammps_data/slab_with_support/
 #   [2] isolate_gel.py      (strips bath solvent, support, piston → isolated_*.data)
@@ -15,11 +15,16 @@
 #   [3a] solvent_pure       (100k steps, NPT at same P*)  ┐ concurrent
 #   [3b] polymer_pure       (100k steps, NPT at same P*)  ┘
 #
+# Each replica is tagged _rep1/_rep2/_rep3 in DATANAME so all filenames,
+# work dirs, and manifest keys are independent.  The analysis script averages
+# the three replicas and plots error bars.
+#
 # All run directories land in ~/Documents/lammps_runs/volmix_sweep/
 # (via LAMMPS_RUNS_OVERRIDE exported in each job script).
 #
-# Batch submission: WINDOW=1 pipeline at a time.  The last polymer job triggers
-# the next batch via a lightweight shared-partition launcher job.
+# Batch submission: WINDOW=1 pipeline at a time.  The last polymer job of the
+# last replica triggers the next batch via a lightweight shared-partition
+# launcher job.
 #
 # Usage:
 #   bash volmix_sweep.sh                    # full pipeline from P=1.0
@@ -87,6 +92,7 @@ if [ -n "$ONLY" ]; then
     echo ">>> --only ${ONLY}: single-pressure smoke test (auto-chaining disabled)"
 fi
 WINDOW=1
+NREPS=3     # independent replicas per pressure (averaged in analysis)
 TOTAL=${#PRESSURES[@]}
 
 END=$(( FROM + WINDOW ))
@@ -100,6 +106,7 @@ fi
 echo "======================================"
 echo "Volume of mixing sweep — batch submission"
 echo "Submitting indices ${FROM}–$((END-1)): ${PRESSURES[*]:$FROM:$((END-FROM))}"
+echo "Replicas per pressure: ${NREPS}"
 echo "Remaining after this batch: $((TOTAL - END)) pressure(s)"
 echo "Run data  → ${VOLMIX_RUNS}/"
 echo "SLURM log → ${SWEEP_LOG}"
@@ -108,9 +115,7 @@ echo "======================================"
 for (( i=FROM; i<END; i++ )); do
     P="${PRESSURES[$i]}"
     IS_LAST_IN_BATCH=$([ "$i" -eq "$((END-1))" ] && echo "yes" || echo "no")
-
-    DATANAME="${BASE_DATANAME}_pstar${P}"
-    TOTSTEPS=$SLAB_STEPS
+    NEXT_FROM=$END
 
     # --- Adaptive rank packing -------------------------------------------
     # High P* (iso-NPT) compresses the box: more atoms + fatter ghost shells
@@ -118,6 +123,18 @@ for (( i=FROM; i<END; i++ )); do
     # 64/node above P*=1.5 (4x64=256 ranks for slab) so each rank gets ~2x
     # RAM. Node count is unchanged, so inter-node communication stays put.
     TPN=$(awk -v p="$P" 'BEGIN{print (p>=1.6)?64:128}')
+
+    LAST_POL_JID=""
+
+    # ------------------------------------------------------------------
+    # Replica loop — run NREPS independent pipelines per pressure.
+    # Each replica gets _rep${rep} appended to DATANAME so all filenames,
+    # work dirs, and manifest keys are unique.
+    # ------------------------------------------------------------------
+    for (( rep=1; rep<=NREPS; rep++ )); do
+
+    DATANAME="${BASE_DATANAME}_pstar${P}_rep${rep}"
+    TOTSTEPS=$SLAB_STEPS
 
     ISOLATED_DATANAME="isolated_${DATANAME}_${INTERACTION}_${TOTSTEPS}"
     SOL_DATANAME="${ISOLATED_DATANAME}_solvent_only"
@@ -133,10 +150,10 @@ for (( i=FROM; i<END; i++ )); do
     # ------------------------------------------------------------------
     # Job 1: slab_with_support  (Widom suppressed via SKIP_WIDOM=1)
     # ------------------------------------------------------------------
-    SLAB_BATCH=$(mktemp /tmp/slab_volmix_p${P}_XXXX.batch)
+    SLAB_BATCH=$(mktemp /tmp/slab_volmix_p${P}_r${rep}_XXXX.batch)
     cat > "$SLAB_BATCH" << HEREDOC
 #!/usr/bin/env bash
-#SBATCH --job-name=slab_p${P}
+#SBATCH --job-name=slab_p${P}_r${rep}
 #SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=3
@@ -159,7 +176,7 @@ module load gcc/10.2.0
 module load openmpi/4.1.3
 module load python/3.8.12
 
-echo ""; echo "====== slab_p${P} | \$(date) | \$(hostname) ======"
+echo ""; echo "====== slab_p${P}_r${rep} | \$(date) | \$(hostname) ======"
 export SKIP_WIDOM=1
 export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
@@ -167,17 +184,17 @@ export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 # Each attempt creates a fresh timestamped work dir; the glob below picks the latest.
 MAX_ATTEMPTS=6
 for attempt in \$(seq 1 \$MAX_ATTEMPTS); do
-    echo "slab_p${P}: attempt \$attempt of \$MAX_ATTEMPTS"
+    echo "slab_p${P}_r${rep}: attempt \$attempt of \$MAX_ATTEMPTS"
     if bash "${SCRIPTS_DIR}/run_lammps.sh" "slab_with_support" "${DATANAME}" "${INTERACTION}" \
             "${SLAB_STEPS}" "0" "" "${P}"; then
-        echo "slab_p${P}: succeeded on attempt \$attempt"
+        echo "slab_p${P}_r${rep}: succeeded on attempt \$attempt"
         break
     fi
     if [ "\$attempt" -eq "\$MAX_ATTEMPTS" ]; then
-        echo "ERROR: slab_p${P} failed after \$MAX_ATTEMPTS attempts"
+        echo "ERROR: slab_p${P}_r${rep} failed after \$MAX_ATTEMPTS attempts"
         exit 1
     fi
-    echo "slab_p${P}: attempt \$attempt failed, retrying in 120s..."
+    echo "slab_p${P}_r${rep}: attempt \$attempt failed, retrying in 120s..."
     sleep 120
 done
 
@@ -194,7 +211,7 @@ if [ ! -f "\$FINAL_CONFIG" ]; then
 fi
 
 cp "\$FINAL_CONFIG" "${SLAB_DATA_DIR}/"
-echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_slab.workdir"
+echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_rep${rep}_slab.workdir"
 HEREDOC
 
     if [ "$SKIP_SLAB" = "1" ]; then
@@ -203,12 +220,12 @@ HEREDOC
             echo "ERROR: --skip-slab set but final_config not found: $FINAL_CHECK"
             exit 1
         fi
-        echo "P=${P}: --skip-slab: using existing $(basename "$FINAL_CHECK")"
+        echo "P=${P} rep=${rep}: --skip-slab: using existing $(basename "$FINAL_CHECK")"
         SLAB_DEP=""
         rm -f "$SLAB_BATCH"
     else
         SLAB_JID=$(sbatch --parsable "$SLAB_BATCH")
-        echo "P=${P}: submitted slab_with_support  JID=${SLAB_JID}"
+        echo "P=${P} rep=${rep}: submitted slab_with_support  JID=${SLAB_JID}"
         SLAB_DEP="--dependency=afterok:${SLAB_JID}"
     fi
 
@@ -217,10 +234,10 @@ HEREDOC
     #   Strips bath solvent, support, piston → isolated_*.data
     #   Output does NOT overwrite final_config_*.data
     # ------------------------------------------------------------------
-    ISOLATE_BATCH=$(mktemp /tmp/isolate_volmix_p${P}_XXXX.batch)
+    ISOLATE_BATCH=$(mktemp /tmp/isolate_volmix_p${P}_r${rep}_XXXX.batch)
     cat > "$ISOLATE_BATCH" << HEREDOC
 #!/usr/bin/env bash
-#SBATCH --job-name=isolate_p${P}
+#SBATCH --job-name=isolate_p${P}_r${rep}
 #SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=1
@@ -235,7 +252,7 @@ module reset
 module load gcc/10.2.0
 module load python/3.8.12
 
-echo ""; echo "====== isolate_p${P} | \$(date) | \$(hostname) ======"
+echo ""; echo "====== isolate_p${P}_r${rep} | \$(date) | \$(hostname) ======"
 FINAL_CONFIG="${SLAB_DATA_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}.data"
 ISOLATED_OUT="${SLAB_DATA_DIR}/${ISOLATED_DATANAME}.data"
 
@@ -253,12 +270,12 @@ python3 "${SCRIPTS_DIR}/isolate_gel.py" \
     --output "\$ISOLATED_OUT"
 
 echo "Isolated gel written: \$ISOLATED_OUT"
-echo "\$ISOLATED_OUT" > "${MANIFEST_DIR}/p${P}_isolated.path"
+echo "\$ISOLATED_OUT" > "${MANIFEST_DIR}/p${P}_rep${rep}_isolated.path"
 
 HEREDOC
 
     ISOLATE_JID=$(sbatch --parsable ${SLAB_DEP} "$ISOLATE_BATCH")
-    echo "P=${P}: submitted isolate_gel          JID=${ISOLATE_JID} (dep: ${SLAB_DEP:-none})"
+    echo "P=${P} rep=${rep}: submitted isolate_gel          JID=${ISOLATE_JID} (dep: ${SLAB_DEP:-none})"
 
     # ------------------------------------------------------------------
     # Job 2b: mixed-gel NPT  (depends on isolate)
@@ -267,10 +284,10 @@ HEREDOC
     #   IS V_mix — measured the same way (NPT box_dimensions) as the pure
     #   references, replacing the old geometric bounding box.
     # ------------------------------------------------------------------
-    MIX_BATCH=$(mktemp /tmp/mix_volmix_p${P}_XXXX.batch)
+    MIX_BATCH=$(mktemp /tmp/mix_volmix_p${P}_r${rep}_XXXX.batch)
     cat > "$MIX_BATCH" << HEREDOC
 #!/usr/bin/env bash
-#SBATCH --job-name=mix_p${P}
+#SBATCH --job-name=mix_p${P}_r${rep}
 #SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=1
@@ -293,7 +310,7 @@ module load gcc/10.2.0
 module load openmpi/4.1.3
 module load python/3.8.12
 
-echo ""; echo "====== mix_p${P} | \$(date) | \$(hostname) ======"
+echo ""; echo "====== mix_p${P}_r${rep} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
 # run_lammps.sh reads inputs from input_data/; isolate wrote the mixed gel to
@@ -309,21 +326,21 @@ bash "${SCRIPTS_DIR}/run_lammps.sh" "polymer_pure" "${ISOLATED_DATANAME}" "${INT
     "${PURE_STEPS}" "0" "" "${P}"
 
 WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/polymer_pure_${ISOLATED_DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
-echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_mixed.workdir"
+echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_rep${rep}_mixed.workdir"
 HEREDOC
 
     MIX_JID=$(sbatch --parsable --dependency=afterok:${ISOLATE_JID} "$MIX_BATCH")
-    echo "P=${P}: submitted mixed_gel NPT         JID=${MIX_JID}  (after ${ISOLATE_JID})"
+    echo "P=${P} rep=${rep}: submitted mixed_gel NPT         JID=${MIX_JID}  (after ${ISOLATE_JID})"
 
     # ------------------------------------------------------------------
     # Job 3: split_gel.py  (depends on isolate; uses isolated_*.data)
     #   Writes isolated_*_polymer_only.data and isolated_*_solvent_only.data
     #   Does NOT touch final_config_*.data
     # ------------------------------------------------------------------
-    SPLIT_BATCH=$(mktemp /tmp/split_volmix_p${P}_XXXX.batch)
+    SPLIT_BATCH=$(mktemp /tmp/split_volmix_p${P}_r${rep}_XXXX.batch)
     cat > "$SPLIT_BATCH" << HEREDOC
 #!/usr/bin/env bash
-#SBATCH --job-name=split_p${P}
+#SBATCH --job-name=split_p${P}_r${rep}
 #SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=1
@@ -337,7 +354,7 @@ module reset
 module load gcc/10.2.0
 module load python/3.8.12
 
-echo ""; echo "====== split_p${P} | \$(date) | \$(hostname) ======"
+echo ""; echo "====== split_p${P}_r${rep} | \$(date) | \$(hostname) ======"
 ISOLATED_FILE="${SLAB_DATA_DIR}/${ISOLATED_DATANAME}.data"
 if [ ! -f "\$ISOLATED_FILE" ]; then
     echo "ERROR: Isolated file not found: \$ISOLATED_FILE"
@@ -354,15 +371,15 @@ ls -lh "${INPUT_DATA_DIR}/${ISOLATED_DATANAME}_solvent_only.data"
 HEREDOC
 
     SPLIT_JID=$(sbatch --parsable --dependency=afterok:${ISOLATE_JID} "$SPLIT_BATCH")
-    echo "P=${P}: submitted split_gel           JID=${SPLIT_JID}  (after ${ISOLATE_JID})"
+    echo "P=${P} rep=${rep}: submitted split_gel           JID=${SPLIT_JID}  (after ${ISOLATE_JID})"
 
     # ------------------------------------------------------------------
     # Job 3a: solvent_pure  (depends on split; concurrent with polymer_pure)
     # ------------------------------------------------------------------
-    SOL_BATCH=$(mktemp /tmp/solvent_volmix_p${P}_XXXX.batch)
+    SOL_BATCH=$(mktemp /tmp/solvent_volmix_p${P}_r${rep}_XXXX.batch)
     cat > "$SOL_BATCH" << HEREDOC
 #!/usr/bin/env bash
-#SBATCH --job-name=sol_p${P}
+#SBATCH --job-name=sol_p${P}_r${rep}
 #SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=1
@@ -385,28 +402,27 @@ module load gcc/10.2.0
 module load openmpi/4.1.3
 module load python/3.8.12
 
-echo ""; echo "====== sol_p${P} | \$(date) | \$(hostname) ======"
+echo ""; echo "====== sol_p${P}_r${rep} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
 bash "${SCRIPTS_DIR}/run_lammps.sh" "solvent_pure" "${SOL_DATANAME}" "${PURE_INTERACTION}" \
     "${PURE_STEPS}" "0" "" "${P}"
 
 WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/solvent_pure_${SOL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
-echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_solvent.workdir"
+echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_rep${rep}_solvent.workdir"
 HEREDOC
 
     SOL_JID=$(sbatch --parsable --dependency=afterok:${SPLIT_JID} "$SOL_BATCH")
-    echo "P=${P}: submitted solvent_pure         JID=${SOL_JID}   (after ${SPLIT_JID})"
+    echo "P=${P} rep=${rep}: submitted solvent_pure         JID=${SOL_JID}   (after ${SPLIT_JID})"
 
     # ------------------------------------------------------------------
     # Job 3b: polymer_pure  (depends on split; concurrent with solvent_pure)
     # ------------------------------------------------------------------
-    POL_BATCH=$(mktemp /tmp/polymer_volmix_p${P}_XXXX.batch)
-    NEXT_FROM=$END
+    POL_BATCH=$(mktemp /tmp/polymer_volmix_p${P}_r${rep}_XXXX.batch)
 
     cat > "$POL_BATCH" << HEREDOC
 #!/usr/bin/env bash
-#SBATCH --job-name=pol_p${P}
+#SBATCH --job-name=pol_p${P}_r${rep}
 #SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=1
@@ -429,20 +445,25 @@ module load gcc/10.2.0
 module load openmpi/4.1.3
 module load python/3.8.12
 
-echo ""; echo "====== pol_p${P} | \$(date) | \$(hostname) ======"
+echo ""; echo "====== pol_p${P}_r${rep} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
 bash "${SCRIPTS_DIR}/run_lammps.sh" "polymer_pure" "${POL_DATANAME}" "${PURE_INTERACTION}" \
     "${PURE_STEPS}" "0" "" "${P}"
 
 WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/polymer_pure_${POL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
-echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_polymer.workdir"
+echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_rep${rep}_polymer.workdir"
 HEREDOC
 
     POL_JID=$(sbatch --parsable --dependency=afterok:${SPLIT_JID} "$POL_BATCH")
-    echo "P=${P}: submitted polymer_pure         JID=${POL_JID}   (after ${SPLIT_JID})"
+    echo "P=${P} rep=${rep}: submitted polymer_pure         JID=${POL_JID}   (after ${SPLIT_JID})"
+
+    LAST_POL_JID="${POL_JID}"
+
+    done  # end replica loop
 
     # Submit launcher for next batch (from login node, avoids sbatch-from-compute issues)
+    # Depends on the last polymer job of the last replica so all reps finish first.
     if [ "$IS_LAST_IN_BATCH" = "yes" ] && [ "$NEXT_FROM" -lt "$TOTAL" ]; then
         LAUNCH_BATCH=$(mktemp /tmp/volmix_launch_XXXX.batch)
         cat > "$LAUNCH_BATCH" << HEREDOC
@@ -462,8 +483,8 @@ module reset
 SKIP_FLAG=$([ "${SKIP_SLAB}" = "1" ] && echo "--skip-slab" || echo "")
 bash "${SCRIPT_DIR}/volmix_sweep.sh" --from ${NEXT_FROM} \${SKIP_FLAG}
 HEREDOC
-        LAUNCH_JID=$(sbatch --parsable --dependency=afterok:${POL_JID} "$LAUNCH_BATCH")
-        echo "P=${P}: submitted next-batch launcher JID=${LAUNCH_JID}  (after ${POL_JID}, --from ${NEXT_FROM})"
+        LAUNCH_JID=$(sbatch --parsable --dependency=afterok:${LAST_POL_JID} "$LAUNCH_BATCH")
+        echo "P=${P}: submitted next-batch launcher JID=${LAUNCH_JID}  (after ${LAST_POL_JID}, --from ${NEXT_FROM})"
     fi
 
     echo "--------------------------------------"
