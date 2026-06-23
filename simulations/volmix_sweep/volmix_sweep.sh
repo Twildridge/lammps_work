@@ -198,7 +198,7 @@ if [ -z "\$WORK_DIR" ]; then
 fi
 
 # Copy all ${N_SNAPS} snapshot files to SLAB_DATA_DIR
-for snap in $(seq 1 ${N_SNAPS}); do
+for (( snap=1; snap<=${N_SNAPS}; snap++ )); do
     SNAP_FILE="\${WORK_DIR}/final_config_${DATANAME}_${INTERACTION}_${TOTSTEPS}_snap\${snap}.data"
     if [ ! -f "\$SNAP_FILE" ]; then
         echo "ERROR: Snapshot \$snap not found: \$SNAP_FILE"
