@@ -133,6 +133,7 @@ for (( i=FROM; i<END; i++ )); do
     # ------------------------------------------------------------------
     for (( rep=1; rep<=NREPS; rep++ )); do
 
+    VEL_SEED=$(( rep * 11111 ))   # 11111 / 22222 / 33333 — unique RNG seed per replica
     DATANAME="${BASE_DATANAME}_pstar${P}_rep${rep}"
     TOTSTEPS=$SLAB_STEPS
 
@@ -186,7 +187,7 @@ MAX_ATTEMPTS=6
 for attempt in \$(seq 1 \$MAX_ATTEMPTS); do
     echo "slab_p${P}_r${rep}: attempt \$attempt of \$MAX_ATTEMPTS"
     if bash "${SCRIPTS_DIR}/run_lammps.sh" "slab_with_support" "${DATANAME}" "${INTERACTION}" \
-            "${SLAB_STEPS}" "0" "" "${P}"; then
+            "${SLAB_STEPS}" "0" "" "${P}" "${VEL_SEED}"; then
         echo "slab_p${P}_r${rep}: succeeded on attempt \$attempt"
         break
     fi
@@ -323,7 +324,7 @@ if [ ! -f "\$ISO_SRC" ]; then echo "ERROR: isolated gel not found: \$ISO_SRC"; e
 # interaction=${INTERACTION} (1.0_1.0): epsSS=1.0 is applied as WCA to ALL pairs,
 # so the mix is athermal and consistent with the pure runs.
 bash "${SCRIPTS_DIR}/run_lammps.sh" "polymer_pure" "${ISOLATED_DATANAME}" "${INTERACTION}" \
-    "${PURE_STEPS}" "0" "" "${P}"
+    "${PURE_STEPS}" "0" "" "${P}" "${VEL_SEED}"
 
 WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/polymer_pure_${ISOLATED_DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_rep${rep}_mixed.workdir"
@@ -406,7 +407,7 @@ echo ""; echo "====== sol_p${P}_r${rep} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
 bash "${SCRIPTS_DIR}/run_lammps.sh" "solvent_pure" "${SOL_DATANAME}" "${PURE_INTERACTION}" \
-    "${PURE_STEPS}" "0" "" "${P}"
+    "${PURE_STEPS}" "0" "" "${P}" "${VEL_SEED}"
 
 WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/solvent_pure_${SOL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_rep${rep}_solvent.workdir"
@@ -449,7 +450,7 @@ echo ""; echo "====== pol_p${P}_r${rep} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
 bash "${SCRIPTS_DIR}/run_lammps.sh" "polymer_pure" "${POL_DATANAME}" "${PURE_INTERACTION}" \
-    "${PURE_STEPS}" "0" "" "${P}"
+    "${PURE_STEPS}" "0" "" "${P}" "${VEL_SEED}"
 
 WORK_DIR=\$(ls -dt "${VOLMIX_RUNS}/polymer_pure_${POL_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_rep${rep}_polymer.workdir"

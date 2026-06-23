@@ -44,6 +44,7 @@
 variable sigma        equal 1.0
 variable temp_target  equal 1.0
 variable press_target index 1.5 # overridden by -var on command line
+variable vel_seed     equal 12345  # RNG seed for create_velocity; overridden by -var for replica sweeps
 variable tdamp        equal 1.0
 variable pdamp        equal 1.0
 variable n_blocks     equal 10
@@ -131,7 +132,7 @@ fix freeze_walls walls setforce 0.0 0.0 0.0
 minimize 1.0e-4 1.0e-6 10000 100000
 
 reset_timestep 0
-velocity solvent create 0.1 12345 mom yes rot no
+velocity solvent create 0.1 ${vel_seed} mom yes rot no
 fix gentle solvent nve/limit 0.05
 fix lang   solvent langevin ${temp_target} ${temp_target} ${tdamp} 904297
 timestep ${timestep_gentle}

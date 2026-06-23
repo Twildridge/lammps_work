@@ -47,6 +47,7 @@
 variable sigma        equal 1.0
 variable temp_target  equal 1.0
 variable press_target index 1.5 # overridden by -var on command line
+variable vel_seed     equal 12345  # RNG seed for create_velocity; overridden by -var for replica sweeps
 variable tdamp        equal 1.0
 variable pdamp        equal 1.0
 variable n_blocks     equal 10
@@ -110,7 +111,7 @@ bond_coeff 1 30.0 0.96
 special_bonds lj 0.0 1.0 1.0
 
 reset_timestep 0
-velocity mobile create 0.01 12345 mom yes rot no
+velocity mobile create 0.01 ${vel_seed} mom yes rot no
 fix pre  mobile nve/limit 0.05
 fix lang mobile langevin 0.01 0.01 ${tdamp} 904297
 timestep ${timestep_gentle}

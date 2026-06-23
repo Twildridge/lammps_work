@@ -64,6 +64,7 @@ variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
 # Equilibration parameters
 variable temp_target equal 1.0
 variable press_target index 1.5 # APPROPRIATE VALUE IMPORTANT — overridden by -var on command line
+variable vel_seed     equal 12345  # RNG seed for create_velocity; overridden by -var for replica sweeps
 variable tdamp equal 1.0
 variable pdamp equal 1.0
 variable timestep_gentle equal 0.001
@@ -142,8 +143,8 @@ thermo_style custom step temp pe ke etotal press vol lx ly lz
 thermo 1000
 
 if "${is_restart} == 0 && ${cont} == 0" then &
-    "velocity mobile create 0.01 12345 mom yes rot no"   &
-    "fix pushoff mobile nve/limit 0.05"                   &
+    "velocity mobile create 0.01 ${vel_seed} mom yes rot no"   &
+    "fix pushoff mobile nve/limit 0.05"                          &
     "fix lang_pushoff mobile langevin 0.01 0.01 ${tdamp} 904297" &
     "timestep ${timestep_gentle}"                        &
     "run 10000"                                          &
@@ -218,7 +219,7 @@ dump poly_traj polymer_and_support custom ${dump_freq} traj_files/polymer_${data
 #   PHASE 3: GENTLE NVT THERMALIZATION
 # =====================================================================
 if "${is_restart} == 0 && ${cont} == 0" then "reset_timestep 0"
-if "${is_restart} == 0 && ${cont} == 0" then "velocity mobile create 0.01 12345 mom yes rot no"
+if "${is_restart} == 0 && ${cont} == 0" then "velocity mobile create 0.01 ${vel_seed} mom yes rot no"
 if "${is_restart} == 0 && ${cont} == 0" then "fix 1 mobile nve/limit 0.05"
 if "${is_restart} == 0 && ${cont} == 0" then "fix 2 mobile langevin 0.01 ${temp_target} ${tdamp} 904297"
 if "${is_restart} == 0 && ${cont} == 0" then "timestep ${timestep_gentle}"

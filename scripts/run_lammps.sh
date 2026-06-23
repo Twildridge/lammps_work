@@ -9,6 +9,7 @@ if [ $# -lt 4 ]; then
     echo "  oldsteps: total timesteps from previous run (defaults to 0 for fresh runs)"
     echo "  type: optional, 'stress' (adds 1), 'volume' (adds 2), or 'stressvol' (adds 3) to dataname"
     echo "  press_target: optional, overrides press_target in .lmp file (default: 1.5)"
+    echo "  vel_seed: optional, RNG seed for create_velocity and fix langevin (default: 12345)"
     exit 1
 fi
 
@@ -19,6 +20,7 @@ NSTEPS=$4
 OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
 TOTSTEPS=$((OLDSTEPS + NSTEPS))
 PRESS_TARGET=${7:-1.5}  # Default pressure; overrides press_target in .lmp file
+VEL_SEED=${8:-12345}    # RNG seed for create_velocity and fix langevin; vary per replica
 SKIP_WIDOM=${SKIP_WIDOM:-0}  # Set to 1 (via env) to minimize Widom output and skip cavity_widom.py
 
 # P-sweep parameters (only used for pure_solvent; ignored by other scripts)
@@ -133,6 +135,7 @@ mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM
     -var nsteps_eq $NSTEPS_EQ \
     -var nsteps_prod $NSTEPS_PROD \
     -var press_target $PRESS_TARGET \
+    -var vel_seed $VEL_SEED \
     \
     -in $LAMMPS_FILE
 LAMMPS_RC=$?
