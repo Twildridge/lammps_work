@@ -153,11 +153,16 @@ pair_coeff 3 3 ${epsSS} ${sigma} 1.122
 #   Plate-plate interactions DISABLED — the six plates must not repel each
 #   other across the gel (unlike shear_slab which only has two plates).
 #   Plate-gel interactions: WCA (soft repulsive wall contact).
+#   Plate-SOLVENT interactions DISABLED — plates must be transparent to solvent
+#   so it flows through freely; measuring the NETWORK bulk modulus only.
+#   (Previously WCA, which made plates push on the dense rho04 solvent layer at
+#    the box faces → ~7.7e8 pressure → "Domain too large for neighbor bins".)
 neigh_modify exclude type 4 4
+neigh_modify exclude type 3 4
 pair_coeff 4 4 0.0 ${sigma} 0.0               # plate-plate DISABLED
 pair_coeff 1 4 1.0 ${sigma} 1.122             # polymer-plate WCA
 pair_coeff 2 4 1.0 ${sigma} 1.122             # crosslinker-plate WCA
-pair_coeff 3 4 1.0 ${sigma} 1.122             # solvent-plate WCA
+pair_coeff 3 4 0.0 ${sigma} 0.0               # solvent-plate DISABLED (solvent flows through)
 
 # Bond coefficients
 bond_coeff 1 30.0 1.5 1.0 1.0   # polymer-polymer FENE (Kremer-Grest)
