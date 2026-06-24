@@ -107,6 +107,7 @@ if [ $NGPUS -gt 0 ]; then
         -var oldsteps $OLDSTEPS \
         -var totsteps $TOTSTEPS \
         -var strains $STRAINS \
+        -var strains_list "$STRAINS" \
         -in $LAMMPS_FILE
 else
     # CPU-only mode
@@ -122,6 +123,7 @@ else
         -var oldsteps $OLDSTEPS \
         -var totsteps $TOTSTEPS \
         -var strains $STRAINS \
+        -var strains_list "$STRAINS" \
         -in $LAMMPS_FILE
 fi
 
@@ -155,11 +157,18 @@ module load anaconda3/2024.10-1
 echo "Generating convergence plot..."
 python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
 
-echo "Generating stress profiles..."
-python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+if [ "$FOLDER" = "shear_slab" ]; then
+    # shear_slab writes per-strain (_g<strain>) files in its own schema; use the
+    # dedicated sweep plotter instead of the compress/flow stress + piston plots.
+    echo "Generating shear stress-strain sweep plots (per strain: $STRAINS)..."
+    python "$SCRIPT_DIR/plot_shear_strain_sweep.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$STRAINS"
+else
+    echo "Generating stress profiles..."
+    python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
 
-echo "Generating piston plots..."
-python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+    echo "Generating piston plots..."
+    python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+fi
 
 echo "Generating computational efficiency plot..."
 python "$SCRIPT_DIR/write_tracking.py" "." "${DATANAME}${SUFFIX}_${INTERACTION}_${TOTSTEPS}" "$SUFFIX"

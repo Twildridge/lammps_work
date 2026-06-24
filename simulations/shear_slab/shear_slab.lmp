@@ -63,6 +63,15 @@ variable timestep_prod  equal 0.005
 # clean G; the curve will reveal where it departs from linearity.
 variable strains index 0.10
 
+# Diagnostic: run_lammps.sh also passes the raw list as a single string
+# (-var strains_list "0.1 0.15 ...") purely for logging. If the log shows the
+# STALE fallback string below instead of your list, the run_lammps.sh that
+# executed did NOT pass -var strains (its on-disk copy was out of date when the
+# job started — the script's own git pull only updates it for the NEXT run).
+# In that case ONLY the single in-script default strain above runs. Fix: make
+# sure run_lammps.sh on the cluster is current BEFORE submitting, then resubmit.
+variable strains_list index "STALE-run_lammps.sh--no-list-passed--running-single-default-only"
+
 # Reference strain used ONLY to set the (constant) plate drive speed vshear.
 # Each increment is stopped by fix halt at the current ${strains} target, so
 # this controls how fast the plates move, not where they stop.
@@ -96,7 +105,12 @@ variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 
 print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
-print ">>> Shear: cumulative strain targets=${strains} ...  nsteps_shear=${nsteps_shear}  (plate-driven, incremental)"
+print "############################################################"
+print ">>> STRAIN SWEEP LIST (raw from run_lammps.sh): ${strains_list}"
+print ">>>   first target=${strains}   nsteps_shear=${nsteps_shear}  (plate-driven, incremental)"
+print ">>>   If the line above reads 'STALE-run_lammps.sh...', only ONE strain"
+print ">>>   will run — update run_lammps.sh on the cluster and resubmit."
+print "############################################################"
 
 # Spatial binning
 variable binWidth    equal 2.0
