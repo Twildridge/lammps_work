@@ -1,0 +1,1100 @@
+# ================= Triaxial Permeation Simulation (piston-driven flow) =======
+# PERMEATION MODE ONLY.  Split out of slab_with_flow.lmp (which carried both
+# compression and permeation modes behind compression_mode logic gates) so the
+# permeation path is self-contained and free of per-step mode branching.
+# The compression counterpart lives in ../triaxial_compression/.
+#
+# Starting from an equilibrated configuration (solvent near walls already
+# removed) produced by the slab_with_support workflow.
+# Variables from bash script: dataname, interaction, epsSS, epsSP, nsteps
+#
+# Atom types: 1=polymer, 2=crosslinker, 3=solvent, 4=support, 5=piston, 6=walls
+#
+# Reduced LJ units: tau = sigma*sqrt(m/epsilon)
+# dt = 0.005 → 1e6 steps ≈ 4.1e3 tau
+#
+# Behaviour:
+#   - Piston-solvent WCA is ON throughout; the piston floats on the solvent.
+#   - Phase 0: NVT equilibration at fixed box volume (piston z-free on solvent).
+#   - Phase 2 (production): piston moves at constant velocity v_piston_perm,
+#     pushing solvent as a plug through the gel.  Records feed/permeate
+#     reservoir pressures and permeate flux.  Halts when the feed reservoir
+#     thins to feed_halt_thick (prevents the piston crashing into the gel).
+
+
+# ==========================================================================
+#                              PARAMETERS
+# ==========================================================================
+
+# ----- Continuation flag -----
+# 0 = fresh start (default)
+# 1 = continuation from a final .data file (via continue_sim.sh)
+#
+# When cont=1, Phase 0 is skipped but the Phase 2 piston velocity is re-applied,
+# so the piston resumes moving at v_piston_perm from its current position.
+variable cont index 0
+
+# ----- Physical Parameters -----
+variable sigma         equal 1.0
+variable temp_target   equal 1.0
+variable P_target      equal 1.5
+variable timestep_prod equal 0.005
+
+# ----- Phase 0: NVT equilibration steps -----
+variable perm_setup_freq equal 50000    # permeation Phase 0 NVT
+
+# ----- Permeation Phase 2 -----
+# v_piston_perm: constant piston velocity (negative = -z direction, toward gel).
+# Slow drive (= 5% of the compression-mode velocity of 0.04 σ/τ) for a steady,
+# steady-state-friendly permeation.
+variable v_piston_perm     equal 0.002  # σ/τ
+variable feed_halt_thick   equal 2.0    # halt when feed reservoir ≤ this (σ)
+variable flux_freq         equal 1000   # permeate bead count output interval (steps)
+
+# ----- Output Frequencies -----
+variable thermo_freq     equal 250000 # 2000  # 250000
+variable dump_freq_setup equal 10000      # frequent dumps during Phase 1
+variable dump_freq_prod  equal 200000 # 5000 # 100000     # sparse dumps during Phase 2
+variable volume_freq     equal 5000 # 1000 # 5000
+
+# Cavity Widom dump cadence — all-atom frames for cavity_widom.py post-processing.
+# More frames → lower noise in time-averaged μ_ex(z): noise ∝ 1/√num_widom_frames.
+# Dump starts after the ε=0 reference recording block (production phase only).
+variable num_widom_frames equal 50
+variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
+
+# ======================================================================
+
+# ----- Time Averaging (stress) -----
+# nfreq = nevery * nrepeat  (LAMMPS constraint)
+variable num_stress_curves equal 10    # target output frames
+variable nevery_target     equal 100   # ~0.5 tau — near stress decorrelation time
+variable nrepeat_max       equal 2000  # cap to preserve transient resolution
+variable nrepeat_min       equal 50    # floor for adequate noise reduction
+
+variable nfreq_raw    equal floor(${nsteps}/v_num_stress_curves)
+variable nrepeat_raw  equal floor(v_nfreq_raw/v_nevery_target)
+
+# Clamp nrepeat to [min, max]
+variable nr_lo equal (v_nrepeat_raw>v_nrepeat_min)*v_nrepeat_raw+(v_nrepeat_raw<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepeat_max)*v_nrepeat_max
+
+# Derive nevery and enforce exact constraint
+variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
+variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
+
+print ">>> Stress: nevery=${nevery_stress} nrepeat=${nrepeat_stress} nfreq=${nfreq_stress}"
+print ">>> Mode: PERMEATION (piston-driven flow)"
+
+# ----- Spatial Binning -----
+variable binWidth    equal 2.0
+variable rg_scale    equal 1.8   # Rg multiplier (~90% coverage for Gaussian)
+variable region_frac equal 1     # fraction of polymer extent for analysis regions
+
+
+# ==========================================================================
+#                           INITIALIZATION
+# ==========================================================================
+
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+# Single lj/cut pair style.
+# NOTE: sub-style virial filtering ("compute stress/atom NULL pair <style>")
+# is not supported by this LAMMPS build — the "pair" keyword in compute
+# stress/atom includes ALL pair interactions and takes no further arguments.
+# The hybrid pair_style approach (using lj/expand for 3-3 to get a unique
+# style name) was attempted but also rejected.  The solvent-solvent-only
+# stress decomposition is therefore omitted; see the poroelasticity notes
+# in compression_analysis.ipynb for the post-processing correction.
+pair_style lj/cut 1.122
+bond_style fene
+
+read_data data_files/${dataname}.data nocoeff
+
+comm_modify cutoff 5.0
+
+print "========================================"
+print "Triaxial permeation simulation: ${dataname}"
+print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
+print "Production steps: ${nsteps}"
+print "Permeation piston velocity: ${v_piston_perm} sigma/tau"
+print "========================================"
+
+
+# ==========================================================================
+#                          GROUP DEFINITIONS
+# ==========================================================================
+
+group polymer   type 1 2
+group solvent   type 3
+group support   type 4
+group piston    type 5
+group walls     type 6
+group mobile    type 1 2 3
+group gel_system type 1 2 3 4 5
+
+
+# ==========================================================================
+#                       INTERATOMIC POTENTIALS
+# ==========================================================================
+
+# Default: full LJ for all pairs
+pair_coeff * * 1.0 ${sigma} 1.122
+
+# Polymer-solvent (tunable)
+pair_coeff 1 3 ${epsSP} ${sigma} 1.122    # polymer-solvent
+pair_coeff 2 3 ${epsSP} ${sigma} 1.122    # crosslinker-solvent
+
+# Solvent-solvent (tunable)
+pair_coeff 3 3 ${epsSS} ${sigma} 1.122    # solvent-solvent
+
+# Polymer/crosslinker with support and piston (WCA repulsive)
+pair_coeff 1 4 1.0 ${sigma} 1.122
+pair_coeff 2 4 1.0 ${sigma} 1.122
+pair_coeff 1 5 1.0 ${sigma} 1.122
+pair_coeff 2 5 1.0 ${sigma} 1.122
+
+# Solvent-piston: mode-dependent from the start.
+#   Compression: OFF — piston passes through solvent freely, loads gel directly.
+#   Permeation:  ON  — piston pushes solvent as a plug through the gel.
+pair_coeff 3 5 0.0 ${sigma} 0.0          # default: OFF (compression)
+pair_coeff 3 5 1.0 ${sigma} 1.122
+
+# Wall interactions (WCA)
+pair_coeff 1 6 1.0 ${sigma} 1.122
+pair_coeff 2 6 1.0 ${sigma} 1.122
+pair_coeff 3 6 1.0 ${sigma} 1.122
+
+# Non-interacting pairs
+pair_coeff 3 4 0.0 ${sigma} 0.0   # solvent-support
+pair_coeff 4 4 0.0 ${sigma} 0.0   # support-support
+pair_coeff 4 5 0.0 ${sigma} 0.0   # support-piston
+pair_coeff 4 6 0.0 ${sigma} 0.0   # support-wall
+pair_coeff 5 5 0.0 ${sigma} 0.0   # piston-piston
+pair_coeff 5 6 0.0 ${sigma} 0.0   # piston-wall
+pair_coeff 6 6 0.0 ${sigma} 0.0   # wall-wall
+
+# ----- Bonds and Angles -----
+bond_coeff * 30.0 1.5 1.0 1.0
+special_bonds fene
+
+# Angle style — hybrid (uncomment if angles are present in data file)
+#angle_style hybrid cosine harmonic
+#angle_coeff 1 cosine 1.0
+#angle_coeff 2 harmonic 40.0 109.47
+
+# ----- Neighbor List Exclusions -----
+neigh_modify exclude type 4 4   # support-support
+neigh_modify exclude type 5 5   # piston-piston
+neigh_modify exclude type 6 6   # wall-wall
+neigh_modify exclude type 4 5   # support-piston
+neigh_modify exclude type 4 6   # support-wall
+neigh_modify exclude type 5 6   # piston-wall
+
+
+# ==========================================================================
+#                           RIGID BODIES
+# ==========================================================================
+
+# Support: completely frozen
+velocity support set 0.0 0.0 0.0
+fix rigid_support support rigid single force * off off off torque * off off off
+
+# Walls: completely frozen
+velocity walls set 0.0 0.0 0.0
+fix rigid_walls walls rigid single force * off off off torque * off off off
+
+# Piston: mode-dependent from the start.
+#   Compression: fully frozen during Phase 0 NVT (force * off off off +
+#                setforce 0).  Released to nve+setforce during Phase 0.5
+#                Langevin+NPH so it scales isotropically with the box.
+#                Restored to rigid+frozen after Phase 0.5; then released
+#                again for constant-velocity compression in Phase 2.
+#   Permeation:  z-motion enabled immediately (piston floats on solvent).
+velocity piston set 0.0 0.0 0.0
+
+
+fix rigid_piston piston rigid single force * off off on torque * off off off
+
+
+# ==========================================================================
+#                           THERMO OUTPUT
+# ==========================================================================
+
+compute mobile_temp mobile temp
+compute mobile_press all pressure thermo_temp pair bond
+thermo_style custom step c_mobile_temp pe ke etotal press c_mobile_press vol lx ly lz
+thermo_modify lost warn
+thermo ${thermo_freq}
+
+# ----- Piston force compute (defined early so permeation mode can record a
+#       Phase 0 equilibrium baseline; compression mode only outputs from Phase 2) -----
+# c_piston_fz: sum of pairwise z-forces on ALL piston atoms.
+#   Positive = net upward (gel/solvent pushing piston up).
+#   In compression mode, setforce 0 is still active here → value will be 0
+#   until Phase 2 (when setforce is removed); the fix print is only defined
+#   for compression AFTER Phase 0.5 cleanup (see OUTPUT: PISTON DATA).
+#   In permeation mode, no setforce is ever applied, so the value is live now.
+compute piston_fz      piston reduce sum fz
+variable piston_area      equal lx*ly          # cross-sectional area of simulation box
+variable piston_pressure_z equal c_piston_fz/v_piston_area  # force normalised by area
+
+
+# ==========================================================================
+#              PHASE 0: NVT EQUILIBRATION (BOTH MODES)
+# ==========================================================================
+# Equilibrate at the current box volume.  No pressure adjustment here —
+# that is handled by the Langevin+NPH block (Phase 0.5) for compression,
+# or by the permeation force ramp in Phase 2 for permeation.
+# Box dimensions stay fixed throughout Phase 0.
+
+print "========================================"
+print "Phase 0: NVT equilibration"
+print "========================================"
+
+reset_timestep 0
+timestep ${timestep_prod}
+
+# ----- cont=1: skip minimize + Phase 0 NVT (data file already holds equilibrated config) -----
+if "${cont} == 1" then "jump SELF label_after_phase0"
+
+# Brief minimize to clean up any residual overlaps from wall insertion
+minimize 1.0e-4 1.0e-6 1000 10000
+
+# Setup trajectory
+dump traj_setup gel_system custom ${dump_freq_setup} &
+   traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
+   id type mol x y z
+
+# NVT equilibration at fixed volume (piston frozen for compression, z-free for permeation)
+fix nvt_equil mobile nvt temp ${temp_target} ${temp_target} 1.0
+
+# Permeation: record piston force from the very start of Phase 0 to capture the
+# equilibrium (zero-applied-pressure) baseline.  The piston floats freely on solvent
+# (fix rigid_piston force * off off on, no setforce), so c_piston_fz is live now.
+# Compression mode: force output begins AFTER Phase 0.5 (see OUTPUT: PISTON DATA).
+fix out_piston_force all print ${volume_freq} '$(step) $(c_piston_fz)' file output_files/piston_data/piston_force_${dataname}_${interaction}_${nsteps}.dat screen no
+
+run ${perm_setup_freq}
+
+print ">>> Post-Phase-0 NVT: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
+unfix nvt_equil
+
+label label_after_phase0
+
+# run 0 initializes all computes so their values can be referenced in
+# variable formulas and print statements below (required when cont=1 skips
+# the minimize that previously served this purpose).
+run 0
+
+# ==========================================================================
+#    PHASE 0.5 (COMPRESSION ONLY): ISOTROPIC LANGEVIN + NPH
+# ==========================================================================
+# Brings mobile_press to P_target = 1.5 by isotropically swelling/deswelling
+# the gel.  All rigid bodies (piston, walls, support) are temporarily put on
+# nve+setforce so they scale freely with the box without contributing spurious
+# virial to the barostat.
+#
+# Why Langevin + NPH (not fix npt / Nosé-Hoover):
+#   FENE bonds under compression inject kinetic energy faster than the
+#   Nosé-Hoover chain can remove it → T stuck at ~6.  Langevin's per-atom
+#   friction coefficient (∝ v) removes energy in direct proportion to how
+#   hot each atom is — it always wins against FENE heating.
+#
+# Key parameters:
+#   npt_P_damp: barostat damping (τ).  100 τ is a good default; increase to
+#               500–1000 if FENE bond warnings appear.
+#   npt_p05_steps: run length.  200k is usually enough; increase if
+#                  mobile_press has not converged at the end of the run.
+
+variable npt_P_damp    equal 50.0   # barostat damping (τ); increase if FENE errors appear
+variable npt_p05_steps equal 120000  # run length; increase if mobile_press not converged
+# NPH targets 'press', which includes the barostat's own virial contributions
+# (~+0.39 above c_mobile_press for this system).  To get c_mobile_press = 1.5
+# at NPH convergence, set npt_P05_target ≈ P_target + 0.41.
+# Re-calibrate if the system size or density changes significantly.
+variable npt_P05_target equal ${P_target}+0.41   # ≈ 1.91
+
+# ----- cont=1 + compression: jump over Phase 0.5 (box already at equilibrium pressure) -----
+
+
+# Isotropic NPH so the gel swells/deswells uniformly in all directions.
+# Piston and walls on nve+setforce during NPH so they scale with the box.
+# Langevin (T_damp=1.0): robust temperature control even under FENE stress.
+# Nosé-Hoover (fix npt) left T stuck at ~6 because FENE bonds inject energy
+# faster than the NH chain can remove it; Langevin's per-atom friction removes
+# energy in direct proportion to velocity, which always wins.
+
+# Release piston to scale isotropically (nve+setforce, no fix rigid)
+
+# Release walls and support to scale isotropically
+
+
+
+# Restore rigid piston at its new (scaled) position
+
+# Restore rigid walls and support
+
+# NVT equilibration at the new box volume (all rigid bodies restored)
+
+label label_after_phase05
+
+print ">>> Pre-production: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
+# traj_setup dump only exists when cont=0 (Phase 0 ran)
+if "${cont} == 0" then "undump traj_setup"
+
+
+# ==========================================================================
+#                    ANALYSIS: POLYMER TRACKING
+# ==========================================================================
+
+compute polymer_com polymer com
+
+# ----- Bounding Box (BB) — gel dimensions from min/max coordinates -----
+# Sensitive to outlier beads; kept for diagnostics and gel dimension output.
+compute minx polymer reduce min x
+compute maxx polymer reduce max x
+compute miny polymer reduce min y
+compute maxy polymer reduce max y
+compute minz polymer reduce min z
+compute maxz polymer reduce max z
+
+variable gel_lx_bb equal c_maxx-c_minx
+variable gel_ly_bb equal c_maxy-c_miny
+variable gel_lz_bb equal c_maxz-c_minz
+variable gel_vol_bb equal v_gel_lx_bb*v_gel_ly_bb*v_gel_lz_bb
+
+# ----- Radius of Gyration (Rg) — robust gel dimensions -----
+# For a uniform rectangular prism: Rg_ii² = L_i²/12  →  L_i = 2√3·√(Rg_ii²)
+# c_rg_tensor[i] returns Rg_ii² (diagonal component of gyration tensor).
+compute rg_tensor polymer gyration
+
+variable gel_lx_rg equal 2.0*sqrt(3.0*c_rg_tensor[1])
+variable gel_ly_rg equal 2.0*sqrt(3.0*c_rg_tensor[2])
+variable gel_lz_rg equal 2.0*sqrt(3.0*c_rg_tensor[3])
+variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
+
+# Robust gel-top estimate: polymer COM_z + half the Rg-based z-thickness.
+# c_maxz (raw maximum) is polluted by stray crosslinker/polymer beads that
+# diffuse into the solvent.  The Rg-based estimate is unaffected because
+# COM and Rg² are mean/variance over ~96k atoms — one outlier < 0.004%.
+variable gel_top_rg equal c_polymer_com[3]+0.5*v_gel_lz_rg
+
+# ----- Box dimensions -----
+variable box_lx equal lx
+variable box_ly equal ly
+variable box_lz equal lz
+
+# ----- Piston position/velocity computes -----
+# Defined here (before run 0) so they are initialized alongside polymer/rg computes.
+# Used unconditionally in piston output fixes, and in permeation-mode reservoir
+# regions where LAMMPS evaluates variable bounds at region creation time.
+compute piston_com piston com          # PBC-aware COM; use [3] for z
+compute piston_vz piston reduce ave vz  # velocities do not wrap
+
+# ----- Polymer z-displacement reference -----
+# Defined here so run 0 below captures the post-Phase-0.5 equilibrated positions
+# as the reference configuration.  This gives u_z(z, 0) = 0 at Phase 2 start
+# by construction.  c_displace_poly[3] is the PBC-aware z-displacement per atom.
+compute displace_poly polymer displace/atom
+
+run 0   # initializes ALL computes in one pass; sets displace_poly reference
+
+# ----- Snapshot Rg tensor for diagnostics and analysis region sizing -----
+variable Rg_xx equal c_rg_tensor[1]
+variable Rg_yy equal c_rg_tensor[2]
+variable Rg_zz equal c_rg_tensor[3]
+
+print "Rg_xx = ${Rg_xx}  →  Lx_rg = $(v_gel_lx_rg)"
+print "Rg_yy = ${Rg_yy}  →  Ly_rg = $(v_gel_ly_rg)"
+print "Rg_zz = ${Rg_zz}  →  Lz_rg = $(v_gel_lz_rg)"
+print "BB:  Lx=$(v_gel_lx_bb) Ly=$(v_gel_ly_bb) Lz=$(v_gel_lz_bb)"
+
+# Analysis region half-widths (use rg_scale for ~90% coverage)
+variable eps equal 1.0e-12
+variable hw_x equal v_region_frac*v_rg_scale*sqrt(v_Rg_xx + v_eps)
+variable hw_y equal v_region_frac*v_rg_scale*sqrt(v_Rg_yy + v_eps)
+variable hw_z equal v_region_frac*v_rg_scale*sqrt(v_Rg_zz + v_eps)
+
+print "hw_x = ${hw_x}"
+print "hw_y = ${hw_y}"
+print "hw_z = ${hw_z}"
+
+# ----- Gel strain (Rg-based) -----
+# $(v_gel_lz_rg) — parentheses force immediate numeric evaluation right now,
+# storing a constant. ${gel_lz_rg} would store the expression string instead.
+variable gel_lz_initial equal $(v_gel_lz_rg)
+print ">>> Initial gel thickness (Rg): L0 = ${gel_lz_initial}"
+print ">>> Initial gel thickness (BB): L0 = $(v_gel_lz_bb)"
+print ">>> Gel top (Rg-based) = $(v_gel_top_rg)   c_maxz (raw) = $(c_maxz)   Piston z = $(c_piston_com[3])   Gap = $(c_piston_com[3]-v_gel_top_rg)"
+
+variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
+
+
+# ==========================================================================
+#              PHASE 2: PRODUCTION — piston forcing
+# ==========================================================================
+
+print "========================================"
+print "Phase 2: Production — piston forcing"
+print "========================================"
+
+# ----- Compression: unfreeze piston, switch to velocity control -----
+# The piston was re-frozen after Phase 0.5 Langevin+NPH (rigid + setforce 0).
+# Unfreeze, then re-fix with force*off off off so the prescribed velocity
+# is maintained exactly (no force-driven acceleration from the gel).
+#
+# cont=1 compression: piston stays frozen (already at ~comp_percent strain).
+#   halt_compress fires immediately on the first volume_freq check, and the
+#   entire run becomes a pure stress-relaxation measurement.
+label label_skip_comp_piston_setup
+
+# ----- Thermostat (x,y only — z is flow/compression direction) -----
+compute myTemp mobile temp/partial 1 1 0
+fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix_modify nvt_prod temp myTemp
+
+# ----- Permeation: constant-velocity piston (v_piston_perm = 5% of v_piston_prod) -----
+# Re-fix piston with all forces off and prescribe velocity, matching the
+# compression-mode approach.  The halt_perm condition (feed ≤ feed_halt_thick)
+# is the sole termination condition — no ramp/equilibration phase needed.
+# cont=1 permeation: piston velocity is re-applied from current position, resuming
+#   the drive at v_piston_perm exactly as if the run had not been interrupted.
+unfix rigid_piston
+fix rigid_piston piston rigid single force * off off off torque * off off off
+velocity piston set 0.0 0.0 -${v_piston_perm}
+
+# Permeation piston force output.  For fresh starts (cont=0) this was already
+# defined in Phase 0 (to capture the zero-pressure baseline); for continuations
+# (cont=1) Phase 0 was skipped, so define it here at Phase 2 onset.
+if "${cont} == 1" then "fix out_piston_force all print ${volume_freq} '$(step) $(c_piston_fz)' file output_files/piston_data/piston_force_${dataname}_${interaction}_${nsteps}.dat screen no"
+
+# ----- Permeation: start displacement recording at Phase 2 onset -----
+# Reference positions reset here so u_z(z,0) = 0 at the start of the drive.
+uncompute displace_poly
+compute displace_poly polymer displace/atom
+variable uz_poly atom c_displace_poly[3]
+fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} chunk_z_polymer v_uz_poly file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+# ----- Production Trajectory (sparse sampling) -----
+dump traj_flow gel_system custom ${dump_freq_prod} &
+    traj_files/gel_flow_${dataname}_${interaction}_${nsteps}.lammpstrj &
+    id type mol x y z
+
+
+# ==========================================================================
+#                    ANALYSIS: DYNAMIC REGIONS
+# ==========================================================================
+
+# Region for X-direction binning: restricted in Y-Z, full extent in X
+variable reg_x_ylo equal c_polymer_com[2]-v_hw_y
+variable reg_x_yhi equal c_polymer_com[2]+v_hw_y
+variable reg_x_zlo equal c_polymer_com[3]-v_hw_z
+variable reg_x_zhi equal c_polymer_com[3]+v_hw_z
+region reg_x block EDGE EDGE v_reg_x_ylo v_reg_x_yhi v_reg_x_zlo v_reg_x_zhi side in
+
+# Region for Y-direction binning: restricted in X-Z, full extent in Y
+variable reg_y_xlo equal c_polymer_com[1]-v_hw_x
+variable reg_y_xhi equal c_polymer_com[1]+v_hw_x
+variable reg_y_zlo equal c_polymer_com[3]-v_hw_z
+variable reg_y_zhi equal c_polymer_com[3]+v_hw_z
+region reg_y block v_reg_y_xlo v_reg_y_xhi EDGE EDGE v_reg_y_zlo v_reg_y_zhi side in
+
+# NOTE: Z-direction binning uses the full simulation box (no region restriction).
+# This allows piston position to be visualized in permeation mode, and ensures
+# support stress appears at its true z-location. X and Y profiles retain the
+# polymer-COM-tracked lateral restriction above.
+
+
+# ==========================================================================
+#                    ANALYSIS: CHUNK DEFINITIONS
+# ==========================================================================
+
+# 1D binning with dynamic rectangular regions (x, y — single user each, no conflict)
+compute chunk_x_polymer polymer chunk/atom bin/1d x lower ${binWidth} region reg_x
+compute chunk_y_polymer polymer chunk/atom bin/1d y lower ${binWidth} region reg_y
+compute chunk_x_solvent solvent chunk/atom bin/1d x lower ${binWidth} region reg_x
+compute chunk_y_solvent solvent chunk/atom bin/1d y lower ${binWidth} region reg_y
+
+# Z profiles — one chunk/atom per reduce/chunk user.
+# LAMMPS 22Jul2025 rejects multiple fix ave/time sharing the same chunk/atom
+# via different reduce/chunk computes ("Two fix commands using same compute
+# chunk/atom command in incompatible ways").  Each compute reduce/chunk must
+# therefore reference a unique chunk/atom ID.
+#
+#   chunk_z_poly_p   → press_z_polymer  (isotropic z-press, polymer)
+#   chunk_z_poly_zz  → sigmazz_poly
+#   chunk_z_poly_xx  → sigmaxx_poly
+#   chunk_z_poly_yy  → sigmayy_poly
+#   chunk_z_polymer  → fix avg_disp_z_poly (displacement, relaxation phase only)
+#   chunk_z_solv_p   → press_z_solvent  (isotropic z-press, solvent)
+#   chunk_z_solv_zz  → sigmazz_solv
+#   chunk_z_solv_xx  → sigmaxx_solv
+#   chunk_z_solv_yy  → sigmayy_solv
+compute chunk_z_poly_p   polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_poly_zz  polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_poly_xx  polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_poly_yy  polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_polymer  polymer chunk/atom bin/1d z lower ${binWidth}
+
+compute chunk_z_solv_p   solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_zz  solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_xx  solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_yy  solvent chunk/atom bin/1d z lower ${binWidth}
+
+# Piston and support — single user each, no conflict
+compute chunk_z_piston  piston  chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_support support chunk/atom bin/1d z lower ${binWidth}
+
+
+# ==========================================================================
+#                    ANALYSIS: PARTIAL STRESSES
+# ==========================================================================
+
+compute stress_polymer polymer stress/atom NULL
+compute stress_solvent solvent stress/atom NULL
+
+# Partial stress for each atom: P = -(σxx + σyy + σzz)/(3*vol)
+variable press_polymer_x atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*${binWidth}*ly*lz)
+variable press_polymer_y atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*lx*${binWidth}*lz)
+variable press_polymer_z atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*lx*ly*${binWidth})
+
+variable press_solvent_x atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*${binWidth}*ly*lz)
+variable press_solvent_y atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*lx*${binWidth}*lz)
+variable press_solvent_z atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*lx*ly*${binWidth})
+
+# Sum pre-divided per-atom contributions over chunks → pressure per bin
+compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer_x
+compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer_y
+compute press_z_polymer polymer reduce/chunk chunk_z_poly_p  sum v_press_polymer_z
+
+compute press_x_solvent solvent reduce/chunk chunk_x_solvent  sum v_press_solvent_x
+compute press_y_solvent solvent reduce/chunk chunk_y_solvent  sum v_press_solvent_y
+compute press_z_solvent solvent reduce/chunk chunk_z_solv_p   sum v_press_solvent_z
+
+# Piston and support partial stresses — same methodology as above.
+# stress/atom NULL captures pairwise virial only (no kinetic term), which is
+# correct for rigid bodies; internal constraint forces are excluded.
+compute stress_piston  piston  stress/atom NULL
+compute stress_support support stress/atom NULL
+
+variable press_piston_z  atom -(c_stress_piston[1]+c_stress_piston[2]+c_stress_piston[3])/(3.0*lx*ly*${binWidth})
+variable press_support_z atom -(c_stress_support[1]+c_stress_support[2]+c_stress_support[3])/(3.0*lx*ly*${binWidth})
+
+compute press_z_piston  piston  reduce/chunk chunk_z_piston  sum v_press_piston_z
+compute press_z_support support reduce/chunk chunk_z_support sum v_press_support_z
+
+# ── True ZZ partial-stress component (σzz only) ───────────────────────────
+# The isotropic press_*_z variables above average (σxx+σyy+σzz)/3, which
+# mixes background pressure into the compression signal and cannot be used
+# directly to compute the longitudinal modulus.  These variables isolate the
+# ZZ virial component (c_stress[3]) needed for the Terzaghi decomposition:
+#   σ'_zz = (σ_p_zz + σ_s_zz) − p_pore,   p_pore = σ_s_zz / φ_s
+# Note: still virial-only (NULL kinetic); kinetic contribution is isotropic
+# and cancels in the effective-stress difference for an equilibrated solvent.
+variable sigma_p_zz atom -c_stress_polymer[3]/(lx*ly*${binWidth})
+variable sigma_s_zz atom -c_stress_solvent[3]/(lx*ly*${binWidth})
+variable sigma_p_xx atom -c_stress_polymer[1]/(lx*ly*${binWidth})
+variable sigma_s_xx atom -c_stress_solvent[1]/(lx*ly*${binWidth})
+variable sigma_p_yy atom -c_stress_polymer[2]/(lx*ly*${binWidth})
+variable sigma_s_yy atom -c_stress_solvent[2]/(lx*ly*${binWidth})
+
+compute sigmazz_poly polymer reduce/chunk chunk_z_poly_zz sum v_sigma_p_zz
+compute sigmazz_solv solvent  reduce/chunk chunk_z_solv_zz sum v_sigma_s_zz
+compute sigmaxx_poly polymer reduce/chunk chunk_z_poly_xx sum v_sigma_p_xx
+compute sigmaxx_solv solvent  reduce/chunk chunk_z_solv_xx sum v_sigma_s_xx
+compute sigmayy_poly polymer reduce/chunk chunk_z_poly_yy sum v_sigma_p_yy
+compute sigmayy_solv solvent  reduce/chunk chunk_z_solv_yy sum v_sigma_s_yy
+
+# ── Pair-local data for ss-only virial (post-processing) ─────────────────
+# compute stress/atom does not support sub-style filtering in this LAMMPS
+# build (the "pair" keyword means ALL pair interactions).  Instead, we record
+# per-pair virial via compute pair/local and filter for ss pairs in Python.
+#
+# Using group=solvent guarantees all 3-3 (ss) pairs are captured:
+#   For any ss pair (i,j) with i<j by atom ID, both atoms are type 3 and
+#   therefore in the solvent group → atom i is always in the group → pair
+#   is always included.  Some 3-polymer ps pairs are also captured but are
+#   discarded in post-processing by filtering ptype1==ptype2==3.
+#
+# fx/fy/fz = force on atom I due to atom J.  lj/cut exposes force components
+#   but NOT the virial fields p1/p2/p3 (those require special per-pair virial
+#   support that lj/cut does not implement → "extra field" error at runtime).
+#   The virial is reconstructed in post-processing from forces + positions:
+#     p_zz_pair = -(r_z * fz)   where r_z = z_J - z_I  (PBC-corrected)
+#     p_xx_pair = -(r_x * fx),  p_yy_pair = -(r_y * fy)
+#   Sign convention: positive p means repulsive/compressed → same as p1/p2/p3.
+#   z-positions z_I and z_J come from the main traj dump (same dump_freq_prod).
+#
+# Post-processing steps (see compression_analysis.ipynb):
+#   1. Read pairs dump (atom IDs, types, fx/fy/fz) frame by frame.
+#   2. Read main traj dump (id type x y z) at the same timesteps.
+#   3. Filter: keep rows where ptype1==3 AND ptype2==3.
+#   4. For each ss pair:
+#        r_x/y/z = pos_J - pos_I  (with PBC wrap: if |r_α| > L_α/2, subtract L_α)
+#        p_zz = -(r_z * fz);  z_mid = (z_I + z_J) / 2; assign to z-bin
+#   5. sigma_ss_zz(bin) = sum(p_zz_in_bin) / (lx * ly * binWidth)
+#      (no extra factor of 2: fx/fy/fz is force on atom I only, and r_I*f_I
+#       gives the full pair contribution already — the other half r_J*f_J
+#       is equal by Newton's 3rd law, so sum over all I-as-first pairs gives
+#       the complete double-counted virial; divide by 2 if you use both atoms)
+#      → safest: only count each pair once (as stored in this dump) and use
+#        W_pair = -(r_z * fz) without the factor of 2.
+compute pl_local  solvent pair/local  fx fy fz
+compute ids_local solvent property/local patom1 patom2 ptype1 ptype2
+
+
+# ==========================================================================
+#                 ANALYSIS: POLYMER Z-DISPLACEMENT
+# ==========================================================================
+# u_z(z, t): mean z-displacement of polymer atoms per z-bin.
+# Feeds the cooperative-diffusivity extraction via:
+#   ∂u_z/∂t = D_c ∂²u_z/∂z²
+# phi_p ∝ u_z, so this PDE is equivalent to the volume-fraction formulation
+# but avoids the computationally expensive Voronoi step.
+#
+# Uses the same z-binning (chunk_z_polymer) as the stress profiles so that
+# displacement and stress outputs are spatially registered.
+# Reference is the Phase 2 start (set by run 0 above); u_z(z, 0) = 0 everywhere.
+
+variable uz_poly atom c_displace_poly[3]
+
+# Note: compute reduce/chunk only supports sum/min/max, not ave.
+# Per-bin mean is obtained directly via fix ave/chunk in the OUTPUT section below.
+
+
+# ==========================================================================
+#                  ANALYSIS: RESERVOIR PRESSURES (permeation mode only)
+# ==========================================================================
+# Reservoir pressures are only meaningful in permeation mode:
+#   Feed reservoir:     solvent between gel top and piston bottom face.
+#                       Gel top is approximated by the Rg-based gel_top_rg
+#                       (robust to stray beads); c_maxz is NOT used here.
+#   Permeate reservoir: solvent above piston top face to box top; solvent that
+#                       has permeated through gel + support wraps via PBC here.
+#
+# Piston is 1 sigma thick; its center of mass is c_piston_com[3], so:
+#   bottom face = c_piston_com[3] - 0.5*sigma
+#   top face    = c_piston_com[3] + 0.5*sigma
+# Using the actual faces (rather than the COM) keeps solvent that is between
+# the gel top and piston bottom correctly in the feed reservoir, and avoids
+# counting any piston volume in either reservoir.
+#
+# Skipped entirely in compression mode — the support sits at the box bottom,
+# leaving only a 1-2 bead sliver of solvent beneath the gel, and the
+# variable-bound regions can go negative (causing LAMMPS errors).
+#
+# P_res = sum[-( σxx+σyy+σzz )_i / 3] / V_res,   V_res = lx·ly·h_res
+
+# Piston face positions (permeation mode only)
+variable piston_z_bot equal c_piston_com[3]-0.5*${sigma}
+variable piston_z_top equal c_piston_com[3]+0.5*${sigma}
+
+# Feed: gel top → piston bottom face.
+# NOTE: c_maxz is used here (not gel_top_rg) because the region requires a
+# dynamic lower bound that tracks the true polymer surface.  The clamping guard
+# prevents LAMMPS "bad value" errors when a stray bead raises c_maxz above the
+# piston: if c_maxz >= piston_z_bot − σ, the lower bound is clamped to
+# piston_z_bot − σ, keeping the region at least 1σ tall.
+variable res_feed_zlo equal (c_maxz<(c_piston_com[3]-1.5*${sigma}))*c_maxz+(c_maxz>=(c_piston_com[3]-1.5*${sigma}))*(c_piston_com[3]-1.5*${sigma})
+region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo v_piston_z_bot side in
+
+# Permeate: piston top face → box top (permeated solvent collects here via PBC)
+region reg_perm_res block EDGE EDGE EDGE EDGE v_piston_z_top EDGE side in
+
+# Dynamic solvent groups — membership refreshed every stress sampling interval
+group g_solvent_feed dynamic solvent region reg_feed_res every ${nevery_stress}
+group g_solvent_perm dynamic solvent region reg_perm_res every ${nevery_stress}
+
+# Per-atom pressure·volume; reuses c_stress_solvent
+variable pv_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
+
+compute pv_feed g_solvent_feed reduce sum v_pv_solvent
+compute pv_perm g_solvent_perm reduce sum v_pv_solvent
+
+# Reservoir volumes (height = distance between region faces, not piston COM)
+variable vol_feed equal lx*ly*(v_piston_z_bot-v_res_feed_zlo)
+variable vol_perm equal lx*ly*(lz-v_piston_z_top)
+
+# Instantaneous reservoir pressures
+variable P_res_feed equal c_pv_feed/v_vol_feed
+variable P_res_perm equal c_pv_perm/v_vol_perm
+
+# halt_p_target removed: velocity-controlled permeation does not need a
+# ramp-to-equilibrium phase.  halt_perm (feed ≤ feed_halt_thick) is the
+# sole termination condition for the permeation run.
+
+
+# ==========================================================================
+#         PERMEATION: PERMEATE FLUX COUNTER + FEED-THICKNESS HALT
+# ==========================================================================
+# Permeate flux: solvent that passes through the gel and support exits at
+# z < zlo and wraps via PBC to z ≈ zhi (top of box).  The piston is located
+# BETWEEN the gel and the box top, well below zhi, so the top 10σ of the
+# box is an unambiguous permeate accumulation zone.  Counting beads there
+# gives a monotonically increasing cumulative permeate count:
+#
+#   Flux = ΔN_permeate / (Δt × Lx × Ly)  — computed in post-processing.
+#
+# Using a fixed band near zhi (rather than a region above the piston) avoids
+# the complication of the piston being deep inside the solvent column — the
+# feed solvent above the piston never reaches z > zhi−10 while the piston
+# is pushing it downward.
+#
+# Feed-thickness halt: stops the run when the feed reservoir (between gel top
+# and piston bottom face) is ≤ feed_halt_thick = 2σ, preventing the piston
+# from crashing into the gel and causing FENE errors.
+
+variable permeate_zlo equal $(zhi-10.0)
+region reg_permeate block EDGE EDGE EDGE EDGE v_permeate_zlo EDGE side in
+group g_permeate dynamic solvent region reg_permeate every ${flux_freq}
+variable N_permeate equal count(g_permeate)
+
+fix out_permeate_flux all print ${flux_freq} '$(step) $(v_N_permeate)' file output_files/permeation_data/permeate_count_${dataname}_${interaction}_${nsteps}.dat screen no
+
+# Feed-reservoir thickness = piston bottom face − gel top (Rg-based, robust)
+# c_maxz is NOT used here: stray crosslinker beads in the solvent give a
+# spuriously large c_maxz that would falsely trigger an early halt.
+variable feed_thickness equal c_piston_com[3]-0.5-v_gel_top_rg
+fix halt_perm all halt ${volume_freq} v_feed_thickness <= ${feed_halt_thick} error continue
+
+print ">>> Phase 2 start: piston_z=$(c_piston_com[3])  gel_top_rg=$(v_gel_top_rg)  gel_top_raw=$(c_maxz)"
+
+
+# ==========================================================================
+#                         OUTPUT: PISTON DATA
+# ==========================================================================
+
+fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_com[3])" &
+    file output_files/piston_data/piston_position_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &
+    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${nsteps}.dat screen no
+
+# ----- Piston force: compression mode only (Phase 2 start = immediately after Phase 0.5) -----
+# setforce 0 was removed at Phase 2 setup above; pairwise z-forces are live from here.
+# Expected profile: rises as gel compresses → plateaus near comp_percent strain → decays
+# during stress relaxation.  This fix is intentionally NOT unfixed in the relaxation
+# cleanup block so that force relaxation is captured; it is removed at final cleanup.
+# (Permeation-mode force recording began before Phase 0 NVT; see above.)
+
+
+# ── Per-pair force dump for ss-only stress (post-processing) ──────────────
+# Columns: patom1 patom2 ptype1 ptype2 fx fy fz
+#   (fx/fy/fz = force on atom I due to atom J)
+# Frequency: nfreq_stress — one pairs frame per stress-profile snapshot.
+# This synchronises σ_s,ss(z,t) with σ_p(z,t) and σ_s(z,t) so all three
+# can be plotted on the same time-evolution axes in compression_analysis.ipynb.
+# Atom positions for r_IJ are supplied by traj_stress_sync (same timesteps).
+# Output directory must exist before the run: output_files/pair_data/
+dump pairlocal_dump solvent local ${nfreq_stress} &
+    output_files/pair_data/pairs_${dataname}_${interaction}_${nsteps}.dump &
+    c_ids_local[1] c_ids_local[2] c_ids_local[3] c_ids_local[4] &
+    c_pl_local[1] c_pl_local[2] c_pl_local[3]
+
+# Companion position dump — same frequency, same timesteps as pairlocal_dump.
+# Used by compute_ss_stress_from_pairs to look up r_IJ for each ss pair.
+# Column layout matches gel_flow_*.lammpstrj so read_lammpstrj_frame works.
+# Output directory must exist before the run: traj_files/
+dump traj_stress_sync gel_system custom ${nfreq_stress} &
+    traj_files/traj_stress_${dataname}_${interaction}_${nsteps}.lammpstrj &
+    id type mol x y z
+
+
+# ==========================================================================
+#             OUTPUT: POLYMER Z-DISPLACEMENT PROFILE (time-averaged)
+# ==========================================================================
+# Identical nevery/nrepeat/nfreq as stress profiles → displacement and stress
+# curves are time-aligned for joint fitting in compression_analysis.ipynb.
+# File format mirrors stress output: header + one row per nfreq, columns = bins.
+
+# fix ave/chunk output is started AFTER the piston stops:
+#   Compression mode: defined in the relaxation cleanup block, reference = halt state.
+#   Permeation mode:  defined when constant-force steady state begins, reference = that state.
+# This ensures u_z(z, 0) = 0 at the correct physical start of each measurement window.
+
+
+# ==========================================================================
+#                  OUTPUT: RESERVOIR PRESSURES (permeation mode only)
+# ==========================================================================
+fix avg_P_feed all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} v_P_res_feed file output_files/stress_data/pressure_feed_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_P_perm all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} v_P_res_perm file output_files/stress_data/pressure_permeate_${dataname}_${interaction}_${nsteps}.dat
+
+# ----- Permeation: piston force vs reservoir pressure comparison -----
+# At mechanical quasi-equilibrium the piston force balances the pressure difference:
+#   c_piston_fz  ≈  (P_res_feed − P_res_perm) × lx × ly
+# P_feed_force (= P_res_feed × lx × ly) is the feed-pressure force equivalent;
+# comparing it to c_piston_fz validates that the reservoir pressure measurement
+# is consistent with the actual contact force on the piston.
+#
+# Output file columns (one row per volume_freq steps):
+#   step | F_piston_z | P_piston (=F/A) | P_res_feed | P_res_perm | P_feed×A
+variable P_feed_force equal v_P_res_feed*v_piston_area
+fix out_piston_force_perm all print ${volume_freq} '$(step) $(c_piston_fz) $(v_piston_pressure_z) $(v_P_res_feed) $(v_P_res_perm) $(v_P_feed_force)' file output_files/piston_data/piston_force_pressure_${dataname}_${interaction}_${nsteps}.dat screen no
+
+
+# ==========================================================================
+#                    OUTPUT: GEL STRAIN (for longitudinal modulus)
+# ==========================================================================
+# Columns: timestep | L_initial_rg (constant) | L_current_rg (dynamic)
+# ΔL = L_initial - L_current;  ε = ΔL / L_initial
+# Gel thickness from Rg: L = 2√3·√(Rg_zz²)  (uniform rectangular prism)
+# This file is read by longitudinal_modulus_analysis.ipynb.
+
+fix out_strain_zz all print ${volume_freq} &
+    "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
+    file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}.dat screen no
+
+# Echo current strain to thermo log as well
+variable gel_strain_pct equal v_gel_strain*100.0
+fix out_gel_strain_thermo all print ${thermo_freq} &
+    ">>> gel_strain = $(v_gel_strain_pct) %" screen yes &
+    file output_files/stress_data/gel_strain_log_${dataname}_${interaction}_${nsteps}.dat
+
+
+# ==========================================================================
+#                    OUTPUT: GEL DIMENSIONS
+# ==========================================================================
+
+# Bounding-box volume and dimensions (for comparison/diagnostics)
+fix out_gel_vol_bb all print ${volume_freq} "$(step) $(v_gel_vol_bb)" &
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix out_gel_dims_bb all print ${volume_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
+    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${nsteps}.dat screen no
+
+# Rg-based volume and dimensions (rectangular prism: L_i = 2√3·√Rg_ii²)
+fix out_gel_vol_rg all print ${volume_freq} "$(step) $(v_gel_vol_rg)" &
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix out_gel_dims_rg all print ${volume_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+
+# Box dimensions
+fix out_box_dims all print ${volume_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix out_polymer_com all print ${volume_freq} &
+    "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}.dat screen no
+
+
+# ==========================================================================
+#  COMPRESSION MODE: REFERENCE-STATE (ε=0) STRESS RECORDING
+# ==========================================================================
+# Skipped for cont=1: the reference files already exist from the original run.
+# The production stress fixes below use those same reference files in analysis.
+
+# The main fix ave/time stress fixes above start sampling at the moment they
+# are defined and emit their first output `nfreq_stress` steps later — long
+# after compression has already happened.  That means the first snapshot in
+# the regular stress files is NOT a clean ε=0 reference; it's a relaxation
+# state at ε≈comp_percent.  Using it for σ′_ref in compression_analysis.ipynb
+# gives a meaningless (often negative) Δσ′.
+#
+# Here we record stress with the piston temporarily HELD at v=0 for one
+# `nfreq_stress` window.  Output files are tagged "_ref_" so the analysis
+# notebook can pick them up as the true ε=0 reference.  This block adds
+# ~1 nfreq_stress to the run-time but only for compression mode; permeation
+# mode skips it entirely.
+
+
+# Hold the piston still during the reference window (cancels the
+# v_piston_prod assignment made during Phase 2 setup; restored below).
+
+# Reference fix ave/time fixes — same computes, "_ref_" filename tag.
+# ── ε=0 solvent-solvent-only (ss) reference dumps (pairs + traj) ─────────
+# dump local has no fix ave/time / chunk-atom epoch-lock issue, so we can
+# safely write one frame here while the piston is still frozen at v=0.
+#
+# Two dumps are written in the same run 1:
+#   pairs_ref_*.dump  — pair/local forces for ss virial reconstruction
+#   traj_ref_*.lammpstrj — matching atom positions (id type mol x y z)
+#                          needed by compute_ss_stress_from_pairs to form r_IJ
+#
+# The traj_ref dump uses the same column layout as the main traj_flow dump
+# so that read_lammpstrj_frame/compute_ss_stress_from_pairs work unmodified.
+#
+# NOTE: run 1 advances the step counter by 1 *before* preroll_steps is
+# computed below — the formula uses $(step) at evaluation time, so the
+# epoch alignment automatically accounts for it.
+
+# Run for ONE full averaging window so each "_ref_" file gets exactly one
+# stress snapshot at ε=0.
+#
+# CRITICAL — must end at an epoch boundary (multiple of nfreq_stress from
+# step 0), NOT just `run ${nfreq_stress}` from the current step:
+#
+#   fix ave/time epoch boundaries are ALWAYS at multiples of nfreq from
+#   step 0 (see FixAveTime::nextvalid in src/fix_ave_time.cpp), regardless
+#   of when the fix is created.  If the pre-roll run ends mid-epoch, the
+#   ref_ fixes have an active compute chunk/atom lock that never gets
+#   released — because fix ave/time's destructor only calls unlock() for
+#   ave=RUNNING/WINDOW (see FixAveTime::~FixAveTime), and these fixes use
+#   the default ave=ONE.  The dangling lockfix pointer (plus stale
+#   lockstart/lockstop) then collides with the production-fix lock attempt
+#   that follows, producing:
+#
+#     ERROR: Two fix commands using same compute chunk/atom command in
+#            incompatible ways (src/compute_chunk_atom.cpp:680)
+#
+#   The check at line 680 of compute_chunk_atom.cpp is exactly
+#   `startstep != lockstart || stopstep != lockstop` — i.e. it fires when
+#   a different lock window is requested for an already-locked chunk/atom.
+#
+# Fix: pad the pre-roll length so it ends at the FIRST multiple of
+# nfreq_stress >= step + nfreq_stress.  At that step end_of_step fires
+# unlock() naturally; the subsequent unfix then sees lockfix == nullptr.
+# preroll_steps lies in [nfreq_stress, 2*nfreq_stress).
+
+# Tear down the reference fixes
+
+# Reinstate the production-velocity assignment for the actual compression
+
+
+label label_after_ref_rec
+
+
+# ==========================================================================
+#                    OUTPUT: PARTIAL STRESS PROFILES (time-averaged)
+# ==========================================================================
+# NOTE: these fixes are defined HERE — after the reference recording block —
+# so that they are NOT active during the ref_ run above.  Two reasons:
+#  (1) Each ref_ fix and its production-fix counterpart route through the
+#      same compute chunk/atom (chunk_z_poly_zz, chunk_z_solv_zz, etc.).
+#      Coexisting in one run causes a "Two fix commands using same compute
+#      chunk/atom command in incompatible ways" error at fix ave/time setup
+#      because the lock windows (start, stop) differ between the fixes.
+#  (2) The ref_ fixes must complete their first epoch and release their
+#      chunk/atom lock BEFORE the production fixes are defined.  The
+#      pre-roll run length is aligned to nfreq_stress epoch boundaries
+#      (see Phase 2 pre-roll block); the subsequent unfix then finds
+#      lockfix == nullptr and is a no-op for lock state.  If pre-roll were
+#      run with `run ${nfreq_stress}` (mid-epoch end), the unfix would NOT
+#      release the lock — fix ave/time's destructor only unlocks for
+#      ave=RUNNING/WINDOW, not the default ave=ONE — and these production
+#      fixes would then fail with the same chunk/atom error.
+
+fix avg_stress_x_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_x_polymer mode vector file output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_y_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_y_polymer mode vector file output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_z_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_polymer mode vector file output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_x_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_x_solvent mode vector file output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_y_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_y_solvent mode vector file output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_z_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_piston mode vector file output_files/stress_data/stress_z_piston_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_support mode vector file output_files/stress_data/stress_z_support_${dataname}_${interaction}_${nsteps}.dat
+
+# True ZZ partial-stress outputs (σzz component only; used for longitudinal modulus)
+fix avg_sigmazz_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmazz_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmaxx_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmaxx_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmayy_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_${dataname}_${interaction}_${nsteps}.dat
+
+fix avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${nsteps}.dat
+
+
+# ==========================================================================
+#        OUTPUT: SOLVENT DENSITY PROFILE + CAVITY-WIDOM TRAJECTORY
+# ==========================================================================
+# Solvent density profile: z-binned number density, time-averaged over
+# windows aligned to nfreq_widom_dump.  Used by plot_lammps_log.py's
+# plot_chempot_diagnostics to form mu_total(z) = mu_ex + kT*ln(rho_s).
+#
+# Cavity-Widom trajectory: all-atom snapshot at nfreq_widom_dump cadence.
+# cavity_widom.py reads this to compute mu_ex(z) via test-particle insertion.
+#
+# Both are defined here (after ref_ teardown) so all frames come from the
+# production phase. Active for the full run ${nsteps} + relax/perm_relax runs.
+# NOTE: output_files/chemical_potential/ must exist before the run.
+#       run_lammps.sh creates it automatically; for direct LAMMPS invocation:
+shell mkdir -p output_files/chemical_potential
+
+variable nevery_density  equal 100
+variable nrepeat_density equal floor(v_nfreq_widom_dump/v_nevery_density)
+variable nfreq_density   equal v_nevery_density*v_nrepeat_density
+print ">>> Density: nevery=${nevery_density} nrepeat=${nrepeat_density} nfreq=${nfreq_density}"
+
+compute chunk_z_solv_density solvent chunk/atom bin/1d z lower ${binWidth}
+fix avg_solv_density all ave/chunk ${nevery_density} ${nrepeat_density} ${nfreq_density} &
+    chunk_z_solv_density density/number &
+    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${totsteps}.dat
+
+# All-atom trajectory for cavity_widom.py (solvent type 3 + all others for WCA energy)
+dump widom_traj all custom ${nfreq_widom_dump} &
+    traj_files/widom_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z
+
+
+print ">>> Starting Phase 2 production run (nsteps = ${nsteps})"
+print ">>> Mode: PERMEATION (piston-driven flow)"
+if "${cont} == 1" then "print '>>> Continuing after ${oldsteps} timesteps'"
+
+variable phase2_start equal $(step)
+
+# ==========================================================================
+#                         PRODUCTION RUN
+# ==========================================================================
+# Runs to completion (nsteps) unless halt_perm fires first (feed reservoir
+# thins to feed_halt_thick).
+
+run ${nsteps}
+
+
+# ==========================================================================
+#                            POST-RUN CLEANUP
+# ==========================================================================
+# The main run ended because halt_perm fired (feed ≤ feed_halt_thick) or
+# nsteps were exhausted.  Velocity-controlled permeation has no second run
+# phase; simply unfix the halt and proceed to final cleanup.
+unfix halt_perm
+
+# Piston force output — removed here after all runs are complete
+unfix out_piston_force
+unfix out_piston_force_perm
+
+# Unfix permeation-mode fixes
+unfix out_permeate_flux
+
+undump traj_flow
+undump pairlocal_dump
+undump traj_stress_sync
+undump widom_traj
+unfix avg_solv_density
+
+print "========================================"
+print "Simulation complete"
+print "========================================"
+
+variable outfile string "final_flow_${dataname}_${interaction}_${nsteps}"
+write_data ${outfile}.data
+
