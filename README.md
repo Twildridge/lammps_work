@@ -253,7 +253,7 @@ The `run_lammps` scripts handle all the bookkeeping automatically: creating time
 
 | Folder | What it simulates | Typical use |
 |--------|------------------|-------------|
-| `slab_with_support/` | Gel equilibration or axial compression with piston | Equilibrate gel; measure M (longitudinal modulus) |
+| `slab_with_support/` | Gel equilibration (free-swelling) or axial compression with piston. NPT uses **`aniso`** so x, y, z each relax independently to P* — the gel reaches its true equilibrium swelling instead of being locked to the data file's aspect ratio (see **Barostat choice** note at the end of this guide). | Equilibrate gel; measure M (longitudinal modulus) |
 | `slab_with_flow/` | Piston-forced permeation **or** compression of a pre-equilibrated walled gel — toggled by `variable compression_mode` (0 = permeation, 1 = compression). Phase 0.5 piston pre-compression brings the gel to P* = 1.5 before production. | Measure flux, Dc, pore pressure profiles (mode 0); load gel to measure M (mode 1) |
 | `shear_slab/` | Plate-driven xz shear of an isolated swollen gel with attached plates (input from `add_plates_to_gel.ipynb`). Phase 1a NPT (50k) + Phase 1b NVT (100k) + Phase 2 shear with `fix halt` at γ = 10% + Phase 3 NVT production. | Measure G (shear modulus) from ⟨σ_p,xz⟩ / γ |
 | `slab_elongation/` | Legacy uniaxial elongation prototype (NPT → fix deform z → NVT) | Superseded by `shear_slab/`; folder kept temporarily |
@@ -342,7 +342,7 @@ The script jumps directly to the production phase, skipping all setup:
 |--------|---------|------|
 | `slab_with_flow` compression | Phase 0 NVT, Phase 0.5 pressure equilibration, compression drive, ε=0 reference recording | All analysis computes and output fixes; stress-relaxation run with piston frozen |
 | `slab_with_flow` permeation | Phase 0 NVT | Piston velocity re-applied, all observables, halts when feed reservoir empties |
-| `slab_with_support` | Soft push-off, minimize, NVT ramp, NPT warm-up | NPT production with Widom, stress, and volume outputs |
+| `slab_with_support` | Soft push-off, minimize, NVT ramp, NPT (`aniso`) warm-up | `aniso` NPT production with volume/dimension outputs (Widom removed) |
 
 All the same output files are produced (stress profiles, chemical potential, piston data, trajectories, `log.lammps`). The only intentional omissions are the setup trajectory (`gel_setup_*.lammpstrj`) and the ε=0 reference stress files — these already exist from the original run.
 
@@ -910,4 +910,15 @@ Full details are in `lj_units_cheat_sheet.md`. Key conversions for PEG/water:
 
 ---
 
-*Last updated: 2026-06-06. For questions, contact Dylan Pollard (pollard@ucsb.edu).*
+## 12. Barostat choice (equilibration)
+
+Match the barostat to the geometry:
+
+- **Free-swelling gel in a solvent bath** (`slab_with_support` equilibration): use `fix npt … aniso P P pdamp`. Each of x, y, z is barostatted independently to the target pressure, so the box adopts whatever aspect ratio balances σxx = σyy = σzz = P and the gel relaxes to its own equilibrium shape — the analogue of a hydrogel free to swell in all directions. **Do not use `iso` here:** `iso` controls only the mean (hydrostatic) pressure and freezes the box aspect ratio, so any anisotropic stress or z-padding baked into the data file is never relaxed. Switching `slab_with_support` from `iso` → `aniso` (2026-06-24) fixed exactly this: the gel had been stuck artificially swollen along z, and with `aniso` it reaches a noticeably taller, true equilibrium swelling. Use `couple xy` only if you must enforce lateral isotropy (a free gel reaches it anyway); use `tri` only to relax shear stress (lets the box tilt).
+- **Walled / piston-driven runs** (`triaxial_compression`, `triaxial_permeation`, `slab_with_flow`): production is `fix nvt` with the box fixed and the rigid piston as the sole z-actuator — **no box barostat in production** (a barostat would double-control z and fight the piston). The only barostat is the `fix nph iso` Phase-0.5 pre-equilibration, run with the piston/walls frozen.
+
+When adding lateral walls to an equilibrated config, `add_walls_to_slab.ipynb` unwraps the gel via image flags before measuring its extent, so a gel that has drifted across a periodic face (a little "image pollution" in the visualizer) does not corrupt the wall placement. Under `boundary p p p` the wrapped sliver itself is harmless to the run (bonds use the minimum image; `compute com` unwraps). With `RECENTER_LATERAL = True` (default) it also shifts the mobile group (gel + solvent) in x/y so the polymer COM lands at the lateral box center — the support/piston plates and the z-axis are left untouched, which keeps gel↔support/piston contact along the loading axis and relies on the plates being laterally larger than the gel (the notebook checks this and warns if the gel would exceed the support footprint).
+
+---
+
+*Last updated: 2026-06-24. For questions, contact Dylan Pollard (pollard@ucsb.edu).*
