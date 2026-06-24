@@ -5,8 +5,6 @@
 # Submits a chained SLURM pipeline for slab_with_support at 11 pressures
 # P* = 1.0, 1.1, 1.2, ..., 2.0 (0.1 increments).
 #
-# Widom/chempot is suppressed for all sweep runs (SKIP_WIDOM=1).
-#
 # Pipeline per pressure:
 #   [1] slab_with_support   (600k steps, NPT at P*)
 #         → writes N_SNAPS snapshot configs at equal intervals during production
@@ -172,7 +170,6 @@ module load openmpi/4.1.3
 module load python/3.8.12
 
 echo ""; echo "====== slab_p${P} | \$(date) | \$(hostname) ======"
-export SKIP_WIDOM=1
 export LAMMPS_RUNS_OVERRIDE="${VOLMIX_RUNS}"
 
 MAX_ATTEMPTS=6

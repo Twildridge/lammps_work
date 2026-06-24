@@ -231,8 +231,8 @@ fi
 # and solvent density files, using the same dataname_interaction_totsteps stem:
 #   mu_z_cavity_${DATANAME}_${INTERACTION}_${TOTSTEPS}.dat       (per-frame)
 #   mu_z_cavity_summary_${DATANAME}_${INTERACTION}_${TOTSTEPS}.dat (time-averaged ± stderr)
-if [ "$SKIP_WIDOM" = "1" ]; then
-    echo "SKIP_WIDOM=1: skipping cavity Widom post-processing."
+if [ "$FOLDER" != "slab_with_flow" ] || [ "$SKIP_WIDOM" = "1" ]; then
+    echo "Cavity Widom post-processing applies only to slab_with_flow (and not when SKIP_WIDOM=1) — skipping for ${FOLDER}."
 else
 
 WIDOM_TRAJ="${WORK_DIR}/traj_files/widom_${DATANAME}_${INTERACTION}_${TOTSTEPS}.lammpstrj"
@@ -289,7 +289,7 @@ else
     echo "  TRAJ_DIR (scratch): $TRAJ_DIR"
     echo "  If the file is missing, check that:"
     echo "    1. The run completed without error"
-    echo "    2. dump widom_traj is in slab_with_support.lmp or slab_with_flow.lmp (check git pulled correctly)"
+    echo "    2. dump widom_traj is in slab_with_flow.lmp (check git pulled correctly)"
     echo "    3. Scratch dir is accessible: ls $TRAJ_DIR"
 fi
 
