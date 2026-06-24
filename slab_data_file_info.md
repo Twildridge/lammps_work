@@ -468,3 +468,29 @@ Generated tetrahedral gel slab with piston:
   Total atoms: 325311
   Total bonds: 108864
   Output: ../../lammps_data_files_local/slab_support_5beads_tall_rho02_1.data
+  
+  
+  Generated tetrahedral gel slab with piston:
+  Unit cells: 9 x 9 x 21
+  Beads per chain: 5
+  Gel dimensions: 43.20 x 43.20 x 100.80
+  Box dimensions: 55.20 x 55.20 x 128.80
+  Side thickness (x/y):  6.00
+  Below thickness (z):   4.00
+  Top thickness (z):     20.00
+  Gel top z:          108.8000
+  Piston z:           124.8000  (piston_height=0.80 of gel top -> box top)
+  Piston exclusion:   +/-0.10 sigma around piston plane
+  Crosslinks: 14566
+  Chains: 27216
+  Polymer beads: 96214
+  Bottom support: 61451 (spacing: 0.20, margin: 5.00)
+  Top piston: 61451 (spacing: 0.20, margin: 5.00)
+  Solvent beads: 156983 (density: 0.40)
+  Total atoms: 376099
+  Total bonds: 108864
+  Output: ../../lammps_data_files_local/slab_support_5beads_tall_rho04_compression.data
+  
+  
+  
+  

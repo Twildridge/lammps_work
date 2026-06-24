@@ -3,7 +3,7 @@
 #SBATCH --job-name=triax_comp
 #SBATCH --partition=compute
 #SBATCH --account=csb197
-#SBATCH --nodes=5
+#SBATCH --nodes=4
 #SBATCH --ntasks-per-node=32 # was 32
 #SBATCH --cpus-per-task=4     # was 4
 #SBATCH --mem=0
