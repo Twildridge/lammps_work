@@ -44,6 +44,18 @@ NSTEPS=1000000
 OLDSTEPS=0              # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""                 # Options: stress, volume, stressvol, or leave empty
 
+# -----------------------------------------------------------------------
+# Stress-strain curve: cumulative shear strains to step through.
+#   strains = [0.1, 0.15, 0.2, 0.25, 0.3]
+# The gel shears to the first strain, runs an NSTEPS production hold there,
+# then shears FURTHER (incrementally, from that state) to each subsequent
+# strain and holds again. Each strain writes its own output files tagged
+# _g<strain>. For a single operating point, use one value, e.g. (0.1).
+# If this is left unset, shear_slab.lmp falls back to a single strain of 0.1.
+# -----------------------------------------------------------------------
+STRAINS=(0.1 0.15 0.2 0.25 0.3)
+export STRAINS="${STRAINS[*]}"   # space-separated for run_lammps.sh / LAMMPS -var
+
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1
 

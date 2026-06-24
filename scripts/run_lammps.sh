@@ -22,6 +22,8 @@ TOTSTEPS=$((OLDSTEPS + NSTEPS))
 PRESS_TARGET=${7:-1.5}  # Default pressure; overrides press_target in .lmp file
 VEL_SEED=${8:-12345}    # RNG seed for create_velocity and fix langevin; vary per replica
 SKIP_WIDOM=${SKIP_WIDOM:-0}  # Set to 1 (via env) to minimize Widom output and skip cavity_widom.py
+STRAINS=${STRAINS:-0.1}      # Space-separated shear-strain list (shear_slab only); passed as a
+                             # LAMMPS index variable. Default 0.1 = single operating point.
 
 # P-sweep parameters (only used for pure_solvent; ignored by other scripts)
 NSTEPS_EQ=200000    # equilibration steps per state point
@@ -136,6 +138,7 @@ mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM
     -var nsteps_prod $NSTEPS_PROD \
     -var press_target $PRESS_TARGET \
     -var vel_seed $VEL_SEED \
+    -var strains $STRAINS \
     \
     -in $LAMMPS_FILE
 LAMMPS_RC=$?

@@ -17,20 +17,29 @@
 #   interior only see the distributed gel strain (safe at 10% target).
 #
 # Phases:
-#   1. NVT equilibration — plates frozen (fix move linear 0 0 0), gel NVT
-#   2. Shear — plates driven at ±vshear, gel NVT
-#   3. Production — plates frozen at Phase 2 final position, gel NVT
-#      G = <sigma_p_zx> / gel_strain_cm_final
+#   1. Equilibration (ONCE) — NPT then NVT, plates frozen (fix move linear 0 0 0)
+#   2+3. STRAIN LOOP over ${strains} (cumulative, incremental):
+#        For each target strain:
+#          2. Shear — plates driven at ±vshear until gel_strain_cm reaches target
+#          3. Production — plates frozen at that strain, gel NVT
+#             G(γ) = <sigma_p_zx> / gel_strain_cm   at each target
+#        The next iteration resumes shearing FURTHER from the held state, so
+#        the gel walks monotonically through 0.1 -> 0.15 -> ... (stress-strain).
 #
-# Outputs:
-#   stress_data/stress_tensor_polymer_*.dat   6-component polymer stress vs time
-#   stress_data/stress_tensor_solvent_*.dat   6-component solvent stress vs time
-#   stress_data/stress_profile_x_polymer_*.dat x-binned polymer stress (gap direction)
-#   stress_data/stress_profile_x_solvent_*.dat x-binned solvent stress (gap direction)
-#   stress_data/shear_strain_*.dat            step  gel_lz_initial  gel_gap  gel_strain_cm
-#   volume_data/gel_dimensions_rg_*.dat       Rg-based gel dimensions
-#   volume_data/box_dimensions_*.dat          box dims vs step
-#   volume_data/polymer_com_*.dat             polymer COM vs step
+# Stress-strain curve: G / sigma_zx at each strain (shear_analysis.ipynb).
+# Cooperative diffusivity D_c (∝ G): from the Phase-3 relaxation of the polymer
+# z-displacement profile u_z(x) toward the linear shear ramp (displacement_data).
+#
+# Outputs (one set per strain, tagged _g<strain>):
+#   stress_data/stress_tensor_polymer_*_g<γ>.dat   6-component polymer stress vs time
+#   stress_data/stress_tensor_solvent_*_g<γ>.dat   6-component solvent stress vs time
+#   stress_data/stress_profile_x_polymer_*_g<γ>.dat x-binned polymer stress (gap dir)
+#   stress_data/stress_profile_x_solvent_*_g<γ>.dat x-binned solvent stress (gap dir)
+#   stress_data/shear_strain_*_g<γ>.dat            step  gel_lz_initial  gel_gap  gel_strain_cm
+#   displacement_data/disp_z_polymer_*_g<γ>.dat    x-binned mean polymer u_z (for D_c)
+#   volume_data/gel_dimensions_rg_*_g<γ>.dat       Rg-based gel dimensions
+#   volume_data/box_dimensions_*_g<γ>.dat          box dims vs step
+#   volume_data/polymer_com_*_g<γ>.dat             polymer COM vs step
 
 
 # ==========================================================================
@@ -42,8 +51,22 @@ variable temp_target    equal 1.0
 variable P_target       equal 1.5
 variable timestep_prod  equal 0.005
 
-# Shear strain target (keep <= 0.10 for linear elastic regime)
-variable target_strain_zx equal 0.10
+# ---- Stress-strain curve: list of cumulative shear strains -------------------
+# 'strains' is an index-style variable supplied on the command line by
+# run_lammps.sh as:   -var strains 0.1 0.15 0.2 0.25 0.3
+# (set in shear_slab.batch via STRAINS=(...)).  If it is NOT supplied, the
+# in-script default below is used instead: a single strain of 0.10.  (A
+# command-line index variable always takes precedence over this fallback.)
+# The script loops over these values, shearing INCREMENTALLY from one target
+# to the next (see the STRAIN LOOP near the end) and running a production hold
+# at each.  Keep individual targets in the linear-elastic regime if you want a
+# clean G; the curve will reveal where it departs from linearity.
+variable strains index 0.10
+
+# Reference strain used ONLY to set the (constant) plate drive speed vshear.
+# Each increment is stopped by fix halt at the current ${strains} target, so
+# this controls how fast the plates move, not where they stop.
+variable strain_rate_ref equal 0.10
 
 # Phase lengths
 variable nsteps_npt    equal 50000    # Phase 1a: NPT — find equilibrium volume (plates frozen)
@@ -73,7 +96,7 @@ variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 
 print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
-print ">>> Shear: γ_target=${target_strain_zx}  nsteps_shear=${nsteps_shear}  (plate-driven)"
+print ">>> Shear: cumulative strain targets=${strains} ...  nsteps_shear=${nsteps_shear}  (plate-driven, incremental)"
 
 # Spatial binning
 variable binWidth    equal 2.0
@@ -101,8 +124,8 @@ comm_modify cutoff 5.0
 print "========================================"
 print "Shear slab simulation (plate-driven): ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
-print "Production steps: ${nsteps}"
-print "Target shear strain: ${target_strain_zx}"
+print "Production steps per strain: ${nsteps}"
+print "Cumulative shear strain targets (first=${strains}): see STRAIN LOOP"
 print "========================================"
 
 
@@ -301,76 +324,32 @@ variable gel_strain_cm equal (c_zcm_right[3] - c_zcm_left[3] - v_zcm_sep_0) / v_
 print ">>> zcm_sep_0 (z-COM right-left, t=0): ${zcm_sep_0}"
 print ">>> poly_right_s: $(count(poly_right_s))  poly_left_s: $(count(poly_left_s))"
 
-# Plate velocity: 1.1× the speed that would reach target_strain in nsteps_shear_base steps.
-# The run is capped by fix halt at target_strain, so nsteps_shear is just a safety buffer.
-#   vshear = 1.1 * target_strain * gel_gap / (2 * nsteps_shear_base * dt)
-variable vshear     equal $(v_target_strain_zx * v_gel_gap / (2.0 * v_nsteps_shear_base * v_timestep_prod) * 1.1)
+# Plate velocity: 1.1× the speed that would reach strain_rate_ref in nsteps_shear_base steps.
+# The drive speed is CONSTANT for every increment; the run is capped by fix halt
+# at each ${strains} target, so nsteps_shear is just a safety buffer.
+#   vshear = 1.1 * strain_rate_ref * gel_gap / (2 * nsteps_shear_base * dt)
+variable vshear     equal $(v_strain_rate_ref * v_gel_gap / (2.0 * v_nsteps_shear_base * v_timestep_prod) * 1.1)
 variable neg_vshear equal -v_vshear
-print ">>> vshear = ${vshear} σ/τ  (1.1× base speed; halt fires at gel_strain_cm = ${target_strain_zx})"
+print ">>> vshear = ${vshear} σ/τ  (constant plate speed; halt fires at each ${strains} target)"
 
-
-# ==========================================================================
-#              PHASE 2: SHEAR APPLICATION (Plate-Driven)
-# ==========================================================================
-# Plates driven at ±vshear (1.1× base speed) in z.
-# fix halt stops the run as soon as gel_strain_cm >= target_strain_zx (10%).
-# nsteps_shear is a 2× safety buffer — the halt fires well before it runs out.
-# After the halt the script continues; plates are then frozen for Phase 3.
-
-print "========================================"
-print "Phase 2: Plate-driven shear (up to ${nsteps_shear} steps, halt at ${target_strain_zx})"
-print "  Right plate (+x): vz = +${vshear}   Left plate (-x): vz = -${vshear}"
-print "  Box stays ORTHOGONAL (xz = 0)"
-print "========================================"
-
-fix drive_right  plate_right move linear  0 0  ${vshear}
-fix drive_left   plate_left  move linear  0 0  ${neg_vshear}
-fix nvt_shear  gel       nvt  temp ${temp_target} ${temp_target} 1.0
-fix mom_lin    gel       momentum 100 linear 1 1 1
-fix mom_rot    gel       momentum 100 angular
-
-# Columns: step  gel_lz_initial  gel_gap  gel_strain_cm
-fix out_shear_strain all print ${stress_freq} &
-    "$(step) ${gel_lz_initial} ${gel_gap} $(v_gel_strain_cm)" &
-    file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
-
-# Halt when target xz strain is reached (linear poroelasticity regime).
-# error continue: run exits cleanly; script proceeds to Phase 3.
-fix halt_shear all halt ${stress_freq} v_gel_strain_cm >= ${target_strain_zx} error continue
-
-run ${nsteps_shear}
-
-unfix halt_shear
-unfix out_shear_strain
-unfix mom_rot
-unfix mom_lin
-unfix nvt_shear
-unfix drive_left
-unfix drive_right
+# Phase-1 setup trajectory is done — the per-strain production trajectories
+# (one per ${strains}) are dumped inside the loop below.
 undump traj_setup
 
-print ">>> Phase 2 complete"
-print ">>>   gel_strain_cm = $(v_gel_strain_cm)  (target: ${target_strain_zx})"
-print ">>>   G = <sigma_p_zx> / $(v_gel_strain_cm)  [gap=x, shear=z]"
-print ">>> Post-shear gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
-
-# Freeze Rg half-widths as constants (gel geometry now fixed)
-variable hw_x equal $(v_hw_x)
-variable hw_y equal $(v_hw_y)
-variable hw_z equal $(v_hw_z)
-
 
 # ==========================================================================
-#                    BULK REGION (exclude 5σ near each plate)
+#             BULK REGION (exclude 3σ near each plate)   [defined ONCE]
 # ==========================================================================
-# Atoms within 5σ of either plate surface are bonded to the plate via
-# harmonic springs and carry artifactual constraint stresses. Exclude them
-# from all stress measurements so only the interior gel is sampled.
+# Atoms within 3σ of either plate surface are bonded to the plate via harmonic
+# springs and carry artifactual constraint stresses. Exclude them from all
+# stress/displacement measurements so only the interior gel is sampled.
+# The gap direction (x) does not change during z-shear, so this region — and
+# the analysis computes below — are defined ONCE and reused for every strain.
 
 variable xlo_bulk equal ${gel_xlo}+3.0
 variable xhi_bulk equal ${gel_xhi}-3.0
 variable bulk_lx  equal v_xhi_bulk-v_xlo_bulk       # x-extent of bulk region
-variable bulk_vol equal v_bulk_lx*ly*lz              # bulk volume (dynamic: ly,lz fixed post-NPT)
+variable bulk_vol equal v_bulk_lx*ly*lz             # bulk volume (ly,lz fixed post-NPT)
 region   reg_bulk block ${xlo_bulk} ${xhi_bulk} EDGE EDGE EDGE EDGE units box
 group    all_bulk  region reg_bulk
 group    poly_bulk intersect polymer all_bulk
@@ -381,7 +360,7 @@ print ">>> poly_bulk: $(count(poly_bulk))  solv_bulk: $(count(solv_bulk))"
 
 
 # ==========================================================================
-#                    ANALYSIS: PARTIAL STRESSES
+#              ANALYSIS: PARTIAL STRESSES   [computes defined ONCE]
 # ==========================================================================
 
 compute stress_polymer poly_bulk stress/atom NULL
@@ -435,7 +414,7 @@ variable s_s_yz atom c_stress_solvent[6]/(${binWidth}*ly*lz)
 
 
 # ==========================================================================
-#                    ANALYSIS: SPATIAL CHUNKS (z-binning)
+#              ANALYSIS: SPATIAL CHUNKS (x-binning)   [defined ONCE]
 # ==========================================================================
 
 variable binWidth_reduced equal $(v_binWidth/lx)
@@ -444,97 +423,165 @@ compute chunk_x_solvent  solv_bulk chunk/atom bin/1d x lower ${binWidth_reduced}
 
 
 # ==========================================================================
-#              PHASE 3: NVT PRODUCTION (Plates Frozen at Final Position)
+#       POLYMER z-DISPLACEMENT (for cooperative diffusivity D_c)   [ONCE]
 # ==========================================================================
-# Both plates frozen at Phase 2 final positions (fix move linear 0 0 0).
-# Gel NVT: interior relaxes to mechanical equilibrium at frozen strain.
-# G = <sigma_p_zx> / gel_strain_cm_final.
+# u_z(x): mean polymer z-displacement per x-bin (gap direction). The reference
+# configuration is RESET to the start of each production hold inside the loop
+# (uncompute/compute), so u_z(x, 0) = 0 at the onset of each Phase-3 relaxation
+# — mirroring the compression D_c measurement. With the plates frozen during
+# the hold, the boundary displacement stays ~0 and the interior relaxes toward
+# the linear shear ramp; D_c (∝ G) is fit from that relaxation.
+compute  displace_shear polymer displace/atom
+variable uz_shear atom 0.0    # placeholder so 'variable ... delete' is always valid
 
-print "========================================"
-print "Phase 3: NVT production (${nsteps} steps)"
-print "  Plates frozen at Phase 2 final positions"
-print "  gel_strain_cm = $(v_gel_strain_cm)  (= γ for G)"
-print "========================================"
 
+# ==========================================================================
+#                       STRAIN LOOP (incremental shear)
+# ==========================================================================
+# For each ${strains} value: drive the plates until the cumulative
+# gel_strain_cm reaches that target, then freeze the plates and run an
+# NSTEPS production hold while recording stress + displacement. The next
+# iteration resumes shearing FURTHER from the current (held) state, so the
+# gel walks monotonically through the requested strain list.
+#
+# Epoch note: every fix ave/time and fix ave/chunk below is created right
+# before its production 'run ${nsteps}' and removed right after it, i.e. only
+# on epoch boundaries (nsteps is an integer multiple of nfreq_stress). This
+# avoids the mid-epoch chunk/atom-lock corruption that mid-run unfixes cause.
+
+label strain_loop
+
+print "########################################################"
+print "  STRAIN TARGET (cumulative) = ${strains}"
+print "########################################################"
+
+
+# ---------- PHASE 2: incremental shear to ${strains} ----------
+fix drive_right  plate_right move linear  0 0  ${vshear}
+fix drive_left   plate_left  move linear  0 0  ${neg_vshear}
+fix nvt_shear  gel       nvt  temp ${temp_target} ${temp_target} 1.0
+fix mom_lin    gel       momentum 100 linear 1 1 1
+fix mom_rot    gel       momentum 100 angular
+
+# Columns: step  gel_lz_initial  gel_gap  gel_strain_cm
+fix out_shear_strain all print ${stress_freq} &
+    "$(step) ${gel_lz_initial} ${gel_gap} $(v_gel_strain_cm)" &
+    file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
+
+# Halt when the cumulative target strain is reached (error continue: run exits
+# cleanly and the script proceeds to the production hold).
+fix halt_shear all halt ${stress_freq} v_gel_strain_cm >= ${strains} error continue
+
+run ${nsteps_shear}
+
+unfix halt_shear
+unfix out_shear_strain
+unfix mom_rot
+unfix mom_lin
+unfix nvt_shear
+unfix drive_left
+unfix drive_right
+
+print ">>> Reached gel_strain_cm = $(v_gel_strain_cm)  (target ${strains})"
+
+
+# ---------- Reset displacement reference to THIS production start ----------
+# Delete the variable first so the compute it references can be safely replaced;
+# the recreated displace/atom captures the current (held) config as u_z(x,0)=0.
+variable uz_shear delete
+uncompute displace_shear
+compute   displace_shear polymer displace/atom
+variable  uz_shear atom c_displace_shear[3]
+
+
+# ---------- PHASE 3: NVT production hold at this strain ----------
 fix freeze_right  plate_right move linear 0 0 0
 fix freeze_left   plate_left  move linear 0 0 0
 fix nvt_prod    gel       nvt  temp ${temp_target} ${temp_target} 1.0
 fix mom_prod    gel       momentum 100 linear 1 1 1 angular
 
 dump traj_prod all custom ${dump_freq_prod} &
-    traj_files/prod_${dataname}_${interaction}_${nsteps}.lammpstrj &
+    traj_files/prod_${dataname}_${interaction}_${nsteps}_g${strains}.lammpstrj &
     id type mol x y z
 
-
-# ==========================================================================
-#    OUTPUT: BOX-INTEGRATED STRESS TENSOR
-# ==========================================================================
-
+# -- Box-integrated stress tensors (one row per nfreq block; ~num_stress_curves
+#    blocks per hold -> block-to-block scatter gives the stress-strain error bar) --
 fix avg_stress_polymer all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     v_stress_p_xx v_stress_p_yy v_stress_p_zz &
     v_stress_p_xy v_stress_p_zx v_stress_p_yz &
-    file output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}.dat
+    file output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 
 fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     v_stress_s_xx v_stress_s_yy v_stress_s_zz &
     v_stress_s_xy v_stress_s_zx v_stress_s_yz &
-    file output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}.dat
+    file output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 
-
-# ==========================================================================
-#    OUTPUT: Z-PROFILE STRESS TENSOR
-# ==========================================================================
-
+# -- x-profile stress tensors --
 fix prof_x_polymer poly_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_x_polymer &
     v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_zx v_s_p_yz &
     norm none &
-    file output_files/stress_data/stress_profile_x_polymer_${dataname}_${interaction}_${nsteps}.dat
+    file output_files/stress_data/stress_profile_x_polymer_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 
 fix prof_x_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_x_solvent &
     v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_zx v_s_s_yz &
     norm none &
-    file output_files/stress_data/stress_profile_x_solvent_${dataname}_${interaction}_${nsteps}.dat
+    file output_files/stress_data/stress_profile_x_solvent_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 
+# -- Polymer z-displacement profile u_z(x) (mean per x-bin) for D_c --
+fix avg_disp_x_poly poly_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_x_polymer v_uz_shear &
+    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 
-# ==========================================================================
-#    OUTPUT: GEL AND BOX DIMENSIONS
-# ==========================================================================
-
+# -- Gel / box dimensions, polymer COM --
 fix out_gel_dims_rg all print ${stress_freq} &
     "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
-    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
 
 fix out_box_dims all print ${stress_freq} &
     "$(step) $(lx) $(ly) $(lz) $(xy) $(xz) $(yz)" &
-    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
 
 fix out_polymer_com all print ${stress_freq} &
     "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
-    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}.dat screen no
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
 
-
-# ==========================================================================
-#                         PRODUCTION RUN
-# ==========================================================================
+print "========================================"
+print "Phase 3 production at strain ${strains} (${nsteps} steps, plates frozen)"
+print "  gel_strain_cm = $(v_gel_strain_cm)  (= γ for G)"
+print "  G(γ) = <sigma_p_zx> / $(v_gel_strain_cm)"
+print "========================================"
 
 run ${nsteps}
 
-
-# ==========================================================================
-#                            CLEANUP
-# ==========================================================================
-
 undump traj_prod
+unfix out_polymer_com
+unfix out_box_dims
+unfix out_gel_dims_rg
+unfix avg_disp_x_poly
+unfix prof_x_solvent
+unfix prof_x_polymer
+unfix avg_stress_solvent
+unfix avg_stress_polymer
 unfix mom_prod
 unfix nvt_prod
 unfix freeze_left
 unfix freeze_right
 
+print ">>> Completed strain ${strains}:  gel_strain_cm = $(v_gel_strain_cm)"
+
+next strains
+jump SELF strain_loop
+
+
+# ==========================================================================
+#                            FINAL STATE
+# ==========================================================================
+
 print "========================================"
-print "Shear slab simulation complete"
-print "  gel_strain_cm (γ for G): $(v_gel_strain_cm)  (target: ${target_strain_zx})"
+print "Shear slab stress-strain sweep complete"
+print "  Final gel_strain_cm: $(v_gel_strain_cm)"
 print "  gel_lz_initial: ${gel_lz_initial}  gel_gap: ${gel_gap}"
 print "  Final box: $(lx) x $(ly) x $(lz)  xz = $(xz)"
 print "========================================"

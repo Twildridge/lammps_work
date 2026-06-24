@@ -15,6 +15,7 @@ INTERACTION=$3
 NSTEPS=$4
 OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
 TOTSTEPS=$((OLDSTEPS + NSTEPS))
+STRAINS=${STRAINS:-0.1}  # Space-separated shear-strain list (shear_slab only); LAMMPS index var
 
 # Scratch directory for trajectories
 SCRATCH_DIR="/ocean/projects/chm250028p/$USER"
@@ -105,6 +106,7 @@ if [ $NGPUS -gt 0 ]; then
         -var nsteps $NSTEPS \
         -var oldsteps $OLDSTEPS \
         -var totsteps $TOTSTEPS \
+        -var strains $STRAINS \
         -in $LAMMPS_FILE
 else
     # CPU-only mode
@@ -119,6 +121,7 @@ else
         -var nsteps $NSTEPS \
         -var oldsteps $OLDSTEPS \
         -var totsteps $TOTSTEPS \
+        -var strains $STRAINS \
         -in $LAMMPS_FILE
 fi
 
