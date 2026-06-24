@@ -124,7 +124,28 @@ fi
 
 # CPU-only mode (NOT USING OMP FOR NOW (not on Expanse 2021 version)
 echo "Running CPU-only with $SLURM_NTASKS tasks"
-mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM_THREADS}" \
+
+# ── Teardown-hang guard ───────────────────────────────────────────────────────
+# On Expanse, ranks occasionally deadlock in MPI_Finalize / UCX cleanup AFTER
+# LAMMPS has already printed "Total wall time" and written every output file.
+# When that happens mpirun never returns, SLURM eventually kills the whole step,
+# and the post-processing below never runs even though the science is complete.
+# (Symptom: log ends at "Total wall time" with neither a post-processing banner
+# nor a "LAMMPS failed" line — the script never regained control.)
+#
+# Defense: run mpirun under `timeout`, sized to fire a few minutes before the
+# SLURM wall limit, so a hung teardown is force-killed and control returns here.
+# Completion is then judged from the LAMMPS log (below), not the mpirun RC.
+MPIRUN_TIMEOUT=""
+if [ -n "${SLURM_JOB_END_TIME:-}" ]; then
+    REMAIN=$(( SLURM_JOB_END_TIME - $(date +%s) - 300 ))   # 5-min buffer before wall limit
+    if [ "$REMAIN" -gt 60 ]; then
+        MPIRUN_TIMEOUT="timeout -k 60 ${REMAIN}s"           # SIGTERM, then SIGKILL after 60s
+        echo "mpirun guarded by: ${MPIRUN_TIMEOUT} (force-returns ~5 min before wall limit)"
+    fi
+fi
+
+$MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM_THREADS}" \
     /home/dpollard/software/lammps/22Jul2025_update3/mpi-omp/gcc/10.2.0/openmpi/4.1.3/lammps-22Jul2025/build/lmp \
     -sf omp -pk omp $SLURM_CPUS_PER_TASK \
     -var dataname $DATANAME \
@@ -138,13 +159,30 @@ mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM
     -var nsteps_prod $NSTEPS_PROD \
     -var press_target $PRESS_TARGET \
     -var vel_seed $VEL_SEED \
+    -var skip_widom $SKIP_WIDOM \
     -var strains $STRAINS \
     \
     -in $LAMMPS_FILE
 LAMMPS_RC=$?
-if [ $LAMMPS_RC -ne 0 ]; then
-    echo "LAMMPS failed with exit code ${LAMMPS_RC} — skipping post-processing"
-    exit $LAMMPS_RC
+
+# Judge completion from the LAMMPS log, not the mpirun exit code. LAMMPS writes
+# "Total wall time:" to log.lammps (here in WORK_DIR, since no -log/log override)
+# only on a clean run-to-completion — for every run type. A nonzero mpirun RC, or
+# a RC 124 from the timeout guard above, can occur during teardown AFTER that
+# point, when all output is already on disk; those must NOT discard a good run.
+LAMMPS_LOG="${WORK_DIR}/log.lammps"
+if [ "$LAMMPS_RC" -eq 124 ]; then
+    echo "WARNING: mpirun hit the timeout guard (RC 124) — probable MPI/UCX teardown hang after completion."
+fi
+if grep -q "Total wall time" "$LAMMPS_LOG" 2>/dev/null; then
+    if [ "$LAMMPS_RC" -ne 0 ]; then
+        echo "NOTE: mpirun returned ${LAMMPS_RC}, but '${LAMMPS_LOG}' reached 'Total wall time' —"
+        echo "      LAMMPS ran to completion; proceeding with post-processing."
+    fi
+else
+    echo "LAMMPS did not reach 'Total wall time' in ${LAMMPS_LOG} (mpirun RC ${LAMMPS_RC})."
+    echo "Treating as a genuine failure — skipping post-processing."
+    exit "${LAMMPS_RC:-1}"
 fi
 
 # Determine suffix based on 6th argument (type) - moved from 7th position

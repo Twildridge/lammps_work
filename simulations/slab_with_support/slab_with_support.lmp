@@ -46,7 +46,11 @@ variable volume_freq equal 10000
 # 0 = fresh start (default)  1 = continuation from a final .data file
 # When cont=1 the push-off, minimization, gentle NVT thermalization, and NPT
 # warm-up are all skipped — the data file already holds an equilibrated config.
-variable cont index 0
+variable cont       index 0
+variable skip_widom index 0   # set to 1 via -var (run_lammps.sh reads SKIP_WIDOM env) to skip
+                               # fix widom setup and cleanup — required when write_data is called
+                               # mid-production (snapshot loop) because init() checks static bin
+                               # boundaries that may be stale after NPT box compression
 
 variable num_widom_curves equal 10     # time-snapshots of μ(z) for fix widom / fix print output
 variable M_widom          equal 1000   # ghost-particle insertions per bin per snapshot
@@ -282,7 +286,11 @@ fix box_dims_output all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_
 
 # =====================================================================
 #   CHEMICAL POTENTIAL: WIDOM TEST-PARTICLE INSERTION
+#   Skipped when skip_widom=1 (volmix sweeps) — write_data mid-loop
+#   triggers init() which re-validates the static bin regions; at high P*
+#   NPT compression can push those boundaries outside the current box.
 # =====================================================================
+if "${skip_widom} == 1" then "jump SELF widom_setup_skip"
 shell mkdir -p output_files/chemical_potential
 # 20 equal-width z-slabs with variable-bound regions — tracks NPT box.
 # One fix widom per slab fires every nfreq_widom steps (= nsteps/10),
@@ -415,6 +423,8 @@ fix avg_solv_density all ave/chunk ${nevery_density} ${nrepeat_density} ${nfreq_
 # cadence as the fix widom fires.
 dump widom_traj all custom ${nfreq_widom_dump} traj_files/widom_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z
 
+label widom_setup_skip   # jump target when skip_widom=1
+
 # Production run — split into n_snaps sequential blocks; write a data snapshot after each.
 # Snapshot files: final_config_${dataname}_${interaction}_${totsteps}_snap<N>.data
 # volmix_sweep isolates each snapshot independently so ΔV_mix error bars capture
@@ -439,9 +449,10 @@ label snap_loop
 unfix 1
 unfix remove_drift
 undump poly_traj
-undump widom_traj
+if "${skip_widom} == 0" then "undump widom_traj"
 
-# Widom / chemical potential cleanup
+# Widom / chemical potential cleanup (skipped when skip_widom=1)
+if "${skip_widom} == 1" then "jump SELF widom_cleanup_skip"
 unfix widom_b1
 unfix widom_b2
 unfix widom_b3
@@ -465,6 +476,7 @@ unfix widom_b20
 unfix out_mu_z
 unfix avg_solv_density
 uncompute chunk_z_solv_density
+label widom_cleanup_skip
 
 
 
