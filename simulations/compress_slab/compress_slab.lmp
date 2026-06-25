@@ -20,14 +20,15 @@
 #   Plate-driven compression keeps the box fixed; plates mechanically transmit
 #   the load to the gel through harmonic bonds (same logic as shear_slab).
 #
-# Phases:
-#   1. NVT equilibration — all 6 plates frozen (fix move 0 0 0), gel NVT
-#      1a. NPT (nsteps_npt steps):  find equilibrium box volume at P = P_target
-#      1b. NVT (nsteps_equil steps): relax internal stresses at NPT-final volume
-#   2. Compression — all 6 plates driven inward simultaneously, gel NVT
-#      Run halts when compress_strain_z >= target_strain_comp
-#   3. Production — all 6 plates frozen at Phase 2 final positions, gel NVT
-#      K = -(sig_p_xx + sig_p_yy + sig_p_zz) / (3 * compress_strain_vol_final)
+# Phases:  (equilibration ported from slab_with_flow.lmp — Langevin beats FENE heating)
+#   0.  NVT settle (nsteps_phase0) — fixed box, all 6 plates frozen (fix move 0 0 0)
+#   0.5 Langevin+NPH iso (nsteps_npt) — find equilibrium box volume at P = P_target;
+#       plates released to nve+setforce so they scale isotropically with the box
+#   1b. NVT (nsteps_equil) — relax internal stresses at NPH-final volume, plates frozen
+#   2.  Compression — all 6 plates driven inward simultaneously; gel on Langevin+NVE
+#       Run halts when compress_strain_z >= target_strain_comp
+#   3.  Production — all 6 plates frozen at Phase 2 final positions, gel NVT
+#       K = -(sig_p_xx + sig_p_yy + sig_p_zz) / (3 * compress_strain_vol_final)
 #
 # Plate mol IDs (assigned by add_more_plates_to_gel.ipynb):
 #   top   = max_mol_gel + 1      bot   = max_mol_gel + 2
@@ -60,12 +61,26 @@ variable timestep_prod  equal 0.005
 # Linear compressive strain target per axis (keep <= 0.10 for linear elastic regime)
 variable target_strain_comp equal 0.10
 
-# Phase lengths
-variable nsteps_npt           equal 50000    # Phase 1a: NPT — find equilibrium volume
-variable nsteps_equil         equal 100000   # Phase 1b: NVT — equilibrate at NPT volume
+# Phase lengths  (unchanged values — equilibration dynamics method changed below)
+variable nsteps_phase0        equal 50000    # Phase 0:   NVT settle at fixed box (new; = old nsteps_npt)
+variable nsteps_npt           equal 50000    # Phase 0.5: Langevin+NPH — find equilibrium volume at P_target
+variable nsteps_equil         equal 100000   # Phase 1b:  NVT — equilibrate at NPH-final volume
 variable nsteps_compress_base equal 285000   # reference for vcompress velocity calculation
 variable nsteps_compress      equal 570000   # 2× safety buffer — halt fires at target_strain
 # nsteps (Phase 3 production) passed from bash via -var nsteps
+
+# ----- Phase 0.5: Langevin + NPH barostat (replaces Nosé-Hoover NPT) -----
+# Ported from slab_with_flow.lmp (compression_mode=1).  Nosé-Hoover NPT was
+# replaced because FENE bonds inject kinetic energy faster than the NH chain
+# can remove it (T runs away, bonds stretch toward R0=1.5 → "FENE bond too
+# long").  A Langevin thermostat's per-atom friction removes energy in direct
+# proportion to velocity and always wins against FENE heating; an NPH barostat
+# sets the volume.
+variable npt_P_damp equal 50.0   # NPH barostat damping (τ); raise to 500–1000 if FENE warnings persist
+variable lang_T_damp equal 1.0   # Langevin damping (τ)
+# NOTE: NPH targets the TOTAL pressure (incl. barostat virial).  We target
+# P_target directly; if c_gel_press does not converge to ~${P_target}, add a
+# small offset to the NPH target (slab_with_flow needed ≈ +0.41 for its system).
 
 # Output frequencies
 variable thermo_freq     equal 25000
@@ -185,19 +200,22 @@ thermo ${thermo_freq}
 
 
 # ==========================================================================
-#              PHASE 1: EQUILIBRATION (NPT then NVT, all plates frozen)
+#   PHASE 1: EQUILIBRATION  (Phase 0 NVT → Phase 0.5 Langevin+NPH → Phase 1b NVT)
 # ==========================================================================
-# Phase 1a — NPT (${nsteps_npt} steps):
-#   All 6 plates frozen with fix move linear 0 0 0; box adjusts iso to P_target.
-#   Plate atoms scale with the box (reduced coords fixed) so plate-polymer
-#   gaps adjust consistently with the gel. Goal: equilibrium box volume.
+# Ported from slab_with_flow.lmp (compression_mode=1).  Replaces the previous
+# Nosé-Hoover NPT (which let FENE bonds heat the system: "FENE bond too long").
 #
-# Phase 1b — NVT (${nsteps_equil} steps):
-#   Box locked at NPT-final volume. Plates remain frozen. Gel thermalises.
-#   Goal: relax internal stresses at correct density before compression.
+# Phase 0   — NVT at fixed box volume, all plates frozen.  Settles the (cold)
+#             starting config before any volume change.
+# Phase 0.5 — Langevin thermostat + NPH iso barostat → P_target.  Plates are
+#             released to nve+setforce so they scale isotropically with the box
+#             (the old fix-move-0 pinned plates in absolute space while the box
+#             shrank around them — a latent bug).  Re-frozen afterward.
+# Phase 1b  — NVT at the new (NPH-final) box volume, plates re-frozen.  Relaxes
+#             internal stresses at the correct density before compression.
 
 print "========================================"
-print "Phase 1a: NPT equilibration (${nsteps_npt} steps, all plates frozen)"
+print "Phase 0: NVT equilibration (${nsteps_phase0} steps, fixed box, all plates frozen)"
 print "========================================"
 
 reset_timestep 0
@@ -216,27 +234,57 @@ velocity plate set 0.0 0.0 0.0
 minimize 1.0e-4 1.0e-6 5000 50000
 unfix freeze_plates_min
 
-# --- Phase 1a: NPT ---
-fix freeze_plates_npt plate   move linear 0 0 0
-fix npt_equil         gel     npt temp ${temp_target} ${temp_target} 1.0 &
-                                   iso ${P_target} ${P_target} 10.0
-fix mom_npt           gel     momentum 100 linear 1 1 1
+# Seed gel velocities at temp_target.  The input config is cold (T=0); without
+# this the thermostats must heat from exactly zero, which is slow and leaves
+# bonds pinned near R0.  (Addition beyond slab_with_flow, which starts from an
+# already-equilibrated config that carries velocities.)
+velocity gel create ${temp_target} 90210 mom yes rot yes dist gaussian
+
+# --- Phase 0: NVT at fixed box volume ---
+fix freeze_plates_0 plate   move linear 0 0 0
+fix nvt_phase0      gel     nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_phase0      gel     momentum 100 linear 1 1 1
+
+run ${nsteps_phase0}
+
+unfix mom_phase0
+unfix nvt_phase0
+unfix freeze_plates_0
+
+print ">>> Post-Phase-0 NVT  T = $(c_gel_temp)  P = $(press)  c_gel_press = $(c_gel_press)"
+
+# --- Phase 0.5: Langevin + NPH iso to P_target (plates scale with box) ---
+print "========================================"
+print "Phase 0.5: Langevin+NPH iso to P = ${P_target} (${nsteps_npt} steps, plates scale with box)"
+print "========================================"
+
+# Release plates: nve + setforce 0 → zero net force, integrated, and remapped
+# by the NPH barostat (dilate all) so they scale isotropically with the box.
+velocity plate set 0.0 0.0 0.0
+fix nve_plate      plate nve
+fix setforce_plate plate setforce 0.0 0.0 0.0
+
+# Langevin (per-atom friction beats FENE heating) + NPH barostat.
+fix lang_p05 gel langevin ${temp_target} ${temp_target} ${lang_T_damp} 48279
+fix nph_p05  gel nph iso ${P_target} ${P_target} ${npt_P_damp}
 
 run ${nsteps_npt}
 
-unfix mom_npt
-unfix npt_equil
-unfix freeze_plates_npt
+unfix nph_p05
+unfix lang_p05
 
-print ">>> Post-NPT T = $(c_gel_temp)  P = $(press)"
-print ">>> NPT-final box: $(lx) x $(ly) x $(lz)  (this becomes the NVT input volume)"
+print ">>> Post-Langevin+NPH  T = $(c_gel_temp)  c_gel_press = $(c_gel_press)  box = $(lx) x $(ly) x $(lz)"
 
+# Re-freeze plates at their new (scaled) positions.
+unfix nve_plate
+unfix setforce_plate
+velocity plate set 0.0 0.0 0.0
+
+# --- Phase 1b: NVT at the NPH-final volume ---
 print "========================================"
-print "Phase 1b: NVT equilibration (${nsteps_equil} steps, all plates frozen)"
-print "  Box fixed at NPT-final volume"
+print "Phase 1b: NVT equilibration (${nsteps_equil} steps, plates frozen at NPH volume)"
 print "========================================"
 
-# --- Phase 1b: NVT at NPT-final volume ---
 fix freeze_plates_1 plate   move linear 0 0 0
 fix nvt_equil       gel     nvt temp ${temp_target} ${temp_target} 1.0
 fix mom_equil       gel     momentum 100 linear 1 1 1
@@ -247,7 +295,7 @@ unfix mom_equil
 unfix nvt_equil
 unfix freeze_plates_1
 
-print ">>> Post-NVT T = $(c_gel_temp)  P = $(press)"
+print ">>> Post-NVT T = $(c_gel_temp)  P = $(press)  c_gel_press = $(c_gel_press)"
 print ">>> Box after Phase 1: $(lx) x $(ly) x $(lz)"
 
 
@@ -398,9 +446,17 @@ fix drive_back  plate_back  move linear  0             ${vcompress_y}  0
 fix drive_right plate_right move linear -${vcompress_x}  0           0
 fix drive_left  plate_left  move linear  ${vcompress_x}  0           0
 
-fix nvt_compress gel     nvt  temp ${temp_target} ${temp_target} 1.0
-fix mom_lin_c    gel     momentum 100 linear 1 1 1
-fix mom_rot_c    gel     momentum 100 angular
+# Thermostat during active compression: Langevin + NVE (not Nosé-Hoover).
+# FENE heating is worst while the gel is being deformed; Langevin's per-atom
+# friction removes it robustly (same rationale as Phase 0.5).  Configurational
+# (pair+bond) virial — i.e. the stress used for K — is unaffected by the choice
+# of thermostat, so this does not bias the modulus.
+# Nosé-Hoover fallback (revert if Langevin over-damps the compression streaming):
+#   fix nvt_compress gel nvt temp ${temp_target} ${temp_target} 1.0
+fix nve_compress  gel     nve
+fix lang_compress gel     langevin ${temp_target} ${temp_target} ${lang_T_damp} 71623
+fix mom_lin_c     gel     momentum 100 linear 1 1 1
+fix mom_rot_c     gel     momentum 100 angular
 
 # Output: step  gap_z_0  gap_z_current  compress_strain_z  compress_strain_vol
 fix out_compress_strain all print ${stress_freq} &
@@ -416,7 +472,8 @@ unfix halt_compress
 unfix out_compress_strain
 unfix mom_rot_c
 unfix mom_lin_c
-unfix nvt_compress
+unfix lang_compress
+unfix nve_compress
 unfix drive_left
 unfix drive_right
 unfix drive_back
