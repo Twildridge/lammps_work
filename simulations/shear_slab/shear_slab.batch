@@ -11,6 +11,25 @@
 #SBATCH --output=%x.o%j.%N
 # #SBATCH --error=%x.e%j.%N
 
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (must run BEFORE STRAINS is defined below).
+# sbatch submits whatever copy of this file is on disk at submit time. If that
+# local copy is STALE (e.g. predates the STRAINS sweep), the run silently does
+# the wrong thing — and run_lammps.sh's own `git pull` is too late to fix it,
+# because this batch has ALREADY exported STRAINS by the time run_lammps.sh
+# runs. (That is exactly how a sweep collapses to a single strain=0.1.)
+# Fix: pull the repo FIRST, then re-exec the freshly pulled batch so STRAINS
+# is always read from the current file. The guard var prevents an exec loop.
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${SHEAR_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining STRAINS..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export SHEAR_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/shear_slab/shear_slab.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (SHEAR_BATCH_SYNCED=1)"
+
 # Set environment variables
 declare -xr OMPI_UNIT='core'
 declare -xr OMPI_MCA_btl='self,vader'

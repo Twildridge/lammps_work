@@ -22,6 +22,12 @@ TOTSTEPS=$((OLDSTEPS + NSTEPS))
 PRESS_TARGET=${7:-1.5}  # Default pressure; overrides press_target in .lmp file
 VEL_SEED=${8:-12345}    # RNG seed for create_velocity and fix langevin; vary per replica
 SKIP_WIDOM=${SKIP_WIDOM:-0}  # Set to 1 (via env) to minimize Widom output and skip cavity_widom.py
+if [ -z "${STRAINS:-}" ]; then
+    echo ">>> WARNING: STRAINS is unset — falling back to single strain 0.1."
+    echo ">>>          For shear_slab this means NO sweep. If you intended a sweep,"
+    echo ">>>          your shear_slab.batch on the cluster was likely stale at sbatch"
+    echo ">>>          time. Pull lammps_work and resubmit (the batch now self-syncs)."
+fi
 STRAINS=${STRAINS:-0.1}      # Space-separated shear-strain list (shear_slab only); passed as a
                              # LAMMPS index variable. Default 0.1 = single operating point.
 
