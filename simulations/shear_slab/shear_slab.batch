@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-node=128 # was 32, 128
 #SBATCH --cpus-per-task=1     # was 4, 1
 #SBATCH --mem=0
-#SBATCH --time=2:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=%x.o%j.%N
 # #SBATCH --error=%x.e%j.%N
 
