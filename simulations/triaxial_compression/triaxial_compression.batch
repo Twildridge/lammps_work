@@ -9,7 +9,6 @@
 #SBATCH --mem=0
 #SBATCH --time=14:00:00
 #SBATCH --output=%x.o%j.%N
-#SBATCH --error=%x.e%j.%N
 
 # Set environment variables
 declare -xr OMPI_UNIT='core'
