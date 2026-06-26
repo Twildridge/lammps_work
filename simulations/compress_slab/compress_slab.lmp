@@ -361,19 +361,16 @@ variable mol_left_plate  equal round($(c_max_mol_gel)+6)
 
 print ">>> Plate mol IDs: top=${mol_top_plate}  bot=${mol_bot_plate}  front=${mol_front_plate}  back=${mol_back_plate}  right=${mol_right_plate}  left=${mol_left_plate}"
 
-variable is_plate_top   atom "(type==4)&&(mol==${mol_top_plate})"
-variable is_plate_bot   atom "(type==4)&&(mol==${mol_bot_plate})"
-variable is_plate_front atom "(type==4)&&(mol==${mol_front_plate})"
-variable is_plate_back  atom "(type==4)&&(mol==${mol_back_plate})"
-variable is_plate_right atom "(type==4)&&(mol==${mol_right_plate})"
-variable is_plate_left  atom "(type==4)&&(mol==${mol_left_plate})"
-
-group plate_top   variable is_plate_top
-group plate_bot   variable is_plate_bot
-group plate_front variable is_plate_front
-group plate_back  variable is_plate_back
-group plate_right variable is_plate_right
-group plate_left  variable is_plate_left
+# Use the group command's native 'molecule' style (works on all LAMMPS
+# versions). The earlier atom-style-variable approach used the 'mol' keyword,
+# which is only a valid atom-style vector in newer LAMMPS builds and fails with
+# "Invalid syntax in variable formula" on older cluster builds.
+group plate_top   molecule ${mol_top_plate}
+group plate_bot   molecule ${mol_bot_plate}
+group plate_front molecule ${mol_front_plate}
+group plate_back  molecule ${mol_back_plate}
+group plate_right molecule ${mol_right_plate}
+group plate_left  molecule ${mol_left_plate}
 
 print ">>> plate_top: $(count(plate_top))  plate_bot: $(count(plate_bot))"
 print ">>> plate_front: $(count(plate_front))  plate_back: $(count(plate_back))"
