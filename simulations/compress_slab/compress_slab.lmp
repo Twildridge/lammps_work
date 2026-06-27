@@ -121,12 +121,20 @@ boundary p p p
 atom_style molecular
 atom_modify map array
 
+# Tiled comm style enables RCB load balancing (see balance / fix balance below).
+# Needed because the dense gel slab sits in a sparse rho04 solvent box, so a
+# uniform processor grid overloads a few ranks (Nlocal ranged 2106..20701).
+comm_style tiled
+
 pair_style lj/cut 1.122
 bond_style fene
 
 read_data data_files/${dataname}.data nocoeff
 
-comm_modify cutoff 5.0
+# Ghost-atom communication cutoff. Must be >= the longest bond (FENE R0 = 1.5);
+# 2.0 leaves margin. Previously 5.0, which made Nghost ~4x Nlocal and drove Comm
+# to ~47% of wall time while Pair was only 0.14% (pair cutoff is just 1.122).
+comm_modify cutoff 2.0
 
 print "========================================"
 print "Compression slab simulation (plate-driven): ${dataname}"
@@ -184,6 +192,14 @@ bond_coeff 1 30.0 1.5 1.0 1.0   # polymer-polymer FENE (Kremer-Grest)
 
 special_bonds fene
 neigh_modify delay 0 every 1 check yes
+
+# ── Load balancing (RCB) ──────────────────────────────────────────────────────
+# One-time repartition now (also speeds the upcoming minimize), then a periodic
+# rebalance to track density changes through NPH (Phase 0.5) and compression
+# (Phase 2). Threshold 1.05 = rebalance when the busiest rank exceeds the
+# average by >5%. Requires comm_style tiled (set in the init section above).
+balance 1.0 rcb
+fix balance all balance 10000 1.05 rcb
 
 
 # ==========================================================================
