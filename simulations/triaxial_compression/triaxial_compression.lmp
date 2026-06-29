@@ -4,12 +4,26 @@
 # compression path is self-contained and free of per-step mode branching.
 # The permeation counterpart lives in ../triaxial_permeation/.
 #
-# Starting from an equilibrated configuration (solvent near walls already
-# removed, support shifted up off the box bottom in the data-file workflow)
-# produced by the slab_with_support workflow.
+# Starting from an equilibrated configuration produced by the
+# slab_with_support workflow on the PERIODIC slab generator
+# (slab_with_support_periodic.ipynb).
 # Variables from bash script: dataname, interaction, epsSS, epsSP, nsteps
 #
-# Atom types: 1=polymer, 2=crosslinker, 3=solvent, 4=support, 5=piston, 6=walls
+# Atom types: 1=crosslink, 2=chain bead, 3=solvent, 4=support(frozen),
+#             5=piston(mobile).  NO side walls (the periodic geometry is
+#             laterally periodic — there is nothing to confine).
+#
+# GEOMETRY (periodic generator):
+#   The slab spans the WHOLE x-y plane: box_x = box_y = units*a EXACTLY, no
+#   side solvent padding.  Network bonds wrap the x and y PBC only; z is a
+#   finite slab (no bonds cross z).  boundary p p p with a single z-period
+#   that recirculates through the z-PBC:
+#       below solvent | support sheet (type4, frozen) | gap | polymer slab |
+#       top solvent (piston type5 parked high) -> wraps to next image's support.
+#   Because the slab is laterally periodic and unconfined, x,y are free to
+#   relax; z compression is applied solely by the piston (NO box barostat in z).
+#   Single support + single piston sheet → c_piston_fz/(lx*ly) is the true
+#   piston stress (no multi-period normalisation needed).
 #
 # Reduced LJ units: tau = sigma*sqrt(m/epsilon)
 # dt = 0.005 → 1e6 steps ≈ 4.1e3 tau
@@ -18,10 +32,10 @@
 #   - Piston-solvent WCA is OFF throughout; the piston passes through the
 #     solvent freely and loads the gel network directly.
 #   - Phase 0:   NVT equilibration at fixed box volume (piston frozen).
-#   - Phase 0.5: isotropic Langevin + NPH to bring mobile_press → P_target.
-#                Rigid bodies temporarily on nve+setforce so they scale with
-#                the box.  Langevin (not Nosé-Hoover) because FENE bonds inject
-#                heat faster than NH chains can remove it.
+#   - Phase 0.5: NVT re-equilibration at the inherited (fixed) box.  No
+#                barostat: the input is already at P_target from the aniso
+#                equilibration in slab_with_support.lmp, and x,y are held
+#                fixed while z is reserved for piston control.
 #   - Phase 1.5 (NEW): pre-compression REFERENCE window.  Piston held at v=0
 #                for ref_avg_steps; ALL observables (partial stresses, σ_ss,
 #                σ_pp, solvent mass density) are averaged into "_ref_" files,
@@ -50,7 +64,7 @@
 #
 # When cont=1 the following are skipped (data file already holds the state):
 #   Phase 0    — NVT equilibration run (box volume/piston position stay as-is)
-#   Phase 0.5  — Langevin+NPH isotropic pressure equilibration
+#   Phase 0.5  — NVT re-equilibration at the inherited box
 #   Phase 1.5  — reference recording (reference files already exist)
 #   Phase 2 piston setup — piston stays frozen; halt_compress fires immediately
 #                          and the run becomes a pure stress-relaxation measurement
@@ -179,7 +193,6 @@ group polymer   type 1 2
 group solvent   type 3
 group support   type 4
 group piston    type 5
-group walls     type 6
 group mobile    type 1 2 3
 group gel_system type 1 2 3 4 5
 
@@ -204,24 +217,15 @@ pair_coeff 2 4 1.0 ${sigma} 1.122
 pair_coeff 1 5 1.0 ${sigma} 1.122
 pair_coeff 2 5 1.0 ${sigma} 1.122
 
-# Solvent-piston: mode-dependent from the start.
-#   Compression: OFF — piston passes through solvent freely, loads gel directly.
-#   Permeation:  ON  — piston pushes solvent as a plug through the gel.
-pair_coeff 3 5 0.0 ${sigma} 0.0          # default: OFF (compression)
-
-# Wall interactions (WCA)
-pair_coeff 1 6 1.0 ${sigma} 1.122
-pair_coeff 2 6 1.0 ${sigma} 1.122
-pair_coeff 3 6 1.0 ${sigma} 1.122
+# Solvent-piston: OFF for compression — piston passes through solvent freely,
+# loads gel directly.
+pair_coeff 3 5 0.0 ${sigma} 0.0          # OFF (compression)
 
 # Non-interacting pairs
 pair_coeff 3 4 0.0 ${sigma} 0.0   # solvent-support
 pair_coeff 4 4 0.0 ${sigma} 0.0   # support-support
 pair_coeff 4 5 0.0 ${sigma} 0.0   # support-piston
-pair_coeff 4 6 0.0 ${sigma} 0.0   # support-wall
 pair_coeff 5 5 0.0 ${sigma} 0.0   # piston-piston
-pair_coeff 5 6 0.0 ${sigma} 0.0   # piston-wall
-pair_coeff 6 6 0.0 ${sigma} 0.0   # wall-wall
 
 # ----- Bonds and Angles -----
 bond_coeff * 30.0 1.5 1.0 1.0
@@ -235,10 +239,7 @@ special_bonds fene
 # ----- Neighbor List Exclusions -----
 neigh_modify exclude type 4 4   # support-support
 neigh_modify exclude type 5 5   # piston-piston
-neigh_modify exclude type 6 6   # wall-wall
 neigh_modify exclude type 4 5   # support-piston
-neigh_modify exclude type 4 6   # support-wall
-neigh_modify exclude type 5 6   # piston-wall
 
 
 # ==========================================================================
@@ -249,17 +250,10 @@ neigh_modify exclude type 5 6   # piston-wall
 velocity support set 0.0 0.0 0.0
 fix rigid_support support rigid single force * off off off torque * off off off
 
-# Walls: completely frozen
-velocity walls set 0.0 0.0 0.0
-fix rigid_walls walls rigid single force * off off off torque * off off off
-
-# Piston: mode-dependent from the start.
-#   Compression: fully frozen during Phase 0 NVT (force * off off off +
-#                setforce 0).  Released to nve+setforce during Phase 0.5
-#                Langevin+NPH so it scales isotropically with the box.
-#                Restored to rigid+frozen after Phase 0.5; then released
-#                again for constant-velocity compression in Phase 2.
-#   Permeation:  z-motion enabled immediately (piston floats on solvent).
+# Piston: fully frozen during Phase 0 / Phase 0.5 NVT (force * off off off +
+#   setforce 0).  Stays rigid+frozen through equilibration (no barostat means
+#   no dilation to scale with), then released for constant-velocity
+#   compression in Phase 2.
 velocity piston set 0.0 0.0 0.0
 
 fix rigid_piston piston rigid single force * off off off torque * off off off
@@ -294,8 +288,8 @@ variable piston_pressure_z equal c_piston_fz/v_piston_area  # force normalised b
 #              PHASE 0: NVT EQUILIBRATION (BOTH MODES)
 # ==========================================================================
 # Equilibrate at the current box volume.  No pressure adjustment here —
-# that is handled by the Langevin+NPH block (Phase 0.5) for compression,
-# or by the permeation force ramp in Phase 2 for permeation.
+# the input is already at P_target (set upstream in slab_with_support.lmp);
+# Phase 0.5 is a plain NVT settle and Phase 2 applies the piston.
 # Box dimensions stay fixed throughout Phase 0.
 
 print "========================================"
@@ -308,7 +302,7 @@ timestep ${timestep_prod}
 # ----- cont=1: skip minimize + Phase 0 NVT (data file already holds equilibrated config) -----
 if "${cont} == 1" then "jump SELF label_after_phase0"
 
-# Brief minimize to clean up any residual overlaps from wall insertion
+# Brief minimize to clean up any residual overlaps from the data-file build
 minimize 1.0e-4 1.0e-6 1000 10000
 
 # Setup trajectory
@@ -337,90 +331,43 @@ label label_after_phase0
 run 0
 
 # ==========================================================================
-#    PHASE 0.5 (COMPRESSION ONLY): ISOTROPIC LANGEVIN + NPH
+#    PHASE 0.5 (COMPRESSION ONLY): NVT RE-EQUILIBRATION (no barostat)
 # ==========================================================================
-# Brings mobile_press to P_target = 1.5 by isotropically swelling/deswelling
-# the gel.  All rigid bodies (piston, walls, support) are temporarily put on
-# nve+setforce so they scale freely with the box without contributing spurious
-# virial to the barostat.
+# The periodic slab is laterally periodic and unconfined, and the input config
+# already sits at P_target (set upstream by the aniso NPT in slab_with_support.lmp).
+# So there is no box barostat here:
+#   • x,y are HELD FIXED — no lateral barostat (the user's choice; the lateral
+#     stress carried by the equilibrated file is preserved as the ε=0 state).
+#   • z is reserved for the piston (compression in Phase 2); barostatting z
+#     would fight the force/velocity-controlled piston.
+# Phase 0.5 is therefore just a short NVT settle at the inherited box volume,
+# with the piston and support kept rigid+frozen throughout (no dilation to
+# scale them through, so they are NOT released to nve as in the old iso-NPH
+# workflow).  mobile_press is printed for monitoring only — it is not driven.
 #
-# Why Langevin + NPH (not fix npt / Nosé-Hoover):
-#   FENE bonds under compression inject kinetic energy faster than the
-#   Nosé-Hoover chain can remove it → T stuck at ~6.  Langevin's per-atom
-#   friction coefficient (∝ v) removes energy in direct proportion to how
-#   hot each atom is — it always wins against FENE heating.
-#
-# Key parameters:
-#   npt_P_damp: barostat damping (τ).  100 τ is a good default; increase to
-#               500–1000 if FENE bond warnings appear.
-#   npt_p05_steps: run length.  200k is usually enough; increase if
-#                  mobile_press has not converged at the end of the run.
+# Why Langevin (not Nosé-Hoover) for the thermostat:
+#   FENE bonds inject kinetic energy faster than a Nosé-Hoover chain can
+#   remove it (T can stick at ~6).  Langevin's per-atom friction (∝ v) removes
+#   energy in proportion to how hot each atom is — it always wins.
 
-variable npt_P_damp    equal 50.0   # barostat damping (τ); increase if FENE errors appear
-variable npt_p05_steps equal 120000  # run length; increase if mobile_press not converged
-# NPH targets 'press', which includes the barostat's own virial contributions
-# (~+0.39 above c_mobile_press for this system).  To get c_mobile_press = 1.5
-# at NPH convergence, set npt_P05_target ≈ P_target + 0.41.
-# Re-calibrate if the system size or density changes significantly.
-variable npt_P05_target equal ${P_target}+0.41   # ≈ 1.91
+variable p05_steps equal 120000   # NVT settle length; increase if T/press drift
 
-# ----- cont=1 + compression: jump over Phase 0.5 (box already at equilibrium pressure) -----
+# ----- cont=1 + compression: jump over Phase 0.5 (already equilibrated) -----
 if "${cont} == 1" then "jump SELF label_after_phase05"
 
 print '========================================'
-print 'Phase 0.5 (compression): Langevin+NPH iso, press target=${npt_P05_target} → c_mobile_press target=${P_target}'
+print 'Phase 0.5 (compression): NVT re-equilibration at fixed box (no barostat)'
 print '========================================'
 
-# Isotropic NPH so the gel swells/deswells uniformly in all directions.
-# Piston and walls on nve+setforce during NPH so they scale with the box.
-# Langevin (T_damp=1.0): robust temperature control even under FENE stress.
-# Nosé-Hoover (fix npt) left T stuck at ~6 because FENE bonds inject energy
-# faster than the NH chain can remove it; Langevin's per-atom friction removes
-# energy in direct proportion to velocity, which always wins.
-
-# Release piston to scale isotropically (nve+setforce, no fix rigid)
-unfix freeze_piston
-unfix rigid_piston
-fix nve_piston      piston nve
-fix setforce_piston piston setforce 0.0 0.0 0.0
-
-# Release walls and support to scale isotropically
-unfix rigid_walls
-unfix rigid_support
-fix freeze_walls   walls   setforce 0.0 0.0 0.0
-fix freeze_support support setforce 0.0 0.0 0.0
-fix nve_walls      walls   nve
-fix nve_support    support nve
-
+# Piston and support stay rigid+frozen (defined in RIGID BODIES); only the
+# mobile group is integrated.  Langevin thermostat + nve for robust T control.
 fix lang_p05 mobile langevin ${temp_target} ${temp_target} 1.0 48279
-fix nph_p05 mobile nph iso ${npt_P05_target} ${npt_P05_target} ${npt_P_damp}
-run ${npt_p05_steps}
+fix nve_p05  mobile nve
+run ${p05_steps}
 unfix lang_p05
-unfix nph_p05
+unfix nve_p05
 
-print '>>> Post-Langevin+NPH: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)  lz=$(lz)'
-
-# Restore rigid piston at its new (scaled) position
-unfix nve_piston
-unfix setforce_piston
-velocity piston set 0.0 0.0 0.0
-fix rigid_piston piston rigid single force * off off off torque * off off off
-fix freeze_piston piston setforce 0.0 0.0 0.0
-
-# Restore rigid walls and support
-unfix freeze_walls
-unfix freeze_support
-unfix nve_walls
-unfix nve_support
-velocity walls   set 0.0 0.0 0.0
-velocity support set 0.0 0.0 0.0
-fix rigid_walls   walls   rigid single force * off off off torque * off off off
-fix rigid_support support rigid single force * off off off torque * off off off
-
-# NVT equilibration at the new box volume (all rigid bodies restored)
-fix nvt_p05_eq mobile nvt temp ${temp_target} ${temp_target} 1.0
-run 50000
-unfix nvt_p05_eq
+print '>>> Post-Phase-0.5 NVT: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)  lz=$(lz)'
 
 label label_after_phase05
 
@@ -529,7 +476,7 @@ print "Phase 2: Production — piston forcing"
 print "========================================"
 
 # ----- Compression: unfreeze piston, switch to velocity control -----
-# The piston was re-frozen after Phase 0.5 Langevin+NPH (rigid + setforce 0).
+# The piston was held rigid+frozen (rigid + setforce 0) through Phase 0/0.5.
 # Unfreeze, then re-fix with force*off off off so the prescribed velocity
 # is maintained exactly (no force-driven acceleration from the gel).
 #
