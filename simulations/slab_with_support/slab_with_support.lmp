@@ -173,9 +173,22 @@ neigh_modify exclude type 4 5   # support-piston
 if "${is_restart} == 0 && ${cont} == 0" then &
     "minimize 1.0e-4 1.0e-6 10000 100000"
 
-# Release piston: switch from setforce freeze to z-free rigid body
+# Release piston: free to fluctuate in z, frozen and PERIODIC in x/y.
+# NOTE: do NOT use `fix rigid` here — the piston sheet now spans the entire
+# periodic box in x and y, and a rigid body wider than half the box is
+# mis-reconstructed by rigid's nearest-image unwrapping. Instead:
+#   - setforce 0 0 NULL  : zero x/y forces so the sheet can't drift laterally
+#                          (it stays tiled and periodic with the box)
+#   - aveforce NULL NULL 0.0 : give every piston atom the SAME z-force (the
+#                          group average), so the plate translates uniformly in
+#                          z and stays flat as solvent equilibrates around it
+#   - nve                : integrate the piston (mobile group / npt does not)
+# This is periodic-safe and frictionless; the box-expansion coupling is a
+# separate issue (dilate/aniso-z) handled elsewhere.
 unfix freeze_piston
-fix rigid_piston piston rigid single force * off off on torque * off off off
+fix piston_xy  piston setforce 0.0 0.0 NULL
+fix piston_z   piston aveforce NULL NULL 0.0
+fix piston_nve piston nve
 
 
 # =====================================================================
