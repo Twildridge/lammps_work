@@ -209,8 +209,42 @@ fix balance all balance 10000 1.05 rcb
 compute gel_temp  gel   temp
 compute gel_press all   pressure gel_temp pair bond
 
+# ── Global polymer osmotic stress (whole polymer / Rg gel volume) ──────────
+# Defined here (before thermo_style) so σ_ii^poly and Π print from Phase 0
+# onward — the gel volume V_gel(Rg) co-evolves with compression, which is
+# exactly the Π-vs-V data the osmotic bulk modulus needs.
+# See slab_with_flow.lmp for the stress/atom + Rg conventions reused below.
+#
+# compute stress/atom NULL → per-atom virial stress in pressure·volume units
+#   (no kinetic term → configurational network stress only).  Summing the
+#   diagonal over ALL polymer atoms and dividing by the gel volume converts
+#   pressure·volume → pressure:        σ_ii^poly = Σ_a S_ii^a / V_gel.
+# V_gel is the Rg-based gel volume (NOT the box volume).  For a uniform prism
+#   L_i = 2√3·√(Rg_ii²)  and  V_gel = Lx_rg·Ly_rg·Lz_rg.  This is the same
+#   Rg→length mapping used in slab_with_flow.lmp and later in this script.
+compute rg_tensor       polymer gyration
+compute stress_poly_all polymer stress/atom NULL
+compute sumS_p_xx       polymer reduce sum c_stress_poly_all[1]
+compute sumS_p_yy       polymer reduce sum c_stress_poly_all[2]
+compute sumS_p_zz       polymer reduce sum c_stress_poly_all[3]
+
+variable gel_lx_rg  equal 2.0*sqrt(3.0*c_rg_tensor[1])
+variable gel_ly_rg  equal 2.0*sqrt(3.0*c_rg_tensor[2])
+variable gel_lz_rg  equal 2.0*sqrt(3.0*c_rg_tensor[3])
+variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
+
+# Polymer normal stresses normalised by the Rg gel volume → true pressure units.
+variable sigP_xx equal c_sumS_p_xx/v_gel_vol_rg
+variable sigP_yy equal c_sumS_p_yy/v_gel_vol_rg
+variable sigP_zz equal c_sumS_p_zz/v_gel_vol_rg
+# Total osmotic pressure = (1/3) tr(σ^poly).  (Sign follows the LAMMPS virial
+# convention; take |Π| for a positive osmotic pressure — see plot script.)
+variable Pi_osm  equal (v_sigP_xx+v_sigP_yy+v_sigP_zz)/3.0
+
+# thermo_style: P_ij (pxx..pyz) removed; replaced by the polymer-only normal
+# stresses and the total osmotic pressure Π so they are logged every thermo step.
 thermo_style custom step c_gel_temp pe ke etotal press c_gel_press &
-    pxx pyy pzz pxy pxz pyz vol lx ly lz xy xz yz
+    v_sigP_xx v_sigP_yy v_sigP_zz v_Pi_osm vol lx ly lz xy xz yz
 thermo_modify lost warn
 thermo ${thermo_freq}
 
@@ -255,6 +289,17 @@ unfix freeze_plates_min
 # bonds pinned near R0.  (Addition beyond slab_with_flow, which starts from an
 # already-equilibrated config that carries velocities.)
 velocity gel create ${temp_target} 90210 mom yes rot yes dist gaussian
+
+# ── OSMOTIC BULK-MODULUS DATA (Π, σ_ii^poly, gel volume) — all phases ──────
+# Defined here (before Phase 0) and never unfixed, so it records continuously
+# from Phase 0 through Phase 3.  Pairs the instantaneous polymer osmotic stress
+# with the co-evolving Rg gel volume → the Π-vs-V_gel curve for the osmotic
+# bulk modulus K = -V (dΠ/dV).  Post-processed in bulk_modulus_analysis.ipynb.
+# Columns: step  σ_xx  σ_yy  σ_zz  Π  V_gel_rg  lx_rg  ly_rg  lz_rg
+fix out_bulk_modulus all print ${stress_freq} &
+    "$(step) $(v_sigP_xx) $(v_sigP_yy) $(v_sigP_zz) $(v_Pi_osm) $(v_gel_vol_rg) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    title "# step sigP_xx sigP_yy sigP_zz Pi_osm V_gel_rg lx_rg ly_rg lz_rg" &
+    file output_files/stress_data/bulk_modulus_plot_data_${dataname}_${interaction}_${nsteps}.dat screen no
 
 # --- Phase 0: NVT at fixed box volume ---
 fix freeze_plates_0 plate   move linear 0 0 0
@@ -333,16 +378,13 @@ compute miny_polymer polymer reduce min y
 compute maxy_polymer polymer reduce max y
 compute minz_polymer polymer reduce min z
 compute maxz_polymer polymer reduce max z
-compute rg_tensor    polymer gyration
+# compute rg_tensor and the gel_lx/ly/lz/vol_rg variables are now defined
+# earlier (THERMO OUTPUT section) so they are available from Phase 0; the
+# duplicate definitions that lived here have been removed.
 
 # Atom-style variable used to access mol ID per atom in compute reduce
 variable mol_id atom mol
 compute max_mol_gel gel reduce max v_mol_id
-
-variable gel_lx_rg equal 2.0*sqrt(3.0*c_rg_tensor[1])
-variable gel_ly_rg equal 2.0*sqrt(3.0*c_rg_tensor[2])
-variable gel_lz_rg equal 2.0*sqrt(3.0*c_rg_tensor[3])
-variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
 
 run 0
 

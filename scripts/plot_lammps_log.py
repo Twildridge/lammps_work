@@ -516,6 +516,98 @@ def plot_shear_diagnostics(data, folder, run_id, output):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# COMPRESSION (NORMAL-STRESS) DIAGNOSTICS PLOT  — compress_slab only
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plot_compression_diagnostics(data, folder, run_id, output):
+    """Normal-stress diagnostics for compress_slab runs.
+
+    Replaces the shear-stress panel (which is meaningless for isotropic
+    compression) with the three POLYMER normal stresses and their average.
+    Auto-triggered only when bulk_modulus_plot_data_<run_id>.dat is present, so
+    shear_slab runs keep using plot_shear_diagnostics untouched.
+
+    Panels (shown when data is available):
+      1. Temperature                    — thermo c_gel_temp
+      2. Polymer normal stresses        — σ_xx, σ_yy, σ_zz vs step
+                                          (all polymer / V_gel(Rg))
+      3. |mean normal stress| = |Π|     — osmotic pressure magnitude vs step
+                                          (absolute value → positive convention)
+      4. Gel volume V_gel(Rg)           — context for the Π-vs-V bulk modulus
+
+    Data source: output_files/stress_data/bulk_modulus_plot_data_<run_id>.dat
+      cols: step  σ_xx  σ_yy  σ_zz  Π  V_gel_rg  lx_rg  ly_rg  lz_rg
+    """
+    sd      = os.path.join(folder, 'output_files', 'stress_data')
+    bm_file = os.path.join(sd, f'bulk_modulus_plot_data_{run_id}.dat')
+
+    arr = read_fix_print(bm_file)
+    if not arr.size or arr.shape[1] < 5:
+        print("No bulk_modulus_plot_data found — skipping compression plot.")
+        return
+
+    t   = arr[:, 0]
+    sxx = arr[:, 1]
+    syy = arr[:, 2]
+    szz = arr[:, 3]
+    Pi  = arr[:, 4]
+    Vgel = arr[:, 5] if arr.shape[1] > 5 else None
+
+    temp_key = _first_key(data, 'c_gel_temp', 'Temp')
+
+    panels = []
+    if temp_key:        panels.append('temp')
+    panels.append('normal_stress')
+    panels.append('osmotic')
+    if Vgel is not None: panels.append('volume')
+
+    fig, axes = plt.subplots(len(panels), 1, figsize=(10, 3 * len(panels)))
+    if len(panels) == 1:
+        axes = [axes]
+    fig.suptitle(f'{run_id}  —  compression diagnostics',
+                 fontsize=12, fontweight='bold')
+    steps = data.get('Step', np.array([]))
+
+    for i, panel in enumerate(panels):
+        ax = axes[i]
+        ax.grid(alpha=0.3)
+
+        # ── Temperature ───────────────────────────────────────────────────
+        if panel == 'temp':
+            ax.plot(steps, data[temp_key], 'b-', lw=1.2, marker='o', markersize=3)
+            ax.set_ylabel('Temperature')
+            _annotate_last30(ax, data[temp_key])
+
+        # ── Three polymer normal stresses vs step ─────────────────────────
+        elif panel == 'normal_stress':
+            ax.plot(t, sxx, color='royalblue',   lw=1.5, marker='o', markersize=3, label='σ_xx')
+            ax.plot(t, syy, color='darkorange',  lw=1.5, marker='s', markersize=3, label='σ_yy')
+            ax.plot(t, szz, color='forestgreen', lw=1.5, marker='^', markersize=3, label='σ_zz')
+            ax.axhline(0, color='k', ls=':', lw=0.8)
+            ax.set_ylabel('Polymer normal stress\n(all polymer / V_gel(Rg))')
+            ax.legend(fontsize=8, ncol=3)
+
+        # ── |mean normal stress| = |Π| (osmotic pressure magnitude) ───────
+        elif panel == 'osmotic':
+            absPi = np.abs(Pi)
+            ax.plot(t, absPi, color='crimson', lw=1.5, marker='o', markersize=3,
+                    label='|Π| = |(σ_xx+σ_yy+σ_zz)/3|')
+            ax.set_ylabel('|Osmotic pressure|')
+            ax.legend(fontsize=8)
+            _annotate_last30(ax, absPi, fmt='.4f')
+
+        # ── Gel volume (Rg) — context for Π-vs-V bulk modulus ─────────────
+        elif panel == 'volume':
+            ax.plot(t, Vgel, color='purple', lw=1.5, marker='o', markersize=3)
+            ax.set_ylabel('V_gel (Rg³)')
+
+    axes[-1].set_xlabel('Step')
+    plt.tight_layout()
+    plt.savefig(output, dpi=150)
+    print(f"Compression diags   → {output}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # FLOW / COMPRESSION DIAGNOSTICS PLOT
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -926,14 +1018,24 @@ if __name__ == '__main__':
     plot_convergence(data, args.folder, run_id,
                      os.path.join(out_dir, f'{run_id}_convergence.png'))
 
-    # Shear diagnostics (auto-triggered by presence of shear output files or
-    # shear-specific thermo columns Pxz / Xz)
+    # Compression diagnostics (compress_slab) — auto-triggered when the osmotic
+    # bulk-modulus data file is present.  Takes precedence over (and suppresses)
+    # the shear plot, since compress_slab has no meaningful shear signal.
     sd = os.path.join(args.folder, 'output_files', 'stress_data')
+    is_compress = os.path.exists(
+        os.path.join(sd, f'bulk_modulus_plot_data_{run_id}.dat'))
+    if is_compress:
+        plot_compression_diagnostics(
+            data, args.folder, run_id,
+            os.path.join(out_dir, f'{run_id}_compression_diagnostics.png'))
+
+    # Shear diagnostics (auto-triggered by presence of shear output files or
+    # shear-specific thermo columns Pxz / Xz).  Skipped for compress_slab runs.
     shear_files_present = (
         os.path.exists(os.path.join(sd, f'stress_tensor_polymer_{run_id}.dat')) or
         os.path.exists(os.path.join(sd, f'shear_strain_{run_id}.dat'))
     )
-    if shear_files_present or 'Pxz' in data or 'Xz' in data:
+    if not is_compress and (shear_files_present or 'Pxz' in data or 'Xz' in data):
         plot_shear_diagnostics(data, args.folder, run_id,
                                os.path.join(out_dir, f'{run_id}_shear_diagnostics.png'))
 
