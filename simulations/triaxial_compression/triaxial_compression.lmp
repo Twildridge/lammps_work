@@ -32,10 +32,13 @@
 #   - Piston-solvent WCA is OFF throughout; the piston passes through the
 #     solvent freely and loads the gel network directly.
 #   - Phase 0:   NVT equilibration at fixed box volume (piston frozen).
-#   - Phase 0.5: NVT re-equilibration at the inherited (fixed) box.  No
-#                barostat: the input is already at P_target from the aniso
-#                equilibration in slab_with_support.lmp, and x,y are held
-#                fixed while z is reserved for piston control.
+#   - Phase 0.5: anisotropic Langevin + NPH to re-pressurise the box to
+#                P_target (full Press, matching slab_with_support.lmp's
+#                aniso barostat).  Needed because the fixed-volume read
+#                relaxes below P_target.  Rigid bodies temporarily on
+#                nve+setforce so they scale with the box.  The piston is
+#                frozen here, so barostatting z is safe; the box is frozen
+#                again before Phase 2, where z is piston-controlled only.
 #   - Phase 1.5 (NEW): pre-compression REFERENCE window.  Piston held at v=0
 #                for ref_avg_steps; ALL observables (partial stresses, σ_ss,
 #                σ_pp, solvent mass density) are averaged into "_ref_" files,
@@ -64,7 +67,7 @@
 #
 # When cont=1 the following are skipped (data file already holds the state):
 #   Phase 0    — NVT equilibration run (box volume/piston position stay as-is)
-#   Phase 0.5  — NVT re-equilibration at the inherited box
+#   Phase 0.5  — anisotropic Langevin+NPH re-pressurisation to P_target
 #   Phase 1.5  — reference recording (reference files already exist)
 #   Phase 2 piston setup — piston stays frozen; halt_compress fires immediately
 #                          and the run becomes a pure stress-relaxation measurement
@@ -288,9 +291,8 @@ variable piston_pressure_z equal c_piston_fz/v_piston_area  # force normalised b
 #              PHASE 0: NVT EQUILIBRATION (BOTH MODES)
 # ==========================================================================
 # Equilibrate at the current box volume.  No pressure adjustment here —
-# the input is already at P_target (set upstream in slab_with_support.lmp);
-# Phase 0.5 is a plain NVT settle and Phase 2 applies the piston.
-# Box dimensions stay fixed throughout Phase 0.
+# Phase 0.5 (aniso NPH) re-pressurises the box to P_target, then Phase 2
+# applies the piston.  Box dimensions stay fixed throughout Phase 0.
 
 print "========================================"
 print "Phase 0: NVT equilibration"
@@ -331,45 +333,95 @@ label label_after_phase0
 run 0
 
 # ==========================================================================
-#    PHASE 0.5 (COMPRESSION ONLY): NVT RE-EQUILIBRATION (no barostat)
+#    PHASE 0.5 (COMPRESSION ONLY): ANISOTROPIC LANGEVIN + NPH → P_target
 # ==========================================================================
-# The periodic slab is laterally periodic and unconfined, and the input config
-# already sits at P_target (set upstream by the aniso NPT in slab_with_support.lmp).
-# So there is no box barostat here:
-#   • x,y are HELD FIXED — no lateral barostat (the user's choice; the lateral
-#     stress carried by the equilibrated file is preserved as the ε=0 state).
-#   • z is reserved for the piston (compression in Phase 2); barostatting z
-#     would fight the force/velocity-controlled piston.
-# Phase 0.5 is therefore just a short NVT settle at the inherited box volume,
-# with the piston and support kept rigid+frozen throughout (no dilation to
-# scale them through, so they are NOT released to nve as in the old iso-NPH
-# workflow).  mobile_press is printed for monitoring only — it is not driven.
+# WHY a barostat is needed here:
+#   The equilibrated input only sits at P_target while slab_with_support.lmp's
+#   aniso NPT actively holds it there.  Read at FIXED volume, the pressure
+#   bleeds off — the minimize relaxes the pair virial and the thermostat cools
+#   T (1.26→1.0), dropping the kinetic term — so the system settles to its
+#   natural fixed-volume pressure (~1.2 full), NOT P_target.  This block
+#   re-pressurises the box to P_target so the ε=0 reference is correct.
 #
-# Why Langevin (not Nosé-Hoover) for the thermostat:
-#   FENE bonds inject kinetic energy faster than a Nosé-Hoover chain can
-#   remove it (T can stick at ~6).  Langevin's per-atom friction (∝ v) removes
-#   energy in proportion to how hot each atom is — it always wins.
+# WHY aniso (matches slab_with_support.lmp): each of x,y,z is barostatted
+#   INDEPENDENTLY to the full scalar target P_target, so the unconfined,
+#   laterally-periodic slab relaxes to its own equilibrium shape at bath
+#   pressure (cell stays orthogonal; no tilt).  The target is the FULL pressure
+#   (thermo `Press`), exactly as the equilibration used `aniso 1.5` — so the
+#   thermo Press lands at ~1.5 here, consistent with the equilibration output.
+#
+# WHY this does NOT fight the piston: the piston is frozen during Phase 0.5
+#   (no velocity drive until Phase 2).  Barostatting z is therefore safe here.
+#   The box is frozen again after this block; Phase 2 compresses purely by the
+#   piston with NO box barostat (which is where a z-barostat WOULD conflict).
+#
+# All rigid bodies (piston, support) are temporarily put on nve+setforce so
+# they scale freely with the box (dilate all remaps them) without injecting
+# spurious virial into the barostat, then restored to rigid+frozen afterward.
+#
+# Why Langevin + NPH (not fix npt / Nosé-Hoover):
+#   FENE bonds inject kinetic energy faster than a Nosé-Hoover chain can remove
+#   it → T can stick at ~6.  Langevin's per-atom friction (∝ v) removes energy
+#   in proportion to how hot each atom is — it always wins against FENE heating.
+#
+# Key parameters:
+#   npt_P_damp:    barostat damping (τ).  Increase (e.g. 200–1000) if FENE bond
+#                  warnings appear or the box oscillates.
+#   npt_p05_steps: barostat run length; increase if Press has not converged.
 
-variable p05_steps equal 120000   # NVT settle length; increase if T/press drift
+variable npt_P_damp    equal 50.0    # barostat damping (τ); increase if FENE errors appear
+variable npt_p05_steps equal 120000  # run length; increase if Press not converged
+# aniso targets the FULL scalar pressure per direction (no kinetic offset
+# needed, unlike the old iso-NPH+0.41 convention which drove c_mobile_press).
+variable npt_P05_target equal ${P_target}
 
-# ----- cont=1 + compression: jump over Phase 0.5 (already equilibrated) -----
+# ----- cont=1 + compression: jump over Phase 0.5 (box already at equilibrium pressure) -----
 if "${cont} == 1" then "jump SELF label_after_phase05"
 
 print '========================================'
-print 'Phase 0.5 (compression): NVT re-equilibration at fixed box (no barostat)'
+print 'Phase 0.5 (compression): Langevin+NPH aniso → full Press target=${npt_P05_target}'
 print '========================================'
 
-# Piston and support stay rigid+frozen (defined in RIGID BODIES); only the
-# mobile group is integrated.  Langevin thermostat + nve for robust T control.
-fix lang_p05 mobile langevin ${temp_target} ${temp_target} 1.0 48279
-fix nve_p05  mobile nve
-run ${p05_steps}
-unfix lang_p05
-unfix nve_p05
+# Release piston to scale with the box (nve+setforce, no fix rigid)
+unfix freeze_piston
+unfix rigid_piston
+fix nve_piston      piston nve
+fix setforce_piston piston setforce 0.0 0.0 0.0
 
-print '>>> Post-Phase-0.5 NVT: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)  lz=$(lz)'
+# Release support to scale with the box
+unfix rigid_support
+fix freeze_support support setforce 0.0 0.0 0.0
+fix nve_support    support nve
+
+fix lang_p05 mobile langevin ${temp_target} ${temp_target} 1.0 48279
+fix nph_p05  mobile nph aniso ${npt_P05_target} ${npt_P05_target} ${npt_P_damp}
+run ${npt_p05_steps}
+unfix lang_p05
+unfix nph_p05
+
+print '>>> Post-Langevin+NPH: T=$(c_mobile_temp)  Press=$(press)  mobile_press=$(c_mobile_press)  lx=$(lx) ly=$(ly) lz=$(lz)'
+
+# Restore rigid piston at its new (scaled) position
+unfix nve_piston
+unfix setforce_piston
+velocity piston set 0.0 0.0 0.0
+fix rigid_piston piston rigid single force * off off off torque * off off off
+fix freeze_piston piston setforce 0.0 0.0 0.0
+
+# Restore rigid support
+unfix freeze_support
+unfix nve_support
+velocity support set 0.0 0.0 0.0
+fix rigid_support support rigid single force * off off off torque * off off off
+
+# NVT settle at the new (re-pressurised) box volume, all rigid bodies restored
+fix nvt_p05_eq mobile nvt temp ${temp_target} ${temp_target} 1.0
+run 50000
+unfix nvt_p05_eq
 
 label label_after_phase05
+
+print '>>> Post-Phase-0.5: T=$(c_mobile_temp)  Press=$(press)  mobile_press=$(c_mobile_press)  lz=$(lz)'
 
 print ">>> Pre-production: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
 # traj_setup dump only exists when cont=0 (Phase 0 ran)
