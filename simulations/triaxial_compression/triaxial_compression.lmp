@@ -109,12 +109,12 @@ variable solvent_mass  equal 1.0
 variable thermo_freq     equal 250000 # 2000  # 250000
 variable dump_freq_setup equal 10000      # frequent dumps during Phase 1
 # Production (gel_flow) dump cadence — tie to nsteps so the compression is
-# always resolved (~40 frames) regardless of run length.  At dump_freq_prod =
-# nsteps (the old fixed 200000) a short run captured only ONE production frame,
-# taken before the piston had descended into the gel — making it look like the
-# piston never reached the gel.  Raise the divisor for fewer/larger frames if
-# all-atom dump size on scratch is a concern (gel_system = full system).
-variable dump_freq_prod  equal floor(${nsteps}/40)   # ~40 production frames
+# always resolved regardless of run length.  At dump_freq_prod = nsteps (the
+# old fixed 200000) a short run captured only ONE production frame, taken
+# before the piston had descended into the gel — making it look like the
+# piston never reached the gel.  Lower the divisor for finer resolution if
+# the all-atom dump size on scratch allows (gel_system = full system).
+variable dump_freq_prod  equal floor(${nsteps}/20)   # ~20 production frames
 variable volume_freq     equal 5000 # 1000 # 5000
 
 # Cavity Widom dump cadence — all-atom frames for cavity_widom.py post-processing.
