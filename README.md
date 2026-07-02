@@ -80,8 +80,7 @@ lammps_work/                    ← This git repository
 │   ├── plot_lammps_log.py      ← Plot T, P, volume convergence from log.lammps (+ shear diagnostics)
 │   ├── plot_stress_profiles.py ← Plot stress and volume fraction profiles
 │   ├── plot_piston_data.py     ← Plot piston position and velocity
-│   ├── plot_eos.py             ← Plot P* vs ρ* for EOS sweeps (solvent_phase / polymer_phase)
-│   └── write_tracking.py       ← Log performance data to tracking.txt
+│   └── plot_eos.py             ← Plot P* vs ρ* for EOS sweeps (solvent_phase / polymer_phase)
 │
 ├── lammps_data/                ← Reserved for small committed .data files (currently empty;
 │                                  input_data/ lives outside the repo — see §4)
@@ -93,11 +92,7 @@ lammps_work/                    ← This git repository
 ├── expanse_lammps_guide.md     ← Expanse-specific setup and GitHub guide
 ├── slurm_commands_and_compiling.md  ← Cluster commands and LAMMPS build notes
 ├── slab_data_file_info.md      ← Log of every .data file that has been generated
-├── documenting_pod_runs.md     ← HPC performance benchmarks
-├── time_vs_atoms.png           ← Benchmark figure (scaling vs system size)
-├── time_vs_timesteps.png       ← Benchmark figure (wall-clock vs timestep count)
-├── tracking.txt                ← Legacy performance log (not actively maintained)
-└── tracking_backup.txt         ← Snapshot of tracking.txt
+└── documenting_pod_runs.md     ← HPC performance benchmarks
 ```
 
 **What lives outside the repo** (on each machine):
@@ -539,17 +534,6 @@ python ~/Documents/lammps_work/scripts/plot_piston_data.py \
     . \
     isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000 \
     0
-```
-
----
-
-**`write_tracking.py`** — performance log (all sim types; not actively maintained)
-```bash
-python ~/Documents/lammps_work/scripts/write_tracking.py \
-    . \
-    isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000 \
-    ""
-# third argument is the TYPE suffix (stress/volume/stressvol or empty string)
 ```
 
 ---
