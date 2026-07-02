@@ -292,6 +292,20 @@ compute piston_fz      piston reduce sum fz
 variable piston_area      equal lx*ly          # cross-sectional area of simulation box
 variable piston_pressure_z equal c_piston_fz/v_piston_area  # force normalised by area
 
+# ----- Block-averaged piston force (noise reduction for P(t) and M_piston) -----
+# c_piston_fz is the INSTANTANEOUS pairwise contact force on the piston -> it
+# carries the full thermal fluctuation (that is the scatter seen in P(t)).
+# There is no damping on the piston (rigid + velocity-controlled), and damping
+# it would corrupt this measurement, so noise is reduced the correct way: by
+# time-averaging.  fix out_piston_force_avg (see PRODUCTION stress block) block-
+# averages c_piston_fz over each volume_freq window, cutting the scatter by
+# ~sqrt(pf_nrepeat) while keeping the same output cadence as the raw file.
+# c_piston_fz is a GLOBAL reduce (not chunk/atom), so there is no ave/time lock
+# issue and the fix can span the compression + relaxation runs freely.
+variable pf_nevery  equal 50                        # sample every 50 steps (~0.25 tau)
+variable pf_nrepeat equal floor(${volume_freq}/v_pf_nevery)   # samples per window
+variable pf_nfreq   equal v_pf_nevery*v_pf_nrepeat   # = volume_freq (exact multiple)
+
 
 # ==========================================================================
 #              PHASE 0: NVT EQUILIBRATION (BOTH MODES)
@@ -1088,6 +1102,16 @@ fix avg_stress_z_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_st
 fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_press_z_support mode vector file output_files/stress_data/stress_z_support_${dataname}_${interaction}_${nsteps}.dat
 
+# ----- Block-averaged piston force (variables defined near compute piston_fz) -----
+# Defined here (with the other production ave/time fixes) so its sampling window
+# is aligned with the production run start.  Writes the same 2-column
+# "step  <F_z>" format as the raw piston_force file, so the notebook reads it
+# with read_print_file() identically.  Spans compression + relaxation (the
+# accumulator continues across the run boundary); removed in final cleanup.
+fix out_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_piston_fz ave one &
+    file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${nsteps}.dat
+
 # True ZZ partial-stress outputs (σzz component only; used for longitudinal modulus)
 fix avg_sigmazz_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${nsteps}.dat
@@ -1267,6 +1291,7 @@ run ${relax_steps}
 
 # Piston force output — removed here after all runs are complete
 unfix out_piston_force
+unfix out_piston_force_avg
 
 undump traj_flow
 undump pairlocal_dump
