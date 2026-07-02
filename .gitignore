@@ -34,3 +34,8 @@ CLAUDE_CONTEXT.md
 *.o*.*
 slurm_*.out
 slurm_*.err
+# ── Removed tracking/efficiency artifacts (see write_tracking.py removal) ──
+tracking.txt
+tracking_backup.txt
+time_vs_atoms.png
+time_vs_timesteps.png

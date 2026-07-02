@@ -170,8 +170,6 @@ else
     python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
 fi
 
-echo "Generating computational efficiency plot..."
-python "$SCRIPT_DIR/write_tracking.py" "." "${DATANAME}${SUFFIX}_${INTERACTION}_${TOTSTEPS}" "$SUFFIX"
 
 echo "======================================"
 echo "Done! Results are in: $WORK_DIR"

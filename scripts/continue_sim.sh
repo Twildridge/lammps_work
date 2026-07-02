@@ -329,7 +329,6 @@ fi
 
 python "$SCRIPT_DIR/plot_stress_profiles.py"  "." "$STEM" "$OLDSTEPS"
 python "$SCRIPT_DIR/plot_piston_data.py"      "." "$STEM" "$OLDSTEPS"
-python "$SCRIPT_DIR/write_tracking.py"        "." "$STEM" ""
 
 echo "======================================"
 echo "Done! Results in: $CONT_DIR"

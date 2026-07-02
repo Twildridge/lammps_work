@@ -126,8 +126,6 @@ python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTE
 echo "Generating stress profiles..."
 python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
 
-echo "Generating computational efficiency plot..."
-python "$SCRIPT_DIR/write_tracking.py" "." "${DATANAME}${SUFFIX}_${INTERACTION}_${TOTSTEPS}" "$SUFFIX"
 
 echo "======================================"
 echo "Done! Results are in: $WORK_DIR"
