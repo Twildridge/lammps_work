@@ -30,9 +30,9 @@ module load python/3.8.12
 
 # Set simulation parameters
 FOLDER="slab_with_support"
-DATANAME="slab_support_periodic_5beads_tall_rho04"
+DATANAME="slab_support_5beads_tall_rho04" # slab_support_periodic_5beads_tall_rho04
 INTERACTION="1.0_1.0"
-NSTEPS=800000
+NSTEPS=3000000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
