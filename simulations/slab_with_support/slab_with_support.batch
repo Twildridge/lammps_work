@@ -44,4 +44,4 @@ cd ~/Documents/lammps_work/scripts || exit 1
 
 # Run the simulation
 # Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS OLDSTEPS TYPE PRESS_TARGET VEL_SEED
-./run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$TYPE" "$PRESS_TARGET" "$SEED"
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$TYPE" "$PRESS_TARGET" "$SEED"
