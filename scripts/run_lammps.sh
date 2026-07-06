@@ -151,6 +151,15 @@ if [ -n "${SLURM_JOB_END_TIME:-}" ]; then
     fi
 fi
 
+# ── Launch LAMMPS in the background and watch the log ─────────────────────────
+# See the teardown-hang note above. Rather than blocking on mpirun's return (which
+# can hang for hours in MPI_Finalize/UCX cleanup AFTER the science is complete),
+# we background it and poll log.lammps. LAMMPS prints "Total wall time:" as the
+# very last line, AFTER every write_data/write_restart, so once it appears all
+# output is on disk. We then allow a short grace period for a clean teardown and,
+# if mpirun is still stuck, kill it and proceed to post-processing anyway.
+LAMMPS_LOG="${WORK_DIR}/log.lammps"
+
 $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM_THREADS}" \
     /home/dpollard/software/lammps/22Jul2025_update3/mpi-omp/gcc/10.2.0/openmpi/4.1.3/lammps-22Jul2025/build/lmp \
     -sf omp -pk omp $SLURM_CPUS_PER_TASK \
@@ -169,15 +178,36 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var strains $STRAINS \
     -var strains_list "$STRAINS" \
     \
-    -in $LAMMPS_FILE
+    -in $LAMMPS_FILE &
+MPIRUN_PID=$!
+
+TEARDOWN_GRACE=180   # seconds to allow a clean MPI_Finalize after completion
+POLL_INTERVAL=15     # seconds between log checks
+while kill -0 "$MPIRUN_PID" 2>/dev/null; do
+    if grep -q "Total wall time" "$LAMMPS_LOG" 2>/dev/null; then
+        echo ">>> Detected 'Total wall time' in log — LAMMPS complete; all output written."
+        echo ">>> Allowing ${TEARDOWN_GRACE}s for a clean MPI teardown before proceeding..."
+        WAITED=0
+        while kill -0 "$MPIRUN_PID" 2>/dev/null && [ "$WAITED" -lt "$TEARDOWN_GRACE" ]; do
+            sleep 10; WAITED=$((WAITED + 10))
+        done
+        if kill -0 "$MPIRUN_PID" 2>/dev/null; then
+            echo ">>> mpirun still running ${TEARDOWN_GRACE}s after completion — assuming MPI/UCX teardown hang."
+            echo ">>> Killing mpirun (PID ${MPIRUN_PID}) and proceeding to post-processing."
+            kill -TERM "$MPIRUN_PID" 2>/dev/null; sleep 10
+            kill -KILL "$MPIRUN_PID" 2>/dev/null; sleep 2
+        fi
+        break
+    fi
+    sleep "$POLL_INTERVAL"
+done
+wait "$MPIRUN_PID" 2>/dev/null
 LAMMPS_RC=$?
 
-# Judge completion from the LAMMPS log, not the mpirun exit code. LAMMPS writes
-# "Total wall time:" to log.lammps (here in WORK_DIR, since no -log/log override)
-# only on a clean run-to-completion — for every run type. A nonzero mpirun RC, or
-# a RC 124 from the timeout guard above, can occur during teardown AFTER that
-# point, when all output is already on disk; those must NOT discard a good run.
-LAMMPS_LOG="${WORK_DIR}/log.lammps"
+# Judge completion from the LAMMPS log, not the mpirun exit code. A nonzero RC (or
+# 128+signal from our own kill, or 124 from the timeout guard) can occur during a
+# teardown that happens AFTER all output is on disk; those must NOT discard a good
+# run. Only the absence of "Total wall time" means a genuine failure.
 if [ "$LAMMPS_RC" -eq 124 ]; then
     echo "WARNING: mpirun hit the timeout guard (RC 124) — probable MPI/UCX teardown hang after completion."
 fi
@@ -192,151 +222,14 @@ else
     exit "${LAMMPS_RC:-1}"
 fi
 
-# Determine suffix based on 6th argument (type) - moved from 7th position
-SUFFIX=""
-if [ $# -ge 6 ]; then
-    case "$6" in
-        stress)
-            SUFFIX="1"
-            ;;
-        volume)
-            SUFFIX="2"
-            ;;
-        stressvol)
-            SUFFIX="3"
-            ;;
-    esac
-fi
-
-# Run post-processing Python scripts
-echo "======================================"
-echo "Running post-processing..."
-echo "======================================"
-
-cd "$WORK_DIR" || exit 1
-
-source /etc/profile.d/modules.sh
-module unload python/3.8.12
-module load anaconda3/2021.05/q4munrg
-python -c "import numpy; print(numpy.__version__)"
-
-echo "Generating convergence plot..."
-# Pass --p-ext for slab_with_flow so the pore-pressure panel uses the barostat target
-if [ "$FOLDER" = "slab_with_flow" ]; then
-    python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" --p-ext 1.8
-else
-    python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
-fi
-
-# ── Cavity-biased Widom insertion (auto-detected: only runs if dump exists) ──
-# slab_with_support dumps an all-atom trajectory at nfreq_widom cadence for
-# post-processing by cavity_widom.py.  Standard Widom (fix widom) returns zero
-# inside the gel; cavity-biased Widom restricts insertions to void space and
-# applies a bias correction, giving valid μ_ex estimates even in dense regions.
+# ── Post-processing ───────────────────────────────────────────────────────────
+# All plot generation lives in postprocess.sh so the automatic pipeline and a
+# manual re-run use the EXACT same module + script order. If a teardown hang or
+# job kill ever skips this step, regenerate every plot by hand (no MD, no MPI):
 #
-# Output written to output_files/chemical_potential/ alongside the fix widom
-# and solvent density files, using the same dataname_interaction_totsteps stem:
-#   mu_z_cavity_${DATANAME}_${INTERACTION}_${TOTSTEPS}.dat       (per-frame)
-#   mu_z_cavity_summary_${DATANAME}_${INTERACTION}_${TOTSTEPS}.dat (time-averaged ± stderr)
-if [ "$FOLDER" != "slab_with_flow" ] || [ "$SKIP_WIDOM" = "1" ]; then
-    echo "Cavity Widom post-processing applies only to slab_with_flow (and not when SKIP_WIDOM=1) — skipping for ${FOLDER}."
-else
-
-WIDOM_TRAJ="${WORK_DIR}/traj_files/widom_${DATANAME}_${INTERACTION}_${TOTSTEPS}.lammpstrj"
-echo "======================================"
-echo "Cavity Widom check:"
-echo "  Looking for: $WIDOM_TRAJ"
-echo "  traj_files/ contents:"
-ls -lh "${WORK_DIR}/traj_files/" 2>&1 | head -20
-echo "======================================"
-if [ -f "$WIDOM_TRAJ" ]; then
-    echo "Running cavity-biased Widom insertion..."
-    echo "  Trajectory: $WIDOM_TRAJ"
-    echo "  Output dir: output_files/chemical_potential/"
-
-    # slab_with_flow: use 1 bin-width exclusion buffer (binWidth=2.0) to exclude
-    # gel-side and reservoir-side piston interface bins; set P_ext to barostat
-    # target; set piston-eps=0 (compression mode — solvent transparent to piston)
-    # so bins inside the piston body give physically meaningful μ_ex.
-    if [ "$FOLDER" = "slab_with_flow" ]; then
-        WIDOM_PEXT="1.8"
-        WIDOM_EXCL="2.0"
-        WIDOM_PISTON_EPS="0.0"
-    else
-        WIDOM_PEXT="$PRESS_TARGET"
-        WIDOM_EXCL=""     # default = r_cavity
-        WIDOM_PISTON_EPS="1.0"
-    fi
-
-    WIDOM_EXCL_ARGS=()
-    if [ -n "$WIDOM_EXCL" ]; then
-        WIDOM_EXCL_ARGS=(--exclusion-buffer "$WIDOM_EXCL")
-    fi
-
-    python "$SCRIPT_DIR/cavity_widom.py" \
-        --traj      "$WIDOM_TRAJ" \
-        --out-dir   "output_files/chemical_potential" \
-        --out-stem  "${DATANAME}_${INTERACTION}_${TOTSTEPS}" \
-        --eps-sp    "$EPSSP" \
-        --eps-ss    "$EPSSS" \
-        --n-bins    40 \
-        --n-trial   50000 \
-        --r-cavity  0.5 \
-        --temperature 1.0 \
-        --p-ext     "$WIDOM_PEXT" \
-        --piston-eps "$WIDOM_PISTON_EPS" \
-        "${WIDOM_EXCL_ARGS[@]}"
-
-    echo "Re-generating convergence plot with cavity Widom panel..."
-    python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" \
-        --p-ext "$WIDOM_PEXT"
-else
-    echo "WARNING: Widom trajectory not found — skipping cavity_widom.py"
-    echo "  Expected path: $WIDOM_TRAJ"
-    echo "  TRAJ_DIR (scratch): $TRAJ_DIR"
-    echo "  If the file is missing, check that:"
-    echo "    1. The run completed without error"
-    echo "    2. dump widom_traj is in slab_with_flow.lmp (check git pulled correctly)"
-    echo "    3. Scratch dir is accessible: ls $TRAJ_DIR"
-fi
-
-fi  # end SKIP_WIDOM=0 block
-
-# Pure solvent P-sweep: run EOS plot instead of stress/piston/tracking scripts
-if [ "$FOLDER" = "solvent_phase" ]; then
-    echo "Solvent phase-sweep run detected — generating EOS plot..."
-    python "$SCRIPT_DIR/plot_eos.py" "." "$DATANAME" "$INTERACTION"
-    echo "======================================"
-    echo "Done! Results are in: $WORK_DIR"
-    echo "======================================"
-    exit 0
-fi
-
-# Pure polymer P-sweep: run EOS plot instead of stress/piston/tracking scripts
-if [ "$FOLDER" = "polymer_phase" ]; then
-    echo "Polymer phase-sweep run detected — generating EOS plot..."
-    python "$SCRIPT_DIR/plot_eos.py" "." "$DATANAME" "$INTERACTION"
-    echo "======================================"
-    echo "Done! Results are in: $WORK_DIR"
-    echo "======================================"
-    exit 0
-fi
-
-if [ "$FOLDER" = "shear_slab" ]; then
-    # shear_slab writes per-strain (_g<strain>) tensor/profile files in its own
-    # schema; the compress/flow stress + piston plotters don't apply. Use the
-    # dedicated sweep plotter, looping over every strain in $STRAINS.
-    echo "Generating shear stress-strain sweep plots (per strain: $STRAINS)..."
-    python "$SCRIPT_DIR/plot_shear_strain_sweep.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$STRAINS"
-else
-    echo "Generating stress profiles..."
-    python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
-
-    echo "Generating piston plots..."
-    python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
-fi
-
-
-echo "======================================"
-echo "Done! Results are in: $WORK_DIR"
-echo "======================================"
+#   bash scripts/postprocess.sh <run_dir> <folder> <dataname> <interaction> <totsteps> [oldsteps] [press_target]
+#
+# SKIP_WIDOM and STRAINS are read from the environment by postprocess.sh.
+export SKIP_WIDOM STRAINS
+bash "$SCRIPT_DIR/postprocess.sh" \
+    "$WORK_DIR" "$FOLDER" "$DATANAME" "$INTERACTION" "$TOTSTEPS" "$OLDSTEPS" "$PRESS_TARGET"

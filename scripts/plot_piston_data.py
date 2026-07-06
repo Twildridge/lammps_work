@@ -39,13 +39,15 @@ def plot_piston_data(folder, dataname, oldsteps=0):
     pos_file = os.path.join(piston_data_dir, f'piston_position_{dataname}.dat')
     vel_file = os.path.join(piston_data_dir, f'piston_velocity_{dataname}.dat')
     
-    # Check files exist
+    # Check files exist. Some geometries (e.g. slab_with_support, compress_slab)
+    # never write piston position/velocity files, so a missing file is expected,
+    # not an error — skip cleanly instead of printing a scary "Error:" line.
     if not os.path.exists(pos_file):
-        print(f"Error: Piston position file not found: {pos_file}")
-        return False
+        print(f"No piston position file ({os.path.basename(pos_file)}) — skipping piston plots.")
+        return True
     if not os.path.exists(vel_file):
-        print(f"Error: Piston velocity file not found: {vel_file}")
-        return False
+        print(f"No piston velocity file ({os.path.basename(vel_file)}) — skipping piston plots.")
+        return True
     
     # Read data
     timesteps_pos, positions = read_piston_file(pos_file)
