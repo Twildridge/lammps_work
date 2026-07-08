@@ -38,7 +38,7 @@ variable temp_target equal 1.0
 variable press_target index 1.5 # APPROPRIATE VALUE IMPORTANT — overridden by -var on command line
 variable vel_seed     index 12345  # RNG seed for create_velocity; overridden by -var for replica sweeps
 variable tdamp equal 1.0
-variable pdamp equal 1.0
+variable pdamp equal 5.0   # ~1000*dt (dt=0.005); looser than 1.0 to avoid barostat ringing during swelling
 variable timestep_gentle equal 0.001
 variable timestep_prod equal 0.005
 variable nsteps_gentle equal 5000
