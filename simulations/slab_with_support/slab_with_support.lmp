@@ -146,7 +146,11 @@ pair_coeff 4 4 0.0 ${sigma} 0.0        # support-support (off)
 pair_coeff 1 5 1.0 ${sigma} 1.122       # polymer-piston (WCA)
 pair_coeff 2 5 1.0 ${sigma} 1.122       # crosslinker-piston (WCA)
 pair_coeff 3 5 1.0 ${sigma} 1.122       # solvent-piston (WCA)
-pair_coeff 4 5 0.0 ${sigma} 0.0        # support-piston (off)
+pair_coeff 4 5 1.0 ${sigma} 1.122      # support-piston (WCA backstop): if the
+                                       #   piston floats up through the top z-PBC
+                                       #   it re-enters below the support and is
+                                       #   stopped at contact instead of passing
+                                       #   through into the gel from below.
 pair_coeff 5 5 0.0 ${sigma} 0.0        # piston-piston (off)
 
 bond_style fene
@@ -156,7 +160,9 @@ special_bonds fene
 # Neighbor list exclusions
 neigh_modify exclude type 4 4   # support-support
 neigh_modify exclude type 5 5   # piston-piston
-neigh_modify exclude type 4 5   # support-piston
+# neigh_modify exclude type 4 5   # support-piston: EXCLUSION REMOVED so the
+#   WCA backstop above (pair_coeff 4 5) is actually computed. Re-add this line
+#   (and reset pair_coeff 4 5 to 0.0) to restore pass-through behavior.
 
 # Angle style (uncomment if angles present in data file)
 #angle_style hybrid cosine harmonic
