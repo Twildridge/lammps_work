@@ -23,8 +23,8 @@ variable nrepeat_avg_stress equal 1000 # 625 or 50
 variable nfreq_avg_stress equal 10000 # 125000 or 10000
 
 # Output frequencies
-variable thermo_freq equal 10000
-variable dump_freq equal 10000
+variable thermo_freq equal 100000
+variable dump_freq equal 100000
 variable volume_freq equal 10000
 
 # ----- Continuation flag -----
