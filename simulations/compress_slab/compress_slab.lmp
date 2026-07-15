@@ -39,6 +39,11 @@
 #  overlapping with the y-extent of front/back plates.)
 #
 # Outputs:
+#   stress_data/bulk_modulus_plot_data_*.dat   step  sigP_xx/yy/zz/xy/zx/yz  Pi  V_gel_rg  lx/ly/lz_rg
+#                                               (whole-polymer, Rg-normalised; continuous Phase 0->3)
+#   stress_data/plate_force_*.dat              step  {top,bot,front,back,right,left}_{fx,fy,fz}
+#                                               (net pairwise force on each plate; continuous from the
+#                                                point the six plates are individually resolved onward)
 #   stress_data/stress_tensor_polymer_*.dat    6-component polymer stress vs time
 #   stress_data/stress_tensor_solvent_*.dat    6-component solvent stress vs time
 #   stress_data/stress_profile_z_polymer_*.dat z-binned polymer stress (top/bot axis)
@@ -227,6 +232,13 @@ compute stress_poly_all polymer stress/atom NULL
 compute sumS_p_xx       polymer reduce sum c_stress_poly_all[1]
 compute sumS_p_yy       polymer reduce sum c_stress_poly_all[2]
 compute sumS_p_zz       polymer reduce sum c_stress_poly_all[3]
+# Off-diagonal (shear) components of the same whole-polymer, Rg-normalised
+# stress — added so σ_xy/σ_zx/σ_yz are available continuously (Phase 0->3)
+# alongside the normal stresses, for the same time axis as Π and V_gel.
+# stress/atom component order: [1]=xx [2]=yy [3]=zz [4]=xy [5]=xz [6]=yz.
+compute sumS_p_xy       polymer reduce sum c_stress_poly_all[4]
+compute sumS_p_zx       polymer reduce sum c_stress_poly_all[5]
+compute sumS_p_yz       polymer reduce sum c_stress_poly_all[6]
 
 variable gel_lx_rg  equal 2.0*sqrt(3.0*c_rg_tensor[1])
 variable gel_ly_rg  equal 2.0*sqrt(3.0*c_rg_tensor[2])
@@ -237,6 +249,10 @@ variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
 variable sigP_xx equal c_sumS_p_xx/v_gel_vol_rg
 variable sigP_yy equal c_sumS_p_yy/v_gel_vol_rg
 variable sigP_zz equal c_sumS_p_zz/v_gel_vol_rg
+# Off-diagonal counterparts (same normalisation).
+variable sigP_xy equal c_sumS_p_xy/v_gel_vol_rg
+variable sigP_zx equal c_sumS_p_zx/v_gel_vol_rg
+variable sigP_yz equal c_sumS_p_yz/v_gel_vol_rg
 # Total osmotic pressure = (1/3) tr(σ^poly).  (Sign follows the LAMMPS virial
 # convention; take |Π| for a positive osmotic pressure — see plot script.)
 variable Pi_osm  equal (v_sigP_xx+v_sigP_yy+v_sigP_zz)/3.0
@@ -295,10 +311,14 @@ velocity gel create ${temp_target} 90210 mom yes rot yes dist gaussian
 # from Phase 0 through Phase 3.  Pairs the instantaneous polymer osmotic stress
 # with the co-evolving Rg gel volume → the Π-vs-V_gel curve for the osmotic
 # bulk modulus K = -V (dΠ/dV).  Post-processed in bulk_modulus_analysis.ipynb.
-# Columns: step  σ_xx  σ_yy  σ_zz  Π  V_gel_rg  lx_rg  ly_rg  lz_rg
+# Columns: step  σ_xx  σ_yy  σ_zz  σ_xy  σ_zx  σ_yz  Π  V_gel_rg  lx_rg  ly_rg  lz_rg
+# (off-diagonal columns added so bulk_modulus_analysis.ipynb can plot the
+#  shear stresses on the same continuous time axis as everything else; older
+#  9-column data files from before this change remain readable — the notebook
+#  reader detects the column count.)
 fix out_bulk_modulus all print ${stress_freq} &
-    "$(step) $(v_sigP_xx) $(v_sigP_yy) $(v_sigP_zz) $(v_Pi_osm) $(v_gel_vol_rg) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
-    title "# step sigP_xx sigP_yy sigP_zz Pi_osm V_gel_rg lx_rg ly_rg lz_rg" &
+    "$(step) $(v_sigP_xx) $(v_sigP_yy) $(v_sigP_zz) $(v_sigP_xy) $(v_sigP_zx) $(v_sigP_yz) $(v_Pi_osm) $(v_gel_vol_rg) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    title "# step sigP_xx sigP_yy sigP_zz sigP_xy sigP_zx sigP_yz Pi_osm V_gel_rg lx_rg ly_rg lz_rg" &
     file output_files/stress_data/bulk_modulus_plot_data_${dataname}_${interaction}_${nsteps}.dat screen no
 
 # --- Phase 0: NVT at fixed box volume ---
@@ -441,6 +461,44 @@ compute com_front plate_front com
 compute com_back  plate_back  com
 compute com_right plate_right com
 compute com_left  plate_left  com
+
+# ── Plate force computes (net force from the gel on each plate) ────────────────
+# reduce sum f{x,y,z} over each plate's atoms = the net pair+bond force LAMMPS
+# computed on those atoms this step. Plates are held with `fix move linear`
+# (kinematic — sets x/v directly, does NOT zero the per-atom force array), so
+# this is the genuine reaction force the gel exerts on the plate, during Phase
+# 1b, Phase 2 (driven), and Phase 3 (frozen post-compression).
+# EXCEPTION: during Phase 0.5 (Langevin+NPH) the plates run under
+# `fix setforce 0 0 0`, which DOES zero the force array — expect exactly 0
+# there; that is correct, not a bug.
+# SCOPE: individual plate identity (top vs bot vs ...) only exists once the
+# mol-ID resolution above has run, i.e. after Phase 0/0.5/1b equilibration —
+# so this is the earliest point these six plates can be tracked separately;
+# it is not available from step 0 of Phase 0.
+compute f_top_x   plate_top   reduce sum fx
+compute f_top_y   plate_top   reduce sum fy
+compute f_top_z   plate_top   reduce sum fz
+compute f_bot_x   plate_bot   reduce sum fx
+compute f_bot_y   plate_bot   reduce sum fy
+compute f_bot_z   plate_bot   reduce sum fz
+compute f_front_x plate_front reduce sum fx
+compute f_front_y plate_front reduce sum fy
+compute f_front_z plate_front reduce sum fz
+compute f_back_x  plate_back  reduce sum fx
+compute f_back_y  plate_back  reduce sum fy
+compute f_back_z  plate_back  reduce sum fz
+compute f_right_x plate_right reduce sum fx
+compute f_right_y plate_right reduce sum fy
+compute f_right_z plate_right reduce sum fz
+compute f_left_x  plate_left  reduce sum fx
+compute f_left_y  plate_left  reduce sum fy
+compute f_left_z  plate_left  reduce sum fz
+
+# Columns: step  {top,bot,front,back,right,left}_{fx,fy,fz}  (18 force values)
+fix out_plate_force all print ${stress_freq} &
+    "$(step) $(c_f_top_x) $(c_f_top_y) $(c_f_top_z) $(c_f_bot_x) $(c_f_bot_y) $(c_f_bot_z) $(c_f_front_x) $(c_f_front_y) $(c_f_front_z) $(c_f_back_x) $(c_f_back_y) $(c_f_back_z) $(c_f_right_x) $(c_f_right_y) $(c_f_right_z) $(c_f_left_x) $(c_f_left_y) $(c_f_left_z)" &
+    title "# step top_fx top_fy top_fz bot_fx bot_fy bot_fz front_fx front_fy front_fz back_fx back_fy back_fz right_fx right_fy right_fz left_fx left_fy left_fz" &
+    file output_files/stress_data/plate_force_${dataname}_${interaction}_${nsteps}.dat screen no
 
 run 0
 
