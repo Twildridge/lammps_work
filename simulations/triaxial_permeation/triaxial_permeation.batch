@@ -3,7 +3,7 @@
 #SBATCH --job-name=triax_perm
 #SBATCH --partition=compute
 #SBATCH --account=csb197
-#SBATCH --nodes=5
+#SBATCH --nodes=4
 #SBATCH --ntasks-per-node=32 # was 32
 #SBATCH --cpus-per-task=4     # was 4
 #SBATCH --mem=0
@@ -30,9 +30,9 @@ module load python/3.8.12
 
 # Set simulation parameters
 FOLDER="triaxial_permeation"
-DATANAME="walled_slab_support_5beads_tall_rho04_p1.52_1.0_1.0_600000"
+DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000"
 INTERACTION="1.0_1.0" # first number is solvent–solvent; second is polymer–solvent
-NSTEPS=4000000      # ending in "7" means permeation mode
+NSTEPS=400000      # ending in "7" means permeation mode
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
