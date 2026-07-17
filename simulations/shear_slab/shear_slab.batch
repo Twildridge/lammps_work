@@ -72,8 +72,14 @@ TYPE=""                 # Options: stress, volume, stressvol, or leave empty
 # _g<strain>. For a single operating point, use one value, e.g. (0.1).
 # If this is left unset, shear_slab.lmp falls back to a single strain of 0.1.
 # -----------------------------------------------------------------------
-STRAINS=(0.1 0.15 0.2 0.25 0.3)
-export STRAINS="${STRAINS[*]}"   # space-separated for run_lammps.sh / LAMMPS -var
+# NOTE: the LIST must be a DISTINCT array name; `export STRAINS="${STRAINS[*]}"`
+# where STRAINS is itself an array keeps it typed as an array, and bash does NOT
+# pass array variables into a child's environment -> run_lammps.sh would see it
+# unset and silently fall back to a single strain (this is the real cause of the
+# "sweep collapsed to strain=0.1" symptom, which the self-sync guard does NOT
+# fix). Export a SCALAR string instead.
+STRAINS_LIST=(0.1 0.15 0.2 0.25 0.3)
+export STRAINS="${STRAINS_LIST[*]}"   # space-separated scalar for run_lammps.sh / LAMMPS -var
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1
