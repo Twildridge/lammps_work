@@ -70,7 +70,7 @@ TYPE=""             # Options: stress, volume, stressvol, or leave empty (just t
 # NSTEPS accordingly, and do a SHORT trial (e.g. COMPRESSIONS=(0.05 0.10), NSTEPS
 # small) before committing a full production sweep.
 # -----------------------------------------------------------------------
-COMPRESSIONS=(0.05 0.10 0.15 0.20)
+COMPRESSIONS=(0.05 0.10)
 export COMPRESSIONS="${COMPRESSIONS[*]}"   # space-separated for run_lammps.sh / LAMMPS -var
 
 # Navigate to the scripts directory
