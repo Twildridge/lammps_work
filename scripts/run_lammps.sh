@@ -30,6 +30,15 @@ if [ -z "${STRAINS:-}" ]; then
 fi
 STRAINS=${STRAINS:-0.1}      # Space-separated shear-strain list (shear_slab only); passed as a
                              # LAMMPS index variable. Default 0.1 = single operating point.
+# COMPRESSIONS: space-separated cumulative compression-strain list (triaxial_compression
+# only), passed as a LAMMPS index variable exactly like STRAINS. Set in
+# triaxial_compression.batch via COMPRESSIONS=(...). Default 0.1 = single operating
+# point (reproduces the original single-run behaviour). Same stale-batch caveat as
+# STRAINS applies: the batch must self-sync BEFORE exporting COMPRESSIONS.
+if [ -z "${COMPRESSIONS:-}" ]; then
+    echo ">>> NOTE: COMPRESSIONS unset — triaxial_compression falls back to single strain 0.1."
+fi
+COMPRESSIONS=${COMPRESSIONS:-0.1}
 
 # P-sweep parameters (only used for pure_solvent; ignored by other scripts)
 NSTEPS_EQ=200000    # equilibration steps per state point
@@ -177,6 +186,8 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var skip_widom $SKIP_WIDOM \
     -var strains $STRAINS \
     -var strains_list "$STRAINS" \
+    -var compressions $COMPRESSIONS \
+    -var compressions_list "$COMPRESSIONS" \
     \
     -in $LAMMPS_FILE &
 MPIRUN_PID=$!
@@ -229,7 +240,7 @@ fi
 #
 #   bash scripts/postprocess.sh <run_dir> <folder> <dataname> <interaction> <totsteps> [oldsteps] [press_target]
 #
-# SKIP_WIDOM and STRAINS are read from the environment by postprocess.sh.
-export SKIP_WIDOM STRAINS
+# SKIP_WIDOM, STRAINS and COMPRESSIONS are read from the environment by postprocess.sh.
+export SKIP_WIDOM STRAINS COMPRESSIONS
 bash "$SCRIPT_DIR/postprocess.sh" \
     "$WORK_DIR" "$FOLDER" "$DATANAME" "$INTERACTION" "$TOTSTEPS" "$OLDSTEPS" "$PRESS_TARGET"

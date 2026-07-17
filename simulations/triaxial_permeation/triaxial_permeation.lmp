@@ -8,7 +8,8 @@
 # removed) produced by the slab_with_support workflow.
 # Variables from bash script: dataname, interaction, epsSS, epsSP, nsteps
 #
-# Atom types: 1=polymer, 2=crosslinker, 3=solvent, 4=support, 5=piston, 6=walls
+# Atom types: 1=polymer, 2=crosslinker, 3=solvent, 4=support, 5=piston
+#   (PERIODIC geometry — laterally periodic, NO type-6 side walls.)
 #
 # Reduced LJ units: tau = sigma*sqrt(m/epsilon)
 # dt = 0.005 → 1e6 steps ≈ 4.1e3 tau
@@ -133,7 +134,6 @@ group polymer   type 1 2
 group solvent   type 3
 group support   type 4
 group piston    type 5
-group walls     type 6
 group mobile    type 1 2 3
 group gel_system type 1 2 3 4 5
 
@@ -161,22 +161,18 @@ pair_coeff 2 5 1.0 ${sigma} 1.122
 # Solvent-piston: mode-dependent from the start.
 #   Compression: OFF — piston passes through solvent freely, loads gel directly.
 #   Permeation:  ON  — piston pushes solvent as a plug through the gel.
-pair_coeff 3 5 0.0 ${sigma} 0.0          # default: OFF (compression)
-pair_coeff 3 5 1.0 ${sigma} 1.122
+# PERMEATION pre-positioning: piston-solvent WCA starts OFF so the piston can be
+# repositioned by sliding freely THROUGH the solvent to the 45/55 split (see
+# Phase 2).  It is turned ON there (pair_coeff 3 5 1.0 ...) only AFTER
+# repositioning, so the piston then pushes the solvent as a plug through the gel.
+pair_coeff 3 5 0.0 ${sigma} 0.0          # OFF until repositioning done (Phase 2)
 
-# Wall interactions (WCA)
-pair_coeff 1 6 1.0 ${sigma} 1.122
-pair_coeff 2 6 1.0 ${sigma} 1.122
-pair_coeff 3 6 1.0 ${sigma} 1.122
 
 # Non-interacting pairs
 pair_coeff 3 4 0.0 ${sigma} 0.0   # solvent-support
 pair_coeff 4 4 0.0 ${sigma} 0.0   # support-support
 pair_coeff 4 5 0.0 ${sigma} 0.0   # support-piston
-pair_coeff 4 6 0.0 ${sigma} 0.0   # support-wall
 pair_coeff 5 5 0.0 ${sigma} 0.0   # piston-piston
-pair_coeff 5 6 0.0 ${sigma} 0.0   # piston-wall
-pair_coeff 6 6 0.0 ${sigma} 0.0   # wall-wall
 
 # ----- Bonds and Angles -----
 bond_coeff * 30.0 1.5 1.0 1.0
@@ -190,10 +186,7 @@ special_bonds fene
 # ----- Neighbor List Exclusions -----
 neigh_modify exclude type 4 4   # support-support
 neigh_modify exclude type 5 5   # piston-piston
-neigh_modify exclude type 6 6   # wall-wall
 neigh_modify exclude type 4 5   # support-piston
-neigh_modify exclude type 4 6   # support-wall
-neigh_modify exclude type 5 6   # piston-wall
 
 
 # ==========================================================================
@@ -204,9 +197,6 @@ neigh_modify exclude type 5 6   # piston-wall
 velocity support set 0.0 0.0 0.0
 fix rigid_support support rigid single force * off off off torque * off off off
 
-# Walls: completely frozen
-velocity walls set 0.0 0.0 0.0
-fix rigid_walls walls rigid single force * off off off torque * off off off
 
 # Piston: mode-dependent from the start.
 #   Compression: fully frozen during Phase 0 NVT (force * off off off +
@@ -313,33 +303,59 @@ run 0
 
 variable npt_P_damp    equal 50.0   # barostat damping (τ); increase if FENE errors appear
 variable npt_p05_steps equal 120000  # run length; increase if mobile_press not converged
-# NPH targets 'press', which includes the barostat's own virial contributions
-# (~+0.39 above c_mobile_press for this system).  To get c_mobile_press = 1.5
-# at NPH convergence, set npt_P05_target ≈ P_target + 0.41.
-# Re-calibrate if the system size or density changes significantly.
-variable npt_P05_target equal ${P_target}+0.41   # ≈ 1.91
+# Aniso NPH targets the FULL scalar pressure per direction (thermo `Press`),
+# exactly like slab_with_support.lmp's aniso barostat and
+# triaxial_compression.lmp's Phase 0.5.  NO +0.41 kinetic offset (that was the
+# old iso-NPH convention).  Without this block the fixed-volume read relaxes to
+# ~1.2 instead of P_target on the periodic geometry.
+variable npt_P05_target equal ${P_target}
 
-# ----- cont=1 + compression: jump over Phase 0.5 (box already at equilibrium pressure) -----
+# ----- cont=1: box already at equilibrium pressure -> skip Phase 0.5 -----
+if "${cont} == 1" then "jump SELF label_after_phase05"
 
+print '========================================'
+print 'Phase 0.5 (permeation): Langevin+NPH aniso -> full Press target=${npt_P05_target}'
+print '========================================'
 
-# Isotropic NPH so the gel swells/deswells uniformly in all directions.
-# Piston and walls on nve+setforce during NPH so they scale with the box.
-# Langevin (T_damp=1.0): robust temperature control even under FENE stress.
-# Nosé-Hoover (fix npt) left T stuck at ~6 because FENE bonds inject energy
-# faster than the NH chain can remove it; Langevin's per-atom friction removes
-# energy in direct proportion to velocity, which always wins.
+# Release piston to scale with the box (nve+setforce, no fix rigid) so it does
+# not inject spurious virial into the barostat.
+unfix rigid_piston
+fix nve_piston      piston nve
+fix setforce_piston piston setforce 0.0 0.0 0.0
 
-# Release piston to scale isotropically (nve+setforce, no fix rigid)
+# Release support to scale with the box.
+unfix rigid_support
+fix freeze_support support setforce 0.0 0.0 0.0
+fix nve_support    support nve
 
-# Release walls and support to scale isotropically
+# Langevin + NPH (aniso).  Langevin's per-atom friction beats FENE heating that
+# would otherwise leave a Nose-Hoover thermostat stuck hot.
+fix lang_p05 mobile langevin ${temp_target} ${temp_target} 1.0 48279
+fix nph_p05  mobile nph aniso ${npt_P05_target} ${npt_P05_target} ${npt_P_damp}
+run ${npt_p05_steps}
+unfix lang_p05
+unfix nph_p05
 
+print '>>> Post-Langevin+NPH: T=$(c_mobile_temp)  Press=$(press)  mobile_press=$(c_mobile_press)  lx=$(lx) ly=$(ly) lz=$(lz)'
 
+# Restore rigid piston at its new (scaled) position, z-DOF free (floats on
+# solvent again); support fully frozen.
+unfix nve_piston
+unfix setforce_piston
+velocity piston set 0.0 0.0 0.0
+fix rigid_piston piston rigid single force * off off on torque * off off off
 
-# Restore rigid piston at its new (scaled) position
+unfix freeze_support
+unfix nve_support
+velocity support set 0.0 0.0 0.0
+fix rigid_support support rigid single force * off off off torque * off off off
 
-# Restore rigid walls and support
+# NVT settle at the re-pressurised box volume.
+fix nvt_p05_eq mobile nvt temp ${temp_target} ${temp_target} 1.0
+run 50000
+unfix nvt_p05_eq
 
-# NVT equilibration at the new box volume (all rigid bodies restored)
+print '>>> Post-Phase-0.5: T=$(c_mobile_temp)  Press=$(press)  mobile_press=$(c_mobile_press)  lz=$(lz)'
 
 label label_after_phase05
 
@@ -458,27 +474,75 @@ compute myTemp mobile temp/partial 1 1 0
 fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
 fix_modify nvt_prod temp myTemp
 
-# ----- Permeation: constant-velocity piston (v_piston_perm = 5% of v_piston_prod) -----
-# Re-fix piston with all forces off and prescribe velocity, matching the
-# compression-mode approach.  The halt_perm condition (feed ≤ feed_halt_thick)
-# is the sole termination condition — no ramp/equilibration phase needed.
-# cont=1 permeation: piston velocity is re-applied from current position, resuming
-#   the drive at v_piston_perm exactly as if the run had not been interrupted.
+# ==========================================================================
+#   PERMEATION PISTON:  (1) reposition to the 45/55 solvent split,
+#                       (2) enable piston-solvent WCA,
+#                       (3) constant-PRESSURE (force-controlled) production
+# ==========================================================================
+# slab_with_support equilibration leaves the piston floating slightly HIGH.
+# First reposition it (piston-solvent still OFF -> slides freely through the
+# solvent) until the FREE solvent is split ~45% on the support/permeate side and
+# ~55% on the gel/feed side (piston "slightly before halfway", gel side larger).
+# THEN switch piston-solvent WCA ON and run a constant-PRESSURE production drive.
+
+# ---- parameters ----
+variable feed_frac_target  equal 0.55    # target fraction of FREE solvent on the gel (feed) side
+variable v_reposition      equal 0.01    # sigma/tau, controlled descent speed while repositioning
+variable nsteps_reposition equal 400000  # cap; halt fires when the split is reached
+variable P_piston          equal 0.1     # applied piston PRESSURE for production (= 0.1*M, small deformation)
+
+# ---- free-solvent split bookkeeping (piston faces; gel top from Rg) ----
+variable piston_z_bot equal c_piston_com[3]-0.5*${sigma}
+variable piston_z_top equal c_piston_com[3]+0.5*${sigma}
+# feed side: solvent between gel top and the piston bottom face
+region reg_feed_split block EDGE EDGE EDGE EDGE v_gel_top_rg v_piston_z_bot side in
+# perm side: solvent above the piston top face (to box top); below-support solvent
+# wraps here via PBC.  Gel-absorbed solvent (below gel_top) is in NEITHER region,
+# so feed_frac is the split of the FREE reservoir solvent only.
+region reg_perm_split block EDGE EDGE EDGE EDGE v_piston_z_top EDGE side in
+group g_feed_split dynamic solvent region reg_feed_split every 1000
+group g_perm_split dynamic solvent region reg_perm_split every 1000
+variable n_feed_split equal count(g_feed_split)
+variable n_perm_split equal count(g_perm_split)
+variable feed_frac    equal v_n_feed_split/(v_n_feed_split+v_n_perm_split)
+
+# ---- (1) reposition: controlled descent, halt when feed fraction reaches target ----
+# The piston starts high (feed_frac > target); descending shrinks the feed region
+# so feed_frac DECREASES monotonically -> halt when it drops to feed_frac_target.
 unfix rigid_piston
 fix rigid_piston piston rigid single force * off off off torque * off off off
-velocity piston set 0.0 0.0 -${v_piston_perm}
+velocity piston set 0.0 0.0 -${v_reposition}
+fix halt_reposition all halt 1000 v_feed_frac <= ${feed_frac_target} error continue
+print ">>> Repositioning piston: feed_frac now $(v_feed_frac)  (target ${feed_frac_target})  piston_z=$(c_piston_com[3])"
+run ${nsteps_reposition}
+unfix halt_reposition
+velocity piston set 0.0 0.0 0.0
+print ">>> Reposition done: feed_frac=$(v_feed_frac)  piston_z=$(c_piston_com[3])  gel_top=$(v_gel_top_rg)"
 
-# Permeation piston force output.  For fresh starts (cont=0) this was already
-# defined in Phase 0 (to capture the zero-pressure baseline); for continuations
-# (cont=1) Phase 0 was skipped, so define it here at Phase 2 onset.
-if "${cont} == 1" then "fix out_piston_force all print ${volume_freq} '$(step) $(c_piston_fz)' file output_files/piston_data/piston_force_${dataname}_${interaction}_${nsteps}.dat screen no"
+# ---- (2) enable piston-solvent WCA: the piston now pushes solvent as a plug ----
+pair_coeff 3 5 1.0 ${sigma} 1.122
 
-# ----- Permeation: start displacement recording at Phase 2 onset -----
-# Reference positions reset here so u_z(z,0) = 0 at the start of the drive.
+# ---- (3) constant-PRESSURE (force-controlled) production piston ----
+# Periodic full-box piston cannot use fix rigid for a force load (see the
+# slab_with_support periodic-piston note): setforce zeroes x,y (no lateral
+# drift), aveforce averages the z-force across piston atoms (so they translate
+# together as a rigid slab in z) and ADDS the per-atom applied load, then nve
+# integrates.  The load tracks lx*ly so the applied PRESSURE P_piston is held
+# constant (v_f_load_atom is re-evaluated every step).
+variable f_load_atom equal -v_P_piston*lx*ly/count(piston)
+unfix rigid_piston
+fix setforce_piston piston setforce 0.0 0.0 NULL
+fix aveforce_piston piston aveforce NULL NULL v_f_load_atom
+fix nve_piston      piston nve
+print ">>> Production: force-controlled piston at P_piston=${P_piston}  (net F=$(-v_P_piston*lx*ly))"
+
+# ----- Reset displacement reference to production onset (u_z(z,0)=0) -----
+# The fix ave/chunk that consumes this is defined AFTER the chunk definitions
+# (see OUTPUT: POLYMER Z-DISPLACEMENT); no steps run in between, so the
+# reference set here is preserved to the production run start.
 uncompute displace_poly
 compute displace_poly polymer displace/atom
 variable uz_poly atom c_displace_poly[3]
-fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} chunk_z_polymer v_uz_poly file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat
 
 # ----- Production Trajectory (sparse sampling) -----
 dump traj_flow gel_system custom ${dump_freq_prod} &
@@ -775,6 +839,20 @@ fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_com[3])" &
 fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &
     file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${nsteps}.dat screen no
 
+# ----- Block-averaged piston force (noise reduction; same idiom as triaxial_compression.lmp) -----
+# Under force control the piston fluctuates more, so the raw c_piston_fz signal
+# (out_piston_force, defined in Phase 0) is noisy.  c_piston_fz is a GLOBAL
+# reduce (no chunk/atom lock), so we block-average it over each volume_freq
+# window with fix ave/time, cutting the scatter by ~sqrt(pf_nrepeat) while
+# keeping the same output cadence.  Writes the same 2-column "step  <F_z>"
+# format as the raw file so the notebook reads it identically.
+variable pf_nevery  equal 50                              # sample every 50 steps (~0.25 tau)
+variable pf_nrepeat equal floor(${volume_freq}/v_pf_nevery)  # samples per window
+variable pf_nfreq   equal v_pf_nevery*v_pf_nrepeat        # = volume_freq (exact multiple)
+fix out_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_piston_fz ave one &
+    file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${nsteps}.dat
+
 # ----- Piston force: compression mode only (Phase 2 start = immediately after Phase 0.5) -----
 # setforce 0 was removed at Phase 2 setup above; pairwise z-forces are live from here.
 # Expected profile: rises as gel compresses → plateaus near comp_percent strain → decays
@@ -816,6 +894,14 @@ dump traj_stress_sync gel_system custom ${nfreq_stress} &
 #   Compression mode: defined in the relaxation cleanup block, reference = halt state.
 #   Permeation mode:  defined when constant-force steady state begins, reference = that state.
 # This ensures u_z(z, 0) = 0 at the correct physical start of each measurement window.
+#
+# Defined HERE (not in the Phase 2 piston block) because it references
+# chunk_z_polymer, which is defined in ANALYSIS: CHUNK DEFINITIONS above.  The
+# displace_poly reference was reset at production onset (Phase 2 piston block);
+# no steps ran in between, so u_z(z,0)=0 holds at the production run start.
+fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_polymer v_uz_poly &
+    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat
 
 
 # ==========================================================================
@@ -1080,10 +1166,12 @@ unfix halt_perm
 
 # Piston force output — removed here after all runs are complete
 unfix out_piston_force
+unfix out_piston_force_avg
 unfix out_piston_force_perm
 
 # Unfix permeation-mode fixes
 unfix out_permeate_flux
+unfix avg_disp_z_poly
 
 undump traj_flow
 undump pairlocal_dump
@@ -1097,4 +1185,5 @@ print "========================================"
 
 variable outfile string "final_flow_${dataname}_${interaction}_${nsteps}"
 write_data ${outfile}.data
+
 

@@ -18,8 +18,10 @@
 #     slab_with_support slab_support_5beads_tall_rho04 1.0_1.0 3000000
 #
 # Optional env vars (default to the run_lammps.sh defaults):
-#   SKIP_WIDOM=1   minimize/skip cavity_widom.py (slab_with_flow only)
-#   STRAINS="..."  space-separated shear-strain list (shear_slab only)
+#   SKIP_WIDOM=1        minimize/skip cavity_widom.py (slab_with_flow only)
+#   STRAINS="..."       space-separated shear-strain list (shear_slab only)
+#   COMPRESSIONS="..."  space-separated compression-strain list (triaxial_compression
+#                       sweep); plotters run once per level on the _c<level> stems
 # ==============================================================================
 set -u
 
@@ -40,6 +42,10 @@ OLDSTEPS=${6:-0}
 PRESS_TARGET=${7:-1.5}
 SKIP_WIDOM=${SKIP_WIDOM:-0}
 STRAINS=${STRAINS:-0.1}
+# COMPRESSIONS: space-separated cumulative compression-strain list (triaxial_compression
+# sweep). Each level's output files are tagged _c<level>, so the plotters are called
+# once per level with a per-level stem. Empty -> treat as a single un-swept run.
+COMPRESSIONS=${COMPRESSIONS:-}
 
 # Directory this script lives in (lammps_work/scripts/) — holds the plotters.
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -134,6 +140,19 @@ fi
 if [ "$FOLDER" = "shear_slab" ]; then
     echo "Generating shear stress-strain sweep plots (per strain: $STRAINS)..."
     python "$SCRIPT_DIR/plot_shear_strain_sweep.py" "." "$STEM" "$STRAINS"
+elif [ "$FOLDER" = "triaxial_compression" ] && [ -n "$COMPRESSIONS" ]; then
+    # Compression sweep: every level's output files are tagged _c<level>, so run
+    # the standard per-run plotters ONCE PER LEVEL with a per-level stem. Each
+    # level is non-fatal so one missing/short level cannot abort the rest.
+    echo "Generating compression stress-strain sweep plots (per level: $COMPRESSIONS)..."
+    for LVL in $COMPRESSIONS; do
+        LVL_STEM="${STEM}_c${LVL}"
+        echo "  --- level c${LVL}  (stem ${LVL_STEM}) ---"
+        python "$SCRIPT_DIR/plot_stress_profiles.py" "." "$LVL_STEM" "$OLDSTEPS" \
+            || echo "  WARNING: plot_stress_profiles.py failed for level ${LVL} (skipping)"
+        python "$SCRIPT_DIR/plot_piston_data.py"     "." "$LVL_STEM" "$OLDSTEPS" \
+            || echo "  WARNING: plot_piston_data.py failed for level ${LVL} (skipping)"
+    done
 else
     echo "Generating stress profiles..."
     python "$SCRIPT_DIR/plot_stress_profiles.py" "." "$STEM" "$OLDSTEPS"

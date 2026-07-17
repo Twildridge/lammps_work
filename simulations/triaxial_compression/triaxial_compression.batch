@@ -10,6 +10,26 @@
 #SBATCH --time=14:00:00
 #SBATCH --output=%x.o%j.%N
 
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (must run BEFORE COMPRESSIONS is defined below).
+# sbatch submits whatever copy of this file is on disk at submit time. If that
+# local copy is STALE (e.g. predates the COMPRESSIONS sweep), the run silently
+# does the wrong thing — and run_lammps.sh's own `git pull` is too late to fix
+# it, because this batch has ALREADY exported COMPRESSIONS by the time
+# run_lammps.sh runs. (That is exactly how the shear sweep once collapsed to a
+# single strain.) Fix: pull the repo FIRST, then re-exec the freshly pulled
+# batch so COMPRESSIONS is always read from the current file. The guard var
+# prevents an exec loop.  (Mirrors shear_slab.batch.)
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${TRIAX_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining COMPRESSIONS..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export TRIAX_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/triaxial_compression/triaxial_compression.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (TRIAX_BATCH_SYNCED=1)"
+
 # Set environment variables
 declare -xr OMPI_UNIT='core'
 declare -xr OMPI_MCA_btl='self,vader'
@@ -31,9 +51,27 @@ module load python/3.8.12
 FOLDER="triaxial_compression"
 DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000"
 INTERACTION="1.0_1.0" # first number is solvent–solvent; second is polymer–solvent
-NSTEPS=4000000 # was 4M (on trial run now)
+NSTEPS=4000000 # was 4M (on trial run now)  # PRODUCTION HOLD steps PER compression level
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
+
+# -----------------------------------------------------------------------
+# Compression stress-strain SWEEP: cumulative strain targets to step through.
+#   COMPRESSIONS = (0.05 0.10 0.15 0.20)
+# The gel compresses to the first target, runs an NSTEPS production HOLD there
+# (piston frozen — the stress relaxes and the piston reaction force is recorded),
+# then compresses FURTHER (incrementally, from that state) to each subsequent
+# target and holds again. Each level writes its own output files tagged
+# _c<strain>. For a single operating point, use one value, e.g. (0.10).
+# If this is left unset, triaxial_compression.lmp falls back to a single 0.10.
+#
+# NOTE ON WALL TIME: total MD ≈ sum over levels of (drive-to-target + NSTEPS hold).
+# With 4 levels and NSTEPS=4M this is far more than a single run — size --time and
+# NSTEPS accordingly, and do a SHORT trial (e.g. COMPRESSIONS=(0.05 0.10), NSTEPS
+# small) before committing a full production sweep.
+# -----------------------------------------------------------------------
+COMPRESSIONS=(0.05 0.10 0.15 0.20)
+export COMPRESSIONS="${COMPRESSIONS[*]}"   # space-separated for run_lammps.sh / LAMMPS -var
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

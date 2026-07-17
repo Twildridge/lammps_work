@@ -83,8 +83,29 @@ variable timestep_prod equal 0.005
 variable comp_setup_freq equal 50000    # compression Phase 0 NVT
 
 # ----- Compression Phase 2 -----
-variable comp_percent    equal 0.1      # strain threshold for halt
-variable v_piston_prod   equal 0.04     # σ/τ (= 1σ per 5000 steps at dt=0.005)
+# comp_percent: LEGACY single-target fallback.  The SWEEP uses the index
+# variable `compressions` (below); comp_percent is retained only for reference.
+variable comp_percent    equal 0.1      # (legacy) single strain threshold
+variable v_piston_prod   equal 0.04     # sigma/tau (= 1 sigma per 5000 steps at dt=0.005)
+
+# ---- Compression stress-strain SWEEP: cumulative strain targets --------------
+# `compressions` is an index-style variable supplied on the command line by
+# run_lammps.sh as:  -var compressions 0.05 0.10 0.15 0.20
+# (set in triaxial_compression.batch via COMPRESSIONS=(...)).  If NOT supplied,
+# the in-script default below (single 0.10 target) is used, reproducing the
+# original single-operating-point run.  A command-line index variable always
+# overrides this fallback.  The script compresses INCREMENTALLY from one target
+# to the next (piston never reverses), holding a production window at each --
+# exactly like shear_slab.lmp's cumulative strain loop.  See the SWEEP LOOP
+# near the end of this file.  cont=1 is NOT supported for a multi-value sweep.
+variable compressions      index 0.10
+variable compressions_list index "STALE-run_lammps.sh--no-list-passed--running-single-default-only"
+
+# Safety cap on the per-increment velocity drive.  fix halt normally stops the
+# drive at the target strain LONG before this (a ~5-10% increment needs only a
+# few x10^4 steps at v_piston_prod); this is only a buffer so a level cannot run
+# unbounded if the target is somehow never reached.
+variable nsteps_comp equal 500000
 
 # ----- Phase 1.5: pre-compression REFERENCE averaging window -----
 # After Phase 0.5 the gel is equilibrated at P_target.  Hold the piston at v=0
@@ -581,10 +602,6 @@ fix_modify nvt_prod temp myTemp
 # ----- Permeation: start displacement recording at Phase 2 onset -----
 # Reference positions reset here so u_z(z,0) = 0 at the start of the drive.
 
-# ----- Production Trajectory (sparse sampling) -----
-dump traj_flow gel_system custom ${dump_freq_prod} &
-    traj_files/gel_flow_${dataname}_${interaction}_${nsteps}.lammpstrj &
-    id type mol x y z
 
 
 # ==========================================================================
@@ -838,126 +855,6 @@ variable uz_poly atom c_displace_poly[3]
 
 print ">>> Phase 2 start: piston_z=$(c_piston_com[3])  gel_top_rg=$(v_gel_top_rg)  gel_top_raw=$(c_maxz)  support_z=$(c_support_com[3])"
 
-
-# ==========================================================================
-#                         OUTPUT: PISTON DATA
-# ==========================================================================
-
-fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_com[3])" &
-    file output_files/piston_data/piston_position_${dataname}_${interaction}_${nsteps}.dat screen no
-
-fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &
-    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${nsteps}.dat screen no
-
-# ----- Piston force: compression mode only (Phase 2 start = immediately after Phase 0.5) -----
-# setforce 0 was removed at Phase 2 setup above; pairwise z-forces are live from here.
-# Expected profile: rises as gel compresses → plateaus near comp_percent strain → decays
-# during stress relaxation.  This fix is intentionally NOT unfixed in the relaxation
-# cleanup block so that force relaxation is captured; it is removed at final cleanup.
-# (Permeation-mode force recording began before Phase 0 NVT; see above.)
-fix out_piston_force all print ${volume_freq} '$(step) $(c_piston_fz)' file output_files/piston_data/piston_force_${dataname}_${interaction}_${nsteps}.dat screen no
-
-
-# ── Per-pair force dump for ss-only stress (post-processing) ──────────────
-# Columns: patom1 patom2 ptype1 ptype2 fx fy fz
-#   (fx/fy/fz = force on atom I due to atom J)
-# Frequency: nfreq_stress — one pairs frame per stress-profile snapshot.
-# This synchronises σ_s,ss(z,t) with σ_p(z,t) and σ_s(z,t) so all three
-# can be plotted on the same time-evolution axes in compression_analysis.ipynb.
-# Atom positions for r_IJ are supplied by traj_stress_sync (same timesteps).
-# Output directory must exist before the run: output_files/pair_data/
-dump pairlocal_dump solvent local ${nfreq_stress} &
-    output_files/pair_data/pairs_${dataname}_${interaction}_${nsteps}.dump &
-    c_ids_local[1] c_ids_local[2] c_ids_local[3] c_ids_local[4] &
-    c_pl_local[1] c_pl_local[2] c_pl_local[3]
-
-# Companion position dump — same frequency, same timesteps as pairlocal_dump.
-# Used by compute_ss_stress_from_pairs to look up r_IJ for each ss pair.
-# Column layout matches gel_flow_*.lammpstrj so read_lammpstrj_frame works.
-# Output directory must exist before the run: traj_files/
-dump traj_stress_sync gel_system custom ${nfreq_stress} &
-    traj_files/traj_stress_${dataname}_${interaction}_${nsteps}.lammpstrj &
-    id type mol x y z
-
-# ── Per-pair + per-bond dumps for pp-only (polymer self) stress ───────────
-# polymer_pairs_*.dump : pp-candidate pair forces (group=polymer pair/local).
-#   Columns: patom1 patom2 ptype1 ptype2 fx fy fz   (force on atom I due to J)
-#   Filter ptype1,ptype2 ∈ {1,2} in post-processing.
-# bonds_*.dump : FENE bond forces.
-#   Columns: batom1 batom2 btype force dist
-#   force = signed scalar bond force; reconstruct σ_pp,bond from r_IJ (positions
-#   from traj_stress_sync, same timesteps) — see compute_pp_stress_from_pairs.
-# Same nfreq_stress cadence and timesteps as the ss dumps so σ_p,pp(z,t)
-# overlays σ_s,ss(z,t) and the group-based profiles in the notebook.
-dump pairlocal_poly polymer local ${nfreq_stress} &
-    output_files/pair_data/polymer_pairs_${dataname}_${interaction}_${nsteps}.dump &
-    c_ids_local_poly[1] c_ids_local_poly[2] c_ids_local_poly[3] c_ids_local_poly[4] &
-    c_pl_local_poly[1] c_pl_local_poly[2] c_pl_local_poly[3]
-
-dump bondlocal_dump all local ${nfreq_stress} &
-    output_files/pair_data/bonds_${dataname}_${interaction}_${nsteps}.dump &
-    c_bnd_ids[1] c_bnd_ids[2] c_bnd_ids[3] c_bnd_local[1] c_bnd_local[2]
-
-
-# ==========================================================================
-#             OUTPUT: POLYMER Z-DISPLACEMENT PROFILE (time-averaged)
-# ==========================================================================
-# Identical nevery/nrepeat/nfreq as stress profiles → displacement and stress
-# curves are time-aligned for joint fitting in compression_analysis.ipynb.
-# File format mirrors stress output: header + one row per nfreq, columns = bins.
-
-# fix ave/chunk output is started AFTER the piston stops:
-#   Compression mode: defined in the relaxation cleanup block, reference = halt state.
-#   Permeation mode:  defined when constant-force steady state begins, reference = that state.
-# This ensures u_z(z, 0) = 0 at the correct physical start of each measurement window.
-
-
-# ==========================================================================
-#                    OUTPUT: GEL STRAIN (for longitudinal modulus)
-# ==========================================================================
-# Columns: timestep | L_initial_rg (constant) | L_current_rg (dynamic)
-# ΔL = L_initial - L_current;  ε = ΔL / L_initial
-# Gel thickness from Rg: L = 2√3·√(Rg_zz²)  (uniform rectangular prism)
-# This file is read by longitudinal_modulus_analysis.ipynb.
-
-fix out_strain_zz all print ${volume_freq} &
-    "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
-    file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}.dat screen no
-
-# Echo current strain to thermo log as well
-variable gel_strain_pct equal v_gel_strain*100.0
-fix out_gel_strain_thermo all print ${thermo_freq} &
-    ">>> gel_strain = $(v_gel_strain_pct) %" screen yes &
-    file output_files/stress_data/gel_strain_log_${dataname}_${interaction}_${nsteps}.dat
-
-
-# ==========================================================================
-#                    OUTPUT: GEL DIMENSIONS
-# ==========================================================================
-
-# Bounding-box volume and dimensions (for comparison/diagnostics)
-fix out_gel_vol_bb all print ${volume_freq} "$(step) $(v_gel_vol_bb)" &
-    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
-
-fix out_gel_dims_bb all print ${volume_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
-    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${nsteps}.dat screen no
-
-# Rg-based volume and dimensions (rectangular prism: L_i = 2√3·√Rg_ii²)
-fix out_gel_vol_rg all print ${volume_freq} "$(step) $(v_gel_vol_rg)" &
-    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
-
-fix out_gel_dims_rg all print ${volume_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
-    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
-
-# Box dimensions
-fix out_box_dims all print ${volume_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
-    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
-
-fix out_polymer_com all print ${volume_freq} &
-    "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
-    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}.dat screen no
-
-
 # ==========================================================================
 #  PHASE 1.5: PRE-COMPRESSION REFERENCE-STATE (ε=0) RECORDING
 # ==========================================================================
@@ -1059,254 +956,236 @@ label label_after_ref_rec
 
 
 # ==========================================================================
-#                    OUTPUT: PARTIAL STRESS PROFILES (time-averaged)
+#            ONE-TIME SETUP FOR THE COMPRESSION SWEEP (post-reference)
 # ==========================================================================
-# NOTE: these fixes are defined HERE — after the reference recording block —
-# so that they are NOT active during the ref_ run above.  Two reasons:
-#  (1) Each ref_ fix and its production-fix counterpart route through the
-#      same compute chunk/atom (chunk_z_poly_zz, chunk_z_solv_zz, etc.).
-#      Coexisting in one run causes a "Two fix commands using same compute
-#      chunk/atom command in incompatible ways" error at fix ave/time setup
-#      because the lock windows (start, stop) differ between the fixes.
-#  (2) The ref_ fixes must complete their first epoch and release their
-#      chunk/atom lock BEFORE the production fixes are defined.  The
-#      pre-roll run length is aligned to nfreq_stress epoch boundaries
-#      (see Phase 2 pre-roll block); the subsequent unfix then finds
-#      lockfix == nullptr and is a no-op for lock state.  If pre-roll were
-#      run with `run ${nfreq_stress}` (mid-epoch end), the unfix would NOT
-#      release the lock — fix ave/time's destructor only unlocks for
-#      ave=RUNNING/WINDOW, not the default ave=ONE — and these production
-#      fixes would then fail with the same chunk/atom error.
+# The gel is at P_target, the epsilon=0 reference files are written, and the
+# piston is velocity-controlled (rigid, all forces off) with velocity currently
+# -v_piston_prod.  The loop below walks the cumulative ${compressions} targets:
+# for each, it (a) drives the piston until gel_strain >= target (fix halt),
+# (b) freezes the piston, and (c) runs an NSTEPS production HOLD recording the
+# full observable set tagged _c<target>.  The next iteration resumes driving
+# FURTHER from the held state (cumulative), matching shear_slab.lmp.
 
-fix avg_stress_x_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_x_polymer mode vector file output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_y_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_y_polymer mode vector file output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_z_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_z_polymer mode vector file output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_x_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_x_solvent mode vector file output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_y_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_y_solvent mode vector file output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_z_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_z_piston mode vector file output_files/stress_data/stress_z_piston_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_z_support mode vector file output_files/stress_data/stress_z_support_${dataname}_${interaction}_${nsteps}.dat
-
-# ----- Block-averaged piston force (variables defined near compute piston_fz) -----
-# Defined here (with the other production ave/time fixes) so its sampling window
-# is aligned with the production run start.  Writes the same 2-column
-# "step  <F_z>" format as the raw piston_force file, so the notebook reads it
-# with read_print_file() identically.  Spans compression + relaxation (the
-# accumulator continues across the run boundary); removed in final cleanup.
-fix out_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
-    c_piston_fz ave one &
-    file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${nsteps}.dat
-
-# True ZZ partial-stress outputs (σzz component only; used for longitudinal modulus)
-fix avg_sigmazz_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_sigmazz_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_sigmaxx_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_sigmaxx_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_sigmayy_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${nsteps}.dat
-
-
-# ==========================================================================
-#        OUTPUT: FINE-RESOLUTION σ_zz PROFILES (support + piston windows)
-# ==========================================================================
-# Same nevery/nrepeat/nfreq as the coarse stress profiles so the fine and
-# coarse σ_zz snapshots are time-aligned.  Polymer + solvent fine σ_zz in the
-# support window and the piston window; the notebook stitches these onto the
-# coarse profile and forms the total fine σ_zz = σ_p,zz + σ_s,zz.
-fix avg_sigmazz_poly_fs all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_poly_fs mode vector file output_files/stress_data/sigmazz_polymer_fine_support_${dataname}_${interaction}_${nsteps}.dat
-fix avg_sigmazz_poly_fp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_poly_fp mode vector file output_files/stress_data/sigmazz_polymer_fine_piston_${dataname}_${interaction}_${nsteps}.dat
-fix avg_sigmazz_solv_fs all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_solv_fs mode vector file output_files/stress_data/sigmazz_solvent_fine_support_${dataname}_${interaction}_${nsteps}.dat
-fix avg_sigmazz_solv_fp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_solv_fp mode vector file output_files/stress_data/sigmazz_solvent_fine_piston_${dataname}_${interaction}_${nsteps}.dat
-
-
-# ==========================================================================
-#        OUTPUT: SOLVENT DENSITY PROFILE + CAVITY-WIDOM TRAJECTORY
-# ==========================================================================
-# Solvent density profile: z-binned NUMBER and MASS density, time-averaged
-# over windows aligned to nfreq_widom_dump.  Number density feeds
-# plot_chempot_diagnostics' mu_total(z) = mu_ex + kT*ln(rho_s); mass density
-# (density/mass — observable #4) and the derived mass fraction rho_s/rho_s0
-# (observable #5, formed in the notebook against the Phase-1.5 reference) feed
-# triaxial_compression.ipynb.  In LJ units with solvent_mass = 1 the number
-# and mass density coincide numerically, but density/mass is recorded
-# explicitly so the analysis is correct for any bead mass.
-#
-# These production fixes are defined here (after the Phase-1.5 reference
-# teardown) so all frames come from the production phase.  The coarse and
-# fine chunk/atom computes were defined earlier (FINE-RESOLUTION section) so
-# they are shared with the reference fixes.
-# NOTE: output_files/chemical_potential/ must exist before the run.
-#       run_lammps.sh creates it automatically; for direct LAMMPS invocation:
+variable gel_strain_pct equal v_gel_strain*100.0
 shell mkdir -p output_files/chemical_potential
 
-variable nevery_density  equal 100
-variable nrepeat_density equal floor(v_nfreq_widom_dump/v_nevery_density)
-variable nfreq_density   equal v_nevery_density*v_nrepeat_density
-print ">>> Density: nevery=${nevery_density} nrepeat=${nrepeat_density} nfreq=${nfreq_density}"
-
-fix avg_solv_density all ave/chunk ${nevery_density} ${nrepeat_density} ${nfreq_density} &
-    chunk_z_solv_density density/number density/mass &
-    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${totsteps}.dat
-
-# Fine-resolution solvent density in the support + piston windows (number+mass)
-fix avg_solv_density_fs all ave/chunk ${nevery_density} ${nrepeat_density} ${nfreq_density} &
-    chunk_zf_dens_sup density/number density/mass &
-    file output_files/chemical_potential/solvent_density_z_fine_support_${dataname}_${interaction}_${totsteps}.dat
-fix avg_solv_density_fp all ave/chunk ${nevery_density} ${nrepeat_density} ${nfreq_density} &
-    chunk_zf_dens_pis density/number density/mass &
-    file output_files/chemical_potential/solvent_density_z_fine_piston_${dataname}_${interaction}_${totsteps}.dat
-
-# All-atom trajectory for cavity_widom.py (solvent type 3 + all others for WCA energy)
-dump widom_traj all custom ${nfreq_widom_dump} &
-    traj_files/widom_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z
+print "############################################################"
+print ">>> COMPRESSION SWEEP LIST (raw from run_lammps.sh): ${compressions_list}"
+print ">>>   first target=${compressions}   drive cap=${nsteps_comp}   hold=${nsteps} per level"
+print ">>>   If the line above reads 'STALE-run_lammps.sh...', only ONE level"
+print ">>>   will run -- update run_lammps.sh on the cluster and resubmit."
+print "############################################################"
 
 
 # ==========================================================================
-#         COMPRESSION MODE: HALT AT comp_percent STRAIN
+#                    COMPRESSION SWEEP LOOP (cumulative)
 # ==========================================================================
-# fix halt stops the current run command (error continue = no abort).
-# After the run exits the script continues to the relaxation block below.
-# In permeation mode this fix is not created; the run ends via halt_perm
-# (feed ≤ feed_halt_thick) or exhausts nsteps.
+# Epoch note: every fix ave/time (mode vector, via reduce/chunk) and fix
+# ave/chunk below is created right before the production 'run ${hold_steps}'
+# and removed right after it.  hold_steps is padded so the run ENDS on an
+# nfreq_stress epoch boundary (multiple of nfreq_stress from step 0), so
+# end_of_step fires unlock() on the chunk/atom compute BEFORE the unfix -- the
+# same idiom the epsilon=0 reference window uses to avoid the "Two fix commands
+# using same compute chunk/atom in incompatible ways" lock corruption.
+label comp_loop
 
-fix halt_compress all halt ${volume_freq} v_gel_strain >= ${comp_percent} error continue
+print "########################################################"
+print "  COMPRESSION TARGET (cumulative) = ${compressions}"
+print "########################################################"
 
-print ">>> Starting Phase 2 production run (nsteps = ${nsteps})"
-print ">>> Mode: COMPRESSION (piston-loaded gel)"
-if "${cont} == 1" then "print '>>> Continuing after ${oldsteps} timesteps'"
+# ----- Per-level loggers that span BOTH the drive and the hold -----
+# fix print (and one GLOBAL ave/time on c_piston_fz) -- none use a compute
+# chunk/atom, so they carry NO lock and may be unfixed at any step.  They record
+# the piston descent + force rise AND the subsequent relaxation during the hold.
+fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_com[3])" &
+    file output_files/piston_data/piston_position_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &
+    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+fix out_piston_force all print ${volume_freq} '$(step) $(c_piston_fz)' &
+    file output_files/piston_data/piston_force_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+fix out_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_piston_fz ave one &
+    file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix out_strain_zz all print ${volume_freq} &
+    "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
+    file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+fix out_gel_strain_thermo all print ${thermo_freq} &
+    ">>> gel_strain = $(v_gel_strain_pct) %" screen yes &
+    file output_files/stress_data/gel_strain_log_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix out_gel_vol_bb all print ${volume_freq} "$(step) $(v_gel_vol_bb)" &
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+fix out_gel_dims_bb all print ${volume_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
+    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+fix out_gel_vol_rg all print ${volume_freq} "$(step) $(v_gel_vol_rg)" &
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+fix out_gel_dims_rg all print ${volume_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+fix out_box_dims all print ${volume_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+fix out_polymer_com all print ${volume_freq} &
+    "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
 
-variable phase2_start equal $(step)
-
-# ==========================================================================
-#                         PRODUCTION RUN
-# ==========================================================================
-# Compression mode: this run halts early when gel_strain >= comp_percent.
-# Permeation mode:  this run runs to completion (nsteps).
-
-run ${nsteps}
-
-
-# ==========================================================================
-#                   FREEZE PISTON + STRESS RELAXATION
-# ==========================================================================
-# After the halt the gel is at ~comp_percent strain.  We freeze the piston
-# in place and run for the remaining steps so that compression + relaxation
-# = exactly nsteps total.  If comp_percent was never reached, relax_steps
-# will be 0 and the run below is a no-op (and a warning is printed).
-# NOTE: ave/time accumulators continue from where they left off — the output
-# files will contain entries spanning both the compression and relaxation phases.
-
+# ----- PHASE 2a: drive the piston until gel_strain >= this cumulative target -----
+velocity piston set 0.0 0.0 -${v_piston_prod}
+fix halt_compress all halt ${volume_freq} v_gel_strain >= ${compressions} error continue
+print ">>> [level ${compressions}] driving piston (cap ${nsteps_comp} steps)..."
+run ${nsteps_comp}
 unfix halt_compress
+print ">>> [level ${compressions}] drive done: gel_strain = $(v_gel_strain)  (target ${compressions})  step=$(step)"
 
-variable phase2_end   equal $(step)
-variable relax_steps  equal ${nsteps}-(${phase2_end}-${phase2_start})
-if "${cont} == 0 && ${relax_steps} <= 0" then "print 'WARNING: COMPRESSION TARGET NOT REACHED WITHIN nsteps — NO RELAXATION STEPS REMAINING'"
-if "${cont} == 1 && ${relax_steps} <= 0" then "print '>>> Continuation: piston held fixed for full ${nsteps} steps (no relaxation phase)'"
-print '>>> Compression halted — relaxation steps remaining: ${relax_steps}'
-print '>>> Freezing piston and starting stress relaxation'
-
-# Snapshot hw values as constants before destroying rg_tensor
-# (reg_x and reg_y use these as dynamic bounds; gel is frozen so values won't change)
-variable hw_x equal $(v_hw_x)
-variable hw_y equal $(v_hw_y)
-variable hw_z equal $(v_hw_z)
-
-# Stop all volume/strain/dim output — everything is constant after piston freeze
-unfix out_piston_pos
-unfix out_piston_vel
-# NOTE: out_piston_force is intentionally NOT unfixed here.
-# The gel reaction force changes during stress relaxation (it should decay), and
-# capturing that decay is the point of Phase 2.  out_piston_force is removed in
-# the final cleanup block after run ${relax_steps} completes.
-unfix out_strain_zz
-unfix out_gel_strain_thermo
-unfix out_gel_vol_bb
-unfix out_gel_dims_bb
-unfix out_gel_vol_rg
-unfix out_gel_dims_rg
-unfix out_box_dims
-unfix out_polymer_com
-
-# Free the expensive computes (polymer_com must stay for dynamic region bounds)
-uncompute rg_tensor
-uncompute minx
-uncompute maxx
-uncompute miny
-uncompute maxy
-uncompute minz
-uncompute maxz
-
-# Freeze piston (velocity control: no force fixes to unfix)
-# cont=1: freeze_piston (setforce 0) was never removed (Phase 2 setup was skipped),
-#   so unfix it here before redefining rigid_piston.
-if "${cont} == 1" then "unfix freeze_piston"
+# ----- Freeze the piston at this strain for the production hold -----
 velocity piston set 0.0 0.0 0.0
-unfix rigid_piston
-fix rigid_piston piston rigid single force * off off off torque * off off off
 
-# ----- Displacement: start recording at the halt state -----
-# The compute is redefined here so its reference positions are the compressed
-# (halt) configuration, giving u_z(z, 0) = 0 at the start of relaxation.
+# ----- Reset the displacement reference to the (held) compressed state so
+#       u_z(z,0)=0 at the onset of THIS level's relaxation (for D_c). -----
+variable uz_poly delete
 uncompute displace_poly
 compute displace_poly polymer displace/atom
 variable uz_poly atom c_displace_poly[3]
-fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} chunk_z_polymer v_uz_poly file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat
 
-run ${relax_steps}
+# ----- PHASE 2b: production HOLD -- chunk-locked averaging fixes created HERE -----
+dump traj_flow gel_system custom ${dump_freq_prod} &
+    traj_files/gel_flow_${dataname}_${interaction}_${nsteps}_c${compressions}.lammpstrj &
+    id type mol x y z
+dump pairlocal_dump solvent local ${nfreq_stress} &
+    output_files/pair_data/pairs_${dataname}_${interaction}_${nsteps}_c${compressions}.dump &
+    c_ids_local[1] c_ids_local[2] c_ids_local[3] c_ids_local[4] &
+    c_pl_local[1] c_pl_local[2] c_pl_local[3]
+dump traj_stress_sync gel_system custom ${nfreq_stress} &
+    traj_files/traj_stress_${dataname}_${interaction}_${nsteps}_c${compressions}.lammpstrj &
+    id type mol x y z
+dump pairlocal_poly polymer local ${nfreq_stress} &
+    output_files/pair_data/polymer_pairs_${dataname}_${interaction}_${nsteps}_c${compressions}.dump &
+    c_ids_local_poly[1] c_ids_local_poly[2] c_ids_local_poly[3] c_ids_local_poly[4] &
+    c_pl_local_poly[1] c_pl_local_poly[2] c_pl_local_poly[3]
+dump bondlocal_dump all local ${nfreq_stress} &
+    output_files/pair_data/bonds_${dataname}_${interaction}_${nsteps}_c${compressions}.dump &
+    c_bnd_ids[1] c_bnd_ids[2] c_bnd_ids[3] c_bnd_local[1] c_bnd_local[2]
+dump widom_traj all custom ${nfreq_widom_dump} &
+    traj_files/widom_${dataname}_${interaction}_${nsteps}_c${compressions}.lammpstrj id type x y z
 
+fix avg_stress_x_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_x_polymer mode vector file output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_stress_y_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_y_polymer mode vector file output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_stress_z_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_polymer mode vector file output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_stress_x_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_x_solvent mode vector file output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_stress_y_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_y_solvent mode vector file output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_stress_z_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_piston mode vector file output_files/stress_data/stress_z_piston_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_support mode vector file output_files/stress_data/stress_z_support_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
 
-# ==========================================================================
-#                            CLEANUP
-# ==========================================================================
+fix avg_sigmazz_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_sigmazz_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_sigmaxx_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_sigmaxx_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_sigmayy_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
 
-# Piston force output — removed here after all runs are complete
-unfix out_piston_force
-unfix out_piston_force_avg
+fix avg_sigmazz_poly_fs all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_poly_fs mode vector file output_files/stress_data/sigmazz_polymer_fine_support_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_sigmazz_poly_fp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_poly_fp mode vector file output_files/stress_data/sigmazz_polymer_fine_piston_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_sigmazz_solv_fs all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_solv_fs mode vector file output_files/stress_data/sigmazz_solvent_fine_support_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_sigmazz_solv_fp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_solv_fp mode vector file output_files/stress_data/sigmazz_solvent_fine_piston_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
 
-undump traj_flow
-undump pairlocal_dump
-undump pairlocal_poly
-undump bondlocal_dump
-undump traj_stress_sync
-undump widom_traj
-unfix avg_solv_density
-unfix avg_solv_density_fs
+# Solvent density: use the STRESS cadence (not a separate density cadence) so
+# the ave/chunk teardown lands on the SAME nfreq_stress epoch boundary as the
+# run end -- guaranteeing a clean chunk/atom unlock before the next level.
+fix avg_solv_density all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_solv_density density/number density/mass &
+    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_solv_density_fs all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_zf_dens_sup density/number density/mass &
+    file output_files/chemical_potential/solvent_density_z_fine_support_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_solv_density_fp all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_zf_dens_pis density/number density/mass &
+    file output_files/chemical_potential/solvent_density_z_fine_piston_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+
+fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_polymer v_uz_poly &
+    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+
+variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print ">>> [level ${compressions}] production HOLD for ${hold_steps} steps (>= ${nsteps}, aligned to nfreq_stress=${nfreq_stress})"
+run ${hold_steps}
+
+# ----- Teardown this level's hold fixes/dumps (lock released on the epoch-
+#       aligned end_of_step above) BEFORE the next increment. -----
+unfix avg_disp_z_poly
 unfix avg_solv_density_fp
+unfix avg_solv_density_fs
+unfix avg_solv_density
+unfix avg_sigmazz_solv_fp
+unfix avg_sigmazz_solv_fs
+unfix avg_sigmazz_poly_fp
+unfix avg_sigmazz_poly_fs
+unfix avg_sigmayy_solv
+unfix avg_sigmayy_poly
+unfix avg_sigmaxx_solv
+unfix avg_sigmaxx_poly
+unfix avg_sigmazz_solv
+unfix avg_sigmazz_poly
+unfix avg_stress_z_supp
+unfix avg_stress_z_pist
+unfix avg_stress_z_solv
+unfix avg_stress_y_solv
+unfix avg_stress_x_solv
+unfix avg_stress_z_poly
+unfix avg_stress_y_poly
+unfix avg_stress_x_poly
+undump widom_traj
+undump bondlocal_dump
+undump pairlocal_poly
+undump traj_stress_sync
+undump pairlocal_dump
+undump traj_flow
 
+# ----- Teardown the drive+hold loggers -----
+unfix out_polymer_com
+unfix out_box_dims
+unfix out_gel_dims_rg
+unfix out_gel_vol_rg
+unfix out_gel_dims_bb
+unfix out_gel_vol_bb
+unfix out_gel_strain_thermo
+unfix out_strain_zz
+unfix out_piston_force_avg
+unfix out_piston_force
+unfix out_piston_vel
+unfix out_piston_pos
+
+print ">>> Completed level ${compressions}:  gel_strain = $(v_gel_strain)  step=$(step)"
+
+variable hold_steps delete
+
+next compressions
+jump SELF comp_loop
+
+
+# ==========================================================================
+#                            FINAL STATE
+# ==========================================================================
 print "========================================"
-print "Simulation complete"
+print "Triaxial compression stress-strain sweep complete"
+print "  Final gel_strain: $(v_gel_strain)"
+print "  Final box: $(lx) x $(ly) x $(lz)"
 print "========================================"
 
 variable outfile string "final_flow_${dataname}_${interaction}_${nsteps}"
 write_data ${outfile}.data
-
