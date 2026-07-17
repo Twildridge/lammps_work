@@ -57,7 +57,7 @@ TYPE=""             # Options: stress, volume, stressvol, or leave empty (just t
 
 # -----------------------------------------------------------------------
 # Compression stress-strain SWEEP: cumulative strain targets to step through.
-#   COMPRESSIONS = (0.05 0.10 0.15 0.20)
+#   COMPRESSIONS = (0.10 0.15 0.20)
 # The gel compresses to the first target, runs an NSTEPS production HOLD there
 # (piston frozen — the stress relaxes and the piston reaction force is recorded),
 # then compresses FURTHER (incrementally, from that state) to each subsequent
@@ -74,7 +74,7 @@ TYPE=""             # Options: stress, volume, stressvol, or leave empty (just t
 # where COMPRESSIONS is itself an array keeps it typed as an array, and bash does
 # NOT pass array variables into a child's environment -> run_lammps.sh would see
 # it unset and silently fall back to a single level.  Export a SCALAR string.
-COMPRESSIONS_LIST=(0.05 0.10)
+COMPRESSIONS_LIST=(0.10 0.20)
 export COMPRESSIONS="${COMPRESSIONS_LIST[*]}"   # space-separated scalar for run_lammps.sh / LAMMPS -var
 
 # Navigate to the scripts directory
