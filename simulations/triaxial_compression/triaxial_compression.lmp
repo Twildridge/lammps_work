@@ -950,7 +950,7 @@ unfix ref_dens_fp
 # Reinstate the production-velocity assignment for the actual compression
 velocity piston set 0.0 0.0 -${v_piston_prod}
 
-print '>>> Reference recording done.  step=$(step)  gel_strain=$(v_gel_strain)'
+print '>>> Reference recording done.  step=$(step)  gel_strain=$(v_gel_strain:%.4f)'
 
 label label_after_ref_rec
 
@@ -1010,7 +1010,7 @@ fix out_strain_zz all print ${volume_freq} &
     "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
     file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
 fix out_gel_strain_thermo all print ${thermo_freq} &
-    ">>> gel_strain = $(v_gel_strain_pct) %" screen yes &
+    ">>> gel_strain = $(v_gel_strain_pct:%.2f) %" screen yes &
     file output_files/stress_data/gel_strain_log_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
 fix out_gel_vol_bb all print ${volume_freq} "$(step) $(v_gel_vol_bb)" &
     file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
@@ -1032,7 +1032,7 @@ fix halt_compress all halt ${volume_freq} v_gel_strain >= ${compressions} error 
 print ">>> [level ${compressions}] driving piston (cap ${nsteps_comp} steps)..."
 run ${nsteps_comp}
 unfix halt_compress
-print ">>> [level ${compressions}] drive done: gel_strain = $(v_gel_strain)  (target ${compressions})  step=$(step)"
+print ">>> [level ${compressions}] drive done: gel_strain = $(v_gel_strain:%.4f)  (target ${compressions})  step=$(step)"
 
 # ----- Freeze the piston at this strain for the production hold -----
 velocity piston set 0.0 0.0 0.0
@@ -1170,7 +1170,7 @@ unfix out_piston_force
 unfix out_piston_vel
 unfix out_piston_pos
 
-print ">>> Completed level ${compressions}:  gel_strain = $(v_gel_strain)  step=$(step)"
+print ">>> Completed level ${compressions}:  gel_strain = $(v_gel_strain:%.4f)  step=$(step)"
 
 variable hold_steps delete
 
@@ -1183,8 +1183,8 @@ jump SELF comp_loop
 # ==========================================================================
 print "========================================"
 print "Triaxial compression stress-strain sweep complete"
-print "  Final gel_strain: $(v_gel_strain)"
-print "  Final box: $(lx) x $(ly) x $(lz)"
+print "  Final gel_strain: $(v_gel_strain:%.4f)"
+print "  Final box: $(lx:%.3f) x $(ly:%.3f) x $(lz:%.3f)"
 print "========================================"
 
 variable outfile string "final_flow_${dataname}_${interaction}_${nsteps}"

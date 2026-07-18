@@ -21,7 +21,8 @@
 #   SKIP_WIDOM=1        minimize/skip cavity_widom.py (slab_with_flow only)
 #   STRAINS="..."       space-separated shear-strain list (shear_slab only)
 #   COMPRESSIONS="..."  space-separated compression-strain list (triaxial_compression
-#                       sweep); plotters run once per level on the _c<level> stems
+#                       sweep); the consolidated plotter overlays all _c<level>
+#                       stems onto one figure per quantity (one curve per level)
 # ==============================================================================
 set -u
 
@@ -141,18 +142,15 @@ if [ "$FOLDER" = "shear_slab" ]; then
     echo "Generating shear stress-strain sweep plots (per strain: $STRAINS)..."
     python "$SCRIPT_DIR/plot_shear_strain_sweep.py" "." "$STEM" "$STRAINS"
 elif [ "$FOLDER" = "triaxial_compression" ] && [ -n "$COMPRESSIONS" ]; then
-    # Compression sweep: every level's output files are tagged _c<level>, so run
-    # the standard per-run plotters ONCE PER LEVEL with a per-level stem. Each
-    # level is non-fatal so one missing/short level cannot abort the rest.
-    echo "Generating compression stress-strain sweep plots (per level: $COMPRESSIONS)..."
-    for LVL in $COMPRESSIONS; do
-        LVL_STEM="${STEM}_c${LVL}"
-        echo "  --- level c${LVL}  (stem ${LVL_STEM}) ---"
-        python "$SCRIPT_DIR/plot_stress_profiles.py" "." "$LVL_STEM" "$OLDSTEPS" \
-            || echo "  WARNING: plot_stress_profiles.py failed for level ${LVL} (skipping)"
-        python "$SCRIPT_DIR/plot_piston_data.py"     "." "$LVL_STEM" "$OLDSTEPS" \
-            || echo "  WARNING: plot_piston_data.py failed for level ${LVL} (skipping)"
-    done
+    # Compression sweep: every level's output files are tagged _c<level>. Rather
+    # than emit one plot PER LEVEL, the consolidated plotter overlays every
+    # level's curves onto a single figure per quantity (one color per level) --
+    # so the output_plots folder holds ONE piston plot and ONE stress-profile
+    # plot for the whole sweep instead of a pair per level. Non-fatal so a bad
+    # level cannot abort the chain.
+    echo "Generating consolidated compression sweep plots (levels: $COMPRESSIONS)..."
+    python "$SCRIPT_DIR/plot_compression_strain_sweep.py" "." "$STEM" "$COMPRESSIONS" "$OLDSTEPS" \
+        || echo "  WARNING: plot_compression_strain_sweep.py failed (skipping)"
 else
     echo "Generating stress profiles..."
     python "$SCRIPT_DIR/plot_stress_profiles.py" "." "$STEM" "$OLDSTEPS"
