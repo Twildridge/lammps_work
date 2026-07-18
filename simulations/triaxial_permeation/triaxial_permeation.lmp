@@ -407,6 +407,10 @@ variable box_lz equal lz
 # regions where LAMMPS evaluates variable bounds at region creation time.
 compute piston_com piston com          # PBC-aware COM; use [3] for z
 compute piston_vz piston reduce ave vz  # velocities do not wrap
+# Support membrane z (frozen, so its COM is fixed).  The support sits near the
+# BOTTOM of the periodic cell; the permeate reservoir is the solvent BELOW it.
+# Used as the fixed reference plane for the permeate flux counter and reservoirs.
+compute support_com support com
 
 # ----- Polymer z-displacement reference -----
 # Defined here so run 0 below captures the post-Phase-0.5 equilibrated positions
@@ -439,6 +443,10 @@ print "hw_z = ${hw_z}"
 # ----- Gel strain (Rg-based) -----
 # $(v_gel_lz_rg) — parentheses force immediate numeric evaluation right now,
 # storing a constant. ${gel_lz_rg} would store the expression string instead.
+# Snapshot the (fixed) support plane z as a constant now that computes are live.
+variable support_z equal $(c_support_com[3])
+print ">>> Support plane z = ${support_z}   (permeate reservoir = solvent below this)"
+
 variable gel_lz_initial equal $(v_gel_lz_rg)
 print ">>> Initial gel thickness (Rg): L0 = ${gel_lz_initial}"
 print ">>> Initial gel thickness (BB): L0 = $(v_gel_lz_bb)"
@@ -490,16 +498,26 @@ variable P_piston          equal 0.1     # applied piston PRESSURE for productio
 # ---- free-solvent split bookkeeping (piston faces; gel top from Rg) ----
 variable piston_z_bot equal c_piston_com[3]-0.5*${sigma}
 variable piston_z_top equal c_piston_com[3]+0.5*${sigma}
-# feed side: solvent between gel top and the piston bottom face
+# feed side: solvent between gel top and the piston bottom face (the compressible
+# feed reservoir the piston acts on).
 region reg_feed_split block EDGE EDGE EDGE EDGE v_gel_top_rg v_piston_z_bot side in
-# perm side: solvent above the piston top face (to box top); below-support solvent
-# wraps here via PBC.  Gel-absorbed solvent (below gel_top) is in NEITHER region,
-# so feed_frac is the split of the FREE reservoir solvent only.
-region reg_perm_split block EDGE EDGE EDGE EDGE v_piston_z_top EDGE side in
 group g_feed_split dynamic solvent region reg_feed_split every 1000
-group g_perm_split dynamic solvent region reg_perm_split every 1000
 variable n_feed_split equal count(g_feed_split)
-variable n_perm_split equal count(g_perm_split)
+#
+# perm side: solvent ABOVE the piston (the 45% side).  Counted BY DIFFERENCE so
+# the reposition can start with the piston still parked at the top boundary:
+#   n_perm = n_total - (solvent in [zlo, piston_z_top]).
+# The OLD region [piston_z_top, EDGE] evaluates at reposition step 0 while the
+# piston is still at the top (piston_z_top >= zhi) -> zlo>zhi -> LAMMPS "Variable
+# evaluation in region gave bad value" (the crash).  The complementary region
+# [EDGE, piston_z_top] can never invert (zlo < piston_z_top always), and at step 0
+# it simply spans the whole box so n_perm = 0 (correct: nothing above the piston
+# yet).  As the piston descends into the feed column, solvent appears above it and
+# n_perm grows, so feed_frac drops monotonically to the target.
+region reg_below_piston block EDGE EDGE EDGE EDGE EDGE v_piston_z_top side in
+group g_below_piston dynamic solvent region reg_below_piston every 1000
+variable n_total_solv equal count(solvent)
+variable n_perm_split equal v_n_total_solv-count(g_below_piston)
 variable feed_frac    equal v_n_feed_split/(v_n_feed_split+v_n_perm_split)
 
 # ---- (1) reposition: controlled descent, halt when feed fraction reaches target ----
@@ -759,7 +777,15 @@ variable piston_z_top equal c_piston_com[3]+0.5*${sigma}
 variable res_feed_zlo equal (c_maxz<(c_piston_com[3]-1.5*${sigma}))*c_maxz+(c_maxz>=(c_piston_com[3]-1.5*${sigma}))*(c_piston_com[3]-1.5*${sigma})
 region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo v_piston_z_bot side in
 
-# Permeate: piston top face → box top (permeated solvent collects here via PBC)
+# Permeate: solvent ABOVE the piston top face (piston_z_top → box top).  Together
+# with reg_feed_res (below the piston) this gives the two piston-relative reservoir
+# pressures the 45/55 reposition sets up.  This region is defined AFTER the
+# reposition run, by which point the piston has descended into the feed column
+# (out of the top z-boundary), so piston_z_top < zhi and the block is valid; as
+# the production piston descends further, piston_z_top only drops, so the region
+# grows and never inverts.  (The step-0 inversion that crashed the run occurred in
+# the REPOSITION counter, which is evaluated while the piston is still parked at
+# the top — that counter is now handled crash-safe via reg_below_piston, above.)
 region reg_perm_res block EDGE EDGE EDGE EDGE v_piston_z_top EDGE side in
 
 # Dynamic solvent groups — membership refreshed every stress sampling interval
@@ -774,7 +800,8 @@ compute pv_perm g_solvent_perm reduce sum v_pv_solvent
 
 # Reservoir volumes (height = distance between region faces, not piston COM)
 variable vol_feed equal lx*ly*(v_piston_z_bot-v_res_feed_zlo)
-variable vol_perm equal lx*ly*(lz-v_piston_z_top)
+# perm reservoir height = box top − piston top face (above-piston slab)
+variable vol_perm equal lx*ly*(zhi-v_piston_z_top)
 
 # Instantaneous reservoir pressures
 variable P_res_feed equal c_pv_feed/v_vol_feed
@@ -788,27 +815,27 @@ variable P_res_perm equal c_pv_perm/v_vol_perm
 # ==========================================================================
 #         PERMEATION: PERMEATE FLUX COUNTER + FEED-THICKNESS HALT
 # ==========================================================================
-# Permeate flux: solvent that passes through the gel and support exits at
-# z < zlo and wraps via PBC to z ≈ zhi (top of box).  The piston is located
-# BETWEEN the gel and the box top, well below zhi, so the top 10σ of the
-# box is an unambiguous permeate accumulation zone.  Counting beads there
-# gives a monotonically increasing cumulative permeate count:
+# Permeate flux counter — located AT THE SUPPORT.  Permeate = solvent that has
+# left the support->piston span (i.e. crossed below the support membrane).  With
+# the production piston (WCA ON) sealing the top, solvent can only leave the
+# support->piston span downward through the support, so the count below rises
+# monotonically and IS the cumulative permeate count:
 #
 #   Flux = ΔN_permeate / (Δt × Lx × Ly)  — computed in post-processing.
 #
-# Using a fixed band near zhi (rather than a region above the piston) avoids
-# the complication of the piston being deep inside the solvent column — the
-# feed solvent above the piston never reaches z > zhi−10 while the piston
-# is pushing it downward.
+# Located AT THE SUPPORT: N_permeate = n_total − (solvent in [support_z, piston_bot]),
+# i.e. everything that has crossed below the support (or wrapped above the piston).
+# This replaces the old "top 10σ band" counter, which was wrong for the periodic
+# geometry (permeate collects at the BOTTOM, below the support, not near zhi).
+# reg_perm_span never inverts (support_z is a fixed plane below the piston).
 #
 # Feed-thickness halt: stops the run when the feed reservoir (between gel top
 # and piston bottom face) is ≤ feed_halt_thick = 2σ, preventing the piston
 # from crashing into the gel and causing FENE errors.
 
-variable permeate_zlo equal $(zhi-10.0)
-region reg_permeate block EDGE EDGE EDGE EDGE v_permeate_zlo EDGE side in
-group g_permeate dynamic solvent region reg_permeate every ${flux_freq}
-variable N_permeate equal count(g_permeate)
+region reg_perm_span block EDGE EDGE EDGE EDGE v_support_z v_piston_z_bot side in
+group g_perm_span dynamic solvent region reg_perm_span every ${flux_freq}
+variable N_permeate equal v_n_total_solv-count(g_perm_span)
 
 fix out_permeate_flux all print ${flux_freq} '$(step) $(v_N_permeate)' file output_files/permeation_data/permeate_count_${dataname}_${interaction}_${nsteps}.dat screen no
 
