@@ -356,8 +356,13 @@ print '>>> Post-Phase-0.5: T=$(c_mobile_temp)  Press=$(press)  mobile_press=$(c_
 label label_after_phase05
 
 print ">>> Pre-production: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
-# traj_setup dump only exists when cont=0 (Phase 0 ran)
-if "${cont} == 0" then "undump traj_setup"
+# traj_setup dump only exists when cont=0 (Phase 0 ran).  It is intentionally NOT
+# undumped here any more: extended to keep recording through Phase 0.5 AND the
+# Phase 2 piston reposition, so the setup/reposition motion is captured even if
+# production dies early (the production trajectories were empty when the run died
+# at the WCA switch-on).  It is handed off to traj_flow immediately before the
+# production run begins (see "Hand off the setup trajectory" below), so the two
+# dumps are never active simultaneously — no overlapping-dump conflict.
 
 
 # ==========================================================================
@@ -536,6 +541,31 @@ print ">>> Reposition done: feed_frac=$(v_feed_frac)  piston_z=$(c_piston_com[3]
 # ---- (2) enable piston-solvent WCA: the piston now pushes solvent as a plug ----
 pair_coeff 3 5 1.0 ${sigma} 1.122
 
+# ---- (2.5) relax piston-solvent overlaps BEFORE force-loading ----
+# The reposition descended the piston with piston-solvent WCA OFF, so solvent
+# beads are now embedded inside the 1-sigma-thick piston slab.  Enabling WCA
+# (above) turns those ~zero-distance overlaps into enormous repulsions; stepping
+# them straight into the production thermostat launches atoms in a single step
+# and triggers the FENE "bond atoms missing" blowup (the step-507002 crash, where
+# PotEng jumped to ~7e23 on the first production step).  Bleed the overlaps out
+# gently first: fix nve/limit caps per-atom displacement per step (0.05 sigma) so
+# no atom can fly regardless of force magnitude, and Langevin removes the injected
+# heat (per-atom friction beats FENE heating; same rationale as Phase 0.5).  The
+# piston is held FIXED during this stage — rigid_piston (force * off off off,
+# velocity 0) zeroes the net body force in all three directions, so the escaping
+# solvent cannot shove the piston and the 45/55 split from the reposition is
+# preserved.  Only the mobile group (polymer+solvent) is re-integrated here.
+variable n_wca_relax equal 5000
+unfix nvt_prod
+fix relax_nvelim mobile nve/limit 0.05
+fix relax_lang   mobile langevin ${temp_target} ${temp_target} 1.0 58291
+run ${n_wca_relax}
+unfix relax_nvelim
+unfix relax_lang
+fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix_modify nvt_prod temp myTemp
+print ">>> WCA overlap relax done: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
+
 # ---- (3) constant-PRESSURE (force-controlled) production piston ----
 # Periodic full-box piston cannot use fix rigid for a force load (see the
 # slab_with_support periodic-piston note): setforce zeroes x,y (no lateral
@@ -558,10 +588,22 @@ uncompute displace_poly
 compute displace_poly polymer displace/atom
 variable uz_poly atom c_displace_poly[3]
 
+# ----- Hand off the setup trajectory to the production trajectory -----
+# Undump traj_setup HERE (rather than after Phase 0.5) so it recorded Phase 0.5 +
+# the reposition + the WCA overlap relax, then stop it exactly as the production
+# dump is created below.  The two dumps are strictly sequential (traj_setup ends
+# before traj_flow begins), so they are never simultaneously active — this avoids
+# the overlapping-dump problem entirely.
+if "${cont} == 0" then "undump traj_setup"
+
 # ----- Production Trajectory (sparse sampling) -----
 dump traj_flow gel_system custom ${dump_freq_prod} &
     traj_files/gel_flow_${dataname}_${interaction}_${nsteps}.lammpstrj &
     id type mol x y z
+# first yes: always write a frame at the production start step so, even if
+# production ever dies immediately, there is a snapshot of the exact starting
+# configuration (the setup/reposition frames now live in traj_setup instead).
+dump_modify traj_flow first yes
 
 
 # ==========================================================================
