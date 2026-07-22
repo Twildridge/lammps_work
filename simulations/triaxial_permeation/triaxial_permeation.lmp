@@ -19,7 +19,7 @@
 #                piston-solvent WCA OFF so the piston can be repositioned later).
 #   - Phase 0.5: anisotropic Langevin + NPH re-pressurises the box to P_target
 #                (the fixed-volume read relaxes below P_target otherwise).
-#   - Phase 2:   (1) REPOSITION the piston to the 45/55 free-solvent split
+#   - Phase 2:   (1) REPOSITION the piston to the 35/65 free-solvent split
 #                (piston-solvent still OFF -> slides freely); (2) turn piston-
 #                solvent WCA ON so it pushes solvent as a plug; (3) constant-
 #                PRESSURE (force-controlled) production drive.  Records feed/
@@ -490,12 +490,12 @@ fix_modify nvt_prod temp myTemp
 # ==========================================================================
 # slab_with_support equilibration leaves the piston floating slightly HIGH.
 # First reposition it (piston-solvent still OFF -> slides freely through the
-# solvent) until the FREE solvent is split ~45% on the support/permeate side and
-# ~55% on the gel/feed side (piston "slightly before halfway", gel side larger).
+# solvent) until the FREE solvent is split ~35% on the support/permeate side and
+# ~65% on the gel/feed side (piston "before halfway", gel side larger).
 # THEN switch piston-solvent WCA ON and run a constant-PRESSURE production drive.
 
 # ---- parameters ----
-variable feed_frac_target  equal 0.55    # target fraction of FREE solvent on the gel (feed) side
+variable feed_frac_target  equal 0.65    # target fraction of FREE solvent on the gel (feed) side (35% permeate / 65% feed)
 variable v_reposition      equal 0.01    # sigma/tau, controlled descent speed while repositioning
 variable nsteps_reposition equal 400000  # cap; halt fires when the split is reached
 variable P_piston          equal 0.1     # applied piston PRESSURE for production (= 0.1*M, small deformation)
@@ -566,18 +566,50 @@ fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
 fix_modify nvt_prod temp myTemp
 print ">>> WCA overlap relax done: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
 
-# ---- (3) constant-PRESSURE (force-controlled) production piston ----
+# ---- (3) piston force RAMP -> constant-PRESSURE production ----
 # Periodic full-box piston cannot use fix rigid for a force load (see the
 # slab_with_support periodic-piston note): setforce zeroes x,y (no lateral
 # drift), aveforce averages the z-force across piston atoms (so they translate
 # together as a rigid slab in z) and ADDS the per-atom applied load, then nve
-# integrates.  The load tracks lx*ly so the applied PRESSURE P_piston is held
-# constant (v_f_load_atom is re-evaluated every step).
-variable f_load_atom equal -v_P_piston*lx*ly/count(piston)
+# integrates.
+#
+# Rather than applying the full load in a single step, the net downward force on
+# the piston is RAMPED from 0 up to F_max in n_ramp (= 5) equal increments,
+# holding each stage for ramp_steps.  This eases the gel into the
+# load gently (complementary to the Phase 2.5 overlap relax).  F_max is snapshot
+# to the current box (= P_piston*lx*ly, the same max force the constant-pressure
+# drive would apply now).  After the ramp reaches F_max the aveforce target is
+# switched to the box-tracking f_load_atom so PRODUCTION holds constant PRESSURE.
 unfix rigid_piston
 fix setforce_piston piston setforce 0.0 0.0 NULL
-fix aveforce_piston piston aveforce NULL NULL v_f_load_atom
 fix nve_piston      piston nve
+
+variable n_ramp      equal 5                       # number of equal force increments (0 -> F_max)
+variable F_max_ramp  equal $(v_P_piston*lx*ly)     # constant snapshot of the target net force
+variable ramp_dF     equal v_F_max_ramp/v_n_ramp   # per-stage net-force increment (= F_max/5)
+variable ramp_steps  equal 1000                    # steps held at each increment (tune as needed)
+
+# Staged net force = stage*(F_max/n_ramp); stage n_ramp lands exactly on F_max.
+# aveforce re-evaluates v_f_ramp_atom every step, so bumping the loop counter
+# (next ramp_stage) is all that changes the applied force between stages.
+variable F_stage     equal v_ramp_stage*v_ramp_dF
+variable f_ramp_atom equal -v_F_stage/count(piston)
+fix aveforce_piston piston aveforce NULL NULL v_f_ramp_atom
+
+print ">>> Piston force ramp: 0 -> F_max=$(v_F_max_ramp) in ${n_ramp} equal stages of $(v_ramp_dF)  (${ramp_steps} steps each)"
+variable ramp_stage loop ${n_ramp}
+label piston_ramp_loop
+print ">>> Piston ramp stage ${ramp_stage}/${n_ramp}: net F=$(v_F_stage)"
+run ${ramp_steps}
+next ramp_stage
+jump SELF piston_ramp_loop
+
+# ---- constant-PRESSURE production drive (box-tracking, held to the end) ----
+# The load tracks lx*ly so the applied PRESSURE P_piston is held constant
+# (v_f_load_atom is re-evaluated every step).
+variable f_load_atom equal -v_P_piston*lx*ly/count(piston)
+unfix aveforce_piston
+fix aveforce_piston piston aveforce NULL NULL v_f_load_atom
 print ">>> Production: force-controlled piston at P_piston=${P_piston}  (net F=$(-v_P_piston*lx*ly))"
 
 # ----- Reset displacement reference to production onset (u_z(z,0)=0) -----
