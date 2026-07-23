@@ -138,6 +138,17 @@ variable dump_freq_setup equal 10000      # frequent dumps during Phase 1
 variable dump_freq_prod  equal floor(${nsteps}/20)   # ~20 production frames
 variable volume_freq     equal 5000 # 1000 # 5000
 
+# Finer cadence for the STRAIN / POSITION diagnostics (strain_zz, piston &
+# polymer positions, gel dimensions).  These are tiny per-line prints, so a
+# high rate is cheap and lets the piston-motion (drive) phase be resolved —
+# especially useful for pinning the exact step where gel_strain crosses the
+# target and for the strain-diagnostic plot in triaxial_compression.ipynb.
+variable strain_freq     equal 1000
+# Drive-phase all-atom trajectory cadence: captures the piston pushing the slab
+# through the solvent onto the support.  The drive is short, so 2000 gives
+# plenty of frames without a large file.
+variable drive_dump_freq equal 2000
+
 # Cavity Widom dump cadence — all-atom frames for cavity_widom.py post-processing.
 # More frames → lower noise in time-averaged μ_ex(z): noise ∝ 1/√num_widom_frames.
 # Dump starts after the ε=0 reference recording block (production phase only).
@@ -997,41 +1008,52 @@ print "########################################################"
 # fix print (and one GLOBAL ave/time on c_piston_fz) -- none use a compute
 # chunk/atom, so they carry NO lock and may be unfixed at any step.  They record
 # the piston descent + force rise AND the subsequent relaxation during the hold.
-fix out_piston_pos all print ${volume_freq} "$(step) $(c_piston_com[3])" &
+fix out_piston_pos all print ${strain_freq} "$(step) $(c_piston_com[3])" &
     file output_files/piston_data/piston_position_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
-fix out_piston_vel all print ${volume_freq} "$(step) $(c_piston_vz)" &
+fix out_piston_vel all print ${strain_freq} "$(step) $(c_piston_vz)" &
     file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
 fix out_piston_force all print ${volume_freq} '$(step) $(c_piston_fz)' &
     file output_files/piston_data/piston_force_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
 fix out_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
     c_piston_fz ave one &
     file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
-fix out_strain_zz all print ${volume_freq} &
+fix out_strain_zz all print ${strain_freq} &
     "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
     file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
 fix out_gel_strain_thermo all print ${thermo_freq} &
     ">>> gel_strain = $(v_gel_strain_pct:%.2f) %" screen yes &
     file output_files/stress_data/gel_strain_log_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
-fix out_gel_vol_bb all print ${volume_freq} "$(step) $(v_gel_vol_bb)" &
+fix out_gel_vol_bb all print ${strain_freq} "$(step) $(v_gel_vol_bb)" &
     file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
-fix out_gel_dims_bb all print ${volume_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
+fix out_gel_dims_bb all print ${strain_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
     file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
-fix out_gel_vol_rg all print ${volume_freq} "$(step) $(v_gel_vol_rg)" &
+fix out_gel_vol_rg all print ${strain_freq} "$(step) $(v_gel_vol_rg)" &
     file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
-fix out_gel_dims_rg all print ${volume_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+fix out_gel_dims_rg all print ${strain_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
     file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
-fix out_box_dims all print ${volume_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
+fix out_box_dims all print ${strain_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
     file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
-fix out_polymer_com all print ${volume_freq} &
+fix out_polymer_com all print ${strain_freq} &
     "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
     file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
 
 # ----- PHASE 2a: drive the piston until gel_strain >= this cumulative target -----
 velocity piston set 0.0 0.0 -${v_piston_prod}
-fix halt_compress all halt ${volume_freq} v_gel_strain >= ${compressions} error continue
+# halt checked on the fine strain cadence so the piston stops as close as
+# possible to exactly ${compressions} (less overshoot than a coarse check).
+fix halt_compress all halt ${strain_freq} v_gel_strain >= ${compressions} error continue
+# Drive-phase trajectory: captures the PISTON MOTION — the slab being pushed
+# through the solvent and settling onto the support — which no other dump
+# covers (traj_flow starts only in the hold, after the piston freezes).  The
+# fix halt ends this run at the target, so the LAST frame is right before the
+# piston stops; undumped immediately after the drive.
+dump traj_drive gel_system custom ${drive_dump_freq} &
+    traj_files/gel_drive_${dataname}_${interaction}_${nsteps}_c${compressions}.lammpstrj &
+    id type mol x y z
 print ">>> [level ${compressions}] driving piston (cap ${nsteps_comp} steps)..."
 run ${nsteps_comp}
 unfix halt_compress
+undump traj_drive
 print ">>> [level ${compressions}] drive done: gel_strain = $(v_gel_strain:%.4f)  (target ${compressions})  step=$(step)"
 
 # ----- Freeze the piston at this strain for the production hold -----
