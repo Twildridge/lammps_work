@@ -75,7 +75,8 @@ TYPE=""             # Options: stress, volume, stressvol, or leave empty (just t
 # it unset and silently fall back to a single level.  Export a SCALAR string.
 # -----------------------------------------------------------------------
 
-COMPRESSIONS_LIST=(0.10 0.20 0.30 0.40)
+# example: COMPRESSIONS_LIST=(0.10 0.20 0.30 0.40)
+COMPRESSIONS_LIST=(0.10)
 export COMPRESSIONS="${COMPRESSIONS_LIST[*]}"   # space-separated scalar for run_lammps.sh / LAMMPS -var
 
 # Navigate to the scripts directory
