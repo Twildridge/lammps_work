@@ -28,7 +28,17 @@ module load openmpi5
 FOLDER="compress_slab"
 DATANAME="isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600001_with_six_plates"
 INTERACTION="1.0_1.0"
-NSTEPS=70000
+# NSTEPS = length of EACH equilibration/drain hold (Stage 0 reference + 5 stages
+# = 6 holds), not total production steps. Raised 70000 -> 280000 because the
+# volumetric strain ladder (eps_vol 0.015..0.120) produces ~4x smaller stress
+# signals than the old 0.068..0.279 ladder; 4x the hold length halves the
+# statistical noise on each point (2800 samples/hold vs 700).
+# Estimated total: ~2.27M steps (200k equil + 260k ramps + 6 x ~281k holds),
+# ~2.8x the previous configuration. CHECK THIS FITS THE 6h WALLTIME above:
+# grep the "Performance:" / "Loop time" line from a previous log for steps/s.
+# If it doesn't fit, raise --time or use OLDSTEPS to continue, do NOT coarsen
+# the strain ladder (that puts you back outside the linear-elastic regime).
+NSTEPS=280000
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 

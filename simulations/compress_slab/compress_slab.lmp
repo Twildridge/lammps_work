@@ -25,11 +25,16 @@
 #   0.5 Langevin+NPH iso (nsteps_npt) — find equilibrium box volume at P = P_target;
 #       plates released to nve+setforce so they scale isotropically with the box
 #   1b. NVT (nsteps_equil) — relax internal stresses at NPH-final volume, plates frozen
-#   2/3 STAGED (slope method, 5 stages) — for each of 5 cumulative strain targets
-#       (0.02, 0.04, 0.06, 0.08, 0.10 = target_strain_comp):
+#   0/5 ε_vol = 0 REFERENCE — plates frozen, NVT hold of the same length and
+#       averaging as a stage hold, writing stress_tensor_{polymer,solvent}_ref_*.
+#       Gives a MEASURED P'_net at zero strain instead of the assumed zero that
+#       K_single would otherwise use. (Ported from slab_with_flow's ref_ block.)
+#   2/3 STAGED (slope method, 5 stages) — for each of 5 cumulative VOLUMETRIC
+#       strain targets (compress_strain_vol = 0.015, 0.030, 0.045, 0.060, 0.120):
 #         (a) drive all 6 plates inward (gel on Langevin+NVE) until
-#             compress_strain_z reaches that stage's target
-#         (b) freeze all 6 plates, hold NVT for nsteps steps (per-stage
+#             compress_strain_vol reaches that stage's target (checked every
+#             halt_freq steps — see the halt_freq note in PARAMETERS)
+#         (b) freeze all 6 plates, hold NVT for ~nsteps steps (per-stage
 #             equilibration length — see NOTE below) so the solvent can
 #             redistribute/drain before anything is measured
 #         (c) average the equilibrated stress tensor over that hold
@@ -38,6 +43,10 @@
 #       analysis can read one continuous file per quantity and fit ΔP'_net
 #       vs ε_vol across the 5 equilibrated points (the slope = K), rather
 #       than trusting a single point.
+#       Stages 1-4 lie inside the estimated linear-elastic window; stage 5 is
+#       deliberately ~2x past it, so K's strain dependence shows up as that
+#       point sitting above the 4-point fit line. See STAGE TARGETS in
+#       PARAMETERS for the linearity table.
 #
 #   NOTE on drainage / hold length: nsteps (below) now means the length of
 #   EACH of the 5 equilibration holds, not one single Phase-3 run. No
@@ -99,6 +108,9 @@
 #   stress_data/plate_force_*.dat              step  {top,bot,front,back,right,left}_{fx,fy,fz}
 #                                               (net pairwise force on each plate; continuous from the
 #                                                point the six plates are individually resolved onward)
+#   stress_data/stress_tensor_{polymer,solvent}_ref_*.dat
+#                                               ε_vol = 0 baseline (Stage 0), same columns/averaging
+#                                               as the staged files below; own file, not appended
 #   stress_data/stress_tensor_polymer_*.dat    6-component polymer stress, EQUILIBRATED-HOLD windows only
 #                                               (5 stages appended into one file — this is the K data)
 #   stress_data/stress_tensor_solvent_*.dat    6-component solvent stress, EQUILIBRATED-HOLD windows only
@@ -120,17 +132,37 @@ variable temp_target    equal 1.0
 variable P_target       equal 1.5
 variable timestep_prod  equal 0.005
 
-# Linear compressive strain target per axis (keep <= 0.10 for linear elastic regime)
-variable target_strain_comp equal 0.10
+# ── STAGE TARGETS: VOLUMETRIC strain (NOT per-axis) ───────────────────────────
+# The ladder is expressed in compress_strain_vol, because that is the strain K
+# is defined against (K = dP'_net/dε_vol) and the quantity bulk_modulus_
+# analysis.ipynb fits. Compression here is ISOTROPIC (all six plates move, all
+# three axes strain equally), so ε_vol = 1-(1-ε_axis)^3 ≈ 3·ε_axis — a per-axis
+# ladder is ~3x deeper than it looks, which is how the previous 0.02..0.10
+# per-axis ladder ended up spanning ε_vol = 0.068..0.279.
+#
+# Linear-elastic window: for a swollen network in athermal solvent Π ~ φ^(9/4)
+# with φ = φ0/(1-ε_vol), so P'_net(ε_vol) deviates from a straight line by
+#   ε_vol :  0.015   0.030   0.045   0.060   0.120
+#   dev   :   2.5%    5.1%    7.8%   10.6%   23.4%
+# Stages 1-4 sit inside that window and define the linear-elastic K; stage 5 is
+# deliberately ~2x past it so K(ε) strain-stiffening is visible as a point
+# lying above the 4-point fit line. Per-axis equivalents (for reference only):
+#   0.0050  0.0101  0.0152  0.0204  0.0417
+# NOTE: this window is a SCALING ESTIMATE, not a measurement. The 5 points
+# measure it directly — if stages 1-4 are collinear and stage 5 sits above the
+# line, that confirms the limit lies between ε_vol = 0.06 and 0.12.
+variable stage1_target equal 0.015
+variable stage2_target equal 0.030
+variable stage3_target equal 0.045
+variable stage4_target equal 0.060
+variable stage5_target equal 0.120
 
-# Staged (slope-method) strain targets — 5 evenly spaced CUMULATIVE
-# compress_strain_z halt thresholds from 0 to target_strain_comp (each is an
-# absolute strain level, not a per-stage increment).
-variable stage1_target equal 0.02
-variable stage2_target equal 0.04
-variable stage3_target equal 0.06
-variable stage4_target equal 0.08
-variable stage5_target equal ${target_strain_comp}
+# Deepest volumetric strain, and its per-axis equivalent.
+# target_strain_comp is used ONLY to set the plate ramp velocity below; the
+# halt conditions all key off compress_strain_vol.
+#   ε_axis = 1 - (1-ε_vol)^(1/3)
+variable target_strain_vol  equal ${stage5_target}
+variable target_strain_comp equal 1.0-(1.0-${target_strain_vol})^(1.0/3.0)
 
 # Phase lengths  (unchanged values — equilibration dynamics method changed below)
 variable nsteps_phase0        equal 50000    # Phase 0:   NVT settle at fixed box (new; = old nsteps_npt)
@@ -162,6 +194,15 @@ variable dump_freq_setup equal 25000
 variable dump_freq_prod  equal 25000
 variable stress_freq     equal 10000
 
+# fix halt check interval — DECOUPLED from stress_freq on purpose.
+# fix halt only tests its condition every halt_freq steps, so the ramp always
+# overshoots its target by up to one check interval. At the old setting
+# (halt every stress_freq = 10000 steps) one interval advanced ε_vol by
+# ~0.0115 — LARGER than this ladder's entire first rung (0.015), so stage 1
+# would blow straight past its target. At 500 steps the granularity is
+# ~0.00024 in ε_vol, i.e. ~1.6% of the first rung.
+variable halt_freq       equal 500
+
 # Time averaging (stress) — adaptive
 variable num_stress_curves equal 10
 variable nevery_target     equal 100
@@ -177,7 +218,8 @@ variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 
 print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
-print ">>> Compression: ε_target=${target_strain_comp}  nsteps_compress=${nsteps_compress}  (plate-driven, isotropic)"
+print ">>> Compression (plate-driven, isotropic): ε_vol ladder = ${stage1_target} ${stage2_target} ${stage3_target} ${stage4_target} ${stage5_target}"
+print ">>> Deepest ε_vol=${target_strain_vol} -> ε_axis=${target_strain_comp}  halt_freq=${halt_freq}  nsteps_compress=${nsteps_compress}"
 
 # Spatial binning
 variable binWidth    equal 2.0
@@ -623,7 +665,7 @@ variable vcompress_y equal $(v_target_strain_comp * v_gap_y_0 / (2.0 * v_nsteps_
 variable vcompress_x equal $(v_target_strain_comp * v_gap_x_0 / (2.0 * v_nsteps_compress_base * v_timestep_prod) * 1.1)
 
 print ">>> vcompress_z = ${vcompress_z}  vcompress_y = ${vcompress_y}  vcompress_x = ${vcompress_x}"
-print ">>> (1.1× base speed; halt fires at compress_strain_z = ${target_strain_comp})"
+print ">>> (1.1× base speed; halt fires on compress_strain_vol, checked every ${halt_freq} steps)"
 
 
 # ==========================================================================
@@ -772,9 +814,78 @@ fix out_compress_strain all print ${stress_freq} &
     file output_files/stress_data/compress_strain_${dataname}_${interaction}_${nsteps}.dat screen no
 
 
+# ==========================================================================
+#          STAGE 0: ε_vol = 0 REFERENCE (undeformed baseline)
+# ==========================================================================
+# Ported from slab_with_flow.lmp's ref_ fix block. Records the bulk-region
+# polymer and solvent stresses at ZERO strain, over the same poly_bulk/
+# solv_bulk groups, the same bulk_vol normalisation and the same averaging
+# window length as the 5 stage holds — so P'_net(ε_vol=0) is measured, not
+# assumed.
+#
+# WHY: bulk_modulus_analysis.ipynb's K_single = P'_net(ε)/ε carries an
+# "implicit zero at the pre-compression state". For a swollen, pre-stressed
+# network the at-rest Terzaghi effective stress is NOT generally zero, so that
+# assumption biases K_single by an unknown amount. The 4-point linear fit is
+# reference-independent and doesn't need this, but with the tighter ε_vol
+# ladder the signals are small enough that an anchored zero is worth having —
+# it also gives the fit a 6th point at the origin and lets you check the
+# fitted intercept against a measured value.
+#
+# Plates are frozen and the gel is on NVT — identical dynamics to a stage
+# hold, just with no preceding ramp. Uses `file` (not `append`) so the ref
+# lands in its own *_ref_*.dat, leaving the 5-stage files untouched.
+#
+# Only fix ave/time here (no ave/chunk), so no compute chunk/atom lock is
+# taken; the run is still epoch-aligned so the final averaging window
+# actually completes and writes its row.
+
+print "========================================"
+print "Stage 0/5: ε_vol = 0 reference (undeformed baseline)"
+print "========================================"
+
+fix freeze_top   plate_top   move linear 0 0 0
+fix freeze_bot   plate_bot   move linear 0 0 0
+fix freeze_front plate_front move linear 0 0 0
+fix freeze_back  plate_back  move linear 0 0 0
+fix freeze_right plate_right move linear 0 0 0
+fix freeze_left  plate_left  move linear 0 0 0
+fix nvt_ref      gel         nvt  temp ${temp_target} ${temp_target} 1.0
+fix mom_ref      gel         momentum 100 linear 1 1 1 angular
+
+fix ref_avg_stress_polymer all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz &
+    v_stress_p_xy v_stress_p_zx v_stress_p_yz &
+    file output_files/stress_data/stress_tensor_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
+
+fix ref_avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_stress_s_xx v_stress_s_yy v_stress_s_zz &
+    v_stress_s_xy v_stress_s_zx v_stress_s_yz &
+    file output_files/stress_data/stress_tensor_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
+
+# Epoch-aligned (same formula as the stage holds — see NOTE at top of file).
+variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print ">>> Stage 0 (ref) aligned: ${hold_steps} steps (requested ${nsteps}, nfreq_stress=${nfreq_stress})"
+
+run ${hold_steps}
+
+unfix ref_avg_stress_solvent
+unfix ref_avg_stress_polymer
+unfix mom_ref
+unfix nvt_ref
+unfix freeze_left
+unfix freeze_right
+unfix freeze_back
+unfix freeze_front
+unfix freeze_bot
+unfix freeze_top
+
+print ">>> Stage 0 (ref) done: compress_strain_vol=$(v_compress_strain_vol) (should be ~0) stress_p_zz=$(v_stress_p_zz) stress_s_zz=$(v_stress_s_zz)"
+
+
 # ---------------------------------------------------------------- Stage 1 --
 print "========================================"
-print "Stage 1/5: compress to compress_strain_z = ${stage1_target}"
+print "Stage 1/5: compress to compress_strain_vol = ${stage1_target}  (ε_axis ~ 0.005)"
 print "========================================"
 
 fix drive_top   plate_top   move linear  0             0            -${vcompress_z}
@@ -789,7 +900,7 @@ fix lang_compress gel     langevin ${temp_target} ${temp_target} ${lang_T_damp} 
 fix mom_lin_c     gel     momentum 100 linear 1 1 1
 fix mom_rot_c     gel     momentum 100 angular
 
-fix halt_compress all halt ${stress_freq} v_compress_strain_z >= ${stage1_target} error continue
+fix halt_compress all halt ${halt_freq} v_compress_strain_vol >= ${stage1_target} error continue
 
 run ${nsteps_compress}
 
@@ -869,7 +980,7 @@ print ">>> Stage 1 hold done: compress_strain_vol=$(v_compress_strain_vol) stres
 
 # ---------------------------------------------------------------- Stage 2 --
 print "========================================"
-print "Stage 2/5: compress to compress_strain_z = ${stage2_target}"
+print "Stage 2/5: compress to compress_strain_vol = ${stage2_target}  (ε_axis ~ 0.0101)"
 print "========================================"
 
 fix drive_top   plate_top   move linear  0             0            -${vcompress_z}
@@ -884,7 +995,7 @@ fix lang_compress gel     langevin ${temp_target} ${temp_target} ${lang_T_damp} 
 fix mom_lin_c     gel     momentum 100 linear 1 1 1
 fix mom_rot_c     gel     momentum 100 angular
 
-fix halt_compress all halt ${stress_freq} v_compress_strain_z >= ${stage2_target} error continue
+fix halt_compress all halt ${halt_freq} v_compress_strain_vol >= ${stage2_target} error continue
 
 run ${nsteps_compress}
 
@@ -958,7 +1069,7 @@ print ">>> Stage 2 hold done: compress_strain_vol=$(v_compress_strain_vol) stres
 
 # ---------------------------------------------------------------- Stage 3 --
 print "========================================"
-print "Stage 3/5: compress to compress_strain_z = ${stage3_target}"
+print "Stage 3/5: compress to compress_strain_vol = ${stage3_target}  (ε_axis ~ 0.0152)"
 print "========================================"
 
 fix drive_top   plate_top   move linear  0             0            -${vcompress_z}
@@ -973,7 +1084,7 @@ fix lang_compress gel     langevin ${temp_target} ${temp_target} ${lang_T_damp} 
 fix mom_lin_c     gel     momentum 100 linear 1 1 1
 fix mom_rot_c     gel     momentum 100 angular
 
-fix halt_compress all halt ${stress_freq} v_compress_strain_z >= ${stage3_target} error continue
+fix halt_compress all halt ${halt_freq} v_compress_strain_vol >= ${stage3_target} error continue
 
 run ${nsteps_compress}
 
@@ -1047,7 +1158,7 @@ print ">>> Stage 3 hold done: compress_strain_vol=$(v_compress_strain_vol) stres
 
 # ---------------------------------------------------------------- Stage 4 --
 print "========================================"
-print "Stage 4/5: compress to compress_strain_z = ${stage4_target}"
+print "Stage 4/5: compress to compress_strain_vol = ${stage4_target}  (ε_axis ~ 0.0204)"
 print "========================================"
 
 fix drive_top   plate_top   move linear  0             0            -${vcompress_z}
@@ -1062,7 +1173,7 @@ fix lang_compress gel     langevin ${temp_target} ${temp_target} ${lang_T_damp} 
 fix mom_lin_c     gel     momentum 100 linear 1 1 1
 fix mom_rot_c     gel     momentum 100 angular
 
-fix halt_compress all halt ${stress_freq} v_compress_strain_z >= ${stage4_target} error continue
+fix halt_compress all halt ${halt_freq} v_compress_strain_vol >= ${stage4_target} error continue
 
 run ${nsteps_compress}
 
@@ -1139,7 +1250,7 @@ print ">>> Stage 4 hold done: compress_strain_vol=$(v_compress_strain_vol) stres
 # (not unfrozen) — same end state as the original single-shot script.
 
 print "========================================"
-print "Stage 5/5: compress to compress_strain_z = ${stage5_target}"
+print "Stage 5/5: compress to compress_strain_vol = ${stage5_target}  (ε_axis ~ 0.0417)"
 print "========================================"
 
 fix drive_top   plate_top   move linear  0             0            -${vcompress_z}
@@ -1154,7 +1265,7 @@ fix lang_compress gel     langevin ${temp_target} ${temp_target} ${lang_T_damp} 
 fix mom_lin_c     gel     momentum 100 linear 1 1 1
 fix mom_rot_c     gel     momentum 100 angular
 
-fix halt_compress all halt ${stress_freq} v_compress_strain_z >= ${stage5_target} error continue
+fix halt_compress all halt ${halt_freq} v_compress_strain_vol >= ${stage5_target} error continue
 
 run ${nsteps_compress}
 
