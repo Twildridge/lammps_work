@@ -667,7 +667,8 @@ variable compress_strain_vol equal 1.0 - (1.0-v_compress_strain_x)*(1.0-v_compre
 
 # Plate velocities: 1.1× the speed that reaches target_strain in nsteps_compress_base steps.
 # Each plate moves inward by (target_strain * gap_0 / 2) over nsteps_compress_base steps.
-# The run is halted by fix halt, so nsteps_compress is just a 2× safety buffer.
+# The run is halted by fix halt, so nsteps_compress is just a 3× safety buffer
+# (30000 cap vs ~10000 actual per stage ramp).
 variable vcompress_z equal $(v_target_strain_comp * v_gap_z_0 / (2.0 * v_nsteps_compress_base * v_timestep_prod) * 1.1)
 variable vcompress_y equal $(v_target_strain_comp * v_gap_y_0 / (2.0 * v_nsteps_compress_base * v_timestep_prod) * 1.1)
 variable vcompress_x equal $(v_target_strain_comp * v_gap_x_0 / (2.0 * v_nsteps_compress_base * v_timestep_prod) * 1.1)
