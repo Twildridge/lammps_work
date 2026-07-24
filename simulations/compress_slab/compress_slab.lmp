@@ -242,6 +242,22 @@ pair_coeff 1 4 1.0 ${sigma} 1.122             # polymer-plate WCA
 pair_coeff 2 4 1.0 ${sigma} 1.122             # crosslinker-plate WCA
 pair_coeff 3 4 0.0 ${sigma} 0.0               # solvent-plate DISABLED (solvent flows through)
 
+# Type 5: orphan atoms left over from the pre-plate equilibration file (a
+# single-axis "piston" support that add_more_plates_to_gel.py never strips
+# out — it only deletes polymer near the boundary and passes every other
+# atom type through unchanged). Not a real plate in this script's design.
+# Without these lines it silently inherits the wildcard `pair_coeff * *`
+# (full-strength WCA against solvent), which breaks the "plates transparent
+# to solvent" design elsewhere. Mirror the type-4 treatment so it behaves
+# the same way (frozen wall vs polymer, invisible to solvent) instead.
+neigh_modify exclude type 4 5
+neigh_modify exclude type 5 5
+pair_coeff 5 5 0.0 ${sigma} 0.0               # orphan-orphan DISABLED
+pair_coeff 4 5 0.0 ${sigma} 0.0               # orphan-plate DISABLED
+pair_coeff 1 5 1.0 ${sigma} 1.122             # polymer-orphan WCA
+pair_coeff 2 5 1.0 ${sigma} 1.122             # crosslinker-orphan WCA
+pair_coeff 3 5 0.0 ${sigma} 0.0               # solvent-orphan DISABLED (transparent)
+
 # Bond coefficients
 bond_coeff 1 30.0 1.5 1.0 1.0   # polymer-polymer FENE (Kremer-Grest)
 
@@ -371,15 +387,25 @@ fix out_bulk_modulus all print ${stress_freq} &
     title "# step sigP_xx sigP_yy sigP_zz sigP_xy sigP_zx sigP_yz Pi_osm V_gel_rg lx_rg ly_rg lz_rg" &
     file output_files/stress_data/bulk_modulus_plot_data_${dataname}_${interaction}_${nsteps}.dat screen no
 
-# --- Phase 0: NVT at fixed box volume ---
+# --- Phase 0: Langevin+NVE at fixed box volume ---
+# Was plain Nosé-Hoover `fix nvt`. Swapped for the same reason Phase 0.5's
+# barostat thermostat was swapped (see note above Phase 0.5): FENE bonds can
+# inject kinetic energy faster than an NH chain can remove it, and this phase
+# immediately follows `velocity gel create` dumping a fresh Gaussian velocity
+# distribution onto a previously cold, minimized, dense (rho04) system —
+# exactly the situation where NH falls behind. Langevin's per-atom friction
+# does not have that lag. Box is still fixed here (no barostat), so nothing
+# else about Phase 0 changes.
 fix freeze_plates_0 plate   move linear 0 0 0
-fix nvt_phase0      gel     nvt temp ${temp_target} ${temp_target} 1.0
+fix nve_phase0      gel     nve
+fix lang_phase0     gel     langevin ${temp_target} ${temp_target} ${lang_T_damp} 90211
 fix mom_phase0      gel     momentum 100 linear 1 1 1
 
 run ${nsteps_phase0}
 
 unfix mom_phase0
-unfix nvt_phase0
+unfix lang_phase0
+unfix nve_phase0
 unfix freeze_plates_0
 
 print ">>> Post-Phase-0 NVT  T = $(c_gel_temp)  P = $(press)  c_gel_press = $(c_gel_press)"
