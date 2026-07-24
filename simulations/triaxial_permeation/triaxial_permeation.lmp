@@ -461,6 +461,142 @@ variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
 
 
 # ==========================================================================
+#     OUTPUT: GEL STRAIN + Rg THICKNESS  (started PRE-DRIVE for a baseline)
+# ==========================================================================
+# Defined HERE — before the Phase 1.5 reference window and the Phase 2 piston
+# reposition — so gel thickness / strain is recorded from the equilibrated,
+# pre-motion state.  The strain_zz and gel_dimensions_rg files therefore open
+# with a flat eps~=0 baseline (before the piston moves or loads), then continue
+# as ONE unbroken series through the reference window and production.  These
+# replace the (now removed) production-phase definitions of the same two fixes.
+fix out_strain_zz all print ${volume_freq} &
+    "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
+    file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}.dat screen no
+fix out_gel_dims_rg all print ${volume_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+
+
+# ==========================================================================
+#  PHASE 1.5: PRE-DRIVE REFERENCE-STATE (zero-flux baseline) RECORDING
+# ==========================================================================
+# Permeation analog of triaxial_compression.lmp's epsilon=0 reference window.
+# Records the equilibrated gel at P_target BEFORE the piston repositions or
+# loads it — piston floating on solvent, no applied pressure gradient, no flow.
+# All observables are averaged into "_ref_" files so triaxial_permeation.ipynb
+# can overlay a clean baseline on the production evolutions.
+#
+# SELF-CONTAINED by design: it declares its OWN "_r" compute IDs and its own
+# thermostat (nvt_ref), records, then tears everything down.  It therefore never
+# shares a chunk/atom compute with the production stress fixes (defined far
+# below), so there is no cross-phase chunk/atom lock to poison.  The run length
+# is still padded to a ref_nfreq epoch boundary so each ref fix ave/time /
+# ave/chunk releases its lock cleanly on end_of_step before the unfix.
+# Skipped for cont=1 (the _ref files already exist from the original run).
+if "${cont} == 1" then "jump SELF label_after_ref_rec"
+
+# reference averaging cadence (same idiom as triaxial_compression.lmp Phase 1.5)
+variable ref_avg_steps equal 150000     # total reference window (padded up to epoch)
+variable ref_nevery    equal 100         # sample cadence within a ref snapshot
+variable ref_nfreq     equal 10000       # one ref snapshot every ref_nfreq steps
+variable ref_nrepeat   equal v_ref_nfreq/v_ref_nevery   # = 100 samples / snapshot
+#   -> ~15 reference snapshots, each averaging 100 decorrelated samples (=> CIs)
+
+# ----- reference chunk/atom (one per reduce/chunk user; full-box z, binWidth) -----
+compute chunk_zr_poly_zz polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_zr_poly_xx polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_zr_poly_yy polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_zr_solv_zz solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_zr_solv_xx solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_zr_solv_yy solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_zr_dens    solvent chunk/atom bin/1d z lower ${binWidth}
+
+# ----- reference per-atom component stresses (virial only; sign matches production) -----
+compute stress_poly_r polymer stress/atom NULL
+compute stress_solv_r solvent stress/atom NULL
+variable r_sig_p_zz atom -c_stress_poly_r[3]/(lx*ly*${binWidth})
+variable r_sig_s_zz atom -c_stress_solv_r[3]/(lx*ly*${binWidth})
+variable r_sig_p_xx atom -c_stress_poly_r[1]/(lx*ly*${binWidth})
+variable r_sig_s_xx atom -c_stress_solv_r[1]/(lx*ly*${binWidth})
+variable r_sig_p_yy atom -c_stress_poly_r[2]/(lx*ly*${binWidth})
+variable r_sig_s_yy atom -c_stress_solv_r[2]/(lx*ly*${binWidth})
+
+compute sigmazz_poly_r polymer reduce/chunk chunk_zr_poly_zz sum v_r_sig_p_zz
+compute sigmazz_solv_r solvent reduce/chunk chunk_zr_solv_zz sum v_r_sig_s_zz
+compute sigmaxx_poly_r polymer reduce/chunk chunk_zr_poly_xx sum v_r_sig_p_xx
+compute sigmaxx_solv_r solvent reduce/chunk chunk_zr_solv_xx sum v_r_sig_s_xx
+compute sigmayy_poly_r polymer reduce/chunk chunk_zr_poly_yy sum v_r_sig_p_yy
+compute sigmayy_solv_r solvent reduce/chunk chunk_zr_solv_yy sum v_r_sig_s_yy
+
+# ----- reference pair/local (solvent) for the ss baseline (post-processed) -----
+compute pl_local_r  solvent pair/local  fx fy fz
+compute ids_local_r solvent property/local patom1 patom2 ptype1 ptype2
+
+print '========================================'
+print 'Phase 1.5: zero-flux reference recording (${ref_avg_steps} steps, ref_nfreq=${ref_nfreq})'
+print '========================================'
+
+# Thermostat the mobile group for the reference window (none is active between
+# the Phase 0.5 teardown and the Phase 2 setup).  Piston keeps its rigid z-free
+# float (rigid_piston) and support stays frozen (rigid_support) => equilibrium.
+fix nvt_ref mobile nvt temp ${temp_target} ${temp_target} 1.0
+
+# ----- coarse partial-stress component references (poly + solv, zz/xx/yy) -----
+fix ref_sigmazz_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly_r mode vector file output_files/stress_data/sigmazz_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_sigmazz_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv_r mode vector file output_files/stress_data/sigmazz_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_sigmaxx_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmaxx_poly_r mode vector file output_files/stress_data/sigmaxx_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_sigmaxx_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmaxx_solv_r mode vector file output_files/stress_data/sigmaxx_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_sigmayy_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmayy_poly_r mode vector file output_files/stress_data/sigmayy_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_sigmayy_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmayy_solv_r mode vector file output_files/stress_data/sigmayy_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
+
+# ----- solvent number-density reference (coarse; matches production format) -----
+fix ref_dens all ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_zr_dens density/number file output_files/chemical_potential/solvent_density_z_ref_${dataname}_${interaction}_${nsteps}.dat
+
+# ----- ss / traj reference dumps (one frame per ref_nfreq) -> sigma_s,ss baseline -----
+dump pairlocal_ref solvent local ${ref_nfreq} output_files/pair_data/pairs_ref_${dataname}_${interaction}_${nsteps}.dump &
+    c_ids_local_r[1] c_ids_local_r[2] c_ids_local_r[3] c_ids_local_r[4] c_pl_local_r[1] c_pl_local_r[2] c_pl_local_r[3]
+dump traj_ref gel_system custom ${ref_nfreq} traj_files/traj_ref_${dataname}_${interaction}_${nsteps}.lammpstrj id type mol x y z
+
+# Run for ref_avg_steps, PADDED up to the next ref_nfreq epoch boundary so the
+# ave/time + ave/chunk locks release cleanly on end_of_step before the unfix.
+variable ref_run_steps equal (floor(($(step)+${ref_avg_steps}-1)/${ref_nfreq})+1)*${ref_nfreq}-$(step)
+print '>>> Reference window: running ${ref_run_steps} steps (>= ${ref_avg_steps}, aligned to ref_nfreq=${ref_nfreq})'
+run ${ref_run_steps}
+
+# ----- tear down the reference fixes/dumps/computes (locks already released) -----
+undump pairlocal_ref
+undump traj_ref
+unfix ref_sigmazz_poly
+unfix ref_sigmazz_solv
+unfix ref_sigmaxx_poly
+unfix ref_sigmaxx_solv
+unfix ref_sigmayy_poly
+unfix ref_sigmayy_solv
+unfix ref_dens
+unfix nvt_ref
+uncompute sigmazz_poly_r
+uncompute sigmazz_solv_r
+uncompute sigmaxx_poly_r
+uncompute sigmaxx_solv_r
+uncompute sigmayy_poly_r
+uncompute sigmayy_solv_r
+uncompute stress_poly_r
+uncompute stress_solv_r
+uncompute pl_local_r
+uncompute ids_local_r
+uncompute chunk_zr_poly_zz
+uncompute chunk_zr_poly_xx
+uncompute chunk_zr_poly_yy
+uncompute chunk_zr_solv_zz
+uncompute chunk_zr_solv_xx
+uncompute chunk_zr_solv_yy
+uncompute chunk_zr_dens
+
+print '>>> Reference recording done.  step=$(step)  gel_strain=$(v_gel_strain)'
+
+label label_after_ref_rec
+
+
+# ==========================================================================
 #              PHASE 2: PRODUCTION — piston forcing
 # ==========================================================================
 
@@ -1019,10 +1155,11 @@ fix out_piston_force_perm all print ${volume_freq} '$(step) $(c_piston_fz) $(v_p
 # ΔL = L_initial - L_current;  ε = ΔL / L_initial
 # Gel thickness from Rg: L = 2√3·√(Rg_zz²)  (uniform rectangular prism)
 # This file is read by longitudinal_modulus_analysis.ipynb.
-
-fix out_strain_zz all print ${volume_freq} &
-    "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
-    file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}.dat screen no
+#
+# NOTE: out_strain_zz is now defined PRE-DRIVE (see "OUTPUT: GEL STRAIN + Rg
+# THICKNESS" above, before the Phase 1.5 reference window) so the strain_zz file
+# opens with the equilibrated eps~=0 baseline.  It is intentionally NOT redefined
+# here (a second definition of the same fix ID would error).
 
 # Echo current strain to thermo log as well
 variable gel_strain_pct equal v_gel_strain*100.0
@@ -1046,8 +1183,9 @@ fix out_gel_dims_bb all print ${volume_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_
 fix out_gel_vol_rg all print ${volume_freq} "$(step) $(v_gel_vol_rg)" &
     file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
 
-fix out_gel_dims_rg all print ${volume_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
-    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+# NOTE: out_gel_dims_rg is now defined PRE-DRIVE (see "OUTPUT: GEL STRAIN + Rg
+# THICKNESS" above) so the gel_dimensions_rg file opens with the equilibrated
+# baseline.  It is intentionally NOT redefined here.
 
 # Box dimensions
 fix out_box_dims all print ${volume_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
@@ -1059,15 +1197,12 @@ fix out_polymer_com all print ${volume_freq} &
 
 
 # ==========================================================================
-#            (ε=0 REFERENCE-STATE RECORDING — COMPRESSION ONLY, SKIPPED)
+#            (ε=0 REFERENCE-STATE RECORDING — now done in Phase 1.5 above)
 # ==========================================================================
-# The ε=0 reference-state stress recording is a triaxial_compression feature
-# (it needs a clean pre-compression baseline for the σ' Terzaghi split).
-# Permeation does not compress the gel to a reference strain, so there is no
-# reference block here — the label below is kept only so any legacy jump lands
-# somewhere valid.
-
-label label_after_ref_rec
+# The zero-flux reference state IS now recorded, in the Phase 1.5 block near the
+# top of Phase 2 (before the piston repositions).  Its label_after_ref_rec jump
+# target lives there.  The old placeholder label that used to sit here has been
+# removed to avoid a duplicate label of the same name.
 
 
 # ==========================================================================
