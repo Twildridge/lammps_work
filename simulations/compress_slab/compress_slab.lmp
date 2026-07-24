@@ -53,6 +53,25 @@
 #   plateaued (not still drifting) before the next compression stage begins.
 #   If any stage looks undrained, increase nsteps and rerun.
 #
+#   NOTE on epoch alignment (why the holds do NOT run exactly `nsteps`):
+#   each hold's `run` is padded to end ON an nfreq_stress boundary via the
+#   hold_steps variable defined at each stage. This is REQUIRED, not cosmetic.
+#   fix ave/chunk (ave = one, the default) locks its compute chunk/atom at the
+#   first sample of each Nfreq epoch and only releases the lock when that epoch
+#   COMPLETES; FixAveChunk's destructor unlocks only for ave = running/window,
+#   so `unfix` on a mid-epoch fix leaves the chunk compute locked by a deleted
+#   fix. The next stage's fix ave/chunk then requests a different lock window
+#   and LAMMPS aborts with:
+#       ERROR: Two fix commands using same compute chunk/atom command in
+#              incompatible ways (src/compute_chunk_atom.cpp:680)
+#   That check is literally `startstep != lockstart || stopstep != lockstop`.
+#   Ending each hold on an epoch boundary lets end_of_step() call unlock()
+#   naturally, so the following unfix sees lockfix == nullptr.
+#   Same failure and same remedy as the pre-roll alignment block in
+#   slab_with_flow.lmp (see its notes around the ref_ fix teardown).
+#   Consequence: each hold runs between nsteps and nsteps+nfreq_stress-1 steps
+#   (<= ~10% longer than requested), never fewer than nsteps.
+#
 #   NOTE on bulk region: the poly_bulk/solv_bulk groups (3σ near-plate
 #   exclusion) are defined ONCE, right after Phase 1b, using the
 #   PRE-compression gel geometry — the same specific atoms are tracked
@@ -820,7 +839,17 @@ fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfre
     norm none &
     file output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
 
-run ${nsteps}
+# ── Epoch-aligned hold length (see NOTE on epoch alignment at top of file) ────
+# Pads the hold to the first multiple of nfreq_stress at or beyond
+# step+nsteps, so fix ave/chunk finishes its last epoch and releases the
+# compute chunk/atom lock before the unfix below. Always >= nsteps.
+# $(step) is expanded immediately, so this line MUST be repeated at each
+# stage rather than hoisted (equal-style variables are redefinable, so
+# reusing the name across stages is fine).
+variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print ">>> Stage 1 hold aligned: ${hold_steps} steps (requested ${nsteps}, nfreq_stress=${nfreq_stress})"
+
+run ${hold_steps}
 
 unfix prof_z_solvent
 unfix prof_z_polymer
@@ -905,7 +934,11 @@ fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfre
     norm none &
     append output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
 
-run ${nsteps}
+# Epoch-aligned hold length — see Stage 1 and the NOTE at top of file.
+variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print ">>> Stage 2 hold aligned: ${hold_steps} steps (requested ${nsteps}, nfreq_stress=${nfreq_stress})"
+
+run ${hold_steps}
 
 unfix prof_z_solvent
 unfix prof_z_polymer
@@ -990,7 +1023,11 @@ fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfre
     norm none &
     append output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
 
-run ${nsteps}
+# Epoch-aligned hold length — see Stage 1 and the NOTE at top of file.
+variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print ">>> Stage 3 hold aligned: ${hold_steps} steps (requested ${nsteps}, nfreq_stress=${nfreq_stress})"
+
+run ${hold_steps}
 
 unfix prof_z_solvent
 unfix prof_z_polymer
@@ -1075,7 +1112,11 @@ fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfre
     norm none &
     append output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
 
-run ${nsteps}
+# Epoch-aligned hold length — see Stage 1 and the NOTE at top of file.
+variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print ">>> Stage 4 hold aligned: ${hold_steps} steps (requested ${nsteps}, nfreq_stress=${nfreq_stress})"
+
+run ${hold_steps}
 
 unfix prof_z_solvent
 unfix prof_z_polymer
@@ -1163,7 +1204,13 @@ fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfre
     norm none &
     append output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
 
-run ${nsteps}
+# Epoch-aligned hold length — see Stage 1 and the NOTE at top of file.
+# Still required on the final stage: the ave/chunk fixes are unfixed below,
+# and leaving a dangling lock would poison any continuation run.
+variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print ">>> Stage 5 hold aligned: ${hold_steps} steps (requested ${nsteps}, nfreq_stress=${nfreq_stress})"
+
+run ${hold_steps}
 
 unfix prof_z_solvent
 unfix prof_z_polymer
