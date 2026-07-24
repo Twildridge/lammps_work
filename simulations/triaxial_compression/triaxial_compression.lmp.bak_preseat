@@ -107,22 +107,6 @@ variable compressions_list index "STALE-run_lammps.sh--no-list-passed--running-s
 # unbounded if the target is somehow never reached.
 variable nsteps_comp equal 500000
 
-# ----- Phase 1.25 (NEW): gel PRE-SEATING + boundary (piston-support) strain -----
-# The generator suspends the gel ~10-12 sigma ABOVE the support, so at first
-# piston-gel contact the piston-support gap is NOT the gel height (a solvent void
-# sits below the gel).  To make the boundary strain eps=(L0-gap)/L0 a TRUE gel
-# strain, Phase 1.25 first SEATS the gel on the support (S1: uniform downward
-# body force translates the whole gel down; solvent percolates up through the
-# network), then brings the piston to just touch the gel top (S2) and records
-# L0 = piston-support gap = confined gel height at ~zero load (S3).  Compression
-# then drives the piston to support + (1-eps)*L0, so eps is a clean boundary strain.
-# TUNE these on a SHORT trial (watch the S1/S2 prints for gel_bot_gap seating):
-variable f_seat_atom  equal 0.02     # per-atom downward force on polymer for S1 seating (too big=slam, too small=won't seat)
-variable seat_gamma   equal 1.0      # viscous damping on gel during seating; descent speed ~ f_seat_atom/seat_gamma
-variable seat_gap     equal 1.0      # gel_bot within this many sigma of support => "seated" (S1 halt)
-variable contact_gap  equal 1.0      # piston within this many sigma of gel_top => "in contact" (S2 halt)
-variable nsteps_seat  equal 500000   # safety cap for each seating sub-run (S1, S2)
-
 # ----- Phase 1.5: pre-compression REFERENCE averaging window -----
 # After Phase 0.5 the gel is equilibrated at P_target.  Hold the piston at v=0
 # and average ALL observables over this window to define the ε=0 reference
@@ -548,16 +532,6 @@ compute piston_vz piston reduce ave vz  # velocities do not wrap
 # support so the high-resolution profile follows the support if it ever moves.
 compute support_com support com         # PBC-aware COM; use [3] for z
 
-# ----- Gel bottom + piston/support gaps (for Phase 1.25 seating & boundary strain) -----
-# gel_bot_gap > 0 while the gel floats above the support; -> ~0 once seated.
-# piston_gel_gap: piston COM above gel top (contact detector).
-# piston_support_gap: confined-column height proxy (COM-to-COM; thin sheets so
-#   the constant sheet-thickness offset cancels in the strain ratio).
-variable gel_bot_rg         equal c_polymer_com[3]-0.5*v_gel_lz_rg
-variable gel_bot_gap        equal v_gel_bot_rg-c_support_com[3]
-variable piston_gel_gap     equal c_piston_com[3]-v_gel_top_rg
-variable piston_support_gap equal c_piston_com[3]-c_support_com[3]
-
 # ----- Polymer z-displacement reference -----
 # Defined here so run 0 below captures the post-Phase-0.5 equilibrated positions
 # as the reference configuration.  This gives u_z(z, 0) = 0 at Phase 2 start
@@ -923,50 +897,6 @@ print ">>> Phase 2 start: piston_z=$(c_piston_com[3])  gel_top_rg=$(v_gel_top_rg
 # state.  See the chunk/atom lock note in slab_with_flow's history.
 if "${cont} == 1" then "jump SELF label_after_ref_rec"
 
-# ==========================================================================
-#      PHASE 1.25 (NEW): PRE-SEAT THE GEL ON THE SUPPORT, RECORD L0
-# ==========================================================================
-# Makes the boundary strain eps=(L0-piston_support_gap)/L0 a TRUE gel strain.
-# UNTESTED on live LAMMPS -- verify on a short trial; f_seat_atom / caps may
-# need tuning (see the config block).  cont=1 skips this (already jumped away).
-print '========================================'
-print 'Phase 1.25: pre-seating gel onto support'
-print '========================================'
-print ">>> pre-seat start: gel_bot_gap=$(v_gel_bot_gap:%.2f)  piston_gel_gap=$(v_piston_gel_gap:%.2f)  piston_support_gap=$(v_piston_support_gap:%.2f)"
-
-# S1 -- uniform downward body force TRANSLATES the gel down onto the support.
-#       nvt_prod (mobile) is the integrator; addforce only adds force (polymer
-#       only, so solvent stays and percolates up through the network).  Halt
-#       when the gel bottom is within seat_gap of the support.
-velocity piston set 0.0 0.0 0.0
-fix seat_force polymer addforce 0.0 0.0 -${f_seat_atom}
-# Viscous damping caps the descent speed (terminal v ~ f_seat_atom/seat_gamma)
-# so the body force cannot run the gel away in the unthermostatted z direction.
-fix seat_visc polymer viscous ${seat_gamma}
-fix halt_seat all halt ${strain_freq} v_gel_bot_gap <= ${seat_gap} error continue
-run ${nsteps_seat}
-unfix halt_seat
-print ">>> S1 seated: gel_bot_gap=$(v_gel_bot_gap:%.2f) (target <= ${seat_gap})  step=$(step)"
-
-# S2 -- bring the piston down (seat_force still ON so the gel stays put) until
-#       it just contacts the gel top.  v_piston_prod approach; halt fires within
-#       one strain_freq check of contact, so compression at contact is negligible.
-velocity piston set 0.0 0.0 -${v_piston_prod}
-fix halt_contact all halt ${strain_freq} v_piston_gel_gap <= ${contact_gap} error continue
-run ${nsteps_seat}
-unfix halt_contact
-velocity piston set 0.0 0.0 0.0           # freeze piston AT contact (now caps the gel)
-unfix seat_force                          # release body force; piston + support confine the gel
-unfix seat_visc                           # remove seating damping before the reference window
-print ">>> S2 contact: piston_gel_gap=$(v_piston_gel_gap:%.2f)  piston_support_gap=$(v_piston_support_gap:%.2f)  step=$(step)"
-
-# S3 -- record the boundary-strain reference height L0 (immediate numeric eval).
-#       piston_strain is then a clean boundary strain, 0 at this seated/contact
-#       state and increasing as the piston descends during the sweep.
-variable L0_gap       equal $(v_piston_support_gap)
-variable piston_strain equal (v_L0_gap-v_piston_support_gap)/v_L0_gap
-print ">>> L0 (piston-support = confined gel height at ~zero load) = ${L0_gap}"
-
 print '========================================'
 print 'Phase 1.5: ε=0 reference recording (${ref_avg_steps} steps, ref_nfreq=${ref_nfreq})'
 print '========================================'
@@ -1090,12 +1020,6 @@ fix out_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
 fix out_strain_zz all print ${strain_freq} &
     "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
     file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
-# Boundary (piston-support) strain: step, L0, piston_support_gap, piston_strain.
-# This is the strain used for M in the notebook; strain_zz (Rg) + gel_dimensions_bb
-# (BB) are logged alongside so all three can be overlaid.
-fix out_strain_piston all print ${strain_freq} &
-    "$(step) ${L0_gap} $(v_piston_support_gap) $(v_piston_strain)" &
-    file output_files/stress_data/strain_piston_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
 fix out_gel_strain_thermo all print ${thermo_freq} &
     ">>> gel_strain = $(v_gel_strain_pct:%.2f) %" screen yes &
     file output_files/stress_data/gel_strain_log_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
@@ -1117,10 +1041,7 @@ fix out_polymer_com all print ${strain_freq} &
 velocity piston set 0.0 0.0 -${v_piston_prod}
 # halt checked on the fine strain cadence so the piston stops as close as
 # possible to exactly ${compressions} (less overshoot than a coarse check).
-# Halt on the PISTON-SUPPORT boundary strain (referenced to the seated L0), not
-# the Rg strain -- this is the clean, robust engineering strain of the confined
-# gel.  Rg and BB strains are still logged for comparison.
-fix halt_compress all halt ${strain_freq} v_piston_strain >= ${compressions} error continue
+fix halt_compress all halt ${strain_freq} v_gel_strain >= ${compressions} error continue
 # Drive-phase trajectory: captures the PISTON MOTION — the slab being pushed
 # through the solvent and settling onto the support — which no other dump
 # covers (traj_flow starts only in the hold, after the piston freezes).  The
@@ -1265,7 +1186,6 @@ unfix out_gel_vol_rg
 unfix out_gel_dims_bb
 unfix out_gel_vol_bb
 unfix out_gel_strain_thermo
-unfix out_strain_piston
 unfix out_strain_zz
 unfix out_piston_force_avg
 unfix out_piston_force
