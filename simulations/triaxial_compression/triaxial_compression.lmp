@@ -123,6 +123,20 @@ variable seat_gap     equal 1.0      # gel_bot within this many sigma of support
 variable contact_gap  equal 1.0      # piston within this many sigma of gel_top => "in contact" (S2 halt)
 variable nsteps_seat  equal 500000   # safety cap for each seating sub-run (S1, S2)
 
+# ----- Phase 1.375 (NEW): zero-load FLOAT to set an honest L0 -----
+# The S1 body force crushes the (swollen) gel against the support while seating
+# it -- a large transient pre-strain (in the 2026-07-24 run the Rg thickness
+# collapsed ~37% during seating BEFORE any compression, so the reported Rg
+# gel_strain read ~0.43 at a 0.10 boundary target).  To make L0 a TRUE zero-
+# strain reference regardless of how hard S1/S2 squeezed, after contact we
+# RELEASE the body force and let the piston FLOAT at ~zero applied load: the
+# elastic network re-expands and pushes the piston to its zero-load height,
+# which we then record as L0.  Force-controlled sheet (setforce zeroes x,y,
+# aveforce applies the target z-load, viscous damps the settle, nve integrates).
+variable nsteps_float   equal 150000  # float length; raise if the gel Rg has not plateaued (watch the convergence trace)
+variable ref_load_press equal 0.0     # target piston NORMAL pressure at L0: 0.0 = true zero load (piston rides the gel free surface); set = ${P_target} to reference at bath pressure (more stable if the zero-load float over-swells or drifts)
+variable f_ref_load     equal -v_ref_load_press*lx*ly   # total downward z-force target on the piston sheet (evaluated at float time)
+
 # ----- Phase 1.5: pre-compression REFERENCE averaging window -----
 # After Phase 0.5 the gel is equilibrated at P_target.  Hold the piston at v=0
 # and average ALL observables over this window to define the ε=0 reference
@@ -375,7 +389,10 @@ if "${cont} == 1" then "jump SELF label_after_phase0"
 # Brief minimize to clean up any residual overlaps from the data-file build
 minimize 1.0e-4 1.0e-6 1000 10000
 
-# Setup trajectory
+# Whole-setup trajectory (gel_setup): opens here and stays open through Phase
+# 0.5, seating, the zero-load float, and the ε=0 reference, then continues into
+# the drive at a finer cadence and closes when the piston stops (see sweep loop).
+# One continuous movie of the entire multistep setup — replaces the old gel_drive.
 dump traj_setup gel_system custom ${dump_freq_setup} &
    traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
    id type mol x y z
@@ -492,8 +509,12 @@ label label_after_phase05
 print '>>> Post-Phase-0.5: T=$(c_mobile_temp)  Press=$(press)  mobile_press=$(c_mobile_press)  lz=$(lz)'
 
 print ">>> Pre-production: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
-# traj_setup dump only exists when cont=0 (Phase 0 ran)
-if "${cont} == 0" then "undump traj_setup"
+# gel_setup (traj_setup) is intentionally LEFT OPEN here.  It now runs
+# continuously through Phase 0.5, seating, the zero-load float, the ε=0
+# reference, and into the drive — one movie of the whole multistep setup — and
+# is undumped only when the piston stops (end of the first drive; see the sweep
+# loop).  This replaces the old separate gel_drive dump.  (cont=0 only: for
+# cont=1 Phase 0 never ran, so traj_setup does not exist; the loop guards this.)
 
 
 # ==========================================================================
@@ -595,6 +616,40 @@ print ">>> Initial gel thickness (BB): L0 = $(v_gel_lz_bb)"
 print ">>> Gel top (Rg-based) = $(v_gel_top_rg)   c_maxz (raw) = $(c_maxz)   Piston z = $(c_piston_com[3])   Gap = $(c_piston_com[3]-v_gel_top_rg)"
 
 variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
+
+
+# ==========================================================================
+#   WHOLE-RUN CONVERGENCE TRACKING (BB + Rg gel size, box size)
+# ==========================================================================
+# These span EVERY phase from here on — seating, the zero-load float, the ε=0
+# reference window, and every sweep level's drive + hold — so the convergence
+# figure from plot_lammps_log.py shows BB & Rg gel dimensions and box size
+# across the ENTIRE multistep protocol.  The seating crush and the float
+# recovery therefore appear as inspectable artifacts.
+#
+# STEM-suffixed (NO _c<level> tag) to MATCH the filenames plot_lammps_log.py
+# reads (box_dimensions / gel_volume_bb / gel_volume_rg / gel_dimensions_rg
+# with the run stem = dataname_interaction_nsteps).  The per-level _c<level>
+# loggers inside the sweep loop are kept as-is for the notebook; these are
+# additional and independent.  All are GLOBAL scalars (no chunk/atom compute)
+# → no ave/time lock, so one fix spans every run command unbroken; they are
+# unfixed at the very end (before write_data).
+#
+# Formats match the readers in plot_lammps_log.py:
+#   box_dimensions / gel_dimensions_rg : "step lx ly lz"  (read_fix_print)
+#   gel_volume_rg                      : "step vol"        (read_timestep_volume_file)
+#   gel_volume_bb                      : "vol"             (read_volume_file → column 0)
+# NOTE: tracking begins at the post-Phase-0.5 free-gel state (the gel-dimension
+# computes do not exist earlier); Phase 0/0.5 box changes are already in the log
+# thermo.  Move the gyration/BB computes above Phase 0 if you also want those.
+fix trk_box all print ${strain_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_dims_rg all print ${strain_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_vol_rg all print ${strain_freq} "$(step) $(v_gel_vol_rg)" &
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_vol_bb all print ${strain_freq} "$(v_gel_vol_bb)" &
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
 
 
 # ==========================================================================
@@ -955,17 +1010,48 @@ velocity piston set 0.0 0.0 -${v_piston_prod}
 fix halt_contact all halt ${strain_freq} v_piston_gel_gap <= ${contact_gap} error continue
 run ${nsteps_seat}
 unfix halt_contact
-velocity piston set 0.0 0.0 0.0           # freeze piston AT contact (now caps the gel)
-unfix seat_force                          # release body force; piston + support confine the gel
-unfix seat_visc                           # remove seating damping before the reference window
+velocity piston set 0.0 0.0 0.0           # stop the approach velocity
+unfix seat_force                          # release the gel body force so the gel can RE-EXPAND
+unfix seat_visc                           # remove seating damping
 print ">>> S2 contact: piston_gel_gap=$(v_piston_gel_gap:%.2f)  piston_support_gap=$(v_piston_support_gap:%.2f)  step=$(step)"
 
-# S3 -- record the boundary-strain reference height L0 (immediate numeric eval).
-#       piston_strain is then a clean boundary strain, 0 at this seated/contact
-#       state and increasing as the piston descends during the sweep.
+# S2.5 -- ZERO-LOAD FLOAT.  With the body force gone, hand the piston's z-motion
+#         to the gel under a controlled applied load (f_ref_load; 0 = zero load)
+#         and let the previously-crushed network re-expand and push the piston up
+#         to its zero-load height.  This makes L0 an HONEST zero-strain reference,
+#         independent of how hard S1/S2 squeezed.  Force-controlled sheet:
+#           setforce 0 0 NULL -> x,y frozen, z handed to the gel + control
+#           aveforce NULL NULL f_ref_load -> uniform target z-load on the sheet
+#           viscous -> lets it SETTLE (no bounce/flyaway), nve -> integrates z
+#         NOTE: freeze_piston was already removed in Phase 2 setup; the piston is
+#         held only by rigid_piston (forces off) here, so we release just that.
+print '========================================'
+print 'Phase 1.375: zero-load float -> honest L0'
+print '========================================'
+unfix rigid_piston
+velocity piston set 0.0 0.0 0.0
+fix float_pxy  piston setforce 0.0 0.0 NULL
+fix float_load piston aveforce NULL NULL ${f_ref_load}
+fix float_visc piston viscous ${seat_gamma}
+fix float_nve  piston nve
+print ">>> float start: piston_support_gap=$(v_piston_support_gap:%.2f)  gel_lz_rg=$(v_gel_lz_rg:%.2f)  ref_load_press=${ref_load_press}"
+run ${nsteps_float}
+print ">>> float done:  piston_support_gap=$(v_piston_support_gap:%.2f)  gel_lz_rg=$(v_gel_lz_rg:%.2f)  piston_vz=$(c_piston_vz:%.4f)"
+
+# Restore the rigid, frozen piston at its settled zero-load height
+unfix float_nve
+unfix float_visc
+unfix float_load
+unfix float_pxy
+velocity piston set 0.0 0.0 0.0
+fix rigid_piston piston rigid single force * off off off torque * off off off
+
+# S3 -- record the boundary-strain reference height L0 at the ZERO-LOAD state
+#       (immediate numeric eval).  piston_strain is then a clean boundary strain,
+#       0 here and increasing as the piston descends during the sweep.
 variable L0_gap       equal $(v_piston_support_gap)
 variable piston_strain equal (v_L0_gap-v_piston_support_gap)/v_L0_gap
-print ">>> L0 (piston-support = confined gel height at ~zero load) = ${L0_gap}"
+print ">>> L0 (piston-support = confined gel height at zero load) = ${L0_gap}"
 
 print '========================================'
 print 'Phase 1.5: ε=0 reference recording (${ref_avg_steps} steps, ref_nfreq=${ref_nfreq})'
@@ -1050,6 +1136,11 @@ label label_after_ref_rec
 variable gel_strain_pct equal v_gel_strain*100.0
 shell mkdir -p output_files/chemical_potential
 
+# gel_setup movie is still open (from Phase 0).  It is undumped after the FIRST
+# drive (= first time the piston stops).  This flag makes a multi-level sweep
+# record only that first drive in the movie and keeps cont=1 (no gel_setup) safe.
+variable movie_open equal 1
+
 print "############################################################"
 print ">>> COMPRESSION SWEEP LIST (raw from run_lammps.sh): ${compressions_list}"
 print ">>>   first target=${compressions}   drive cap=${nsteps_comp}   hold=${nsteps} per level"
@@ -1121,18 +1212,21 @@ velocity piston set 0.0 0.0 -${v_piston_prod}
 # the Rg strain -- this is the clean, robust engineering strain of the confined
 # gel.  Rg and BB strains are still logged for comparison.
 fix halt_compress all halt ${strain_freq} v_piston_strain >= ${compressions} error continue
-# Drive-phase trajectory: captures the PISTON MOTION — the slab being pushed
-# through the solvent and settling onto the support — which no other dump
-# covers (traj_flow starts only in the hold, after the piston freezes).  The
-# fix halt ends this run at the target, so the LAST frame is right before the
-# piston stops; undumped immediately after the drive.
-dump traj_drive gel_system custom ${drive_dump_freq} &
-    traj_files/gel_drive_${dataname}_${interaction}_${nsteps}_c${compressions}.lammpstrj &
-    id type mol x y z
+# Drive-phase trajectory: the gel_setup movie (open since Phase 0) is bumped to
+# a FINER cadence here so the piston landing is resolved — it captures the slab
+# being pushed through the solvent and onto the support — then it is undumped
+# right after the drive (= when the piston stops).  This replaces the old
+# separate gel_drive dump.  Guarded by cont (cont=1 has no gel_setup) and the
+# movie_open flag (multi-level sweeps record only the FIRST drive).
+if "${cont} == 0 && ${movie_open} == 1" then &
+    "dump_modify traj_setup every ${drive_dump_freq}"
 print ">>> [level ${compressions}] driving piston (cap ${nsteps_comp} steps)..."
 run ${nsteps_comp}
 unfix halt_compress
-undump traj_drive
+if "${cont} == 0 && ${movie_open} == 1" then &
+    "undump traj_setup" &
+    "variable movie_open delete" &
+    "variable movie_open equal 0"
 print ">>> [level ${compressions}] drive done: gel_strain = $(v_gel_strain:%.4f)  (target ${compressions})  step=$(step)"
 
 # ----- Freeze the piston at this strain for the production hold -----
@@ -1288,6 +1382,12 @@ print "Triaxial compression stress-strain sweep complete"
 print "  Final gel_strain: $(v_gel_strain:%.4f)"
 print "  Final box: $(lx:%.3f) x $(ly:%.3f) x $(lz:%.3f)"
 print "========================================"
+
+# Close the whole-run convergence trackers
+unfix trk_vol_bb
+unfix trk_vol_rg
+unfix trk_dims_rg
+unfix trk_box
 
 variable outfile string "final_flow_${dataname}_${interaction}_${nsteps}"
 write_data ${outfile}.data
