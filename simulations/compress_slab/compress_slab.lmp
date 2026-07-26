@@ -245,10 +245,40 @@ boundary p p p
 atom_style molecular
 atom_modify map array
 
-# Tiled comm style enables RCB load balancing (see balance / fix balance below).
-# Needed because the dense gel slab sits in a sparse rho04 solvent box, so a
-# uniform processor grid overloads a few ranks (Nlocal ranged 2106..20701).
-comm_style tiled
+# ── Domain decomposition / comm style ─────────────────────────────────────────
+# balance_style selects BOTH the decomposition and the comm style — they are
+# coupled: `balance rcb` REQUIRES comm_style tiled, `balance shift` REQUIRES the
+# default regular grid (comm_style brick).  Set here (before read_data) so the
+# very first decomposition already uses the chosen style.
+#
+#   shift (DEFAULT) — regular processor grid, movable cut planes per dimension.
+#       Subdomains stay boxes on a regular lattice and ghost exchange stays on
+#       the well-trodden brick code path.  Recovers most of the imbalance
+#       because cuts move in all three dims (shift xyz).  Critically, `shift`
+#       has a documented guard rcb does NOT: "if any pair of adjacent planes
+#       are closer together than the neighbor skin distance ... the plane
+#       positions are shifted to separate them by at least this amount ... to
+#       prevent particles being lost when dynamics are run with processor
+#       subdomains that are too narrow" (docs.lammps.org/balance.html).
+#
+#   rcb — recursive coordinate bisection (comm_style tiled).  Balances an
+#       irregular density field better in principle, but on THIS geometry (a
+#       dense gel block sitting in a sparse rho04 solvent box, 128 ranks over a
+#       ~47.8 x 47.4 x 212 box) it carves the gel into thin tiles.  Once a tile
+#       dimension approaches comm_modify cutoff (2.0 below) the tiled ghost
+#       exchange degrades into multi-hop swaps and the run slows to a crawl or
+#       stops making progress altogether.
+#
+#       This is the suspected cause of the 2026-07-24 stall (job 286541 on
+#       node20): Phase 0 printed its step-25000 thermo line normally (T=0.998,
+#       PE flat, dangerous builds 0 — no numerical problem), the next scheduled
+#       `fix balance` rebalance was due at step 30000, and the job then produced
+#       no output for ~2 h until it was cancelled.
+#
+#       Kept selectable so the two can be A/B'd:  lmp ... -var balance_style rcb
+variable balance_style index shift
+
+if "${balance_style} == rcb" then "comm_style tiled"
 
 pair_style lj/cut 1.122
 bond_style fene
@@ -333,13 +363,38 @@ bond_coeff 1 30.0 1.5 1.0 1.0   # polymer-polymer FENE (Kremer-Grest)
 special_bonds fene
 neigh_modify delay 0 every 1 check yes
 
-# ── Load balancing (RCB) ──────────────────────────────────────────────────────
+# ── Load balancing ────────────────────────────────────────────────────────────
 # One-time repartition now (also speeds the upcoming minimize), then a periodic
 # rebalance to track density changes through NPH (Phase 0.5) and compression
-# (Phase 2). Threshold 1.05 = rebalance when the busiest rank exceeds the
-# average by >5%. Requires comm_style tiled (set in the init section above).
-balance 1.0 rcb
-fix balance all balance 10000 1.05 rcb
+# (Phase 2).  Decomposition style is chosen by balance_style in the
+# INITIALIZATION section above (default `shift`; `rcb` is the old behaviour).
+#
+# Cadence and threshold relaxed from the old (10000, 1.05):
+#   - The box is FIXED through Phase 0 and Phase 1b, and across the ENTIRE
+#     compression ladder the gel changes by only ε_vol = 0.045 (~1.5% per axis).
+#     Density simply does not redistribute fast enough to justify a rebalance
+#     every 10000 steps.
+#   - A rebalance is not free: it forces a full atom migration plus neighbor-list
+#     rebuild, and each one is another chance to land in a pathological
+#     decomposition.  Fewer, looser rebalances is strictly safer here.
+# Threshold 1.10 = rebalance only when the busiest rank exceeds the average by
+# >10% (was 5%).
+# index (not equal) style so both can be overridden from the command line
+# alongside balance_style, e.g. -var balance_freq 20000
+variable balance_freq   index 50000
+variable balance_thresh index 1.10
+
+# shift: `shift <dims> <Niter> <stopthresh>` — iteratively move the cut planes
+# in x, y and z.  xyz (not just z) because the six-plate geometry makes the gel
+# compact in all three directions, so the imbalance is not purely axial.
+if "${balance_style} == rcb" then &
+    "balance 1.0 rcb" &
+    "fix balance all balance ${balance_freq} ${balance_thresh} rcb" &
+else &
+    "balance 1.0 shift xyz 20 1.05" &
+    "fix balance all balance ${balance_freq} ${balance_thresh} shift xyz 10 1.05"
+
+print ">>> Load balancing: style=${balance_style}  every ${balance_freq} steps  threshold=${balance_thresh}"
 
 
 # ==========================================================================
