@@ -147,7 +147,7 @@ variable solvent_mass  equal 1.0
 
 # ----- Output Frequencies -----
 variable thermo_freq     equal 250000 # 2000  # 250000
-variable dump_freq_setup equal 10000      # frequent dumps during Phase 1
+variable dump_freq_setup equal 25000      # frequent dumps during Phase 1
 # Production (gel_flow) dump cadence — tie to nsteps so the compression is
 # always resolved regardless of run length.  At dump_freq_prod = nsteps (the
 # old fixed 200000) a short run captured only ONE production frame, taken
