@@ -31,16 +31,18 @@
 # Behaviour:
 #   - Piston-solvent WCA is OFF throughout; the piston passes through the
 #     solvent freely and loads the gel network directly.
-#   - Phase 0:   NVT equilibration at fixed box volume (piston frozen).
-#   - Phase 0.5: anisotropic Langevin + NPH to re-pressurise the box to
-#                P_target (full Press, matching slab_with_support.lmp's
-#                aniso barostat).  Needed because the fixed-volume read
-#                relaxes below P_target.  Rigid bodies temporarily on
-#                nve+setforce so they scale with the box.  The piston is
-#                frozen here, so barostatting z is safe; the box is frozen
-#                again before Phase 2, where z is piston-controlled only.
-#   - Phase 1.5 (NEW): pre-compression REFERENCE window.  Piston held at v=0
-#                for ref_avg_steps; ALL observables (partial stresses, σ_ss,
+#   - Phase 0:   NPT equilibration (Langevin + anisotropic NPH at P_target).
+#                The input is already equilibrated at P_target, so a single
+#                pressure-controlled step keeps the gel's equilibrium swelling
+#                (no fixed-volume pre-phase that would bleed P and re-squeeze the
+#                gel).  Rigid bodies temporarily on nve+setforce so they scale
+#                with the box; the box is frozen for every phase afterwards.
+#   - Phase 1.25: bring the piston down (velocity) to first gel contact and
+#                record L0 = gel_lz_rg (equilibrium-swollen Rg reference
+#                thickness).  No body-force seating — the piston pressure seats
+#                the gel on the support itself in Phase 2.
+#   - Phase 1.5: pre-compression REFERENCE window.  Piston held still for
+#                ref_avg_steps; ALL observables (partial stresses, σ_ss,
 #                σ_pp, solvent mass density) are averaged into "_ref_" files,
 #                emitting several snapshots so the notebook can form CIs.
 #   - Phase 2 (production): STRESS-controlled.  A constant piston pressure is
@@ -68,7 +70,7 @@
 #
 # When cont=1 the following are skipped (data file already holds the state):
 #   Phase 0    — NPT (Langevin+NPH) equilibration (box/piston stay as-is)
-#   Phase 1.25 — seating + L0 recording (so L0 is UNDEFINED under cont=1)
+#   Phase 1.25 — piston contact approach + L0 recording (so L0 is UNDEFINED under cont=1)
 #   Phase 1.5  — reference recording (reference files already exist)
 # NOTE: cont=1 is only meaningful as a single-state continuation; it is NOT
 #   supported for the pressure sweep (L0/seating are skipped).
@@ -159,13 +161,13 @@ variable volume_freq     equal 5000 # 1000 # 5000
 
 # Finer cadence for the STRAIN / POSITION diagnostics (strain_zz, piston &
 # polymer positions, gel dimensions).  These are tiny per-line prints, so a
-# high rate is cheap and lets the piston-motion (drive) phase be resolved —
-# especially useful for pinning the exact step where gel_strain crosses the
-# target and for the strain-diagnostic plot in triaxial_compression.ipynb.
+# high rate is cheap and resolves the piston-motion (loading) phase —
+# especially useful for tracking how the measured strain rises under load and
+# for the strain-diagnostic plot in triaxial_compression.ipynb.
 variable strain_freq     equal 1000
-# Drive-phase all-atom trajectory cadence: captures the piston pushing the slab
-# through the solvent onto the support.  The drive is short, so 2000 gives
-# plenty of frames without a large file.
+# Loading-phase all-atom trajectory cadence: captures the piston pushing the slab
+# through the solvent onto the support under the applied load.  2000 gives plenty
+# of frames without a large file.
 variable drive_dump_freq equal 2000
 
 # Cavity Widom dump cadence — all-atom frames for cavity_widom.py post-processing.
@@ -310,10 +312,10 @@ neigh_modify exclude type 4 5   # support-piston
 velocity support set 0.0 0.0 0.0
 fix rigid_support support rigid single force * off off off torque * off off off
 
-# Piston: fully frozen during Phase 0 / Phase 0.5 NVT (force * off off off +
-#   setforce 0).  Stays rigid+frozen through equilibration (no barostat means
-#   no dilation to scale with), then released for constant-velocity
-#   compression in Phase 2.
+# Piston: rigid + frozen (force * off off off + setforce 0) through the Phase 0
+#   NPT equilibration, the contact approach, and the epsilon=0 reference.  It is
+#   released to constant-PRESSURE force control (setforce 0 0 NULL + nve +
+#   viscous + aveforce load) just before the pressure sweep.
 velocity piston set 0.0 0.0 0.0
 
 fix rigid_piston piston rigid single force * off off off torque * off off off
@@ -331,14 +333,13 @@ thermo_style custom step c_mobile_temp pe ke etotal press c_mobile_press vol lx 
 thermo_modify lost warn
 thermo ${thermo_freq}
 
-# ----- Piston force compute (defined early so permeation mode can record a
-#       Phase 0 equilibrium baseline; compression mode only outputs from Phase 2) -----
-# c_piston_fz: sum of pairwise z-forces on ALL piston atoms.
-#   Positive = net upward (gel/solvent pushing piston up).
-#   In compression mode, setforce 0 is still active here → value will be 0
-#   until Phase 2 (when setforce is removed); the fix print is only defined
-#   for compression AFTER Phase 0.5 cleanup (see OUTPUT: PISTON DATA).
-#   In permeation mode, no setforce is ever applied, so the value is live now.
+# ----- Piston force compute -----
+# c_piston_fz: sum of pairwise z-forces on ALL piston atoms = the gel/solvent
+#   reaction on the piston.  Positive = net upward (gel pushing piston up).
+#   While the piston is rigid+frozen (setforce 0) it reads ~0; once it is under
+#   force control during the sweep it reads the gel reaction, which balances the
+#   applied load at equilibrium (a consistency check on the prescribed pressure).
+#   The piston-force fix print is only defined inside the sweep loop.
 compute piston_fz      piston reduce sum fz
 variable piston_area      equal lx*ly          # cross-sectional area of simulation box
 variable piston_pressure_z equal c_piston_fz/v_piston_area  # force normalised by area
@@ -346,9 +347,9 @@ variable piston_pressure_z equal c_piston_fz/v_piston_area  # force normalised b
 # ----- Block-averaged piston force (noise reduction for P(t) and M_piston) -----
 # c_piston_fz is the INSTANTANEOUS pairwise contact force on the piston -> it
 # carries the full thermal fluctuation (that is the scatter seen in P(t)).
-# There is no damping on the piston (rigid + velocity-controlled), and damping
-# it would corrupt this measurement, so noise is reduced the correct way: by
-# time-averaging.  fix out_piston_force_avg (see PRODUCTION stress block) block-
+# The only piston damping is the light viscous settle fix, so noise is reduced
+# the correct way -- by time-averaging.  fix out_piston_force_avg (see PRODUCTION
+# stress block) block-
 # averages c_piston_fz over each volume_freq window, cutting the scatter by
 # ~sqrt(pf_nrepeat) while keeping the same output cadence as the raw file.
 # c_piston_fz is a GLOBAL reduce (not chunk/atom), so there is no ave/time lock
@@ -404,9 +405,9 @@ timestep ${timestep_prod}
 if "${cont} == 1" then "jump SELF label_after_phase05"
 
 # Whole-setup trajectory (gel_setup): opens here and stays open through the
-# equilibration, seating, contact, and the epsilon=0 reference, then continues
-# into the drive at a finer cadence and closes when the piston stops (see sweep
-# loop).  One continuous movie of the entire multistep setup.
+# equilibration, the piston contact approach, and the epsilon=0 reference, then
+# continues into the first level's loading at a finer cadence and closes when
+# that loading ends (see sweep loop).  One continuous movie of the whole setup.
 dump traj_setup gel_system custom ${dump_freq_setup} &
    traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
    id type mol x y z
@@ -456,12 +457,11 @@ run 0
 print '>>> Post-equilibration: T=$(c_mobile_temp)  Press=$(press)  mobile_press=$(c_mobile_press)  lz=$(lz)'
 
 print ">>> Pre-production: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
-# gel_setup (traj_setup) is intentionally LEFT OPEN here.  It now runs
-# continuously through the NPT equilibration, seating, contact, the ε=0
-# reference, and into the drive — one movie of the whole multistep setup — and
-# is undumped only when the piston stops (end of the first drive; see the sweep
-# loop).  This replaces the old separate gel_drive dump.  (cont=0 only: for
-# cont=1 Phase 0 never ran, so traj_setup does not exist; the loop guards this.)
+# gel_setup (traj_setup) is intentionally LEFT OPEN here.  It runs continuously
+# through the NPT equilibration, the piston contact approach, the ε=0 reference,
+# and into the first level's loading — one movie of the whole setup — and is
+# undumped when that loading ends (see the sweep loop).  (cont=0 only: for cont=1
+# Phase 0 never ran, so traj_setup does not exist; the loop guards this.)
 
 
 # ==========================================================================
@@ -507,8 +507,7 @@ variable box_lz equal lz
 
 # ----- Piston position/velocity computes -----
 # Defined here (before run 0) so they are initialized alongside polymer/rg computes.
-# Used unconditionally in piston output fixes, and in permeation-mode reservoir
-# regions where LAMMPS evaluates variable bounds at region creation time.
+# Used by the piston output fixes and by the contact-gap / strain diagnostics.
 compute piston_com piston com          # PBC-aware COM; use [3] for z
 compute piston_vz piston reduce ave vz  # velocities do not wrap
 
@@ -568,11 +567,11 @@ variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
 # ==========================================================================
 #   WHOLE-RUN CONVERGENCE TRACKING (BB + Rg gel size, box size)
 # ==========================================================================
-# These span EVERY phase from here on — seating, the zero-load float, the ε=0
-# reference window, and every sweep level's drive + hold — so the convergence
+# These span EVERY phase from here on — the piston contact approach, the ε=0
+# reference window, and every sweep level's loading + hold — so the convergence
 # figure from plot_lammps_log.py shows BB & Rg gel dimensions and box size
-# across the ENTIRE multistep protocol.  The seating crush and the float
-# recovery therefore appear as inspectable artifacts.
+# across the ENTIRE multistep protocol.  The gel translating onto the support and
+# then compressing under load therefore appear as inspectable stages.
 #
 # STEM-suffixed (NO _c<level> tag) to MATCH the filenames plot_lammps_log.py
 # reads (box_dimensions / gel_volume_bb / gel_volume_rg / gel_dimensions_rg
@@ -607,16 +606,16 @@ print "========================================"
 print "Phase 2: Production — piston forcing"
 print "========================================"
 
-# ----- Ready the piston for the SEATING approach (rigid, forces off) -----
+# ----- Ready the piston for the CONTACT approach (rigid, forces off) -----
 # The piston was held rigid+frozen (rigid + setforce 0) through Phase 0.
-# Unfreeze and re-fix with force*off off off so the S2 seating approach can
-# drive it at a prescribed velocity to first gel contact (no force-driven
-# acceleration from the gel).  PRODUCTION loading is NOT velocity-controlled:
-# the piston is switched to constant-pressure force control before the sweep
-# (see ONE-TIME SETUP FOR THE PRESSURE SWEEP).
+# Unfreeze and re-fix with force*off off off so the Phase 1.25 approach can drive
+# it at a prescribed velocity to first gel contact (no force-driven acceleration
+# from the gel).  PRODUCTION loading is NOT velocity-controlled: the piston is
+# switched to constant-pressure force control before the sweep (see ONE-TIME
+# SETUP FOR THE PRESSURE SWEEP).
 #
-# cont=1: piston stays rigid+frozen (seating/L0 are skipped); a continuation is
-#   only meaningful as a single-state relaxation and is unsupported for a sweep.
+# cont=1: piston stays rigid+frozen (the approach/L0 are skipped); a continuation
+#   is only meaningful as a single-state relaxation and is unsupported for a sweep.
 if "${cont} == 1" then "jump SELF label_skip_comp_piston_setup"
 unfix freeze_piston
 unfix rigid_piston
@@ -628,21 +627,6 @@ label label_skip_comp_piston_setup
 compute myTemp mobile temp/partial 1 1 0
 fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
 fix_modify nvt_prod temp myTemp
-
-# ----- Permeation: constant-velocity piston (v_piston_perm = 5% of v_piston_prod) -----
-# Re-fix piston with all forces off and prescribe velocity, matching the
-# compression-mode approach.  The halt_perm condition (feed ≤ feed_halt_thick)
-# is the sole termination condition — no ramp/equilibration phase needed.
-# cont=1 permeation: piston velocity is re-applied from current position, resuming
-#   the drive at v_piston_perm exactly as if the run had not been interrupted.
-
-# Permeation piston force output.  For fresh starts (cont=0) this was already
-# defined in Phase 0 (to capture the zero-pressure baseline); for continuations
-# (cont=1) Phase 0 was skipped, so define it here at Phase 2 onset.
-
-# ----- Permeation: start displacement recording at Phase 2 onset -----
-# Reference positions reset here so u_z(z,0) = 0 at the start of the drive.
-
 
 
 # ==========================================================================
@@ -664,9 +648,8 @@ variable reg_y_zhi equal c_polymer_com[3]+v_hw_z
 region reg_y block v_reg_y_xlo v_reg_y_xhi EDGE EDGE v_reg_y_zlo v_reg_y_zhi side in
 
 # NOTE: Z-direction binning uses the full simulation box (no region restriction).
-# This allows piston position to be visualized in permeation mode, and ensures
-# support stress appears at its true z-location. X and Y profiles retain the
-# polymer-COM-tracked lateral restriction above.
+# This keeps the piston and support at their true z-locations in the profile.
+# X and Y profiles retain the polymer-COM-tracked lateral restriction above.
 
 
 # ==========================================================================
@@ -1301,7 +1284,7 @@ undump traj_stress_sync
 undump pairlocal_dump
 undump traj_flow
 
-# ----- Teardown the drive+hold loggers -----
+# ----- Teardown the loading+hold loggers -----
 unfix out_polymer_com
 unfix out_box_dims
 unfix out_gel_dims_rg
