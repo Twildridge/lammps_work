@@ -107,35 +107,24 @@ variable compressions_list index "STALE-run_lammps.sh--no-list-passed--running-s
 # unbounded if the target is somehow never reached.
 variable nsteps_comp equal 500000
 
-# ----- Phase 1.25 (NEW): gel PRE-SEATING + boundary (piston-support) strain -----
+# ----- Phase 1.25: gel PRE-SEATING + boundary (piston-support) strain -----
 # The generator suspends the gel ~10-12 sigma ABOVE the support, so at first
 # piston-gel contact the piston-support gap is NOT the gel height (a solvent void
 # sits below the gel).  To make the boundary strain eps=(L0-gap)/L0 a TRUE gel
-# strain, Phase 1.25 first SEATS the gel on the support (S1: uniform downward
-# body force translates the whole gel down; solvent percolates up through the
-# network), then brings the piston to just touch the gel top (S2) and records
-# L0 = piston-support gap = confined gel height at ~zero load (S3).  Compression
-# then drives the piston to support + (1-eps)*L0, so eps is a clean boundary strain.
+# strain, Phase 1.25 first SEATS the gel on the support (S1: a uniform downward
+# body force on the WHOLE gel -- polymer AND solvent -- translates it down as a
+# unit so the equilibrium swelling is preserved), then brings the piston down to
+# just touch the gel top and RECORDS L0 = piston-support gap = confined gel
+# height at ~zero load (S2).  The input is already equilibrated at P_target and
+# the both-species seating does not crush the network, so no zero-load float is
+# needed: L0 at contact IS the honest zero-strain reference.  Compression then
+# drives the piston to support + (1-eps)*L0, so eps is a clean boundary strain.
 # TUNE these on a SHORT trial (watch the S1/S2 prints for gel_bot_gap seating):
-variable f_seat_atom  equal 0.02     # per-atom downward force on polymer for S1 seating (too big=slam, too small=won't seat)
+variable f_seat_atom  equal 0.02     # per-atom downward force on polymer+solvent for S1 seating (too big=slam, too small=won't seat)
 variable seat_gamma   equal 1.0      # viscous damping on gel during seating; descent speed ~ f_seat_atom/seat_gamma
 variable seat_gap     equal 1.0      # gel_bot within this many sigma of support => "seated" (S1 halt)
 variable contact_gap  equal 1.0      # piston within this many sigma of gel_top => "in contact" (S2 halt)
 variable nsteps_seat  equal 500000   # safety cap for each seating sub-run (S1, S2)
-
-# ----- Phase 1.375 (NEW): zero-load FLOAT to set an honest L0 -----
-# The S1 body force crushes the (swollen) gel against the support while seating
-# it -- a large transient pre-strain (in the 2026-07-24 run the Rg thickness
-# collapsed ~37% during seating BEFORE any compression, so the reported Rg
-# gel_strain read ~0.43 at a 0.10 boundary target).  To make L0 a TRUE zero-
-# strain reference regardless of how hard S1/S2 squeezed, after contact we
-# RELEASE the body force and let the piston FLOAT at ~zero applied load: the
-# elastic network re-expands and pushes the piston to its zero-load height,
-# which we then record as L0.  Force-controlled sheet (setforce zeroes x,y,
-# aveforce applies the target z-load, viscous damps the settle, nve integrates).
-variable nsteps_float   equal 150000  # float length; raise if the gel Rg has not plateaued (watch the convergence trace)
-variable ref_load_press equal 0.0     # target piston NORMAL pressure at L0: 0.0 = true zero load (piston rides the gel free surface); set = ${P_target} to reference at bath pressure (more stable if the zero-load float over-swells or drifts)
-variable f_ref_load     equal -v_ref_load_press*lx*ly   # total downward z-force target on the piston sheet (evaluated at float time)
 
 # ----- Phase 1.5: pre-compression REFERENCE averaging window -----
 # After Phase 0.5 the gel is equilibrated at P_target.  Hold the piston at v=0
@@ -377,103 +366,63 @@ variable pf_nfreq   equal v_pf_nevery*v_pf_nrepeat   # = volume_freq (exact mult
 # applies the piston.  Box dimensions stay fixed throughout Phase 0.
 
 print "========================================"
-print "Phase 0: NVT equilibration"
+print "Phase 0: NPT equilibration (preserve equilibrium swelling at P_target)"
 print "========================================"
+# The input configuration is ALREADY equilibrated at P_target by the
+# slab_with_support workflow (~1.4M steps of aniso NPT).  So there is NO
+# fixed-volume pre-phase here: a fixed-volume NVT would bleed the pressure off
+# (the thermostat cools T, dropping the kinetic term) and force a large box
+# shrink to recover P_target — squeezing the gel from both z-ends before any
+# compression.  Instead we go STRAIGHT to a pressure-controlled (NPT-equivalent)
+# equilibration: Langevin thermostat + anisotropic NPH barostat at P_target.
+# Because the box already sits at P_target the cell barely moves, so the gel
+# keeps its equilibrium swollen thickness.
+#
+# aniso: x,y,z each barostatted INDEPENDENTLY to the full scalar P_target, so the
+#   laterally-periodic slab keeps its own equilibrium shape (cell stays
+#   orthogonal).  Target is the FULL thermo `Press`, matching slab_with_support.
+# Langevin+NPH (not fix npt / Nose-Hoover): FENE bonds inject KE faster than a
+#   Nose-Hoover chain removes it (T can stick at ~6); Langevin's per-atom
+#   friction always wins.
+# Piston + support are temporarily on nve+setforce so they scale with the box
+#   (dilate all remaps them) without injecting rigid-constraint virial into the
+#   barostat, then are restored to rigid+frozen.  The box is frozen for every
+#   phase after this one; the piston alone drives z-compression later.
+# npt_P_damp:    barostat damping (tau); increase (200-1000) if FENE warnings / box oscillates.
+# npt_p05_steps: equilibration length; increase if Press has not converged.
+
+variable npt_P_damp    equal 50.0    # barostat damping (tau); increase if FENE errors appear
+variable npt_p05_steps equal 120000  # equilibration length; increase if Press not converged
+variable npt_P05_target equal ${P_target}   # aniso targets the FULL scalar pressure per direction
 
 reset_timestep 0
 timestep ${timestep_prod}
 
-# ----- cont=1: skip minimize + Phase 0 NVT (data file already holds equilibrated config) -----
-if "${cont} == 1" then "jump SELF label_after_phase0"
+# ----- cont=1: skip equilibration (data file already holds the equilibrated state) -----
+# Jump BEFORE opening traj_setup so a continuation does not open the setup movie
+# (the sweep-loop teardown guards on cont=0 to undump it).
+if "${cont} == 1" then "jump SELF label_after_phase05"
 
-# Brief minimize to clean up any residual overlaps from the data-file build
-minimize 1.0e-4 1.0e-6 1000 10000
-
-# Whole-setup trajectory (gel_setup): opens here and stays open through Phase
-# 0.5, seating, the zero-load float, and the ε=0 reference, then continues into
-# the drive at a finer cadence and closes when the piston stops (see sweep loop).
-# One continuous movie of the entire multistep setup — replaces the old gel_drive.
+# Whole-setup trajectory (gel_setup): opens here and stays open through the
+# equilibration, seating, contact, and the epsilon=0 reference, then continues
+# into the drive at a finer cadence and closes when the piston stops (see sweep
+# loop).  One continuous movie of the entire multistep setup.
 dump traj_setup gel_system custom ${dump_freq_setup} &
    traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
    id type mol x y z
 
-# NVT equilibration at fixed volume (piston frozen for compression, z-free for permeation)
-fix nvt_equil mobile nvt temp ${temp_target} ${temp_target} 1.0
-
-# Permeation: record piston force from the very start of Phase 0 to capture the
-# equilibrium (zero-applied-pressure) baseline.  The piston floats freely on solvent
-# (fix rigid_piston force * off off on, no setforce), so c_piston_fz is live now.
-# Compression mode: force output begins AFTER Phase 0.5 (see OUTPUT: PISTON DATA).
-
-run ${comp_setup_freq}
-
-print ">>> Post-Phase-0 NVT: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
-unfix nvt_equil
-
-label label_after_phase0
-
-# run 0 initializes all computes so their values can be referenced in
-# variable formulas and print statements below (required when cont=1 skips
-# the minimize that previously served this purpose).
-run 0
-
-# ==========================================================================
-#    PHASE 0.5 (COMPRESSION ONLY): ANISOTROPIC LANGEVIN + NPH → P_target
-# ==========================================================================
-# WHY a barostat is needed here:
-#   The equilibrated input only sits at P_target while slab_with_support.lmp's
-#   aniso NPT actively holds it there.  Read at FIXED volume, the pressure
-#   bleeds off — the minimize relaxes the pair virial and the thermostat cools
-#   T (1.26→1.0), dropping the kinetic term — so the system settles to its
-#   natural fixed-volume pressure (~1.2 full), NOT P_target.  This block
-#   re-pressurises the box to P_target so the ε=0 reference is correct.
-#
-# WHY aniso (matches slab_with_support.lmp): each of x,y,z is barostatted
-#   INDEPENDENTLY to the full scalar target P_target, so the unconfined,
-#   laterally-periodic slab relaxes to its own equilibrium shape at bath
-#   pressure (cell stays orthogonal; no tilt).  The target is the FULL pressure
-#   (thermo `Press`), exactly as the equilibration used `aniso 1.5` — so the
-#   thermo Press lands at ~1.5 here, consistent with the equilibration output.
-#
-# WHY this does NOT fight the piston: the piston is frozen during Phase 0.5
-#   (no velocity drive until Phase 2).  Barostatting z is therefore safe here.
-#   The box is frozen again after this block; Phase 2 compresses purely by the
-#   piston with NO box barostat (which is where a z-barostat WOULD conflict).
-#
-# All rigid bodies (piston, support) are temporarily put on nve+setforce so
-# they scale freely with the box (dilate all remaps them) without injecting
-# spurious virial into the barostat, then restored to rigid+frozen afterward.
-#
-# Why Langevin + NPH (not fix npt / Nosé-Hoover):
-#   FENE bonds inject kinetic energy faster than a Nosé-Hoover chain can remove
-#   it → T can stick at ~6.  Langevin's per-atom friction (∝ v) removes energy
-#   in proportion to how hot each atom is — it always wins against FENE heating.
-#
-# Key parameters:
-#   npt_P_damp:    barostat damping (τ).  Increase (e.g. 200–1000) if FENE bond
-#                  warnings appear or the box oscillates.
-#   npt_p05_steps: barostat run length; increase if Press has not converged.
-
-variable npt_P_damp    equal 50.0    # barostat damping (τ); increase if FENE errors appear
-variable npt_p05_steps equal 120000  # run length; increase if Press not converged
-# aniso targets the FULL scalar pressure per direction (no kinetic offset
-# needed, unlike the old iso-NPH+0.41 convention which drove c_mobile_press).
-variable npt_P05_target equal ${P_target}
-
-# ----- cont=1 + compression: jump over Phase 0.5 (box already at equilibrium pressure) -----
-if "${cont} == 1" then "jump SELF label_after_phase05"
+# Brief minimize to clean up any residual overlaps from the data-file build
+minimize 1.0e-4 1.0e-6 1000 10000
 
 print '========================================'
-print 'Phase 0.5 (compression): Langevin+NPH aniso → full Press target=${npt_P05_target}'
+print 'Phase 0: Langevin+NPH aniso equilibration -> full Press target=${npt_P05_target}'
 print '========================================'
 
-# Release piston to scale with the box (nve+setforce, no fix rigid)
+# Release piston + support so they scale with the box (nve+setforce, no fix rigid)
 unfix freeze_piston
 unfix rigid_piston
 fix nve_piston      piston nve
 fix setforce_piston piston setforce 0.0 0.0 0.0
-
-# Release support to scale with the box
 unfix rigid_support
 fix freeze_support support setforce 0.0 0.0 0.0
 fix nve_support    support nve
@@ -484,33 +433,31 @@ run ${npt_p05_steps}
 unfix lang_p05
 unfix nph_p05
 
-print '>>> Post-Langevin+NPH: T=$(c_mobile_temp)  Press=$(press)  mobile_press=$(c_mobile_press)  lx=$(lx) ly=$(ly) lz=$(lz)'
+print '>>> Post-NPT equilibration: T=$(c_mobile_temp)  Press=$(press)  mobile_press=$(c_mobile_press)  lx=$(lx) ly=$(ly) lz=$(lz)'
 
-# Restore rigid piston at its new (scaled) position
+# Restore rigid, frozen piston + support at their new (scaled) positions
 unfix nve_piston
 unfix setforce_piston
 velocity piston set 0.0 0.0 0.0
 fix rigid_piston piston rigid single force * off off off torque * off off off
 fix freeze_piston piston setforce 0.0 0.0 0.0
-
-# Restore rigid support
 unfix freeze_support
 unfix nve_support
 velocity support set 0.0 0.0 0.0
 fix rigid_support support rigid single force * off off off torque * off off off
 
-# NVT settle at the new (re-pressurised) box volume, all rigid bodies restored
-fix nvt_p05_eq mobile nvt temp ${temp_target} ${temp_target} 1.0
-run 50000
-unfix nvt_p05_eq
-
 label label_after_phase05
 
-print '>>> Post-Phase-0.5: T=$(c_mobile_temp)  Press=$(press)  mobile_press=$(c_mobile_press)  lz=$(lz)'
+# run 0 initializes all thermo computes so their values can be referenced in the
+# print statements and variable formulas below (required for cont=1, which jumps
+# here and skips the equilibration run that would otherwise serve this purpose).
+run 0
+
+print '>>> Post-equilibration: T=$(c_mobile_temp)  Press=$(press)  mobile_press=$(c_mobile_press)  lz=$(lz)'
 
 print ">>> Pre-production: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
 # gel_setup (traj_setup) is intentionally LEFT OPEN here.  It now runs
-# continuously through Phase 0.5, seating, the zero-load float, the ε=0
+# continuously through the NPT equilibration, seating, contact, the ε=0
 # reference, and into the drive — one movie of the whole multistep setup — and
 # is undumped only when the piston stops (end of the first drive; see the sweep
 # loop).  This replaces the old separate gel_drive dump.  (cont=0 only: for
@@ -989,69 +936,66 @@ print 'Phase 1.25: pre-seating gel onto support'
 print '========================================'
 print ">>> pre-seat start: gel_bot_gap=$(v_gel_bot_gap:%.2f)  piston_gel_gap=$(v_piston_gel_gap:%.2f)  piston_support_gap=$(v_piston_support_gap:%.2f)"
 
-# S1 -- uniform downward body force TRANSLATES the gel down onto the support.
-#       nvt_prod (mobile) is the integrator; addforce only adds force (polymer
-#       only, so solvent stays and percolates up through the network).  Halt
-#       when the gel bottom is within seat_gap of the support.
+# S1 -- uniform downward body force TRANSLATES the whole gel down onto the
+#       support.  The force is applied to the mobile group (polymer AND solvent),
+#       NOT polymer only: pushing the network and its solvent down TOGETHER lets
+#       the gel translate as a unit and preserves its equilibrium swelling,
+#       instead of driving the network down THROUGH its solvent (which strips
+#       solvent out of the network and pre-strains it before any compression).
+#       nvt_prod (mobile) integrates; halt when the gel bottom is within seat_gap
+#       of the support.
+#       NOTE: solvent-support pair is non-interacting (pair_coeff 3 4 = 0), so
+#       free solvent below the network can pass through the support and wrap via
+#       the z-PBC.  Keep the seat short / f_seat_atom modest and watch the
+#       solvent-density trace so drainage does not deplete the reservoir; raise
+#       f_seat_atom for a faster seat if drainage is significant.
 velocity piston set 0.0 0.0 0.0
-fix seat_force polymer addforce 0.0 0.0 -${f_seat_atom}
+fix seat_force mobile addforce 0.0 0.0 -${f_seat_atom}
 # Viscous damping caps the descent speed (terminal v ~ f_seat_atom/seat_gamma)
 # so the body force cannot run the gel away in the unthermostatted z direction.
-fix seat_visc polymer viscous ${seat_gamma}
+fix seat_visc mobile viscous ${seat_gamma}
 fix halt_seat all halt ${strain_freq} v_gel_bot_gap <= ${seat_gap} error continue
 run ${nsteps_seat}
 unfix halt_seat
 print ">>> S1 seated: gel_bot_gap=$(v_gel_bot_gap:%.2f) (target <= ${seat_gap})  step=$(step)"
 
-# S2 -- bring the piston down (seat_force still ON so the gel stays put) until
-#       it just contacts the gel top.  v_piston_prod approach; halt fires within
-#       one strain_freq check of contact, so compression at contact is negligible.
+# S2 -- bring the piston down (seat_force still ON so the gel stays seated at its
+#       equilibrium swelling) until it just contacts the gel top.  v_piston_prod
+#       approach; halt fires within one strain_freq check of contact, so any
+#       compression at contact is negligible.  At contact we RECORD L0 =
+#       piston-support distance: the confined gel height at ~zero load (gel at
+#       equilibrium swelling, piston just touching).  No separate zero-load float
+#       is needed -- the both-species seating already preserved the swelling.
 velocity piston set 0.0 0.0 -${v_piston_prod}
 fix halt_contact all halt ${strain_freq} v_piston_gel_gap <= ${contact_gap} error continue
 run ${nsteps_seat}
 unfix halt_contact
-velocity piston set 0.0 0.0 0.0           # stop the approach velocity
-unfix seat_force                          # release the gel body force so the gel can RE-EXPAND
-unfix seat_visc                           # remove seating damping
-print ">>> S2 contact: piston_gel_gap=$(v_piston_gel_gap:%.2f)  piston_support_gap=$(v_piston_support_gap:%.2f)  step=$(step)"
+velocity piston set 0.0 0.0 0.0           # stop the approach; piston stays rigid + frozen at contact
 
-# S2.5 -- ZERO-LOAD FLOAT.  With the body force gone, hand the piston's z-motion
-#         to the gel under a controlled applied load (f_ref_load; 0 = zero load)
-#         and let the previously-crushed network re-expand and push the piston up
-#         to its zero-load height.  This makes L0 an HONEST zero-strain reference,
-#         independent of how hard S1/S2 squeezed.  Force-controlled sheet:
-#           setforce 0 0 NULL -> x,y frozen, z handed to the gel + control
-#           aveforce NULL NULL f_ref_load -> uniform target z-load on the sheet
-#           viscous -> lets it SETTLE (no bounce/flyaway), nve -> integrates z
-#         NOTE: freeze_piston was already removed in Phase 2 setup; the piston is
-#         held only by rigid_piston (forces off) here, so we release just that.
-print '========================================'
-print 'Phase 1.375: zero-load float -> honest L0'
-print '========================================'
-unfix rigid_piston
-velocity piston set 0.0 0.0 0.0
-fix float_pxy  piston setforce 0.0 0.0 NULL
-fix float_load piston aveforce NULL NULL ${f_ref_load}
-fix float_visc piston viscous ${seat_gamma}
-fix float_nve  piston nve
-print ">>> float start: piston_support_gap=$(v_piston_support_gap:%.2f)  gel_lz_rg=$(v_gel_lz_rg:%.2f)  ref_load_press=${ref_load_press}"
-run ${nsteps_float}
-print ">>> float done:  piston_support_gap=$(v_piston_support_gap:%.2f)  gel_lz_rg=$(v_gel_lz_rg:%.2f)  piston_vz=$(c_piston_vz:%.4f)"
-
-# Restore the rigid, frozen piston at its settled zero-load height
-unfix float_nve
-unfix float_visc
-unfix float_load
-unfix float_pxy
-velocity piston set 0.0 0.0 0.0
-fix rigid_piston piston rigid single force * off off off torque * off off off
-
-# S3 -- record the boundary-strain reference height L0 at the ZERO-LOAD state
-#       (immediate numeric eval).  piston_strain is then a clean boundary strain,
-#       0 here and increasing as the piston descends during the sweep.
-variable L0_gap       equal $(v_piston_support_gap)
+# ----- Record L0 at contact (immediate numeric eval) -----
+# L0 = piston-support COM gap at first contact.  piston_strain is the DISPLACED
+# piston-support distance normalised by L0: 0 here at contact, increasing as the
+# piston descends during the sweep.  This is the AUTHORITATIVE gel strain (halt
+# criterion + the strain plotted against M).
+variable L0_gap        equal $(v_piston_support_gap)
 variable piston_strain equal (v_L0_gap-v_piston_support_gap)/v_L0_gap
-print ">>> L0 (piston-support = confined gel height at zero load) = ${L0_gap}"
+print ">>> S2 contact: piston_gel_gap=$(v_piston_gel_gap:%.2f)  L0 (piston-support) = ${L0_gap}  step=$(step)"
+
+# Release the seating body force now that L0 is set; the gel stays seated and
+# confined between the (frozen) support and the (frozen) piston for the
+# reference window and the compression sweep.
+unfix seat_force
+unfix seat_visc
+
+# Re-reference the Rg gel-thickness baseline to THIS contact state so the
+# diagnostic Rg strain (v_gel_strain) reads ~0 at the epsilon=0 reference and is
+# directly comparable to the authoritative piston strain.  (Previously
+# gel_lz_initial was frozen at the free, pre-seating gel height, giving the Rg
+# strain a large spurious offset.)  gel_strain references v_gel_lz_initial by
+# name, so it picks up the new baseline automatically.
+variable gel_lz_initial delete
+variable gel_lz_initial equal $(v_gel_lz_rg)
+print ">>> Rg baseline reset at contact: gel_lz_initial (Rg) = ${gel_lz_initial}"
 
 print '========================================'
 print 'Phase 1.5: ε=0 reference recording (${ref_avg_steps} steps, ref_nfreq=${ref_nfreq})'
