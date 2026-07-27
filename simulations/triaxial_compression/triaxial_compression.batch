@@ -75,9 +75,15 @@ TYPE=""             # Options: stress, volume, stressvol, or leave empty (just t
 # it unset and silently fall back to a single level.  Export a SCALAR string.
 # -----------------------------------------------------------------------
 
-# example: COMPRESSIONS_LIST=(0.10 0.20 0.30 0.40)
-COMPRESSIONS_LIST=(0.10)
-export COMPRESSIONS="${COMPRESSIONS_LIST[*]}"   # space-separated scalar for run_lammps.sh / LAMMPS -var
+# These are now PISTON PRESSURES (constant-pressure force control), NOT strain
+# targets: the .lmp prescribes each pressure and measures the resulting strain
+# (M = pressure / strain).  From prior runs P=0.1 -> ~10% strain, M~1.  The sweep
+# is cumulative (load steps UP).  The env var is still called COMPRESSIONS and
+# the outputs are still tagged _c<value> so run_lammps.sh / postprocess / the
+# notebook are unchanged -- only the meaning of the numbers changed.
+# example: PISTON_PRESSURES=(0.05 0.10 0.15 0.20)
+PISTON_PRESSURES=(0.10)
+export COMPRESSIONS="${PISTON_PRESSURES[*]}"   # space-separated scalar for run_lammps.sh / LAMMPS -var
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

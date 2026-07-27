@@ -43,8 +43,9 @@
 #                for ref_avg_steps; ALL observables (partial stresses, σ_ss,
 #                σ_pp, solvent mass density) are averaged into "_ref_" files,
 #                emitting several snapshots so the notebook can form CIs.
-#   - Phase 2 (production): constant-velocity piston to comp_percent strain,
-#                then freeze + relax for the remainder of nsteps.
+#   - Phase 2 (production): STRESS-controlled.  A constant piston pressure is
+#                prescribed (force control) and the gel consolidates; the
+#                resulting strain is MEASURED.  M = pressure / strain.
 #
 # Recorded observables (z-profiles, z-normal binning; see ANALYSIS sections):
 #   1) partial stresses of polymer and solvent (group-based stress/atom)
@@ -66,11 +67,11 @@
 # 1 = continuation from a final .data file (via continue_sim.sh)
 #
 # When cont=1 the following are skipped (data file already holds the state):
-#   Phase 0    — NVT equilibration run (box volume/piston position stay as-is)
-#   Phase 0.5  — anisotropic Langevin+NPH re-pressurisation to P_target
+#   Phase 0    — NPT (Langevin+NPH) equilibration (box/piston stay as-is)
+#   Phase 1.25 — seating + L0 recording (so L0 is UNDEFINED under cont=1)
 #   Phase 1.5  — reference recording (reference files already exist)
-#   Phase 2 piston setup — piston stays frozen; halt_compress fires immediately
-#                          and the run becomes a pure stress-relaxation measurement
+# NOTE: cont=1 is only meaningful as a single-state continuation; it is NOT
+#   supported for the pressure sweep (L0/seating are skipped).
 variable cont index 0
 
 # ----- Physical Parameters -----
@@ -82,49 +83,48 @@ variable timestep_prod equal 0.005
 # ----- Phase 0: NVT equilibration steps -----
 variable comp_setup_freq equal 50000    # compression Phase 0 NVT
 
-# ----- Compression Phase 2 -----
-# comp_percent: LEGACY single-target fallback.  The SWEEP uses the index
-# variable `compressions` (below); comp_percent is retained only for reference.
-variable comp_percent    equal 0.1      # (legacy) single strain threshold
-variable v_piston_prod   equal 0.04     # sigma/tau (= 1 sigma per 5000 steps at dt=0.005)
+# ----- Compression Phase 2 (STRESS-CONTROLLED) -----
+# The gel is now loaded by PRESCRIBING a constant piston PRESSURE (force control)
+# and MEASURING the resulting strain -- NOT by driving the piston at fixed
+# velocity to a strain target.  M is then read as (applied pressure)/(measured
+# equilibrium strain).  From prior runs P_piston = 0.1 gives ~10% strain, M ~ 1.
+# v_piston_prod is retained ONLY for the S2 piston-approach in seating (bringing
+# the piston down to first contact); it plays no role in the production load.
+variable v_piston_prod   equal 0.04     # sigma/tau, seating S2 approach only (= 1 sigma / 5000 steps)
 
-# ---- Compression stress-strain SWEEP: cumulative strain targets --------------
+# ---- Piston-PRESSURE SWEEP: constant-pressure operating points ---------------
 # `compressions` is an index-style variable supplied on the command line by
 # run_lammps.sh as:  -var compressions 0.05 0.10 0.15 0.20
-# (set in triaxial_compression.batch via COMPRESSIONS=(...)).  If NOT supplied,
-# the in-script default below (single 0.10 target) is used, reproducing the
-# original single-operating-point run.  A command-line index variable always
-# overrides this fallback.  The script compresses INCREMENTALLY from one target
-# to the next (piston never reverses), holding a production window at each --
-# exactly like shear_slab.lmp's cumulative strain loop.  See the SWEEP LOOP
-# near the end of this file.  cont=1 is NOT supported for a multi-value sweep.
+# (set in triaxial_compression.batch via PISTON_PRESSURES=(...)).  DESPITE THE
+# NAME (kept so the _c<val> output tag and the notebook's COMP_LEVELS reader
+# still work), THE VALUES ARE NOW PISTON PRESSURES, not strain targets.  If NOT
+# supplied, the in-script default below (single P=0.10) is used.  The sweep is
+# CUMULATIVE: the piston load is stepped UP from one pressure to the next (never
+# unloaded), holding a measurement window at each -- like shear_slab.lmp's
+# cumulative loop, but in stress rather than strain.  cont=1 is NOT supported
+# for a multi-value sweep.
 variable compressions      index 0.10
 variable compressions_list index "STALE-run_lammps.sh--no-list-passed--running-single-default-only"
 
-# Safety cap on the per-increment velocity drive.  fix halt normally stops the
-# drive at the target strain LONG before this (a ~5-10% increment needs only a
-# few x10^4 steps at v_piston_prod); this is only a buffer so a level cannot run
-# unbounded if the target is somehow never reached.
+# Settle window: after the load is (re)applied at each level, the piston is held
+# under CONSTANT pressure for up to this many steps so the gel can consolidate
+# (solvent drains, network stress rises to balance the load) and the strain can
+# plateau BEFORE the measurement hold.  Raise if the strain trace has not
+# levelled off by the end of the settle (watch strain_zz / gel_dimensions_rg).
 variable nsteps_comp equal 500000
 
-# ----- Phase 1.25: gel PRE-SEATING + boundary (piston-support) strain -----
-# The generator suspends the gel ~10-12 sigma ABOVE the support, so at first
-# piston-gel contact the piston-support gap is NOT the gel height (a solvent void
-# sits below the gel).  To make the boundary strain eps=(L0-gap)/L0 a TRUE gel
-# strain, Phase 1.25 first SEATS the gel on the support (S1: a uniform downward
-# body force on the WHOLE gel -- polymer AND solvent -- translates it down as a
-# unit so the equilibrium swelling is preserved), then brings the piston down to
-# just touch the gel top and RECORDS L0 = piston-support gap = confined gel
-# height at ~zero load (S2).  The input is already equilibrated at P_target and
-# the both-species seating does not crush the network, so no zero-load float is
-# needed: L0 at contact IS the honest zero-strain reference.  Compression then
-# drives the piston to support + (1-eps)*L0, so eps is a clean boundary strain.
-# TUNE these on a SHORT trial (watch the S1/S2 prints for gel_bot_gap seating):
-variable f_seat_atom  equal 0.02     # per-atom downward force on polymer+solvent for S1 seating (too big=slam, too small=won't seat)
-variable seat_gamma   equal 1.0      # viscous damping on gel during seating; descent speed ~ f_seat_atom/seat_gamma
-variable seat_gap     equal 1.0      # gel_bot within this many sigma of support => "seated" (S1 halt)
-variable contact_gap  equal 1.0      # piston within this many sigma of gel_top => "in contact" (S2 halt)
-variable nsteps_seat  equal 500000   # safety cap for each seating sub-run (S1, S2)
+# ----- Phase 1.25: piston approach to gel contact (records the Rg reference L0) -----
+# The generator suspends the gel ~10-12 sigma ABOVE the support.  There is NO
+# body-force pre-seating: the applied piston PRESSURE (Phase 2) pushes the gel
+# down onto the support itself, and the AUTHORITATIVE strain is Rg-based
+# (eps = (L0 - gel_lz_rg)/L0), which is immune to that rigid translation -- so a
+# separate seating step would only cost wall time.  We only bring the piston to
+# first CONTACT under velocity control (piston-solvent WCA is OFF, so a piston
+# released under load from its parked height would free-fall and slam the gel),
+# then record L0 = gel_lz_rg (the equilibrium-swollen reference thickness).
+variable seat_gamma   equal 1.0      # viscous damping on the force-controlled piston (damps its settle)
+variable contact_gap  equal 1.0      # piston within this many sigma of gel_top => "in contact" (approach halt)
+variable nsteps_seat  equal 500000   # safety cap for the piston-approach run
 
 # ----- Phase 1.5: pre-compression REFERENCE averaging window -----
 # After Phase 0.5 the gel is equilibrated at P_target.  Hold the piston at v=0
@@ -241,7 +241,7 @@ print "========================================"
 print "Triaxial compression simulation: ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
 print "Production steps: ${nsteps}"
-print "Compression piston velocity: ${v_piston_prod} sigma/tau"
+print "Seating piston-approach velocity: ${v_piston_prod} sigma/tau (production is stress-controlled)"
 print "========================================"
 
 
@@ -607,14 +607,16 @@ print "========================================"
 print "Phase 2: Production — piston forcing"
 print "========================================"
 
-# ----- Compression: unfreeze piston, switch to velocity control -----
-# The piston was held rigid+frozen (rigid + setforce 0) through Phase 0/0.5.
-# Unfreeze, then re-fix with force*off off off so the prescribed velocity
-# is maintained exactly (no force-driven acceleration from the gel).
+# ----- Ready the piston for the SEATING approach (rigid, forces off) -----
+# The piston was held rigid+frozen (rigid + setforce 0) through Phase 0.
+# Unfreeze and re-fix with force*off off off so the S2 seating approach can
+# drive it at a prescribed velocity to first gel contact (no force-driven
+# acceleration from the gel).  PRODUCTION loading is NOT velocity-controlled:
+# the piston is switched to constant-pressure force control before the sweep
+# (see ONE-TIME SETUP FOR THE PRESSURE SWEEP).
 #
-# cont=1 compression: piston stays frozen (already at ~comp_percent strain).
-#   halt_compress fires immediately on the first volume_freq check, and the
-#   entire run becomes a pure stress-relaxation measurement.
+# cont=1: piston stays rigid+frozen (seating/L0 are skipped); a continuation is
+#   only meaningful as a single-state relaxation and is unsupported for a sweep.
 if "${cont} == 1" then "jump SELF label_skip_comp_piston_setup"
 unfix freeze_piston
 unfix rigid_piston
@@ -926,83 +928,59 @@ print ">>> Phase 2 start: piston_z=$(c_piston_com[3])  gel_top_rg=$(v_gel_top_rg
 if "${cont} == 1" then "jump SELF label_after_ref_rec"
 
 # ==========================================================================
-#      PHASE 1.25 (NEW): PRE-SEAT THE GEL ON THE SUPPORT, RECORD L0
+#      PHASE 1.25: BRING THE PISTON TO GEL CONTACT, RECORD L0 (Rg)
 # ==========================================================================
-# Makes the boundary strain eps=(L0-piston_support_gap)/L0 a TRUE gel strain.
-# UNTESTED on live LAMMPS -- verify on a short trial; f_seat_atom / caps may
-# need tuning (see the config block).  cont=1 skips this (already jumped away).
+# NO body-force pre-seating: the applied piston PRESSURE (Phase 2) pushes the gel
+# down onto the support on its own, so a separate seating run would only add
+# wall-clock time.  This is safe because the AUTHORITATIVE strain is Rg-based
+# (eps = (L0 - gel_lz_rg)/L0, L0 = the equilibrium-swollen Rg thickness): it is
+# IMMUNE to the rigid translation of the gel down the solvent void.  While the
+# pressure first translates the (still-uncompressed) gel onto the support,
+# gel_lz_rg is unchanged so eps stays ~0; eps rises only once the network seats
+# and actually compresses.  The gel keeps its equilibrium swelling until then.
+#
+# We DO still bring the piston to first contact under VELOCITY control before the
+# load is applied: piston-solvent WCA is OFF, so a piston released under force
+# control from its parked height would free-fall through the solvent and slam the
+# gel.  The controlled approach avoids that and pins the moment we record
+# L0 = gel_lz_rg (the equilibrium-swollen reference thickness).
 print '========================================'
-print 'Phase 1.25: pre-seating gel onto support'
+print 'Phase 1.25: piston approach to gel contact'
 print '========================================'
-print ">>> pre-seat start: gel_bot_gap=$(v_gel_bot_gap:%.2f)  piston_gel_gap=$(v_piston_gel_gap:%.2f)  piston_support_gap=$(v_piston_support_gap:%.2f)"
+print ">>> approach start: gel_bot_gap=$(v_gel_bot_gap:%.2f)  piston_gel_gap=$(v_piston_gel_gap:%.2f)  piston_support_gap=$(v_piston_support_gap:%.2f)"
 
-# S1 -- uniform downward body force TRANSLATES the whole gel down onto the
-#       support.  The force is applied to the mobile group (polymer AND solvent),
-#       NOT polymer only: pushing the network and its solvent down TOGETHER lets
-#       the gel translate as a unit and preserves its equilibrium swelling,
-#       instead of driving the network down THROUGH its solvent (which strips
-#       solvent out of the network and pre-strains it before any compression).
-#       nvt_prod (mobile) integrates; halt when the gel bottom is within seat_gap
-#       of the support.
-#       NOTE: solvent-support pair is non-interacting (pair_coeff 3 4 = 0), so
-#       free solvent below the network can pass through the support and wrap via
-#       the z-PBC.  Keep the seat short / f_seat_atom modest and watch the
-#       solvent-density trace so drainage does not deplete the reservoir; raise
-#       f_seat_atom for a faster seat if drainage is significant.
-velocity piston set 0.0 0.0 0.0
-fix seat_force mobile addforce 0.0 0.0 -${f_seat_atom}
-# Viscous damping caps the descent speed (terminal v ~ f_seat_atom/seat_gamma)
-# so the body force cannot run the gel away in the unthermostatted z direction.
-fix seat_visc mobile viscous ${seat_gamma}
-fix halt_seat all halt ${strain_freq} v_gel_bot_gap <= ${seat_gap} error continue
-run ${nsteps_seat}
-unfix halt_seat
-print ">>> S1 seated: gel_bot_gap=$(v_gel_bot_gap:%.2f) (target <= ${seat_gap})  step=$(step)"
-
-# S2 -- bring the piston down (seat_force still ON so the gel stays seated at its
-#       equilibrium swelling) until it just contacts the gel top.  v_piston_prod
-#       approach; halt fires within one strain_freq check of contact, so any
-#       compression at contact is negligible.  At contact we RECORD L0 =
-#       piston-support distance: the confined gel height at ~zero load (gel at
-#       equilibrium swelling, piston just touching).  No separate zero-load float
-#       is needed -- the both-species seating already preserved the swelling.
+# Bring the piston down at v_piston_prod until it just contacts the gel top.  The
+# halt fires within one strain_freq check of contact, so compression at contact
+# is negligible and gel_lz_rg is still the equilibrium-swollen thickness.
 velocity piston set 0.0 0.0 -${v_piston_prod}
 fix halt_contact all halt ${strain_freq} v_piston_gel_gap <= ${contact_gap} error continue
 run ${nsteps_seat}
 unfix halt_contact
 velocity piston set 0.0 0.0 0.0           # stop the approach; piston stays rigid + frozen at contact
 
-# ----- Record L0 at contact (immediate numeric eval) -----
-# L0 = piston-support COM gap at first contact.  piston_strain is the DISPLACED
-# piston-support distance normalised by L0: 0 here at contact, increasing as the
-# piston descends during the sweep.  This is the AUTHORITATIVE gel strain (halt
-# criterion + the strain plotted against M).
+# ----- Record the boundary-strain reference L0_gap (diagnostic only) -----
+# L0_gap = piston-support COM gap at contact.  NOTE it INCLUDES the solvent void
+# below the still-suspended gel, so piston_strain over-reads during the initial
+# translation -- it is a DIAGNOSTIC only; the Rg strain below is the clean,
+# authoritative measure.
 variable L0_gap        equal $(v_piston_support_gap)
 variable piston_strain equal (v_L0_gap-v_piston_support_gap)/v_L0_gap
-print ">>> S2 contact: piston_gel_gap=$(v_piston_gel_gap:%.2f)  L0 (piston-support) = ${L0_gap}  step=$(step)"
+print ">>> contact: piston_gel_gap=$(v_piston_gel_gap:%.2f)  piston_support_gap (incl void) = ${L0_gap}  step=$(step)"
 
-# Release the seating body force now that L0 is set; the gel stays seated and
-# confined between the (frozen) support and the (frozen) piston for the
-# reference window and the compression sweep.
-unfix seat_force
-unfix seat_visc
-
-# Re-reference the Rg gel-thickness baseline to THIS contact state so the
-# diagnostic Rg strain (v_gel_strain) reads ~0 at the epsilon=0 reference and is
-# directly comparable to the authoritative piston strain.  (Previously
-# gel_lz_initial was frozen at the free, pre-seating gel height, giving the Rg
-# strain a large spurious offset.)  gel_strain references v_gel_lz_initial by
+# ----- Re-reference the Rg gel-thickness baseline to THIS contact state -----
+# This is the AUTHORITATIVE reference thickness L0 (equilibrium-swollen gel).
+# v_gel_strain = (L0 - gel_lz_rg)/L0 then reads ~0 at the epsilon=0 reference and
+# rises only with true compression.  gel_strain references v_gel_lz_initial by
 # name, so it picks up the new baseline automatically.
 variable gel_lz_initial delete
 variable gel_lz_initial equal $(v_gel_lz_rg)
-print ">>> Rg baseline reset at contact: gel_lz_initial (Rg) = ${gel_lz_initial}"
+print ">>> Rg reference thickness L0 = ${gel_lz_initial}  (authoritative strain denominator)"
 
 print '========================================'
 print 'Phase 1.5: ε=0 reference recording (${ref_avg_steps} steps, ref_nfreq=${ref_nfreq})'
 print '========================================'
 
-# Hold the piston still during the reference window (cancels the
-# v_piston_prod assignment made during Phase 2 setup; restored below).
+# Hold the piston still (rigid + frozen at contact) during the reference window.
 velocity piston set 0.0 0.0 0.0
 
 # ----- Coarse partial-stress component references -----
@@ -1058,8 +1036,9 @@ unfix ref_dens
 unfix ref_dens_fs
 unfix ref_dens_fp
 
-# Reinstate the production-velocity assignment for the actual compression
-velocity piston set 0.0 0.0 -${v_piston_prod}
+# Piston stays rigid + frozen at the contact position through the end of the
+# reference window; the sweep loop below switches it to constant-pressure force
+# control.  (No production velocity is assigned -- loading is stress-controlled.)
 
 print '>>> Reference recording done.  step=$(step)  gel_strain=$(v_gel_strain:%.4f)'
 
@@ -1067,27 +1046,54 @@ label label_after_ref_rec
 
 
 # ==========================================================================
-#            ONE-TIME SETUP FOR THE COMPRESSION SWEEP (post-reference)
+#            ONE-TIME SETUP FOR THE PRESSURE SWEEP (post-reference)
 # ==========================================================================
-# The gel is at P_target, the epsilon=0 reference files are written, and the
-# piston is velocity-controlled (rigid, all forces off) with velocity currently
-# -v_piston_prod.  The loop below walks the cumulative ${compressions} targets:
-# for each, it (a) drives the piston until gel_strain >= target (fix halt),
-# (b) freezes the piston, and (c) runs an NSTEPS production HOLD recording the
-# full observable set tagged _c<target>.  The next iteration resumes driving
-# FURTHER from the held state (cumulative), matching shear_slab.lmp.
+# The gel is at P_target, the epsilon=0 reference files are written, the Rg
+# reference thickness L0 (gel_lz_initial) was recorded at piston-gel contact, and
+# the piston is rigid + frozen at that contact position.  The loop below walks
+# the cumulative ${compressions} PRESSURE levels: for each it (a) sets the
+# constant piston load = P*lx*ly, (b) runs a settle window so the gel
+# consolidates and the strain plateaus, and (c) runs an NSTEPS measurement HOLD
+# (load still applied) recording the full observable set tagged _c<pressure>.
+# STRAIN IS THE MEASURED OUTPUT (Rg strain vs L0, and the piston-support boundary
+# strain); M = applied pressure / measured strain.
 
 variable gel_strain_pct equal v_gel_strain*100.0
 shell mkdir -p output_files/chemical_potential
 
+# ----- Switch the piston from rigid+frozen to CONSTANT-PRESSURE force control -----
+# Periodic full-box piston cannot use fix rigid for a force load (see the
+# slab_with_support periodic-piston note and triaxial_permeation.lmp):
+#   setforce 0 0 NULL  -> zero x,y forces (no lateral drift), z handed to control
+#   nve                -> integrates the piston z-motion
+#   viscous            -> damps the piston's z-settling (no bounce/flyaway); at
+#                         mechanical equilibrium <v>=0 so it does not bias the
+#                         equilibrium position or the applied pressure
+#   aveforce NULL NULL f -> equalises the z-force across piston atoms (they move
+#                         as a rigid slab) AND ADDS the uniform external load f
+#                         per atom; at equilibrium the gel WCA reaction balances
+#                         the load and the piston stops.  The per-level load
+#                         (below) tracks lx*ly so the applied PRESSURE is held
+#                         constant.  A zero-load placeholder is set here so the
+#                         per-level unfix/refix is always valid.
+# (cont=1 is unsupported for the sweep -- it skipped seating so L0 is undefined.)
+unfix rigid_piston
+velocity piston set 0.0 0.0 0.0
+fix setforce_piston piston setforce 0.0 0.0 NULL
+fix nve_piston      piston nve
+fix visc_piston     piston viscous ${seat_gamma}
+fix aveforce_piston piston aveforce NULL NULL 0.0
+
 # gel_setup movie is still open (from Phase 0).  It is undumped after the FIRST
-# drive (= first time the piston stops).  This flag makes a multi-level sweep
-# record only that first drive in the movie and keeps cont=1 (no gel_setup) safe.
+# level's loading (= first time the piston is loaded).  This flag makes a
+# multi-level sweep record only that first loading in the movie and keeps cont=1
+# (no gel_setup) safe.
 variable movie_open equal 1
 
 print "############################################################"
-print ">>> COMPRESSION SWEEP LIST (raw from run_lammps.sh): ${compressions_list}"
-print ">>>   first target=${compressions}   drive cap=${nsteps_comp}   hold=${nsteps} per level"
+print ">>> PISTON PRESSURE SWEEP LIST (raw from run_lammps.sh): ${compressions_list}"
+print ">>>   first pressure=${compressions}   settle cap=${nsteps_comp}   hold=${nsteps} per level"
+print ">>>   Rg reference thickness L0 = ${gel_lz_initial}"
 print ">>>   If the line above reads 'STALE-run_lammps.sh...', only ONE level"
 print ">>>   will run -- update run_lammps.sh on the cluster and resubmit."
 print "############################################################"
@@ -1106,13 +1112,13 @@ print "############################################################"
 label comp_loop
 
 print "########################################################"
-print "  COMPRESSION TARGET (cumulative) = ${compressions}"
+print "  PISTON PRESSURE (cumulative) = ${compressions}"
 print "########################################################"
 
-# ----- Per-level loggers that span BOTH the drive and the hold -----
+# ----- Per-level loggers that span BOTH the settle and the hold -----
 # fix print (and one GLOBAL ave/time on c_piston_fz) -- none use a compute
 # chunk/atom, so they carry NO lock and may be unfixed at any step.  They record
-# the piston descent + force rise AND the subsequent relaxation during the hold.
+# the piston descent + strain rise during loading AND the equilibrated hold.
 fix out_piston_pos all print ${strain_freq} "$(step) $(c_piston_com[3])" &
     file output_files/piston_data/piston_position_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
 fix out_piston_vel all print ${strain_freq} "$(step) $(c_piston_vz)" &
@@ -1148,36 +1154,36 @@ fix out_polymer_com all print ${strain_freq} &
     "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
     file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
 
-# ----- PHASE 2a: drive the piston until gel_strain >= this cumulative target -----
-velocity piston set 0.0 0.0 -${v_piston_prod}
-# halt checked on the fine strain cadence so the piston stops as close as
-# possible to exactly ${compressions} (less overshoot than a coarse check).
-# Halt on the PISTON-SUPPORT boundary strain (referenced to the seated L0), not
-# the Rg strain -- this is the clean, robust engineering strain of the confined
-# gel.  Rg and BB strains are still logged for comparison.
-fix halt_compress all halt ${strain_freq} v_piston_strain >= ${compressions} error continue
-# Drive-phase trajectory: the gel_setup movie (open since Phase 0) is bumped to
-# a FINER cadence here so the piston landing is resolved — it captures the slab
-# being pushed through the solvent and onto the support — then it is undumped
-# right after the drive (= when the piston stops).  This replaces the old
-# separate gel_drive dump.  Guarded by cont (cont=1 has no gel_setup) and the
-# movie_open flag (multi-level sweeps record only the FIRST drive).
+# ----- PHASE 2a: apply constant piston PRESSURE and let the gel consolidate -----
+# Set the per-level load: total external z-force on the piston = -P*lx*ly
+# (downward), applied as -P*lx*ly/N per atom via aveforce (P = ${compressions}).
+# lx*ly is re-evaluated every step so the applied PRESSURE is held exact.  The
+# cumulative sweep steps this UP each level (aveforce unfixed/refixed so the new
+# load replaces the old).  Loading is STRESS-controlled: the piston finds its own
+# equilibrium strain, which is the MEASURED quantity -- there is NO strain halt.
+variable f_load_atom equal -${compressions}*lx*ly/count(piston)
+unfix aveforce_piston
+fix aveforce_piston piston aveforce NULL NULL v_f_load_atom
+# Loading-phase trajectory: the gel_setup movie (open since Phase 0) is bumped to
+# a FINER cadence for the FIRST level's loading so the piston descent under load
+# is resolved, then undumped right after.  Guarded by cont (cont=1 has no
+# gel_setup) and the movie_open flag (records only the first loading).
 if "${cont} == 0 && ${movie_open} == 1" then &
     "dump_modify traj_setup every ${drive_dump_freq}"
-print ">>> [level ${compressions}] driving piston (cap ${nsteps_comp} steps)..."
+print ">>> [P=${compressions}] loading piston at constant pressure (settle cap ${nsteps_comp} steps)..."
 run ${nsteps_comp}
-unfix halt_compress
 if "${cont} == 0 && ${movie_open} == 1" then &
     "undump traj_setup" &
     "variable movie_open delete" &
     "variable movie_open equal 0"
-print ">>> [level ${compressions}] drive done: gel_strain = $(v_gel_strain:%.4f)  (target ${compressions})  step=$(step)"
+print ">>> [P=${compressions}] settle done: gel_strain(Rg) = $(v_gel_strain:%.4f)  piston_strain = $(v_piston_strain:%.4f)  step=$(step)"
 
-# ----- Freeze the piston at this strain for the production hold -----
-velocity piston set 0.0 0.0 0.0
+# The piston stays under CONSTANT-PRESSURE force control through the measurement
+# hold below -- it is NOT frozen (freezing would relax the applied load).  The
+# strain recorded during the hold is the equilibrium response to pressure P.
 
-# ----- Reset the displacement reference to the (held) compressed state so
-#       u_z(z,0)=0 at the onset of THIS level's relaxation (for D_c). -----
+# ----- Reset the displacement reference to the loaded state so
+#       u_z(z,0)=0 at the onset of THIS level's measurement hold (for D_c). -----
 variable uz_poly delete
 uncompute displace_poly
 compute displace_poly polymer displace/atom
@@ -1261,7 +1267,7 @@ fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_str
     file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
 
 variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
-print ">>> [level ${compressions}] production HOLD for ${hold_steps} steps (>= ${nsteps}, aligned to nfreq_stress=${nfreq_stress})"
+print ">>> [P=${compressions}] measurement HOLD (constant pressure) for ${hold_steps} steps (>= ${nsteps}, aligned to nfreq_stress=${nfreq_stress})"
 run ${hold_steps}
 
 # ----- Teardown this level's hold fixes/dumps (lock released on the epoch-
@@ -1310,7 +1316,7 @@ unfix out_piston_force
 unfix out_piston_vel
 unfix out_piston_pos
 
-print ">>> Completed level ${compressions}:  gel_strain = $(v_gel_strain:%.4f)  step=$(step)"
+print ">>> Completed P=${compressions}:  gel_strain(Rg) = $(v_gel_strain:%.4f)  piston_strain = $(v_piston_strain:%.4f)  step=$(step)"
 
 variable hold_steps delete
 
