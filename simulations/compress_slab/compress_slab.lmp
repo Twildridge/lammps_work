@@ -193,7 +193,13 @@ variable lang_T_damp equal 1.0   # Langevin damping (τ)
 # small offset to the NPH target (slab_with_flow needed ≈ +0.41 for its system).
 
 # Output frequencies
-variable thermo_freq     equal 25000
+# index (not equal) style so a debug run can crank it up from the command line
+# without editing the script:  lmp ... -var thermo_freq 1
+# At the production value of 25000 there is a 25k-step blind spot between
+# prints, which makes "hung" and "merely slow" look identical, and means the
+# ONLY steps that appear are multiples of 25000 plus the first/last step of
+# each run and each minimize.
+variable thermo_freq     index 25000
 variable dump_freq_setup equal 25000
 variable dump_freq_prod  equal 25000
 variable stress_freq     equal 10000
@@ -451,7 +457,24 @@ variable Pi_osm  equal (v_sigP_xx+v_sigP_yy+v_sigP_zz)/3.0
 # stresses and the total osmotic pressure Π so they are logged every thermo step.
 thermo_style custom step c_gel_temp pe ke etotal press c_gel_press &
     v_sigP_xx v_sigP_yy v_sigP_zz v_Pi_osm vol lx ly lz xy xz yz
-thermo_modify lost warn
+# ── Lost-atom handling ────────────────────────────────────────────────────────
+# WAS: `lost warn`.  That setting is why the 2026-07-24 runs "died with no
+# error": with `warn`, LAMMPS does NOT abort when atoms go missing — it prints a
+# warning and keeps integrating a now-inconsistent system.  Whatever touches the
+# missing atoms next (FENE bonds, the plate fixes, the stress/atom + reduce
+# computes feeding sigP_*) then reads garbage or walks off an array, and the
+# process dies silently instead of printing a diagnosable ERROR line.
+#
+# `error` restores the abort so LAMMPS names the actual failure.  Revert with
+#   -var lost_atoms warn
+# once the underlying problem is found (or if legitimately-escaping orphan
+# type-5 atoms turn out to be the reason `warn` was set in the first place).
+variable lost_atoms index error
+
+# flush yes: force a flush after every thermo line.  Without it the tail of the
+# output is lost in the stdio buffer when the process dies abnormally — so the
+# last thing you see is NOT the last thing that happened.
+thermo_modify lost ${lost_atoms} flush yes
 thermo ${thermo_freq}
 
 
@@ -489,6 +512,13 @@ fix freeze_plates_min plate setforce 0.0 0.0 0.0
 velocity plate set 0.0 0.0 0.0
 minimize 1.0e-4 1.0e-6 5000 50000
 unfix freeze_plates_min
+
+# Phase marker.  `minimize` advances the timestep counter by its ITERATION count,
+# so the step number after this line is the number of CG iterations taken (11 in
+# the 2026-07-24 run), not a dynamics step.  Because thermo_freq is 25000, a
+# thermo line at a small step number like ~158 can ONLY have come from a minimize
+# or from the first/last step of a run — this marker disambiguates which.
+print ">>> Minimize COMPLETE: step=$(step) (= CG iterations)  T=$(c_gel_temp)  PE=$(pe)  Press=$(press)"
 
 # Seed gel velocities at temp_target.  The input config is cold (T=0); without
 # this the thermostats must heat from exactly zero, which is slow and leaves
