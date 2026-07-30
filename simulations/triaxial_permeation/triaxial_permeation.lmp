@@ -17,7 +17,7 @@
 # Behaviour:
 #   - Phase 0:   NVT equilibration at fixed box volume (piston z-free, floats;
 #                piston-solvent WCA OFF so the piston can be repositioned later).
-#   - Phase 0.5: anisotropic Langevin + NPH re-pressurises the box to P_target
+#   - Phase 0.5: z-only Langevin + NPH re-pressurises the box to Pzz=P_target
 #                (the fixed-volume read relaxes below P_target otherwise).
 #   - Phase 2:   (1) REPOSITION the piston to the 35/65 free-solvent split
 #                (piston-solvent still OFF -> slides freely); (2) turn piston-
@@ -203,7 +203,7 @@ fix rigid_support support rigid single force * off off off torque * off off off
 
 
 # Piston: z-motion enabled from the start (rigid, z-DOF free) so it floats on
-# the solvent.  Released to nve+setforce during Phase 0.5 (aniso NPH) so it
+# the solvent.  Released to nve+setforce during Phase 0.5 (z-only NPH) so it
 # scales with the box, then restored to this z-free rigid float.  In Phase 2 it
 # is repositioned (velocity), then switched to constant-pressure force control.
 velocity piston set 0.0 0.0 0.0
@@ -235,7 +235,7 @@ variable piston_pressure_z equal c_piston_fz/v_piston_area  # force normalised b
 #                    PHASE 0: NVT EQUILIBRATION
 # ==========================================================================
 # Equilibrate at the current box volume.  No pressure adjustment here — the box
-# is re-pressurised to P_target by the aniso Langevin+NPH block (Phase 0.5).
+# is re-pressurised to P_target by the z-only Langevin+NPH block (Phase 0.5).
 # Box dimensions stay fixed throughout Phase 0.
 
 print "========================================"
@@ -277,10 +277,10 @@ label label_after_phase0
 run 0
 
 # ==========================================================================
-#              PHASE 0.5: ANISOTROPIC LANGEVIN + NPH -> P_target
+#              PHASE 0.5: Z-ONLY LANGEVIN + NPH -> Pzz=P_target
 # ==========================================================================
-# Re-pressurises the box to P_target by anisotropically swelling/deswelling the
-# gel (each of x,y,z barostatted to the full scalar target).  Needed because the
+# Re-pressurises the box to Pzz=P_target by swelling/deswelling the gel in z ONLY
+# (only the z box dimension is barostatted; x,y stay fixed).  Needed because the
 # fixed-volume read relaxes below P_target.  The piston and support are
 # temporarily put on nve+setforce so they scale freely with the box without
 # contributing spurious virial to the barostat, then restored afterward.
@@ -299,18 +299,18 @@ run 0
 
 variable npt_P_damp    equal 50.0   # barostat damping (τ); increase if FENE errors appear
 variable npt_p05_steps equal 120000  # run length; increase if mobile_press not converged
-# Aniso NPH targets the FULL scalar pressure per direction (thermo `Press`),
-# exactly like slab_with_support.lmp's aniso barostat and
-# triaxial_compression.lmp's Phase 0.5.  NO +0.41 kinetic offset (that was the
-# old iso-NPH convention).  Without this block the fixed-volume read relaxes to
-# ~1.2 instead of P_target on the periodic geometry.
+# z-only NPH targets the zz component of the stress tensor (Pzz), exactly like
+# triaxial_compression.lmp's Phase 0.5.  Transverse gel stresses do not enter the
+# barostat, so the reservoir is held at Pzz=P_target.  NO +0.41 kinetic offset
+# (that was the old iso-NPH convention).  Without this block the fixed-volume read
+# relaxes to ~1.2 instead of P_target on the periodic geometry.
 variable npt_P05_target equal ${P_target}
 
 # ----- cont=1: box already at equilibrium pressure -> skip Phase 0.5 -----
 if "${cont} == 1" then "jump SELF label_after_phase05"
 
 print '========================================'
-print 'Phase 0.5 (permeation): Langevin+NPH aniso -> full Press target=${npt_P05_target}'
+print 'Phase 0.5 (permeation): Langevin+NPH z-only -> Pzz target=${npt_P05_target}'
 print '========================================'
 
 # Release piston to scale with the box (nve+setforce, no fix rigid) so it does
@@ -324,10 +324,13 @@ unfix rigid_support
 fix freeze_support support setforce 0.0 0.0 0.0
 fix nve_support    support nve
 
-# Langevin + NPH (aniso).  Langevin's per-atom friction beats FENE heating that
+# Langevin + NPH (z-only).  Langevin's per-atom friction beats FENE heating that
 # would otherwise leave a Nose-Hoover thermostat stuck hot.
 fix lang_p05 mobile langevin ${temp_target} ${temp_target} 1.0 48279
-fix nph_p05  mobile nph aniso ${npt_P05_target} ${npt_P05_target} ${npt_P_damp}
+# z-ONLY barostat: only Pzz drives box relaxation; x,y box dims stay fixed.
+# Transverse (xx,yy) stresses that develop in the gel during permeation therefore
+# never feed the barostat -> the solvent reservoir is held at Pzz=P_target=1.5.
+fix nph_p05  mobile nph z ${npt_P05_target} ${npt_P05_target} ${npt_P_damp}
 run ${npt_p05_steps}
 unfix lang_p05
 unfix nph_p05

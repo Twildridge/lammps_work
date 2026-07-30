@@ -42,7 +42,9 @@ lammps_work/                    ← This git repository
 │
 ├── simulations/                ← One folder per simulation type
 │   ├── slab_with_support/      ← Gel equilibration and compression (main workhorse)
-│   ├── slab_with_flow/         ← Permeation OR compression with piston forcing (compression_mode switch)
+│   ├── triaxial_compression/   ← CURRENT axial-compression workflow (periodic slab, force-piston) — split from slab_with_flow
+│   ├── triaxial_permeation/    ← CURRENT permeation workflow (periodic slab, force-piston) — split from slab_with_flow
+│   ├── slab_with_flow/         ← LEGACY combined permeation/compression (compression_mode switch) — superseded by the two triaxial_* folders
 │   ├── shear_slab/             ← Shear modulus measurement (plate-driven xz shear; current G workflow)
 │   ├── slab_elongation/        ← LEGACY uniaxial elongation prototype — superseded by shear_slab
 │   ├── solvent_phase/          ← Pure solvent equation of state sweep
@@ -61,6 +63,7 @@ lammps_work/                    ← This git repository
 │   ├── add_walls_to_slab.ipynb         ← Build slab data file (no angles)
 │   ├── add_walls_with_angles.ipynb     ← Build slab data file (with angles)
 │   ├── slab_with_support.ipynb         ← Build basic slab geometry
+│   ├── slab_with_support_periodic.ipynb ← CURRENT: xy-periodic crosslinked slab (bonds wrap x,y only; finite-z; p p p; one support+piston per z-period; no side padding). Input for triaxial_* runs
 │   ├── slab_with_support_angled.ipynb  ← Build angled-chain slab geometry
 │   ├── slab_with_support_old.ipynb     ← Legacy slab builder (kept for reference)
 │   ├── slab_with_support_old_2.ipynb   ← Legacy slab builder (kept for reference)
@@ -70,14 +73,20 @@ lammps_work/                    ← This git repository
 │   ├── add_more_plates_to_gel.ipynb    ← Variant: plates on all six faces (experimental)
 │   ├── pure_polymer.ipynb              ← Build pure polymer data file
 │   ├── pure_solvent_1.ipynb            ← Build pure solvent data file
-│   ├── compression_analysis.ipynb           ← Current: M, Dc, pore pressure, volume fractions (compression runs)
+│   ├── triaxial_compression.ipynb           ← CURRENT: M, network stress, pore pressure vs compression-level sweep (triaxial_compression runs)
+│   ├── triaxial_permeation.ipynb            ← CURRENT: piston/thickness/stress/density/permeate + partial-vs-ss, with Phase 1.5 reference overlays (triaxial_permeation runs)
+│   ├── bulk_modulus_analysis.ipynb          ← Drained vs osmotic bulk modulus K
+│   ├── compression_analysis.ipynb           ← Older: M, Dc, pore pressure, volume fractions (slab_with_flow compression) — superseded by triaxial_compression
 │   ├── longitudinal_modulus_analysis.ipynb  ← Older M-only notebook (superseded by compression_analysis)
-│   ├── permeation_analysis.ipynb            ← Flow profiles & pore pressure evolution (compression_mode=0)
+│   ├── permeation_analysis.ipynb            ← Older flow profiles & pore pressure (slab_with_flow mode 0) — superseded by triaxial_permeation
 │   ├── flow_poroelasticity_analysis.ipynb   ← Older flow notebook (superseded by permeation_analysis)
 │   ├── shear_analysis.ipynb                 ← G, N1/N2, stress profiles (shear_slab output)
 │   ├── volume_of_mixing.ipynb               ← ΔV_mix(P*) and φ(P*) across pressure sweep (syncs from Expanse via paramiko; requires isolated_* data files)
 │   ├── compression_analysis_backup.ipynb    ← Frozen snapshot of compression notebook
 │   ├── plot_lammps_log.py      ← Plot T, P, volume convergence from log.lammps (+ shear diagnostics)
+│   ├── plot_compression_strain_sweep.py ← Plot stress-strain / M across a triaxial_compression sweep
+│   ├── plot_shear_strain_sweep.py ← Plot stress-strain / G across a shear_slab sweep
+│   ├── split_gel.py            ← CLI: split isolated gel into polymer-only / solvent-only (used by volmix_sweep)
 │   ├── plot_stress_profiles.py ← Plot stress and volume fraction profiles
 │   ├── plot_piston_data.py     ← Plot piston position and velocity
 │   └── plot_eos.py             ← Plot P* vs ρ* for EOS sweeps (solvent_phase / polymer_phase)
@@ -248,8 +257,10 @@ The `run_lammps` scripts handle all the bookkeeping automatically: creating time
 
 | Folder | What it simulates | Typical use |
 |--------|------------------|-------------|
-| `slab_with_support/` | Gel equilibration (free-swelling) or axial compression with piston. NPT uses **`aniso`** so x, y, z each relax independently to P* — the gel reaches its true equilibrium swelling instead of being locked to the data file's aspect ratio (see **Barostat choice** note at the end of this guide). | Equilibrate gel; measure M (longitudinal modulus) |
-| `slab_with_flow/` | Piston-forced permeation **or** compression of a pre-equilibrated walled gel — toggled by `variable compression_mode` (0 = permeation, 1 = compression). Phase 0.5 piston pre-compression brings the gel to P* = 1.5 before production. | Measure flux, Dc, pore pressure profiles (mode 0); load gel to measure M (mode 1) |
+| `slab_with_support/` | Gel equilibration (free-swelling) or axial compression with piston. NPT uses **`aniso`** so x, y, z each relax independently to P* — the gel reaches its true equilibrium swelling instead of being locked to the data file's aspect ratio (see **Barostat choice** note at the end of this guide). A `pre_swell` knob scales the lattice constant `a` so the gel starts near its swollen equilibrium (faster convergence; pdamp raised 1→5). | Equilibrate gel; measure M (longitudinal modulus) |
+| `triaxial_compression/` | **Current** axial-compression workflow. Periodic (`p p p`) laterally-unconfined slab from `slab_with_support_periodic.ipynb`, no side walls. A **force-controlled piston** (`setforce`+`aveforce`+`nve`) loads the gel in z; the box is not barostatted during loading. Supports a **cumulative pressure sweep** (`COMPRESSIONS` array in the `.batch`, `_c<level>` output tags) — each level is a piston pressure and the run measures the resulting strain, so **M = pressure / strain**. | Measure M vs compression level |
+| `triaxial_permeation/` | **Current** permeation workflow. Same periodic slab and force-piston machinery, driving solvent through the network at constant piston force. | Measure flux, Dc, pore-pressure profiles |
+| `slab_with_flow/` | **Legacy** combined script: piston-forced permeation **or** compression of a pre-equilibrated *walled* gel — toggled by `variable compression_mode` (0 = permeation, 1 = compression). Superseded by the two `triaxial_*` folders (periodic geometry, no walls). Kept for reference. | (superseded) |
 | `shear_slab/` | Plate-driven xz shear of an isolated swollen gel with attached plates (input from `add_plates_to_gel.ipynb`). Phase 1a NPT (50k) + Phase 1b NVT (100k) + Phase 2 shear with `fix halt` at γ = 10% + Phase 3 NVT production. | Measure G (shear modulus) from ⟨σ_p,xz⟩ / γ |
 | `slab_elongation/` | Legacy uniaxial elongation prototype (NPT → fix deform z → NVT) | Superseded by `shear_slab/`; folder kept temporarily |
 | `solvent_phase/` | Pure solvent pressure sweep across many state points | Build solvent EOS |
@@ -542,7 +553,16 @@ python ~/Documents/lammps_work/scripts/plot_piston_data.py \
 
 Open these on your MacBook in JupyterLab (`jupyter lab`), pointing them at data files in `flow_data_local/<sim_type>/<RUN_ID>/`. Each notebook has a config cell near the top — only `RUN_ID` and `sim_name` change between runs; all paths derive from those.
 
-**`compression_analysis.ipynb`**
+**`triaxial_compression.ipynb`** (current)
+Reads a `triaxial_compression` run (or cumulative pressure sweep). Extracts the longitudinal modulus M from the piston stress vs. strain relationship (M = pressure / strain), network stress σ′ = total − reservoir baseline, and flat pore-pressure profiles. Sweep conventions: `COMP_LEVELS`/`DETAIL_LEVEL` select which `_c<level>` tags to load; per-level reservoir normalisation; block-bootstrap piston CI; z-grid origin includes box zlo (the stress z-coordinates are plotted as z/Lz with support/piston lines). Supersedes `compression_analysis.ipynb`.
+
+**`triaxial_permeation.ipynb`** (current)
+Reads a `triaxial_permeation` run. Six panels — piston, thickness, stress, density, permeate, and partial-vs-ss stress — with Phase 1.5 reference overlays. Supersedes `permeation_analysis.ipynb`.
+
+**`bulk_modulus_analysis.ipynb`**
+Drained vs. osmotic bulk modulus K. The osmotic K_osm = Π − dW/dV carries the absolute swelling pressure (large); the *drained* K should be computed like M (network stress response), not from the osmotic branch.
+
+**`compression_analysis.ipynb`** (older)
 Reads partial stress, volume fraction, and pore pressure data from a `slab_with_flow` compression run (`compression_mode = 1`). Extracts: longitudinal modulus M (both from network-stress integration and Voronoi-tessellated φ_p/φ_s decomposition), cooperative diffusivity Dc from φ_p(z,t) relaxation, and pore-pressure profiles. Inputs: `stress_tensor_polymer_*.dat`, `stress_profile_z_*.dat`, trajectory file. Supersedes `longitudinal_modulus_analysis.ipynb` (still present for reference).
 
 **`permeation_analysis.ipynb`**
@@ -899,10 +919,14 @@ Full details are in `lj_units_cheat_sheet.md`. Key conversions for PEG/water:
 Match the barostat to the geometry:
 
 - **Free-swelling gel in a solvent bath** (`slab_with_support` equilibration): use `fix npt … aniso P P pdamp`. Each of x, y, z is barostatted independently to the target pressure, so the box adopts whatever aspect ratio balances σxx = σyy = σzz = P and the gel relaxes to its own equilibrium shape — the analogue of a hydrogel free to swell in all directions. **Do not use `iso` here:** `iso` controls only the mean (hydrostatic) pressure and freezes the box aspect ratio, so any anisotropic stress or z-padding baked into the data file is never relaxed. Switching `slab_with_support` from `iso` → `aniso` (2026-06-24) fixed exactly this: the gel had been stuck artificially swollen along z, and with `aniso` it reaches a noticeably taller, true equilibrium swelling. Use `couple xy` only if you must enforce lateral isotropy (a free gel reaches it anyway); use `tri` only to relax shear stress (lets the box tilt).
-- **Walled / piston-driven runs** (`triaxial_compression`, `triaxial_permeation`, `slab_with_flow`): production is `fix nvt` with the box fixed and the rigid piston as the sole z-actuator — **no box barostat in production** (a barostat would double-control z and fight the piston). The only barostat is the `fix nph iso` Phase-0.5 pre-equilibration, run with the piston/walls frozen.
+- **Piston-driven runs** (`triaxial_compression`, `triaxial_permeation`, `slab_with_flow`): production is `fix nvt` with the box fixed and the piston as the sole z-actuator — **no box barostat in production** (a barostat would double-control z and fight the piston). The only barostat is the Phase-0.5 pre-equilibration, run with the piston/support temporarily on `nve`+`setforce` so they scale with the box.
+
+  As of **2026-07-29** this Phase-0.5 barostat is **`fix nph z`** (z-only), replacing the earlier `aniso`/`iso` forms. Rationale: transverse (xx, yy) stresses build up in the polymer network during compression or permeation; a scalar (`iso`) or per-axis (`aniso`) barostat would let those transverse stresses perturb the box and drift the reservoir pressure. Barostatting **z only** targets the zz stress component directly, holding the solvent reservoir at Pzz = P* = 1.5 while x, y box dimensions stay fixed at the periodic slab's equilibrium extent. Because the target is now Pzz (not the full scalar `Press`), the old `+0.41` kinetic offset used by `slab_with_flow`'s `iso` convention is dropped — all three scripts target `npt_P05_target = P_target`.
+
+  These three scripts run on the **periodic** slab geometry (`slab_with_support_periodic.ipynb`): laterally periodic (`p p p`), no side walls, one support+piston sheet per z-period. Because the slab fills the x-y plane, x and y are free to relax and the piston stress is simply `c_piston_fz / (lx*ly)` with no multi-period normalisation.
 
 When adding lateral walls to an equilibrated config, `add_walls_to_slab.ipynb` unwraps the gel via image flags before measuring its extent, so a gel that has drifted across a periodic face (a little "image pollution" in the visualizer) does not corrupt the wall placement. Under `boundary p p p` the wrapped sliver itself is harmless to the run (bonds use the minimum image; `compute com` unwraps). With `RECENTER_LATERAL = True` (default) it also shifts the mobile group (gel + solvent) in x/y so the polymer COM lands at the lateral box center — the support/piston plates and the z-axis are left untouched, which keeps gel↔support/piston contact along the loading axis and relies on the plates being laterally larger than the gel (the notebook checks this and warns if the gel would exceed the support footprint).
 
 ---
 
-*Last updated: 2026-06-24. For questions, contact Dylan Pollard (pollard@ucsb.edu).*
+*Last updated: 2026-07-29. For questions, contact Dylan Pollard (pollard@ucsb.edu).*

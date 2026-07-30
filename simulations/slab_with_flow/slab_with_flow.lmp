@@ -22,7 +22,7 @@
 #   z-free on solvent (permeation).
 #
 # Phase 0.5 (compression only):
-#   Isotropic Langevin + NPH to bring mobile_press → P_target = 1.5.
+#   z-only Langevin + NPH to bring Pzz → P_target = 1.5.
 #   All rigid bodies (piston, walls, support) temporarily on nve+setforce so
 #   they scale with the box without creating asymmetric virial contributions.
 #   Langevin thermostat (not Nosé-Hoover) is used because FENE bonds inject
@@ -51,7 +51,7 @@ variable compression_mode equal 1
 #
 # When cont=1 the following phases are skipped:
 #   Phase 0    — NVT equilibration run (box volume/piston position stay as-is)
-#   Phase 0.5  — Langevin+NPH isotropic pressure equilibration (compression only)
+#   Phase 0.5  — Langevin+NPH z-only pressure equilibration (compression only)
 #   Phase 2 compression piston setup — piston stays frozen; halt_compress fires
 #                                      immediately and the run becomes pure relaxation
 #   ε=0 reference recording          — reference already exists from the original run
@@ -242,7 +242,7 @@ fix rigid_walls walls rigid single force * off off off torque * off off off
 # Piston: mode-dependent from the start.
 #   Compression: fully frozen during Phase 0 NVT (force * off off off +
 #                setforce 0).  Released to nve+setforce during Phase 0.5
-#                Langevin+NPH so it scales isotropically with the box.
+#                Langevin+NPH so it scales with the box (z only).
 #                Restored to rigid+frozen after Phase 0.5; then released
 #                again for constant-velocity compression in Phase 2.
 #   Permeation:  z-motion enabled immediately (piston floats on solvent).
@@ -329,10 +329,11 @@ label label_after_phase0
 run 0
 
 # ==========================================================================
-#    PHASE 0.5 (COMPRESSION ONLY): ISOTROPIC LANGEVIN + NPH
+#    PHASE 0.5 (COMPRESSION ONLY): Z-ONLY LANGEVIN + NPH
 # ==========================================================================
-# Brings mobile_press to P_target = 1.5 by isotropically swelling/deswelling
-# the gel.  All rigid bodies (piston, walls, support) are temporarily put on
+# Brings Pzz to P_target = 1.5 by swelling/deswelling the gel in z ONLY (only the
+# z box dimension is barostatted; x,y stay fixed).  All rigid bodies (piston,
+# walls, support) are temporarily put on
 # nve+setforce so they scale freely with the box without contributing spurious
 # virial to the barostat.
 #
@@ -350,21 +351,21 @@ run 0
 
 variable npt_P_damp    equal 50.0   # barostat damping (τ); increase if FENE errors appear
 variable npt_p05_steps equal 120000  # run length; increase if mobile_press not converged
-# NPH targets 'press', which includes the barostat's own virial contributions
-# (~+0.39 above c_mobile_press for this system).  To get c_mobile_press = 1.5
-# at NPH convergence, set npt_P05_target ≈ P_target + 0.41.
-# Re-calibrate if the system size or density changes significantly.
-variable npt_P05_target equal ${P_target}+0.41   # ≈ 1.91
+# z-only NPH targets the zz stress component (Pzz) directly, so the +0.41 offset
+# used by the old iso-NPH convention (scalar 'press' includes barostat virial) is
+# dropped: target Pzz = P_target.  Transverse gel stresses do not enter the
+# barostat, holding the reservoir at Pzz=P_target.
+variable npt_P05_target equal ${P_target}   # Pzz target = 1.5
 
 # ----- cont=1 + compression: jump over Phase 0.5 (box already at equilibrium pressure) -----
 if "${compression_mode} == 1 && ${cont} == 1" then "jump SELF label_after_phase05"
 
 if "${compression_mode} == 1" then "print '========================================'"
 if "${compression_mode} == 1" then &
-    "print 'Phase 0.5 (compression): Langevin+NPH iso, press target=${npt_P05_target} → c_mobile_press target=${P_target}'"
+    "print 'Phase 0.5 (compression): Langevin+NPH z-only, Pzz target=${npt_P05_target}'"
 if "${compression_mode} == 1" then "print '========================================'"
 
-# Isotropic NPH so the gel swells/deswells uniformly in all directions.
+# z-only NPH so the gel swells/deswells in z only (x,y box dims fixed).
 # Piston and walls on nve+setforce during NPH so they scale with the box.
 # Langevin (T_damp=1.0): robust temperature control even under FENE stress.
 # Nosé-Hoover (fix npt) left T stuck at ~6 because FENE bonds inject energy
@@ -388,7 +389,7 @@ if "${compression_mode} == 1" then "fix nve_support    support nve"
 if "${compression_mode} == 1" then &
     "fix lang_p05 mobile langevin ${temp_target} ${temp_target} 1.0 48279"
 if "${compression_mode} == 1" then &
-    "fix nph_p05 mobile nph iso ${npt_P05_target} ${npt_P05_target} ${npt_P_damp}"
+    "fix nph_p05 mobile nph z ${npt_P05_target} ${npt_P05_target} ${npt_P_damp}"
 if "${compression_mode} == 1" then "run ${npt_p05_steps}"
 if "${compression_mode} == 1" then "unfix lang_p05"
 if "${compression_mode} == 1" then "unfix nph_p05"

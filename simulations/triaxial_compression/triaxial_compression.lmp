@@ -31,7 +31,7 @@
 # Behaviour:
 #   - Piston-solvent WCA is OFF throughout; the piston passes through the
 #     solvent freely and loads the gel network directly.
-#   - Phase 0:   NPT equilibration (Langevin + anisotropic NPH at P_target).
+#   - Phase 0:   NPT equilibration (Langevin + z-only NPH at Pzz=P_target).
 #                The input is already equilibrated at P_target, so a single
 #                pressure-controlled step keeps the gel's equilibrium swelling
 #                (no fixed-volume pre-phase that would bleed P and re-squeeze the
@@ -363,7 +363,7 @@ variable pf_nfreq   equal v_pf_nevery*v_pf_nrepeat   # = volume_freq (exact mult
 #              PHASE 0: NVT EQUILIBRATION (BOTH MODES)
 # ==========================================================================
 # Equilibrate at the current box volume.  No pressure adjustment here —
-# Phase 0.5 (aniso NPH) re-pressurises the box to P_target, then Phase 2
+# Phase 0.5 (z-only NPH) re-pressurises the box to P_target, then Phase 2
 # applies the piston.  Box dimensions stay fixed throughout Phase 0.
 
 print "========================================"
@@ -375,13 +375,15 @@ print "========================================"
 # (the thermostat cools T, dropping the kinetic term) and force a large box
 # shrink to recover P_target — squeezing the gel from both z-ends before any
 # compression.  Instead we go STRAIGHT to a pressure-controlled (NPT-equivalent)
-# equilibration: Langevin thermostat + anisotropic NPH barostat at P_target.
+# equilibration: Langevin thermostat + z-only NPH barostat at Pzz=P_target.
 # Because the box already sits at P_target the cell barely moves, so the gel
 # keeps its equilibrium swollen thickness.
 #
-# aniso: x,y,z each barostatted INDEPENDENTLY to the full scalar P_target, so the
-#   laterally-periodic slab keeps its own equilibrium shape (cell stays
-#   orthogonal).  Target is the FULL thermo `Press`, matching slab_with_support.
+# z-only barostat: ONLY the z box dimension is barostatted (to Pzz=P_target); x,y
+#   stay fixed at their equilibrium periodic extents.  Transverse (xx,yy) stresses
+#   that arise in the polymer during compression thus never perturb the barostat,
+#   so the solvent reservoir stays pinned at the target Pzz.  Target is the zz
+#   component of the stress tensor, NOT the full scalar `Press`.
 # Langevin+NPH (not fix npt / Nose-Hoover): FENE bonds inject KE faster than a
 #   Nose-Hoover chain removes it (T can stick at ~6); Langevin's per-atom
 #   friction always wins.
@@ -394,7 +396,7 @@ print "========================================"
 
 variable npt_P_damp    equal 50.0    # barostat damping (tau); increase if FENE errors appear
 variable npt_p05_steps equal 120000  # equilibration length; increase if Press not converged
-variable npt_P05_target equal ${P_target}   # aniso targets the FULL scalar pressure per direction
+variable npt_P05_target equal ${P_target}   # z-only barostat targets the zz stress component (Pzz)
 
 reset_timestep 0
 timestep ${timestep_prod}
@@ -416,7 +418,7 @@ dump traj_setup gel_system custom ${dump_freq_setup} &
 minimize 1.0e-4 1.0e-6 1000 10000
 
 print '========================================'
-print 'Phase 0: Langevin+NPH aniso equilibration -> full Press target=${npt_P05_target}'
+print 'Phase 0: Langevin+NPH z-only equilibration -> Pzz target=${npt_P05_target}'
 print '========================================'
 
 # Release piston + support so they scale with the box (nve+setforce, no fix rigid)
@@ -429,7 +431,11 @@ fix freeze_support support setforce 0.0 0.0 0.0
 fix nve_support    support nve
 
 fix lang_p05 mobile langevin ${temp_target} ${temp_target} 1.0 48279
-fix nph_p05  mobile nph aniso ${npt_P05_target} ${npt_P05_target} ${npt_P_damp}
+# z-ONLY barostat: only Pzz drives box relaxation; x,y box dims stay fixed.
+# Transverse (xx,yy) stresses that develop in the gel during later compression
+# therefore never feed the barostat -> the solvent reservoir is held at the
+# barostat target Pzz=P_target=1.5 by z-relaxation alone.
+fix nph_p05  mobile nph z ${npt_P05_target} ${npt_P05_target} ${npt_P_damp}
 run ${npt_p05_steps}
 unfix lang_p05
 unfix nph_p05
