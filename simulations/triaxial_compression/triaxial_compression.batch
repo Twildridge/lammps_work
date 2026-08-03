@@ -51,7 +51,7 @@ module load python/3.8.12
 FOLDER="triaxial_compression"
 DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000"
 INTERACTION="1.0_1.0" # first number is solvent–solvent; second is polymer–solvent
-NSTEPS=4000000   # measurement-HOLD steps per strain level (drive cap is nsteps_comp in the .lmp)
+NSTEPS=500000   # measurement-HOLD steps per strain level (drive cap is nsteps_comp in the .lmp)
 OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
