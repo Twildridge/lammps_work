@@ -124,7 +124,7 @@ variable nsteps_comp equal 500000
 # released under load from its parked height would free-fall and slam the gel),
 # then record L0 = gel_lz_rg (the equilibrium-swollen reference thickness).
 variable seat_gamma   equal 1.0      # viscous damping on the force-controlled piston (damps its settle)
-variable contact_gap  equal 1.0      # piston within this many sigma of gel_top => "in contact" (approach halt)
+variable contact_gap  equal 0.9      # each plate stops this many sigma short of the gel face at seating (was 1.0; nudged closer). WCA cutoff is 1.122 sigma, so 0.9 keeps gentle contact -- do NOT drop much below ~0.85 or the r^-12 repulsion on the outermost surface bead spikes and shocks the gel.
 variable nsteps_seat  equal 500000   # safety cap for the piston-approach run
 
 # ----- Phase 1.5: pre-compression REFERENCE averaging window -----
@@ -411,7 +411,7 @@ timestep ${timestep_prod}
 if "${cont} == 1" then "jump SELF label_after_phase05"
 
 # ----- Symmetric-seating / settle lengths (also feed the setup-movie cadence) --
-variable t_seat        equal 100000   # seating: common approach time (steps), v=d/t
+variable t_seat        equal 143000   # seating: common approach time (steps), v=d/t; raised from 100000 so the seating approach velocity drops ~30% (v∝1/t_seat) -> gentler contact, less bounce on convergence
 variable nsteps_settle equal 50000    # brief both-plates-fixed settle before the ε=0 reference
 
 # ----- setup-movie cadence: ~num_dump_frames over the pre-production phases -----
@@ -714,6 +714,9 @@ compute chunk_z_solv_p   solvent chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_solv_zz  solvent chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_solv_xx  solvent chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_solv_yy  solvent chunk/atom bin/1d z lower ${binWidth}
+# NON-VOLUME solvent zz virial needs its own unique chunk/atom (LAMMPS forbids
+# two reduce/chunk fixes sharing one chunk/atom) -- see chunk_z_solv_vzz below.
+compute chunk_z_solv_vzz solvent chunk/atom bin/1d z lower ${binWidth}
 
 # Piston and support — single user each, no conflict
 compute chunk_z_piston  piston  chunk/atom bin/1d z lower ${binWidth}
@@ -772,8 +775,18 @@ variable sigma_s_xx atom -c_stress_solvent[1]/(lx*ly*${binWidth})
 variable sigma_p_yy atom -c_stress_polymer[2]/(lx*ly*${binWidth})
 variable sigma_s_yy atom -c_stress_solvent[2]/(lx*ly*${binWidth})
 
+# ── NON-VOLUME solvent zz virial (energy units) ──────────────────────────
+# Per-atom zz virial with NO division by bin volume.  Summed per z-bin below
+# (compute virialzz_solv) it gives the bin's total solvent zz virial in energy
+# units.  The notebook divides this by the SOLVENT partial volume in each bin
+# (Voronoi) to recover the true solvent-phase stress -- instead of dividing by
+# the whole bin volume (lx*ly*binWidth), which dilutes it with empty/polymer
+# space.  Sign matches v_sigma_s_zz (so virialzz_solv / V_solvent == a stress).
+variable virial_s_zz atom -c_stress_solvent[3]
+
 compute sigmazz_poly polymer reduce/chunk chunk_z_poly_zz sum v_sigma_p_zz
 compute sigmazz_solv solvent  reduce/chunk chunk_z_solv_zz sum v_sigma_s_zz
+compute virialzz_solv solvent reduce/chunk chunk_z_solv_vzz sum v_virial_s_zz
 compute sigmaxx_poly polymer reduce/chunk chunk_z_poly_xx sum v_sigma_p_xx
 compute sigmaxx_solv solvent  reduce/chunk chunk_z_solv_xx sum v_sigma_s_xx
 compute sigmayy_poly polymer reduce/chunk chunk_z_poly_yy sum v_sigma_p_yy
@@ -1012,6 +1025,7 @@ velocity piston set 0.0 0.0 0.0
 # ----- Coarse partial-stress component references -----
 fix ref_sigmazz_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
 fix ref_sigmazz_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_virialzz_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_virialzz_solv mode vector file output_files/stress_data/virialzz_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
 fix ref_sigmaxx_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
 fix ref_sigmaxx_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
 fix ref_sigmayy_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
@@ -1050,6 +1064,7 @@ undump bondlocal_ref
 undump traj_ref
 unfix ref_sigmazz_poly
 unfix ref_sigmazz_solv
+unfix ref_virialzz_solv
 unfix ref_sigmaxx_poly
 unfix ref_sigmaxx_solv
 unfix ref_sigmayy_poly
@@ -1260,6 +1275,8 @@ fix avg_sigmazz_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_str
     c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
 fix avg_sigmazz_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+fix avg_virialzz_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_virialzz_solv mode vector file output_files/stress_data/virialzz_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
 fix avg_sigmaxx_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
 fix avg_sigmaxx_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
@@ -1313,6 +1330,7 @@ unfix avg_sigmayy_solv
 unfix avg_sigmayy_poly
 unfix avg_sigmaxx_solv
 unfix avg_sigmaxx_poly
+unfix avg_virialzz_solv
 unfix avg_sigmazz_solv
 unfix avg_sigmazz_poly
 unfix avg_stress_z_supp
