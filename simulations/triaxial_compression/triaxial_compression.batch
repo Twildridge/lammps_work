@@ -82,7 +82,7 @@ TYPE=""             # Options: stress, volume, stressvol, or leave empty (just t
 # COMPRESSIONS and the outputs are still tagged _c<value> so run_lammps.sh /
 # postprocess / the notebook are unchanged -- only the meaning of the numbers.
 # example: STRAIN_TARGETS=(0.05 0.10 0.15 0.20)
-STRAIN_TARGETS=(0.05 0.10 0.15 0.20)
+STRAIN_TARGETS=(0.10)
 export COMPRESSIONS="${STRAIN_TARGETS[*]}"   # space-separated scalar for run_lammps.sh / LAMMPS -var
 
 # Navigate to the scripts directory
