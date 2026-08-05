@@ -23,6 +23,16 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
+# ── Editor / script backup files (never commit) ──
+*.bak
+*.bak.*
+*.bak_*
+*.backup
+*_backup.*
+*.orig
+*.old
+*~
+
 # ── OS clutter ──
 .DS_Store
 
