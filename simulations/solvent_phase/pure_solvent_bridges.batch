@@ -42,7 +42,6 @@ FOLDER="pure_solvent"
 DATANAME="solvent_box_rho6_02"
 INTERACTION="1.5_1.4"
 NSTEPS=200000
-OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE="stress"             # Options: stress, volume, stressvol, or leave empty (just type "")
 
 # Navigate to the scripts directory
@@ -50,7 +49,7 @@ cd ~/Documents/lammps_work/scripts || exit 1
 
 # Run the simulation
 if [ -z "$TYPE" ]; then
-    bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS"
+    bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"
 else
-    bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$TYPE"
+    bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE"
 fi

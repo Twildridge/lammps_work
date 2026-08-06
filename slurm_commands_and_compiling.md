@@ -23,7 +23,7 @@ mpirun -n $SLURM_NTASKS \
     -var epsSS $EPSSS \
     -var epsSP $EPSSP \
     -var nsteps $NSTEPS \
-    -var oldsteps $OLDSTEPS \
+    -var oldsteps 0 \
     -var totsteps $TOTSTEPS \
     -in $LAMMPS_FILE
 ```

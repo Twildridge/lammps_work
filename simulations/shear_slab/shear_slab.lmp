@@ -135,6 +135,20 @@ read_data data_files/${dataname}.data nocoeff
 
 comm_modify cutoff 5.0
 
+# ----- Continuation flag -----
+# 0 = fresh start (default)
+# 1 = continuation from a final .data file (via continue_sim.sh). continue_sim.sh
+#     auto-detects the last _g<strain> level reached by the original run and
+#     supplies THAT single value via -var strains, so ${strains} below is
+#     always a one-element list under cont=1.
+# When cont=1: Phase 1a/1b (NPT+NVT equilibration) are skipped entirely (the
+# data file already holds an equilibrated, plate-attached gel), and inside the
+# strain loop the non-equilibrium shear drive is skipped too (the plates are
+# already at the target strain's positions from the continued data file) --
+# continuation lands straight in the Phase 3 NVT production hold for more
+# steps at that strain. Never re-drives through the strain ladder.
+variable cont index 0
+
 print "========================================"
 print "Shear slab simulation (plate-driven): ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
@@ -222,12 +236,18 @@ thermo ${thermo_freq}
 #   Plates remain frozen. Gel thermalises at fixed volume.
 #   Goal: relax internal stresses at the correct density before shear.
 
+reset_timestep 0
+timestep ${timestep_prod}
+
+# cont=1: the continued data file already holds an equilibrated, correctly-
+# volumed, plate-attached gel (already triclinic if it was written from one) --
+# skip Phase 1a/1b (NPT+NVT equilibration setup) entirely and go straight to
+# the strain loop.
+if "${cont} == 1" then "jump SELF label_after_equil"
+
 print "========================================"
 print "Phase 1a: NPT equilibration (${nsteps_npt} steps, plates frozen)"
 print "========================================"
-
-reset_timestep 0
-timestep ${timestep_prod}
 
 # Triclinic box required before any dump (LAMMPS restriction).
 change_box all triclinic
@@ -463,12 +483,18 @@ variable uz_shear atom 0.0    # placeholder so 'variable ... delete' is always v
 # on epoch boundaries (nsteps is an integer multiple of nfreq_stress). This
 # avoids the mid-epoch chunk/atom-lock corruption that mid-run unfixes cause.
 
+label label_after_equil
 label strain_loop
 
 print "########################################################"
 print "  STRAIN TARGET (cumulative) = ${strains}"
 print "########################################################"
 
+# cont=1: the continued data file already holds the plates at this strain's
+# positions (continue_sim.sh supplied the single last-reached ${strains}
+# value) -- skip the non-equilibrium drive entirely and go straight to the
+# Phase 3 equilibration-only production hold. Never re-drives.
+if "${cont} == 1" then "jump SELF label_skip_shear_drive"
 
 # ---------- PHASE 2: incremental shear to ${strains} ----------
 fix drive_right  plate_right move linear  0 0  ${vshear}
@@ -498,6 +524,7 @@ unfix drive_right
 
 print ">>> Reached gel_strain_cm = $(v_gel_strain_cm)  (target ${strains})"
 
+label label_skip_shear_drive
 
 # ---------- Reset displacement reference to THIS production start ----------
 # Delete the variable first so the compute it references can be safely replaced;

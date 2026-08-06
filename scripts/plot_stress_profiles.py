@@ -61,7 +61,11 @@ def get_box_dims(folder, dataname):
     possible_paths = [
         os.path.join(folder, 'data_files', f'{base_name}.data'),
         os.path.join(folder, f'final_config_{dataname}.data'),
-        os.path.join(folder, f'final_flow_{dataname}.data'),
+        os.path.join(folder, f'final_tricomp_{dataname}.data'),
+        os.path.join(folder, f'final_triperm_{dataname}.data'),
+        os.path.join(folder, f'final_shear_{dataname}.data'),
+        os.path.join(folder, f'puresolv_{dataname}.data'),
+        os.path.join(folder, f'purepol_{dataname}.data'),
         os.path.join(folder, 'data_files', f'{dataname}.data'),
     ]
 

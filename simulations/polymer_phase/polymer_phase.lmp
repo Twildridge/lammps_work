@@ -203,6 +203,7 @@ jump SELF loop2_start
 
 
 # ========== Save Final Configuration ==========
-write_data final_config_${dataname}_${interaction}_psweep.data
+variable outfile string "final_config_${dataname}_${interaction}_psweep"
+write_data ${outfile}.data
 
 print ">>> P-sweep complete. EOS written to eos_${dataname}_${interaction}.dat"

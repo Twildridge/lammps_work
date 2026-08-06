@@ -1,43 +1,70 @@
 #!/bin/bash
 # continue_sim.sh — Continue a LAMMPS simulation from a final .data file.
 #
-# Run this from inside the simulation folder (e.g. simulations/slab_with_flow/).
-# The script finds the SLURM output file for the given job ID, reads the working
-# directory and compression mode from it, locates the final .data file, and
-# launches a continuation run — skipping all setup phases (cont=1).
+# Run this from inside the simulation folder. The script finds the SLURM
+# output file for the given job ID, reads the working directory from it,
+# locates the final .data file, and launches a continuation run — skipping
+# setup phases via cont=1. This is a REAL restart (skip setup, keep going),
+# not a fresh resubmission — see README §5e for how this differs from
+# editing a .batch file's NSTEPS and resubmitting.
 #
-# Usage (from inside simulations/slab_with_flow/ or simulations/slab_with_support/):
+# Usage (from inside the simulation folder):
 #   continue_sim.sh <job_id> <nsteps>
 #
 #   job_id  — the SLURM job ID, e.g. 49772594
-#             (from the output file slab_flow.o49772594.exp-14-05)
+#             (from the output file <folder>.o49772594.exp-14-05)
 #   nsteps  — additional timesteps to run
 #
 # Examples:
-#   cd ~/Documents/lammps_work/simulations/slab_with_flow
-#   continue_sim.sh 49772594 500000
-#
 #   cd ~/Documents/lammps_work/simulations/slab_with_support
 #   continue_sim.sh 49800123 500000
 #
-# What cont=1 skips vs. runs:
-#   slab_with_flow compression:
-#     SKIPPED  — Phase 0 NVT, Phase 0.5 Langevin+NPH, compression piston drive,
-#                epsilon=0 reference stress recording
-#     RUNS     — all analysis computes/output fixes, then pure stress-relaxation
-#                (halt_compress fires immediately → full run = relax_steps)
-#   slab_with_flow permeation:
-#     SKIPPED  — Phase 0 NVT
-#     RUNS     — piston velocity re-applied at v_piston_perm, all observables,
-#                halt_perm condition
-#   slab_with_support:
-#     SKIPPED  — soft push-off, minimize, gentle NVT thermalization, NPT warm-up
-#     RUNS     — NPT production with all observables
+#   cd ~/Documents/lammps_work/simulations/triaxial_compression
+#   continue_sim.sh 49900456 2000000
+#
+# Supported folders and what cont=1 means for each:
+#   slab_with_support               — skip push-off/minimize/gentle-NVT/NPT warm-up; run more NPT production
+#   solvent_pure, polymer_pure      — skip pre-relax/gentle-ramp stages; run more NPT production
+#   triaxial_compression (sweep)    — auto-detects the last _c<level> reached, skips the
+#                                     non-equilibrium drive, extends the equilibration
+#                                     hold at THAT level only (never re-sweeps)
+#   shear_slab (sweep)              — auto-detects the last _g<strain> reached, skips the
+#                                     non-equilibrium shear drive, extends the production
+#                                     hold at THAT strain only (never re-sweeps)
+#   triaxial_permeation             — NOT a sweep; skips Phase 0/0.5/1.5 AND the piston
+#                                     reposition/WCA-relax/force-ramp, resuming the
+#                                     constant-pressure forcing drive for more steps
+#                                     (continuation here means KEEP FORCING, never a hold)
+#
+# Not supported: solvent_phase/polymer_phase (internal P-sweeps complete in one
+# invocation — "continuing" isn't a meaningful operation for them) or volmix_sweep
+# (its own SLURM-chained orchestration, not a fit for this tool). compress_slab
+# is a separate project — ask its owner before adding support here.
 #
 # Output goes into a continuation subfolder inside the original run directory:
-#   ~/Documents/lammps_runs/{original_run_dir}/continuation_{timestamp}/
+#   ~/Documents/lammps_runs/{folder}/{original_run_dir}/continuation_{timestamp}/
 
 set -e
+
+# ── Per-folder output-file prefix (set by each .lmp script's write_data/
+#    write_restart at the very end) and, for sweep folders, the per-level
+#    output tag used to auto-detect which level to continue.
+declare -A FOLDER_PREFIX=(
+    [slab_with_support]="final_config"
+    [triaxial_compression]="final_tricomp"
+    [triaxial_permeation]="final_triperm"
+    [shear_slab]="final_shear"
+    [solvent_pure]="puresolv"
+    [polymer_pure]="purepol"
+)
+declare -A FOLDER_SWEEP_TAG=(   # empty/unset = not a sweep folder
+    [triaxial_compression]="_c"
+    [shear_slab]="_g"
+)
+declare -A FOLDER_SWEEP_VAR=(   # LAMMPS -var name that carries the sweep value
+    [triaxial_compression]="compressions"
+    [shear_slab]="strains"
+)
 
 # ── Self-submit via SLURM if run from a login node ────────────────────────────
 if [ -z "$SLURM_JOB_ID" ]; then
@@ -86,7 +113,7 @@ if [ $# -ne 2 ]; then
     echo "  nsteps  — additional timesteps to run"
     echo ""
     echo "Run from inside the simulation folder:"
-    echo "  cd ~/Documents/lammps_work/simulations/slab_with_flow"
+    echo "  cd ~/Documents/lammps_work/simulations/slab_with_support"
     echo "  continue_sim.sh 49772594 500000"
     exit 1
 fi
@@ -102,10 +129,17 @@ LAMMPS_WORK_DIR="$(dirname "$SCRIPT_DIR")"
 FOLDER="$(basename "$PWD")"
 LAMMPS_FILE="$PWD/${FOLDER}.lmp"
 
+if [ -z "${FOLDER_PREFIX[$FOLDER]:-}" ]; then
+    echo "Error: unsupported folder '$FOLDER'."
+    echo "  Supported: ${!FOLDER_PREFIX[*]}"
+    echo "  Not supported: solvent_phase, polymer_phase (internal P-sweeps, no"
+    echo "  meaningful 'continue'), volmix_sweep (its own SLURM-chained pipeline)."
+    exit 1
+fi
+
 if [ ! -f "$LAMMPS_FILE" ]; then
     echo "Error: no LAMMPS script found at $LAMMPS_FILE"
     echo "  Are you inside the correct simulation folder?"
-    echo "  e.g. cd ~/Documents/lammps_work/simulations/slab_with_flow"
     exit 1
 fi
 
@@ -150,19 +184,12 @@ fi
 echo "Original work dir : $WORK_DIR"
 
 # ── Find the final data file ──────────────────────────────────────────────────
-case "$FOLDER" in
-    slab_with_flow)
-        DATA_FILE=$(ls "$WORK_DIR"/final_flow_*.data 2>/dev/null | head -1) ;;
-    slab_with_support)
-        DATA_FILE=$(ls "$WORK_DIR"/final_config_*.data 2>/dev/null | head -1) ;;
-    *)
-        echo "Error: unsupported folder '$FOLDER'. Supported: slab_with_flow, slab_with_support"
-        exit 1 ;;
-esac
+PREFIX="${FOLDER_PREFIX[$FOLDER]}"
+DATA_FILE=$(ls "$WORK_DIR"/${PREFIX}_*.data 2>/dev/null | head -1)
 
 if [ -z "$DATA_FILE" ] || [ ! -f "$DATA_FILE" ]; then
     echo "Error: no final .data file found in $WORK_DIR"
-    echo "  Expected: final_flow_*.data or final_config_*.data"
+    echo "  Expected: ${PREFIX}_*.data"
     echo "  Did the LAMMPS run finish successfully?"
     exit 1
 fi
@@ -170,10 +197,8 @@ fi
 echo "Final data file   : $DATA_FILE"
 
 # ── Parse dataname, epsSS, epsSP from data file name ─────────────────────────
-# Naming convention set by write_data at end of each LAMMPS script:
-#   slab_with_flow:    final_flow_{dataname}_{epsSS}_{epsSP}_{nsteps}.data
-#   slab_with_support: final_config_{dataname}_{epsSS}_{epsSP}_{nsteps}.data
-#
+# Naming convention set by write_data at the end of each LAMMPS script:
+#   ${prefix}_{dataname}_{epsSS}_{epsSP}_{nsteps}.data
 # Split by '_' from the right:
 #   index -1 = old nsteps  (integer)
 #   index -2 = epsSP       (float, e.g. 1.0)
@@ -181,10 +206,7 @@ echo "Final data file   : $DATA_FILE"
 #   rest     = dataname parts
 
 BASENAME="$(basename "$DATA_FILE" .data)"
-case "$FOLDER" in
-    slab_with_flow)    REST="${BASENAME#final_flow_}" ;;
-    slab_with_support) REST="${BASENAME#final_config_}" ;;
-esac
+REST="${BASENAME#${PREFIX}_}"
 
 IFS='_' read -ra PARTS <<< "$REST"
 N=${#PARTS[@]}
@@ -203,26 +225,23 @@ echo "Data name         : $DATANAME"
 echo "Interaction       : $INTERACTION  (epsSS=$EPSSS  epsSP=$EPSSP)"
 echo "Prev nsteps       : $OLD_NSTEPS"
 
-# ── Auto-detect compression mode (slab_with_flow only) ───────────────────────
-# run_lammps.sh runs LAMMPS, which prints:
-#   >>> Mode: compression_mode=1  (0=permeation, 1=compression)
-# Parse that line from the output file.
-COMPRESSION_MODE=""
-if [ "$FOLDER" = "slab_with_flow" ]; then
-    COMPRESSION_MODE=$(grep ">>> Mode: compression_mode=" "$OUTPUT_FILE" \
-                       | grep -o 'compression_mode=[0-9]' | cut -d= -f2 | head -1)
-    if [ -z "$COMPRESSION_MODE" ]; then
-        echo "Warning: could not detect compression_mode from output file."
-        echo "  Falling back to value in LAMMPS script..."
-        COMPRESSION_MODE=$(grep -E '^variable[[:space:]]+compression_mode[[:space:]]+equal' \
-                           "$LAMMPS_FILE" | awk '{print $NF}')
-    fi
-    if [ -z "$COMPRESSION_MODE" ]; then
-        echo "Error: could not determine compression_mode. Check $LAMMPS_FILE."
+# ── Sweep folders: auto-detect the last level reached ─────────────────────────
+# For triaxial_compression/shear_slab, continuing must extend the equilibration
+# hold at whatever level the original run last completed — never re-drive
+# through the whole strain/compression ladder. Scan the original run's
+# output_files/stress_data/ for the highest _c<level>/_g<level> tag present.
+SWEEP_TAG="${FOLDER_SWEEP_TAG[$FOLDER]:-}"
+SWEEP_LEVEL=""
+if [ -n "$SWEEP_TAG" ]; then
+    SWEEP_LEVEL=$(ls "$WORK_DIR"/output_files/stress_data/*"${SWEEP_TAG}"[0-9]*.dat 2>/dev/null \
+        | sed -E "s/.*${SWEEP_TAG}([0-9.]+)\.dat\$/\1/" \
+        | sort -g | uniq | tail -1)
+    if [ -z "$SWEEP_LEVEL" ]; then
+        echo "Error: could not auto-detect the last ${SWEEP_TAG}<level> reached in"
+        echo "  $WORK_DIR/output_files/stress_data/"
         exit 1
     fi
-    MODE_LABEL=$([ "$COMPRESSION_MODE" = "0" ] && echo "permeation" || echo "compression")
-    echo "Mode              : $COMPRESSION_MODE ($MODE_LABEL)"
+    echo "Last level reached : ${SWEEP_TAG}${SWEEP_LEVEL}"
 fi
 echo "======================================"
 
@@ -258,15 +277,11 @@ LAMMPS_VARS=(
     -var nsteps      "$NSTEPS"
     -var oldsteps    "$OLDSTEPS"
     -var totsteps    "$TOTSTEPS"
-    -var nsteps_eq   200000
-    -var nsteps_prod 100000
     -var cont        1
 )
-
-# Note: compression_mode is defined as an "equal"-style variable inside the LAMMPS
-# script and must NOT be passed via -var (which creates an index-style variable —
-# LAMMPS will error on the style mismatch). The auto-detected value above is used
-# only for logging.
+if [ -n "$SWEEP_TAG" ]; then
+    LAMMPS_VARS+=(-var "${FOLDER_SWEEP_VAR[$FOLDER]}" "$SWEEP_LEVEL")
+fi
 
 # ── Run LAMMPS ────────────────────────────────────────────────────────────────
 echo "Running LAMMPS continuation ($SLURM_NTASKS tasks)..."
@@ -290,11 +305,7 @@ module load anaconda3/2021.05/q4munrg
 
 STEM="${DATANAME}_${INTERACTION}_${TOTSTEPS}"
 
-if [ "$FOLDER" = "slab_with_flow" ]; then
-    python "$SCRIPT_DIR/plot_lammps_log.py" "." "$STEM" --p-ext 1.8
-else
-    python "$SCRIPT_DIR/plot_lammps_log.py" "." "$STEM"
-fi
+python "$SCRIPT_DIR/plot_lammps_log.py" "." "$STEM"
 
 WIDOM_MIN_STEPS=500000
 WIDOM_TRAJ="${CONT_DIR}/traj_files/widom_${STEM}.lammpstrj"
@@ -304,13 +315,6 @@ elif [ "$NSTEPS" -lt "$WIDOM_MIN_STEPS" ]; then
     echo "Skipping cavity_widom.py — only ${NSTEPS} steps (need >=${WIDOM_MIN_STEPS} for decorrelated frames)."
 else
     echo "Running cavity-biased Widom insertion..."
-    if [ "$FOLDER" = "slab_with_flow" ]; then
-        WIDOM_PEXT="1.8"; WIDOM_EXCL="2.0"; WIDOM_PISTON_EPS="0.0"
-    else
-        WIDOM_PEXT="1.5"; WIDOM_EXCL="";    WIDOM_PISTON_EPS="1.0"
-    fi
-    WIDOM_EXCL_ARGS=()
-    [ -n "$WIDOM_EXCL" ] && WIDOM_EXCL_ARGS=(--exclusion-buffer "$WIDOM_EXCL")
     python -u "$SCRIPT_DIR/cavity_widom.py" \
         --traj        "$WIDOM_TRAJ" \
         --out-dir     "output_files/chemical_potential" \
@@ -321,10 +325,9 @@ else
         --n-trial     50000 \
         --r-cavity    0.5 \
         --temperature 1.0 \
-        --p-ext       "$WIDOM_PEXT" \
-        --piston-eps  "$WIDOM_PISTON_EPS" \
-        "${WIDOM_EXCL_ARGS[@]}"
-    python "$SCRIPT_DIR/plot_lammps_log.py" "." "$STEM" --p-ext "$WIDOM_PEXT"
+        --p-ext       "1.5" \
+        --piston-eps  "1.0"
+    python "$SCRIPT_DIR/plot_lammps_log.py" "." "$STEM" --p-ext "1.5"
 fi
 
 python "$SCRIPT_DIR/plot_stress_profiles.py"  "." "$STEM" "$OLDSTEPS"

@@ -1,13 +1,12 @@
 #!/bin/bash
 if [ $# -lt 4 ]; then
-    echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [oldsteps] [type] [press_target]"
+    echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [type] [press_target]"
     echo "Example (fresh run):  ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000"
-    echo "Example (continuation): ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000 20000"
     echo "Example (pure solvent P-sweep): ./run_lammps.sh pure_solvent pure_solvent_1000 1p0 0"
-    echo "Example (pressure sweep): ./run_lammps.sh slab_with_support slab_support_pstar0.8 1.0_1.0 600000 0 \"\" 0.8"
+    echo "Example (pressure sweep): ./run_lammps.sh slab_with_support slab_support_pstar0.8 1.0_1.0 600000 \"\" 0.8"
     echo "  interaction format: epsSS_epsSP (e.g., 1.5_0.4), or epsSS only for pure_solvent (e.g., 1p0)"
-    echo "  oldsteps: total timesteps from previous run (defaults to 0 for fresh runs)"
     echo "  type: optional, 'stress' (adds 1), 'volume' (adds 2), or 'stressvol' (adds 3) to dataname"
+    echo "  to continue a finished run, use continue_sim.sh instead of resubmitting this script"
     echo "  press_target: optional, overrides press_target in .lmp file (default: 1.5)"
     echo "  vel_seed: optional, RNG seed for create_velocity and fix langevin (default: 12345)"
     exit 1
@@ -17,10 +16,9 @@ FOLDER=$1
 DATANAME=$2
 INTERACTION=$3
 NSTEPS=$4
-OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
-TOTSTEPS=$((OLDSTEPS + NSTEPS))
-PRESS_TARGET=${7:-1.5}  # Default pressure; overrides press_target in .lmp file
-VEL_SEED=${8:-12345}    # RNG seed for create_velocity and fix langevin; vary per replica
+TOTSTEPS=$NSTEPS
+PRESS_TARGET=${6:-1.5}  # Default pressure; overrides press_target in .lmp file
+VEL_SEED=${7:-12345}    # RNG seed for create_velocity and fix langevin; vary per replica
 SKIP_WIDOM=${SKIP_WIDOM:-0}  # Set to 1 (via env) to minimize Widom output and skip cavity_widom.py
 if [ -z "${STRAINS:-}" ]; then
     echo ">>> WARNING: STRAINS is unset — falling back to single strain 0.1."
@@ -108,7 +106,7 @@ cd "$WORK_DIR" || exit 1
 echo "Running LAMMPS in $FOLDER with:"
 echo "  dataname=$DATANAME"
 echo "  epsSS=$EPSSS, epsSP=$EPSSP"
-echo "  nsteps=$NSTEPS, oldsteps=$OLDSTEPS, totsteps=$TOTSTEPS"
+echo "  nsteps=$NSTEPS, totsteps=$TOTSTEPS"
 echo "  press_target=$PRESS_TARGET"
 echo "SLURM tasks per node: $SLURM_NTASKS_PER_NODE"
 echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
@@ -177,7 +175,7 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var epsSS $EPSSS \
     -var epsSP $EPSSP \
     -var nsteps $NSTEPS \
-    -var oldsteps $OLDSTEPS \
+    -var oldsteps 0 \
     -var totsteps $TOTSTEPS \
     -var nsteps_eq $NSTEPS_EQ \
     -var nsteps_prod $NSTEPS_PROD \
@@ -243,4 +241,4 @@ fi
 # SKIP_WIDOM, STRAINS and COMPRESSIONS are read from the environment by postprocess.sh.
 export SKIP_WIDOM STRAINS COMPRESSIONS
 bash "$SCRIPT_DIR/postprocess.sh" \
-    "$WORK_DIR" "$FOLDER" "$DATANAME" "$INTERACTION" "$TOTSTEPS" "$OLDSTEPS" "$PRESS_TARGET"
+    "$WORK_DIR" "$FOLDER" "$DATANAME" "$INTERACTION" "$TOTSTEPS" 0 "$PRESS_TARGET"

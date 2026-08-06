@@ -35,11 +35,10 @@ INTERACTION="1.0_1.0"
 #   150k equil (50k phase0 + 50k NPH + 50k NVT) + 100k reference hold
 # + 30k ramps (3 x ~10k) + 3 x ~200k holds (epoch-aligned, up to +nfreq_stress).
 # CHECK THIS FITS THE 6h WALLTIME above: grep the "Performance:" / "Loop time"
-# line from a previous log for steps/s. If it doesn't fit, raise --time or use
-# OLDSTEPS to continue, do NOT coarsen the strain ladder (that puts you back
-# outside the linear-elastic regime).
+# line from a previous log for steps/s. If it doesn't fit, raise --time —
+# do NOT coarsen the strain ladder (that puts you back outside the
+# linear-elastic regime).
 NSTEPS=200000
-OLDSTEPS=0          # Set to 0 for fresh run, or previous totsteps for continuation
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
 # Sync latest scripts from GitHub before running so run_lammps_pod.sh is up-to-date
@@ -54,8 +53,8 @@ cd ~/Documents/lammps_work/scripts || exit 1
 
 # Run the simulation
 if [ -z "$TYPE" ]; then
-    ./run_lammps_pod.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS"
+    ./run_lammps_pod.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"
 else
-    ./run_lammps_pod.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$OLDSTEPS" "$TYPE"
+    ./run_lammps_pod.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE"
 fi
 

@@ -292,7 +292,8 @@ fix remove_drift mobile momentum 1000 linear 1 1 1 angular
 variable snap_i loop ${n_snaps}
 label snap_loop
     run ${steps_per_snap}
-    write_data final_config_${dataname}_${interaction}_${totsteps}_snap${snap_i}.data
+    variable snap_outfile string "final_config_${dataname}_${interaction}_${totsteps}_snap${snap_i}"
+    write_data ${snap_outfile}.data
     print ">>> Wrote snapshot ${snap_i}/${n_snaps} at step $(step)"
     next snap_i
     jump SELF snap_loop
@@ -307,6 +308,7 @@ undump poly_traj
 
 
 # ========== Save Final Configuration ==========
-write_restart restart_${dataname}_${interaction}_${totsteps}.restart
-write_data final_config_${dataname}_${interaction}_${totsteps}.data
+variable outfile string "final_config_${dataname}_${interaction}_${totsteps}"
+write_restart ${outfile}.restart
+write_data ${outfile}.data
 # (identical to snap${n_snaps}; retained for backward compatibility)

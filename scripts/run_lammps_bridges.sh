@@ -1,11 +1,10 @@
 #!/bin/bash
 if [ $# -lt 4 ]; then
-    echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [oldsteps] [type]"
+    echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [type]"
     echo "Example (fresh run):  ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000"
-    echo "Example (continuation): ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000 20000"
     echo "  interaction format: epsSS_epsSP (e.g., 1.5_0.4)"
-    echo "  oldsteps: total timesteps from previous run (defaults to 0 for fresh runs)"
     echo "  type: optional, 'stress' (adds 1), 'volume' (adds 2), or 'stressvol' (adds 3) to dataname"
+    echo "  to continue a finished run, use continue_sim.sh instead of resubmitting this script"
     exit 1
 fi
 
@@ -13,8 +12,7 @@ FOLDER=$1
 DATANAME=$2
 INTERACTION=$3
 NSTEPS=$4
-OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
-TOTSTEPS=$((OLDSTEPS + NSTEPS))
+TOTSTEPS=$NSTEPS
 STRAINS=${STRAINS:-0.1}  # Space-separated shear-strain list (shear_slab only); LAMMPS index var
 
 # Scratch directory for trajectories
@@ -72,7 +70,7 @@ cd "$WORK_DIR" || exit 1
 echo "Running LAMMPS in $FOLDER with:"
 echo "  dataname=$DATANAME"
 echo "  epsSS=$EPSSS, epsSP=$EPSSP"
-echo "  nsteps=$NSTEPS, oldsteps=$OLDSTEPS, totsteps=$TOTSTEPS"
+echo "  nsteps=$NSTEPS, totsteps=$TOTSTEPS"
 echo "SLURM tasks per node: $SLURM_NTASKS_PER_NODE"
 echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
 
@@ -104,7 +102,7 @@ if [ $NGPUS -gt 0 ]; then
         -var epsSS $EPSSS \
         -var epsSP $EPSSP \
         -var nsteps $NSTEPS \
-        -var oldsteps $OLDSTEPS \
+        -var oldsteps 0 \
         -var totsteps $TOTSTEPS \
         -var strains $STRAINS \
         -var strains_list "$STRAINS" \
@@ -120,7 +118,7 @@ else
         -var epsSS $EPSSS \
         -var epsSP $EPSSP \
         -var nsteps $NSTEPS \
-        -var oldsteps $OLDSTEPS \
+        -var oldsteps 0 \
         -var totsteps $TOTSTEPS \
         -var strains $STRAINS \
         -var strains_list "$STRAINS" \
@@ -129,10 +127,10 @@ fi
 
 
 
-# Determine suffix based on 6th argument (type) - moved from 7th position
+# Determine suffix based on 5th argument (type) - moved from 6th position after OLDSTEPS removal
 SUFFIX=""
-if [ $# -ge 6 ]; then
-    case "$6" in
+if [ $# -ge 5 ]; then
+    case "$5" in
         stress)
             SUFFIX="1"
             ;;
@@ -164,10 +162,10 @@ if [ "$FOLDER" = "shear_slab" ]; then
     python "$SCRIPT_DIR/plot_shear_strain_sweep.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$STRAINS"
 else
     echo "Generating stress profiles..."
-    python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+    python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
 
     echo "Generating piston plots..."
-    python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+    python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
 fi
 
 

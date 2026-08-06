@@ -35,8 +35,12 @@
 # 0 = fresh start (default)
 # 1 = continuation from a final .data file (via continue_sim.sh)
 #
-# When cont=1, Phase 0 / Phase 0.5 are skipped (the data file already holds the
-# equilibrated, re-pressurised state); Phase 2 resumes from the current config.
+# When cont=1, Phase 0 / Phase 0.5 / Phase 1.5 are skipped (the data file
+# already holds the equilibrated, re-pressurised state, and the _ref files
+# already exist). Phase 2's reposition/WCA-relax/force-ramp runs are also
+# skipped (piston is already positioned and already at full production force
+# from the continued run's final state) -- continuation means RESUMING the
+# constant-pressure production forcing for more steps, never a passive hold.
 variable cont index 0
 
 # ----- Physical Parameters -----
@@ -598,6 +602,15 @@ print '>>> Reference recording done.  step=$(step)  gel_strain=$(v_gel_strain)'
 
 label label_after_ref_rec
 
+# ----- cont=1: re-establish rigid_piston regardless of path taken -----
+# fix rigid_piston is only ever DEFINED inside Phase 0 (fresh push-off) and
+# redefined inside Phase 0.5 (Langevin+NPH) -- both skipped under cont=1 -- but
+# Phase 2 below unconditionally does `unfix rigid_piston` before reworking it
+# for the reposition step. Without this, cont=1 crashes immediately on
+# "could not find fix ID to delete". Redeclaring it here identically to its
+# Phase 0.5 form (line ~345) is a harmless no-op when cont=0 (already defined
+# the same way) and fixes the cont=1 crash.
+fix rigid_piston piston rigid single force * off off on torque * off off off
 
 # ==========================================================================
 #              PHASE 2: PRODUCTION — piston forcing
@@ -606,16 +619,6 @@ label label_after_ref_rec
 print "========================================"
 print "Phase 2: Production — piston forcing"
 print "========================================"
-
-# ----- Compression: unfreeze piston, switch to velocity control -----
-# The piston was re-frozen after Phase 0.5 Langevin+NPH (rigid + setforce 0).
-# Unfreeze, then re-fix with force*off off off so the prescribed velocity
-# is maintained exactly (no force-driven acceleration from the gel).
-#
-# cont=1 compression: piston stays frozen (already at ~comp_percent strain).
-#   halt_compress fires immediately on the first volume_freq check, and the
-#   entire run becomes a pure stress-relaxation measurement.
-label label_skip_comp_piston_setup
 
 # ----- Thermostat (x,y only — z is flow/compression direction) -----
 compute myTemp mobile temp/partial 1 1 0
@@ -672,7 +675,10 @@ fix rigid_piston piston rigid single force * off off off torque * off off off
 velocity piston set 0.0 0.0 -${v_reposition}
 fix halt_reposition all halt 1000 v_feed_frac <= ${feed_frac_target} error continue
 print ">>> Repositioning piston: feed_frac now $(v_feed_frac)  (target ${feed_frac_target})  piston_z=$(c_piston_com[3])"
-run ${nsteps_reposition}
+# cont=1: piston is already positioned from the continued data file -- skip the
+# actual repositioning run (the surrounding velocity-set-then-zero below becomes
+# a full no-op with no run in between, so no drift is introduced).
+if "${cont} == 0" then "run ${nsteps_reposition}"
 unfix halt_reposition
 velocity piston set 0.0 0.0 0.0
 print ">>> Reposition done: feed_frac=$(v_feed_frac)  piston_z=$(c_piston_com[3])  gel_top=$(v_gel_top_rg)"
@@ -698,7 +704,10 @@ variable n_wca_relax equal 5000
 unfix nvt_prod
 fix relax_nvelim mobile nve/limit 0.05
 fix relax_lang   mobile langevin ${temp_target} ${temp_target} 1.0 58291
-run ${n_wca_relax}
+# cont=1: the continued data file already reflects a WCA-consistent steady
+# state from the prior run (piston-solvent WCA was already on there) -- no
+# fresh overlaps are expected, so skip the relax run.
+if "${cont} == 0" then "run ${n_wca_relax}"
 unfix relax_nvelim
 unfix relax_lang
 fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
@@ -739,7 +748,12 @@ print ">>> Piston force ramp: 0 -> F_max=$(v_F_max_ramp) in ${n_ramp} equal stag
 variable ramp_stage loop ${n_ramp}
 label piston_ramp_loop
 print ">>> Piston ramp stage ${ramp_stage}/${n_ramp}: net F=$(v_F_stage)"
-run ${ramp_steps}
+# cont=1: piston should already be at full production force from the prior
+# run -- skip the actual ramping steps (the loop still cycles through all
+# n_ramp stages instantly with zero run time, so aveforce_piston stays defined
+# for the unfix a few lines below; it's immediately superseded by the real
+# constant-pressure fix regardless, so the skipped ramp's momentary value never matters).
+if "${cont} == 0" then "run ${ramp_steps}"
 next ramp_stage
 jump SELF piston_ramp_loop
 
@@ -1334,7 +1348,7 @@ print "========================================"
 print "Simulation complete"
 print "========================================"
 
-variable outfile string "final_flow_${dataname}_${interaction}_${nsteps}"
+variable outfile string "final_triperm_${dataname}_${interaction}_${nsteps}"
 write_data ${outfile}.data
 
 

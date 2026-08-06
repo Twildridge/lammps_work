@@ -72,8 +72,14 @@
 #   Phase 0    — NPT (Langevin+NPH) equilibration (box/piston stay as-is)
 #   Phase 1.25 — piston contact approach + L0 recording (so L0 is UNDEFINED under cont=1)
 #   Phase 1.5  — reference recording (reference files already exist)
-# NOTE: cont=1 is only meaningful as a single-state continuation; it is NOT
-#   supported for the pressure sweep (L0/seating are skipped).
+# NOTE: cont=1 means "extend the equilibration hold at whatever ONE level is
+#   supplied via -var compressions" -- it is never a fresh multi-value sweep.
+#   continue_sim.sh enforces this: it auto-detects the last _c<level> reached
+#   by the original run and passes that single value back, so `compressions`
+#   is always a one-element list under cont=1. A new cont-gate right before
+#   PHASE 2a's drive (below) skips the drive-to-target (which needs L0_bb/
+#   piston_seat_z, undefined here since Phase 1.25 is skipped) and jumps
+#   straight to the equilibration-only measurement hold -- no re-driving.
 variable cont index 0
 
 # ----- Physical Parameters -----
@@ -103,8 +109,8 @@ variable v_piston_prod   equal 0.04     # sigma/tau, drive velocity (= 1 sigma /
 # L0_bb).  If NOT supplied, the in-script default below (single strain 0.10) is
 # used.  The sweep is CUMULATIVE: the piston is driven DOWN to each successive
 # strain (never unloaded), holding a measurement window at each -- like
-# shear_slab.lmp's cumulative strain loop.  cont=1 is NOT supported for a
-# multi-value sweep.
+# shear_slab.lmp's cumulative strain loop.  cont=1 continuation always supplies
+# a single value here (the last level reached) -- see the cont=1 note above.
 variable compressions      index 0.10
 variable compressions_list index "STALE-run_lammps.sh--no-list-passed--running-single-default-only"
 
@@ -1194,6 +1200,14 @@ fix out_gel_edges all print ${strain_freq} &
     "$(step) $(c_minz) $(c_maxz) $(c_piston_com[3]) $(c_support_com[3])" &
     file output_files/volume_data/gel_edges_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
 
+# ----- cont=1 CONTINUATION (single-level only): the data file already holds
+# the gel at whatever strain level was passed in via ${compressions} (continue_sim.sh
+# auto-detects the last level reached and supplies it as the ONLY sweep value) --
+# skip the drive-to-target entirely (it needs L0_bb/piston_seat_z, which only
+# exist when Phase 1.25 ran, and Phase 1.25 is skipped under cont=1) and go
+# straight to the equilibration-only measurement hold below.
+if "${cont} == 1" then "jump SELF label_skip_drive"
+
 # ----- PHASE 2a: drive the piston to the prescribed cumulative STRAIN target -----
 # Prescribed strain: piston target z = piston_seat_z - strain*L0_bb (strain =
 # ${compressions}, cumulative from the seated reference).  Drive the piston DOWN
@@ -1219,10 +1233,14 @@ if "${cont} == 0 && ${movie_open} == 1" then &
     "variable movie_open delete" &
     "variable movie_open equal 0"
 
+label label_skip_drive
+
 # ----- Freeze the piston at this strain for the measurement hold -----
 # Velocity-controlled loading is done; freeze the piston (v=0, still rigid with
 # forces off) so the network stress RELAXES at fixed strain during the hold.  The
 # support remains frozen.  The measured stress at this fixed strain gives M.
+# (Under cont=1 this is a no-op: the piston should already be at rest at this
+# strain from the continued run's final state.)
 velocity piston set 0.0 0.0 0.0
 print ">>> [strain=${compressions}] drive done: gel_strain_bb = $(v_gel_strain_bb:%.4f)  gel_strain_rg = $(v_gel_strain:%.4f)  piston_z = $(c_piston_com[3]:%.2f)  step=$(step)"
 
@@ -1389,5 +1407,5 @@ unfix trk_vol_rg
 unfix trk_dims_rg
 unfix trk_box
 
-variable outfile string "final_flow_${dataname}_${interaction}_${nsteps}"
+variable outfile string "final_tricomp_${dataname}_${interaction}_${nsteps}"
 write_data ${outfile}.data

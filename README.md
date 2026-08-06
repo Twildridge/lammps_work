@@ -44,9 +44,8 @@ lammps_work/                    ← This git repository
 │   ├── slab_with_support/      ← Gel equilibration and compression (main workhorse)
 │   ├── triaxial_compression/   ← CURRENT axial-compression workflow (periodic slab, force-piston) — split from slab_with_flow
 │   ├── triaxial_permeation/    ← CURRENT permeation workflow (periodic slab, force-piston) — split from slab_with_flow
-│   ├── slab_with_flow/         ← LEGACY combined permeation/compression (compression_mode switch) — superseded by the two triaxial_* folders
 │   ├── shear_slab/             ← Shear modulus measurement (plate-driven xz shear; current G workflow)
-│   ├── slab_elongation/        ← LEGACY uniaxial elongation prototype — superseded by shear_slab
+│   ├── compress_slab/          ← Bulk modulus K measurement (plate-driven isotropic six-face compression; undergrad project, in development)
 │   ├── solvent_phase/          ← Pure solvent equation of state sweep
 │   ├── solvent_pure/           ← Single-state pure solvent run
 │   ├── polymer_phase/          ← Pure polymer equation of state sweep
@@ -56,7 +55,6 @@ lammps_work/                    ← This git repository
 │   ├── run_lammps.sh           ← Job runner for Expanse
 │   ├── run_lammps_bridges.sh   ← Job runner for Bridges-2
 │   ├── run_lammps_pod.sh       ← Job runner for Pod
-│   ├── run_lammps_pod_old.sh   ← Legacy Pod runner (kept for reference)
 │   ├── build_lammps.sh         ← One-shot LAMMPS build script (Expanse-style cmake)
 │   ├── git_sync.sh             ← One-command GitHub sync (MacBook + clusters)
 │   ├── isolate_gel.py          ← CLI: strip bath/walls and define interior control volume (used by volmix_sweep)
@@ -65,24 +63,17 @@ lammps_work/                    ← This git repository
 │   ├── slab_with_support.ipynb         ← Build basic slab geometry
 │   ├── slab_with_support_periodic.ipynb ← CURRENT: xy-periodic crosslinked slab (bonds wrap x,y only; finite-z; p p p; one support+piston per z-period; no side padding). Input for triaxial_* runs
 │   ├── slab_with_support_angled.ipynb  ← Build angled-chain slab geometry
-│   ├── slab_with_support_old.ipynb     ← Legacy slab builder (kept for reference)
-│   ├── slab_with_support_old_2.ipynb   ← Legacy slab builder (kept for reference)
 │   ├── isolate_gel.ipynb               ← Extract just the swollen gel from a run
 │   ├── split_gel_slab.ipynb            ← Split a gel slab into pieces
 │   ├── add_plates_to_gel.ipynb         ← Attach shear plates to isolated gel (input for shear_slab)
-│   ├── add_more_plates_to_gel.ipynb    ← Variant: plates on all six faces (experimental)
+│   ├── add_more_plates_to_gel.ipynb    ← Variant: plates on all six faces — input for compress_slab
 │   ├── pure_polymer.ipynb              ← Build pure polymer data file
 │   ├── pure_solvent_1.ipynb            ← Build pure solvent data file
 │   ├── triaxial_compression.ipynb           ← CURRENT: M, network stress, pore pressure vs compression-level sweep (triaxial_compression runs)
 │   ├── triaxial_permeation.ipynb            ← CURRENT: piston/thickness/stress/density/permeate + partial-vs-ss, with Phase 1.5 reference overlays (triaxial_permeation runs)
 │   ├── bulk_modulus_analysis.ipynb          ← Drained vs osmotic bulk modulus K
-│   ├── compression_analysis.ipynb           ← Older: M, Dc, pore pressure, volume fractions (slab_with_flow compression) — superseded by triaxial_compression
-│   ├── longitudinal_modulus_analysis.ipynb  ← Older M-only notebook (superseded by compression_analysis)
-│   ├── permeation_analysis.ipynb            ← Older flow profiles & pore pressure (slab_with_flow mode 0) — superseded by triaxial_permeation
-│   ├── flow_poroelasticity_analysis.ipynb   ← Older flow notebook (superseded by permeation_analysis)
 │   ├── shear_analysis.ipynb                 ← G, N1/N2, stress profiles (shear_slab output)
 │   ├── volume_of_mixing.ipynb               ← ΔV_mix(P*) and φ(P*) across pressure sweep (syncs from Expanse via paramiko; requires isolated_* data files)
-│   ├── compression_analysis_backup.ipynb    ← Frozen snapshot of compression notebook
 │   ├── plot_lammps_log.py      ← Plot T, P, volume convergence from log.lammps (+ shear diagnostics)
 │   ├── plot_compression_strain_sweep.py ← Plot stress-strain / M across a triaxial_compression sweep
 │   ├── plot_shear_strain_sweep.py ← Plot stress-strain / G across a shear_slab sweep
@@ -95,7 +86,7 @@ lammps_work/                    ← This git repository
 │                                  input_data/ lives outside the repo — see §4)
 │
 ├── README.md                   ← This file
-├── CLAUDE_CONTEXT.md           ← Context file for Cowork AI sessions (gitignored)
+├── shear_slab_notes.md         ← Append-only engineering decision log (gitignored) — NOT current-state; this README is
 ├── .gitattributes              ← Runs nbstripout on every notebook commit (see §8)
 ├── lj_units_cheat_sheet.md     ← Unit conversions and parameter reference
 ├── expanse_lammps_guide.md     ← Expanse-specific setup and GitHub guide
@@ -220,7 +211,7 @@ Before running a gel simulation you need a `.data` file — a text file describi
 | `slab_with_support_angled.ipynb` | Angled-chain slab geometry | Angled geometry variants |
 | `isolate_gel.ipynb` | Extracts the swollen polymer (+solvent) from a finished slab run | Pre-step for `shear_slab`; modulus analysis |
 | `add_plates_to_gel.ipynb` | Attaches rigid shear plates on the x-faces of an isolated gel (atom type 4, harmonic-bonded to surface polymer) | **Required input for `shear_slab.lmp`** |
-| `add_more_plates_to_gel.ipynb` | Variant that adds plates on all six faces | Experimental six-face confinement runs |
+| `add_more_plates_to_gel.ipynb` | Variant that adds plates on all six faces | **Required input for `compress_slab.lmp`** (bulk modulus K) |
 | `split_gel_slab.ipynb` | Splits a slab into polymer-only and solvent-only files | Isolated component analysis |
 | `pure_polymer.ipynb` | Pure polymer box (no solvent) | EOS and baseline runs |
 | `pure_solvent_1.ipynb` | Pure solvent box | EOS and solvent calibration |
@@ -260,15 +251,14 @@ The `run_lammps` scripts handle all the bookkeeping automatically: creating time
 | `slab_with_support/` | Gel equilibration (free-swelling) or axial compression with piston. NPT uses **`aniso`** so x, y, z each relax independently to P* — the gel reaches its true equilibrium swelling instead of being locked to the data file's aspect ratio (see **Barostat choice** note at the end of this guide). A `pre_swell` knob scales the lattice constant `a` so the gel starts near its swollen equilibrium (faster convergence; pdamp raised 1→5). | Equilibrate gel; measure M (longitudinal modulus) |
 | `triaxial_compression/` | **Current** axial-compression workflow. Periodic (`p p p`) laterally-unconfined slab from `slab_with_support_periodic.ipynb`, no side walls. A **force-controlled piston** (`setforce`+`aveforce`+`nve`) loads the gel in z; the box is not barostatted during loading. Supports a **cumulative pressure sweep** (`COMPRESSIONS` array in the `.batch`, `_c<level>` output tags) — each level is a piston pressure and the run measures the resulting strain, so **M = pressure / strain**. | Measure M vs compression level |
 | `triaxial_permeation/` | **Current** permeation workflow. Same periodic slab and force-piston machinery, driving solvent through the network at constant piston force. | Measure flux, Dc, pore-pressure profiles |
-| `slab_with_flow/` | **Legacy** combined script: piston-forced permeation **or** compression of a pre-equilibrated *walled* gel — toggled by `variable compression_mode` (0 = permeation, 1 = compression). Superseded by the two `triaxial_*` folders (periodic geometry, no walls). Kept for reference. | (superseded) |
 | `shear_slab/` | Plate-driven xz shear of an isolated swollen gel with attached plates (input from `add_plates_to_gel.ipynb`). Phase 1a NPT (50k) + Phase 1b NVT (100k) + Phase 2 shear with `fix halt` at γ = 10% + Phase 3 NVT production. | Measure G (shear modulus) from ⟨σ_p,xz⟩ / γ |
-| `slab_elongation/` | Legacy uniaxial elongation prototype (NPT → fix deform z → NVT) | Superseded by `shear_slab/`; folder kept temporarily |
+| `compress_slab/` | **In development (undergrad project).** Isotropic bulk-modulus analogue of `shear_slab`: an isolated gel with plates on all six faces (input from `add_more_plates_to_gel.ipynb`) is compressed simultaneously along x, y, and z by driving all six plates inward. Steps through a 3-point cumulative volumetric-strain ladder (ε_vol = 0.015, 0.030, 0.045), holding + measuring the equilibrated network stress at each stage, then fits ΔP'_net vs ε_vol (slope = K) — a 3-point linear fit rather than the single-point `K_single` estimate in `bulk_modulus_analysis.ipynb`, which its own header notes carries a biasing assumption. Writes `bulk_modulus_plot_data_*.dat` for `bulk_modulus_analysis.ipynb` to read. No dedicated analysis notebook yet. | Measure drained bulk modulus K |
 | `solvent_phase/` | Pure solvent pressure sweep across many state points | Build solvent EOS |
 | `solvent_pure/` | Single pure solvent run | Baseline pressure/density check |
 | `polymer_phase/` | Pure polymer pressure sweep | Build polymer EOS |
 | `polymer_pure/` | Single pure polymer run | Baseline |
 
-> **Legacy `.lmp` files inside simulation folders** (`slab_with_flow_old1.lmp`, `slab_with_flow_old2.lmp`, `solvent_pure_old_no_piston_support.lmp`) are kept for reference but are no longer the active scripts — `run_lammps*.sh` always picks `<folder>.lmp`.
+> **Legacy `.lmp` files inside simulation folders** (`solvent_pure_old_no_piston_support.lmp`) are kept for reference but are no longer the active scripts — `run_lammps*.sh` always picks `<folder>.lmp`.
 
 Each folder contains:
 - `<name>.lmp` — the LAMMPS input script (controls the physics; rarely needs editing)
@@ -281,37 +271,29 @@ Each folder contains:
 Open the `.batch` file for your target cluster. The section you edit is at the bottom:
 
 ```bash
-FOLDER="slab_with_flow"
-DATANAME="walled_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000"
+FOLDER="triaxial_compression"
+DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000"
 INTERACTION="1.0_1.0"   # epsSS_epsSP
-NSTEPS=2000000
-OLDSTEPS=0              # 0 = fresh run; set to previous total steps for continuation
+NSTEPS=4000000
 TYPE=""                 # stress, volume, stressvol, or leave empty
 ```
 
 - **`DATANAME`**: the filename of your `.data` file in `lammps_data/input_data/`, without the `.data` extension
 - **`INTERACTION`**: `epsSS_epsSP` — solvent–solvent and polymer–solvent LJ well depths (see cheat sheet)
 - **`NSTEPS`**: number of timesteps to run (1 million steps ≈ 4100 τ ≈ 19 ns for PEG)
-- **`OLDSTEPS`**: set to the total timesteps already completed if continuing a previous run; 0 otherwise
 - **`TYPE`**: optional suffix that gets appended to the data file name in output (for labelling stress/volume variants)
 
+To extend a finished run, use `continue_sim.sh` (§5e) rather than resubmitting this batch file — there's no more `OLDSTEPS`-based resubmission path (removed 2026-08-06; it always reran full setup from the prior run's final `.data` file anyway, `continue_sim.sh` is the real restart).
+
 For `shear_slab`, `NSTEPS` controls only Phase 3 (production). Phase 1a (NPT equilibration, 50k steps), Phase 1b (NVT lock, 100k steps), and Phase 2 (shear up to 570k steps, halted automatically at γ = 10%) are hardcoded inside `shear_slab.lmp`.
-
-For `slab_with_flow`, the operating mode is set **inside the `.lmp` file**, not the batch file:
-
-```lammps
-variable compression_mode equal 1    # 0 = permeation, 1 = compression
-```
-
-The same `.lmp` script runs both modes — change the variable, push, and resubmit.
 
 ### 5d. Submitting a job
 
 ```bash
 # SSH into the cluster, then:
-cd ~/Documents/lammps_work/simulations/slab_with_flow
-sbatch slab_with_flow_bridges.batch    # Bridges-2
-sbatch slab_with_flow.batch            # Expanse
+cd ~/Documents/lammps_work/simulations/triaxial_compression
+sbatch triaxial_compression_bridges.batch    # Bridges-2
+sbatch triaxial_compression.batch            # Expanse
 ```
 
 > **What is `sbatch`?** It submits a job script to SLURM's queue. SLURM schedules it when the requested nodes are free. You get a job ID back immediately; the simulation runs in the background.
@@ -331,50 +313,53 @@ htop                # live CPU/memory usage per core
 **Read the LAMMPS log while it runs:**
 ```bash
 # From the timestamped working directory (check run_lammps output for the exact path):
-tail -f ~/Documents/lammps_runs/slab_with_flow_*/log.lammps
+tail -f ~/Documents/lammps_runs/triaxial_compression_*/log.lammps
 ```
 
 ### 5e. Continuing a run with `continue_sim.sh`
 
-`continue_sim.sh` picks up from where a finished run left off — no restart files, no editing batch scripts. It reads the SLURM output file to find the original working directory and auto-detects all run parameters from there.
+`continue_sim.sh` picks up from where a finished run left off — no restart files, no editing batch scripts. It reads the SLURM output file to find the original working directory and auto-detects all run parameters from there. This is a **real restart** (skip setup, keep going) — contrast with editing `NSTEPS` in a `.batch` file and resubmitting, which is a fresh job that reruns all setup from scratch (see §5c).
 
-**When to use it:** you want more steps from a completed `slab_with_flow` or `slab_with_support` job — either to extend relaxation/measurement, or to continue a permeation drive.
+**When to use it:** you want more steps from a completed run. As of 2026-08-06, supported for `slab_with_support`, `solvent_pure`, `polymer_pure`, `triaxial_compression`, `triaxial_permeation`, and `shear_slab`. Not supported: `solvent_phase`/`polymer_phase` (their internal P-sweeps complete in one invocation — "continuing" isn't a meaningful operation) or the `volmix_sweep` pipeline (its own SLURM-chained orchestration). `compress_slab` is a separate project — not wired up here.
 
-#### What it does
+#### What it does per folder
 
-The script jumps directly to the production phase, skipping all setup:
+The script always skips setup and always resumes whatever the folder's production behavior actually is — for driven simulations that means *continuing the drive*, not freezing into a hold:
 
-| Script | Skipped | Runs |
+| Folder | Skipped | Runs |
 |--------|---------|------|
-| `slab_with_flow` compression | Phase 0 NVT, Phase 0.5 pressure equilibration, compression drive, ε=0 reference recording | All analysis computes and output fixes; stress-relaxation run with piston frozen |
-| `slab_with_flow` permeation | Phase 0 NVT | Piston velocity re-applied, all observables, halts when feed reservoir empties |
-| `slab_with_support` | Soft push-off, minimize, NVT ramp, NPT (`aniso`) warm-up | `aniso` NPT production with volume/dimension outputs (Widom removed) |
+| `slab_with_support` | Soft push-off, minimize, NVT ramp, NPT (`aniso`) warm-up | `aniso` NPT production with volume/dimension outputs |
+| `solvent_pure`, `polymer_pure` | Box rescale/harmonic pre-relax, gentle Langevin ramp | More NPT production steps |
+| `triaxial_compression` (sweep) | Phase 0/1.25/1.5 setup, **and** the non-equilibrium piston drive-to-target | Equilibration-only measurement hold, extended — at whichever `_c<level>` was last reached (auto-detected, never re-sweeps) |
+| `shear_slab` (sweep) | Phase 1a/1b equilibration, **and** the non-equilibrium plate shear drive | Equilibration-only production hold, extended — at whichever `_g<strain>` was last reached (auto-detected, never re-sweeps) |
+| `triaxial_permeation` (not a sweep) | Phase 0/0.5/1.5 setup, **and** the piston reposition/WCA-relax/force-ramp | The constant-pressure forcing drive itself, extended — continuation here means **keep forcing solvent through the gel**, never a passive hold |
 
-All the same output files are produced (stress profiles, chemical potential, piston data, trajectories, `log.lammps`). The only intentional omissions are the setup trajectory (`gel_setup_*.lammpstrj`) and the ε=0 reference stress files — these already exist from the original run.
+For the two sweep folders, `continue_sim.sh` scans the original run's `output_files/stress_data/` for the highest `_c<level>`/`_g<level>` tag present and passes just that one value back — the `.lmp` script's sweep variable becomes a one-element list, so it runs exactly once at that level and exits, instead of re-driving through the whole ladder.
+
+All the same output files are produced (stress profiles, chemical potential, piston/permeate data, trajectories, `log.lammps`) into a fresh `continuation_{timestamp}/` subfolder, so nothing from the original run is overwritten. The only intentional omissions are the setup trajectory and any ε=0/zero-flux reference files — those already exist from the original run.
 
 #### How to run it
 
 1. **Navigate to the simulation folder** where you submitted the original job:
    ```bash
-   cd ~/Documents/lammps_work/simulations/slab_with_flow
-   # or: simulations/slab_with_support
+   cd ~/Documents/lammps_work/simulations/slab_with_support
    ```
 
 2. **Run the continuation** using the SLURM job ID from the output file name and your desired extra steps:
    ```bash
    ~/Documents/lammps_work/scripts/continue_sim.sh <job_id> <nsteps>
    ```
-   For example, if your output file is `slab_flow.o49772594.exp-14-05`:
+   For example, if your output file is `slab_support.o49772594.exp-14-05`:
    ```bash
    ~/Documents/lammps_work/scripts/continue_sim.sh 49772594 500000
    ```
-   That's it — no other arguments needed. Compression vs. permeation mode is detected automatically.
+   That's it — no other arguments needed. The folder you're in determines everything else (data-file naming, whether it's a sweep, which value to auto-detect).
 
    > **Tip:** Add `~/Documents/lammps_work/scripts` to your `$PATH` in `~/.bashrc` so you can just type `continue_sim.sh 49772594 500000` directly.
 
 3. **Results appear** in a `continuation_{timestamp}/` subfolder inside the original run's working directory:
    ```
-   ~/Documents/lammps_runs/slab_with_flow_{dataname}_{interaction}_{timestamp}/
+   ~/Documents/lammps_runs/slab_with_support_{dataname}_{interaction}_{timestamp}/
    ├── output_files/           ← original run outputs
    ├── log.lammps              ← original log
    └── continuation_20250602_143012/
@@ -387,11 +372,11 @@ All the same output files are produced (stress profiles, chemical potential, pis
 
 1. Finds `*.o{job_id}.*` in the current directory (the SLURM output file).
 2. Reads the line `Working directory: /path/...` that `run_lammps.sh` printed when the job ran — this gives the original output folder.
-3. Finds `final_flow_*.data` (or `final_config_*.data`) inside that folder.
-4. Parses `dataname`, `epsSS`, `epsSP` from the filename.
-5. Reads `>>> Mode: compression_mode=N` from the output file to detect permeation vs. compression.
+3. Looks up the current folder's output-file prefix (`final_config`, `final_tricomp`, `final_triperm`, `final_shear`, `puresolv`, or `purepol`) and finds `<prefix>_*.data` inside that folder.
+4. Parses `dataname`, `epsSS`, `epsSP` from the filename (last three `_`-delimited tokens).
+5. For `triaxial_compression`/`shear_slab` only: scans `output_files/stress_data/` for the highest `_c<level>`/`_g<level>` tag and passes that single value back as the sweep variable.
 6. Creates `continuation_{timestamp}/` inside the original folder and symlinks the data file in.
-7. Passes `-var cont 1` to LAMMPS, which triggers the `jump` commands that bypass setup phases.
+7. Passes `-var cont 1` (plus the sweep variable, if applicable) to LAMMPS, which triggers the `jump`/`if` logic in each `.lmp` script that bypasses setup — and, for the driven sims, bypasses the drive/ramp itself too, so continuation always means "keep going," never "add an artificial hold."
 
 ### 5f. SLURM resource guidelines
 
@@ -450,7 +435,7 @@ After a job finishes, the output `.dat` files are in the working directory on th
 ```bash
 # From MacBook terminal — adjust path to match your run
 rsync -avP <username>@login.expanse.sdsc.edu:\
-  ~/Documents/lammps_runs/slab_with_flow_<dataname>_<interaction>_<timestamp>/output_files/ \
+  ~/Documents/lammps_runs/triaxial_compression_<dataname>_<interaction>_<timestamp>/output_files/ \
   ~/Documents/lammps/flow_data_local/
 ```
 
@@ -486,7 +471,7 @@ ls ~/Documents/lammps_runs/<run_dir>/output_files/stress_data/
 #                              └─────────────────────── run_id ───────────────────────────────────────────┘
 ```
 
-`TOTSTEPS = OLDSTEPS + NSTEPS` from the batch file (for a fresh run, `TOTSTEPS = NSTEPS`).
+`TOTSTEPS = NSTEPS` from the batch file (there's no more `OLDSTEPS`-based cumulative counting — see §5c).
 
 ---
 
@@ -502,7 +487,7 @@ cd ~/Documents/lammps_runs/<run_dir>
 
 **`plot_lammps_log.py`** — T, P, volume convergence (all sim types) + shear diagnostics (shear_slab only, auto-detected)
 
-For `slab_with_flow`, `slab_with_support`, etc.:
+For `triaxial_compression`, `triaxial_permeation`, `slab_with_support`, etc.:
 ```bash
 python ~/Documents/lammps_work/scripts/plot_lammps_log.py \
     . \
@@ -528,18 +513,18 @@ Output plots are saved to `./output_plots/convergence_plots/`.
 
 ---
 
-**`plot_stress_profiles.py`** — partial stress and volume fraction profiles (slab_with_flow / slab_with_support)
+**`plot_stress_profiles.py`** — partial stress and volume fraction profiles (`slab_with_support`, `triaxial_compression` single-level runs, `triaxial_permeation`, etc.)
 ```bash
 python ~/Documents/lammps_work/scripts/plot_stress_profiles.py \
     . \
     isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000 \
     0
-# third argument is OLDSTEPS (0 for a fresh run)
+# third argument is OLDSTEPS — always 0 now (the old batch-file continuation path was removed 2026-08-06)
 ```
 
 ---
 
-**`plot_piston_data.py`** — piston position and velocity (slab_with_flow only)
+**`plot_piston_data.py`** — piston position and velocity (`triaxial_compression` single-level runs, `triaxial_permeation`, etc. — compression *sweeps* and `shear_slab` use their own consolidated plotters instead, see §5b)
 ```bash
 python ~/Documents/lammps_work/scripts/plot_piston_data.py \
     . \
@@ -562,12 +547,6 @@ Reads a `triaxial_permeation` run. Six panels — piston, thickness, stress, den
 **`bulk_modulus_analysis.ipynb`**
 Drained vs. osmotic bulk modulus K. The osmotic K_osm = Π − dW/dV carries the absolute swelling pressure (large); the *drained* K should be computed like M (network stress response), not from the osmotic branch.
 
-**`compression_analysis.ipynb`** (older)
-Reads partial stress, volume fraction, and pore pressure data from a `slab_with_flow` compression run (`compression_mode = 1`). Extracts: longitudinal modulus M (both from network-stress integration and Voronoi-tessellated φ_p/φ_s decomposition), cooperative diffusivity Dc from φ_p(z,t) relaxation, and pore-pressure profiles. Inputs: `stress_tensor_polymer_*.dat`, `stress_profile_z_*.dat`, trajectory file. Supersedes `longitudinal_modulus_analysis.ipynb` (still present for reference).
-
-**`permeation_analysis.ipynb`**
-Reads volume fraction and stress profiles from `slab_with_flow` permeation runs (`compression_mode = 0`). Extracts pore-pressure profiles φ_p(z), φ_s(z), p_p(z), network stress σ'(z), and solvent flux. Plots each trajectory dump as a separate curve to show temporal evolution. Supersedes `flow_poroelasticity_analysis.ipynb` (still present for reference).
-
 **`volume_of_mixing.ipynb`**
 Computes ΔV_mix(P*) = V_mixed − V_pure_solvent − V_pure_polymer across the pressure sweep (P* = 1.0–2.0). Cell 2 syncs `box_dimensions_*.dat` files directly from Expanse via `paramiko` SFTP — no SSH keys required; prompts for password and TOTP code in the notebook. Subsequent cells parse the box dimension files, time-average volumes over the last 50% of each run, and plot both ΔV_mix and the individual component volumes vs P*. Requires `paramiko` (`pip install paramiko`). Data lands in `flow_data_local/volmix_sweep/p{P}/`.
 
@@ -578,21 +557,21 @@ Reads the bulk-region polymer stress tensor from a `shear_slab` Phase 3 producti
 
 ### 7c. Running Python scripts manually on a cluster
 
-You may want to rerun post-processing after a job without relaunching LAMMPS — for example, after updating an analysis script, or to run `cavity_widom.py` which is not called automatically on Bridges-2.
+You may want to rerun post-processing after a job without relaunching LAMMPS — for example, after updating an analysis script, or to run `cavity_widom.py` which is not called automatically on Bridges-2. **Note:** `cavity_widom.py`'s excess-chemical-potential workflow (including the `--p-ext`/`--exclusion-buffer`/`--piston-eps` flags below) was built specifically for the now-removed `slab_with_flow`; it hasn't been ported to `triaxial_compression`/`triaxial_permeation`, which have no equivalent postprocess.sh hook for it yet. `plot_stress_profiles.py` and `plot_piston_data.py` further down are unaffected — those work for the current folders.
 
 All scripts below assume you are **inside the run's working directory** on the cluster:
 
 ```bash
 cd ~/Documents/lammps_runs/<run_dir>
-# e.g. cd ~/Documents/lammps_runs/slab_with_flow_walled_slab_support_5beads_tall_rho04_p1.52_1.0_1.0_600000_1.0_1.0_20250601_120000
+# e.g. cd ~/Documents/lammps_runs/slab_with_support_slab_support_5beads_tall_rho04_1.0_1.0_20260705_124556
 ```
 
 Set these variables once at the top of your shell session — everything else is derived from them:
 
 ```bash
-DATANAME="walled_slab_support_5beads_tall_rho04_p1.52_1.0_1.0_600000"
+DATANAME="slab_support_5beads_tall_rho04"
 INTERACTION="1.0_1.0"
-TOTSTEPS=4000000
+TOTSTEPS=3000000
 EPSSS="${INTERACTION%%_*}"   # first part:  e.g. 1.0
 EPSSP="${INTERACTION##*_}"   # second part: e.g. 1.0
 SCRIPTS=~/Documents/lammps_work/scripts
@@ -616,7 +595,7 @@ module load anaconda3/2024.10-1
 
 This is the main script to run manually, especially on Bridges-2 where it is not called automatically by `run_lammps_bridges.sh`.
 
-**`slab_with_flow` (compression mode — piston-eps 0, exclusion buffer 2σ):**
+**Legacy `slab_with_flow` (compression mode — piston-eps 0, exclusion buffer 2σ); kept as a worked example, folder removed 2026-08-06:**
 
 ```bash
 python "$SCRIPTS/cavity_widom.py" \
@@ -648,15 +627,10 @@ The trajectory file is in `traj_files/` (symlink to scratch). If scratch has bee
 
 #### `plot_lammps_log.py` — T, P, volume convergence + μ_ex diagnostics
 
-**Expanse (`slab_with_flow`):**
-```bash
-python "$SCRIPTS/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" --p-ext 1.8
-```
-
-**Bridges-2 / `slab_with_support`** (no `--p-ext` needed):
 ```bash
 python "$SCRIPTS/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
 ```
+No `--p-ext` flag needed for any current folder — it was a `slab_with_flow`-only option (now removed).
 
 Output saved to `./output_plots/`.
 
@@ -665,16 +639,15 @@ Output saved to `./output_plots/`.
 #### `plot_stress_profiles.py` — partial stress and volume fraction profiles
 
 ```bash
-OLDSTEPS=0   # set to previous totsteps if this was a continuation run
-python "$SCRIPTS/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+python "$SCRIPTS/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
 ```
 
 ---
 
-#### `plot_piston_data.py` — piston position, velocity, force (`slab_with_flow` only)
+#### `plot_piston_data.py` — piston position, velocity, force (`triaxial_compression` single-level runs, `triaxial_permeation`, etc.)
 
 ```bash
-python "$SCRIPTS/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+python "$SCRIPTS/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
 ```
 
 ---
@@ -885,7 +858,7 @@ Check that `epsSP` and `epsSS` are physically reasonable. Verify you're reading 
 This was caused by `xztilt`/`yztilt` not being valid LAMMPS thermo keywords — the correct keywords are `xz` and `yz`. Already fixed in the current script.
 
 **`fix ave/chunk norm none` error**
-`norm none` requires LAMMPS ≥ March 2020. On older builds, replace the `prof_z_polymer/solvent` fixes with the reduce/chunk + ave/time approach used in `slab_with_flow.lmp`.
+`norm none` requires LAMMPS ≥ March 2020. On older builds, replace the `prof_z_polymer/solvent` fixes with an equivalent `compute reduce` + `fix ave/time` approach (see git history for `slab_with_flow.lmp` pre-2026-08-06 removal for a worked example).
 
 **`git pull` fails on cluster ("merge conflict")**
 Run `git stash` to set aside local changes, then `git pull`, then `git stash pop` to restore them. If conflicts persist, resolve them manually or ask for help.
@@ -919,7 +892,7 @@ Full details are in `lj_units_cheat_sheet.md`. Key conversions for PEG/water:
 Match the barostat to the geometry:
 
 - **Free-swelling gel in a solvent bath** (`slab_with_support` equilibration): use `fix npt … aniso P P pdamp`. Each of x, y, z is barostatted independently to the target pressure, so the box adopts whatever aspect ratio balances σxx = σyy = σzz = P and the gel relaxes to its own equilibrium shape — the analogue of a hydrogel free to swell in all directions. **Do not use `iso` here:** `iso` controls only the mean (hydrostatic) pressure and freezes the box aspect ratio, so any anisotropic stress or z-padding baked into the data file is never relaxed. Switching `slab_with_support` from `iso` → `aniso` (2026-06-24) fixed exactly this: the gel had been stuck artificially swollen along z, and with `aniso` it reaches a noticeably taller, true equilibrium swelling. Use `couple xy` only if you must enforce lateral isotropy (a free gel reaches it anyway); use `tri` only to relax shear stress (lets the box tilt).
-- **Piston-driven runs** (`triaxial_compression`, `triaxial_permeation`, `slab_with_flow`): production is `fix nvt` with the box fixed and the piston as the sole z-actuator — **no box barostat in production** (a barostat would double-control z and fight the piston). The only barostat is the Phase-0.5 pre-equilibration, run with the piston/support temporarily on `nve`+`setforce` so they scale with the box.
+- **Piston-driven runs** (`triaxial_compression`, `triaxial_permeation`): production is `fix nvt` with the box fixed and the piston as the sole z-actuator — **no box barostat in production** (a barostat would double-control z and fight the piston). The only barostat is the Phase-0.5 pre-equilibration, run with the piston/support temporarily on `nve`+`setforce` so they scale with the box.
 
   As of **2026-07-29** this Phase-0.5 barostat is **`fix nph z`** (z-only), replacing the earlier `aniso`/`iso` forms. Rationale: transverse (xx, yy) stresses build up in the polymer network during compression or permeation; a scalar (`iso`) or per-axis (`aniso`) barostat would let those transverse stresses perturb the box and drift the reservoir pressure. Barostatting **z only** targets the zz stress component directly, holding the solvent reservoir at Pzz = P* = 1.5 while x, y box dimensions stay fixed at the periodic slab's equilibrium extent. Because the target is now Pzz (not the full scalar `Press`), the old `+0.41` kinetic offset used by `slab_with_flow`'s `iso` convention is dropped — all three scripts target `npt_P05_target = P_target`.
 

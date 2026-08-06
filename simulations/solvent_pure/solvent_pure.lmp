@@ -59,6 +59,14 @@ variable volume_freq   equal 10000
 variable block_steps   equal ${nsteps}/${n_blocks}
 variable nrepeat_block equal ${block_steps}/100
 
+# ----- Continuation flag -----
+# 0 = fresh start (default)
+# 1 = continuation from a final .data file (via continue_sim.sh). The data
+#     file already holds a bulk-density-equilibrated solvent, so Stage 0
+#     (box rescale + minimize + gentle ramp) is skipped entirely and Stage 1
+#     (NPT production) just runs ${nsteps} more steps.
+variable cont index 0
+
 
 
 # ========== Initialization ==========
@@ -105,6 +113,17 @@ special_bonds lj 0.0 0.0 0.0
 thermo_style custom step temp pe ke etotal press vol lx ly lz
 thermo ${thermo_freq}
 
+# Freeze support and piston — always, regardless of cont (Stage 1 unfixes
+# this at the end, so it must exist either way). setforce on an empty group
+# is a safe no-op.
+velocity walls set 0.0 0.0 0.0
+fix freeze_walls walls setforce 0.0 0.0 0.0
+
+# cont=1: the continued data file already holds a bulk-density-equilibrated,
+# minimized, thermalized solvent — rescaling it again here would corrupt the
+# box (rho_liquid=0.5 is only the right target for the RAW input file).
+# Skip straight to Stage 1 production.
+if "${cont} == 1" then "jump SELF label_after_setup"
 
 # ── Rescale box so solvent starts at bulk liquid density ──────────────
 # This eliminates the polymer-void pressure collapse before NVT begins.
@@ -122,13 +141,8 @@ change_box all x scale ${scale_f} y scale ${scale_f} z scale ${scale_f} remap
 
 
 # =====================================================================
-#   STAGE 0 — Freeze walls, minimize solvent, gentle NVT ramp
+#   STAGE 0 — Minimize solvent, gentle NVT ramp
 # =====================================================================
-# Freeze support and piston before minimization so the minimizer only
-# moves solvent atoms.  setforce on an empty group is a safe no-op.
-velocity walls set 0.0 0.0 0.0
-fix freeze_walls walls setforce 0.0 0.0 0.0
-
 minimize 1.0e-4 1.0e-6 10000 100000
 
 reset_timestep 0
@@ -141,6 +155,8 @@ unfix gentle
 unfix lang
 
 
+
+label label_after_setup
 
 # =====================================================================
 #   STAGE 1 — NPT production with block averaging
@@ -181,5 +197,6 @@ unfix 1
 
 
 
-write_data final_config_pure_solvent_${dataname}_${interaction}.data
+variable outfile string "puresolv_${dataname}_${interaction}_${totsteps}"
+write_data ${outfile}.data
 print ">>> Done. Output: vol_pure_solvent_${dataname}_${interaction}.dat"

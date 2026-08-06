@@ -13,7 +13,11 @@ traj_files/
 
 # ── Final config data files written by LAMMPS ──
 final_config_*.data
-final_flow_*.data
+final_tricomp_*.data
+final_triperm_*.data
+final_shear_*.data
+puresolv_*.data
+purepol_*.data
 
 # ── Scratch symlink (points to Expanse-specific Lustre path) ──
 # (traj_files is already covered above, but this catches any other symlinks)
@@ -37,7 +41,7 @@ __pycache__/
 .DS_Store
 
 # ── Claude context (local session notes, not for repo) ──
-CLAUDE_CONTEXT.md
+shear_slab_notes.md
 
 # SLURM stdout/stderr logs
 *.e*.*

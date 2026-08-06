@@ -62,6 +62,16 @@ variable volume_freq   equal 10000
 variable block_steps   equal ${nsteps}/${n_blocks}
 variable nrepeat_block equal ${block_steps}/100
 
+# ----- Continuation flag -----
+# 0 = fresh start (default)
+# 1 = continuation from a final .data file (via continue_sim.sh). The data
+#     file already holds a relaxed, thermalized (FENE) polymer/mix — Stage 0
+#     (harmonic pre-relax) and Stage 1 (gentle Langevin ramp) are skipped
+#     entirely and Stage 2 (NPT production) just runs ${nsteps} more steps.
+#     The FENE pair/bond settings are always reissued regardless (settings
+#     aren't stored in the data file).
+variable cont index 0
+
 
 
 # ========== Initialization ==========
@@ -91,7 +101,9 @@ print ">>> N_polymer=$(count(polymer))  N_solvent=$(count(solvent))  N_mobile=${
 thermo_style custom step temp pe ke etotal press vol lx ly lz
 thermo ${thermo_freq}
 
-
+# cont=1: the continued data file already holds beads at a safe (FENE-scale)
+# separation — skip the harmonic pre-relax entirely.
+if "${cont} == 1" then "jump SELF label_skip_stage0"
 
 # =====================================================================
 #   STAGE 0 — Harmonic pre-relaxation
@@ -119,13 +131,19 @@ run 10000
 unfix pre
 unfix lang
 
+label label_skip_stage0
+
+# Always reissue the FENE pair/bond settings — not stored in the data file,
+# and needed whether Stage 0 ran or was skipped.
 pair_style lj/cut 1.122
 pair_coeff * * ${epsSS} ${sigma} 1.122
 
 bond_style fene
 bond_coeff 1 30.0 1.5 1.0 1.0
 
-
+# cont=1: the continued data file already holds beads thermalized at
+# temp_target — skip the gentle ramp entirely.
+if "${cont} == 1" then "jump SELF label_skip_stage1"
 
 # =====================================================================
 #   STAGE 1 — Gentle Langevin NVT (ramp T from 0.01 → temp_target)
@@ -138,7 +156,7 @@ run ${nsteps_gentle}
 unfix gentle
 unfix lang
 
-
+label label_skip_stage1
 
 # =====================================================================
 #   STAGE 2 — NPT production with block averaging
@@ -171,5 +189,6 @@ unfix 1
 
 
 
-write_data final_config_pure_polymer_${dataname}_${interaction}.data
+variable outfile string "purepol_${dataname}_${interaction}_${totsteps}"
+write_data ${outfile}.data
 print ">>> Done. Output: vol_pure_polymer_${dataname}_${interaction}.dat"

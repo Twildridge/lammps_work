@@ -1,11 +1,10 @@
 #!/bin/bash
 if [ $# -lt 4 ]; then
-    echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [oldsteps] [type]"
+    echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [type]"
     echo "Example (fresh run):  ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000"
-    echo "Example (continuation): ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000 20000"
     echo "  interaction format: epsSS_epsSP (e.g., 1.5_0.4)"
-    echo "  oldsteps: total timesteps from previous run (defaults to 0 for fresh runs)"
     echo "  type: optional, 'stress' (adds 1), 'volume' (adds 2), or 'stressvol' (adds 3) to dataname"
+    echo "  to continue a finished run, use continue_sim.sh instead of resubmitting this script"
     exit 1
 fi
 
@@ -13,8 +12,7 @@ FOLDER=$1
 DATANAME=$2
 INTERACTION=$3
 NSTEPS=$4
-OLDSTEPS=${5:-0}  # Default to 0 for fresh runs
-TOTSTEPS=$((OLDSTEPS + NSTEPS))
+TOTSTEPS=$NSTEPS
 
 # Scratch directory for trajectories
 SCRATCH_DIR="/scratch/$USER"
@@ -71,7 +69,7 @@ cd "$WORK_DIR" || exit 1
 echo "Running LAMMPS in $FOLDER with:"
 echo "  dataname=$DATANAME"
 echo "  epsSS=$EPSSS, epsSP=$EPSSP"
-echo "  nsteps=$NSTEPS, oldsteps=$OLDSTEPS, totsteps=$TOTSTEPS"
+echo "  nsteps=$NSTEPS, totsteps=$TOTSTEPS"
 echo "SLURM tasks per node: $SLURM_NTASKS_PER_NODE"
 echo "SLURM CPUs per task: $SLURM_CPUS_PER_TASK"
 echo "DEBUG: SLURM_NTASKS_PER_NODE: $SLURM_NTASKS_PER_NODE"
@@ -105,15 +103,15 @@ mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM
     -var epsSS $EPSSS \
     -var epsSP $EPSSP \
     -var nsteps $NSTEPS \
-    -var oldsteps $OLDSTEPS \
+    -var oldsteps 0 \
     -var totsteps $TOTSTEPS \
     -in $LAMMPS_FILE
 
 
-# Determine suffix based on 6th argument (type) - moved from 7th position
+# Determine suffix based on 5th argument (type) - moved from 6th position after OLDSTEPS removal
 SUFFIX=""
-if [ $# -ge 6 ]; then
-    case "$6" in
+if [ $# -ge 5 ]; then
+    case "$5" in
         stress)
             SUFFIX="1"
             ;;
@@ -141,10 +139,10 @@ echo "Generating convergence plot..."
 python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
 
 echo "Generating stress profiles..."
-python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
 
 echo "Generating piston plots..."
-python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$OLDSTEPS"
+python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
 
 
 echo "======================================"
