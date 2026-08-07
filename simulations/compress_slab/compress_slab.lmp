@@ -1277,7 +1277,7 @@ print "  compress_strain_vol = $(v_compress_strain_vol)  (= final ε_vol)"
 print "  gel (Rg): $(v_gel_lx_rg) x $(v_gel_ly_rg) x $(v_gel_lz_rg)"
 print "  Final box: $(lx) x $(ly) x $(lz)"
 print "  stress_tensor_polymer/solvent_*.dat and stress_profile_z_*_*.dat now"
-print "  contain 3 equilibrated stages (appended) — fit ΔP'_net vs ε_vol"
+print "  contain 3 equilibrated stages (appended) — fit ΔP′_net vs ε_vol"
 print "  across them (plus the ε_vol=0 origin) for the slope = K."
 print "========================================"
 
