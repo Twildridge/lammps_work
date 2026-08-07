@@ -50,10 +50,12 @@
 #                resulting strain is MEASURED.  M = pressure / strain.
 #
 # Recorded observables (z-profiles, z-normal binning; see ANALYSIS sections):
-#   1) partial stresses of polymer and solvent (group-based stress/atom)
-#   2) solvent-only stress  sigma_s,ss  (pair/local ss-pair virial; virial-only)
+#   1) partial stresses of polymer and solvent (group-based stress/atom).  NOTE:
+#      these INCLUDE the kinetic term n*kT -- see the KINETIC TERM note below.
+#   2) solvent-only stress  sigma_s,ss  (pair/local ss-pair virial; virial-only,
+#      so the notebook adds n_s*kT to it -- ADD_KINETIC in the Config cell)
 #   3) polymer-only stress  sigma_p,pp  (pair/local pp-pair virial + FENE bond
-#                                        virial; virial-only)        [NEW]
+#                                        virial; virial-only, same treatment)
 #   4) solvent MASS density profile                                 [NEW]
 #   5) (mass fraction rho_s/rho_s0 is derived in the notebook from 4 + reference)
 # Dual-resolution z-binning: a coarse global profile plus finer bins in user-
@@ -242,6 +244,15 @@ atom_modify map array
 # style name) was attempted but also rejected.  The solvent-solvent-only
 # stress decomposition is therefore omitted; see the poroelasticity notes
 # in compression_analysis.ipynb for the post-processing correction.
+#
+# rc = 1.122 ~= 2^(1/6) is the LJ MINIMUM, and `pair_modify shift` is NOT set, so
+# the tabulated energy jumps by -epsilon at the cutoff while the force goes
+# continuously to zero.  MD never sees that discontinuity, so the Hamiltonian the
+# trajectory actually samples is WCA, u(r) = 4[(1/r)^12-(1/r)^6] + 1.  Irrelevant
+# to every stress/virial output here (those depend only on du/dr, which is
+# identical either way), but it matters for any ENERGY-based post-processing:
+# a Widom/chemical-potential calculation must use the SHIFTED (WCA) form, or it
+# picks up a spurious -epsilon*(coordination number) in mu_ex.
 pair_style lj/cut 1.122
 bond_style fene
 
@@ -733,6 +744,26 @@ compute chunk_z_support support chunk/atom bin/1d z lower ${binWidth}
 #                    ANALYSIS: PARTIAL STRESSES
 # ==========================================================================
 
+# ── KINETIC TERM: what `stress/atom NULL` actually includes ───────────────
+# NULL does NOT switch off the kinetic contribution.  Per the LAMMPS docs, NULL
+# only means "no velocity-bias temperature compute -- use atom velocities as-is",
+# and "if no extra keywords are listed, the kinetic contribution AND all of the
+# virial contribution terms are included" (default: ke pair bond angle dihedral
+# improper kspace fix).  So every profile derived from these two computes carries
+# the ideal-gas term n(z)*kT.  To get virial only you must say so explicitly:
+#     compute stress_solvent solvent stress/atom NULL virial
+#
+# Verified in the pure-solvent reservoir, where pair_coeff 3 4 / 3 5 are OFF so
+# every solvent interaction is a 3-3 pair and the group value must exceed the
+# ss pair virial (reconstructed from compute pair/local) by exactly n_s*kT:
+#     group W/V_bin = 1.4872   ss pair virial/V_bin = 1.0136
+#     difference    = 0.4737   n_s*kT               = 0.4680   (agrees to 1.2%)
+# Inside the gel the same difference is n_s*kT + (1/2)*W_sp/V_bin, the extra part
+# being half the solvent-polymer CROSS virial (stress/atom gives each atom half of
+# every pair virial it takes part in).  The notebook adds the kinetic term to its
+# pair/local sigma_s,ss and sigma_p,pp (ADD_KINETIC / KIN_T) so all its curves are
+# comparable, and cross-checks that the leftover cross virial matches from both
+# sides (~+0.26 in the gel core, ~0 in the reservoir).
 compute stress_polymer polymer stress/atom NULL
 compute stress_solvent solvent stress/atom NULL
 
@@ -755,8 +786,11 @@ compute press_y_solvent solvent reduce/chunk chunk_y_solvent  sum v_press_solven
 compute press_z_solvent solvent reduce/chunk chunk_z_solv_p   sum v_press_solvent_z
 
 # Piston and support partial stresses — same methodology as above.
-# stress/atom NULL captures pairwise virial only (no kinetic term), which is
-# correct for rigid bodies; internal constraint forces are excluded.
+# These also include the kinetic term (see the KINETIC TERM note above), but the
+# walls are not thermostatted and their motion is imposed: the support is frozen
+# throughout and the piston is frozen during the measurement HOLD, so v_z = 0 and
+# the kinetic contribution vanishes there.  It is nonzero only while the piston is
+# being driven (Phase 1.5), where it is m*v_piston^2 per piston atom.
 compute stress_piston  piston  stress/atom NULL
 compute stress_support support stress/atom NULL
 
@@ -770,10 +804,32 @@ compute press_z_support support reduce/chunk chunk_z_support sum v_press_support
 # The isotropic press_*_z variables above average (σxx+σyy+σzz)/3, which
 # mixes background pressure into the compression signal and cannot be used
 # directly to compute the longitudinal modulus.  These variables isolate the
-# ZZ virial component (c_stress[3]) needed for the Terzaghi decomposition:
-#   σ'_zz = (σ_p_zz + σ_s_zz) − p_pore,   p_pore = σ_s_zz / φ_s
-# Note: still virial-only (NULL kinetic); kinetic contribution is isotropic
-# and cancels in the effective-stress difference for an equilibrated solvent.
+# ZZ component (c_stress[3]) needed for the Terzaghi decomposition:
+#   σ'_zz = (σ_p_zz + σ_s_zz) − p_pore
+# These carry the kinetic term (see the KINETIC TERM note above), which is what
+# you want: the TOTAL σ_zz including n*kT is the quantity that is mechanically
+# flat and that balances the piston force.
+#
+# HOW TO GET p_pore -- and how NOT to.  p_pore is NOT σ_s_zz/φ_s.  That ratio is
+# off by 12% between gel and reservoir even at ZERO strain (so it is a
+# normalisation artefact, not consolidation physics), for two reasons: σ_s_zz
+# contains (1/2)*W_sp, which is momentum handed to the NETWORK, not fluid
+# pressure; and even the clean ss part gives W_ss/V_solv = 0.58 (mass-fraction φ)
+# or 0.74 (Voronoi) in-gel against 1.014 in the reservoir, because the polymer
+# genuinely suppresses solvent-solvent coordination.  The deficit is not
+# geometric, so NO choice of φ_s closes it.  For scale: the piston stress at
+# ε=0.10 is F_z/A = 0.060, while the φ^mf-vs-φ^vor ambiguity alone moves the
+# answer by 0.21 -- 3.5x the whole signal.
+#
+# Instead read p_pore off the flat pure-solvent RESERVOIR, where φ_s = 1 and there
+# is no ambiguity at all (this is what §3 of the notebook does).  The total σ_zz is
+# flat within each region and jumps across the piston by exactly F_z/A:
+#     ε = 0    : reservoir 1.4889   gel 1.484   difference -0.005
+#     ε = 0.10 : reservoir 1.4713   gel 1.537   difference +0.066   (F_z/A = 0.060)
+# so σ'_zz = σ_zz^total(gel) − p_pore(reservoir), consistent with the direct piston
+# measurement.  Widom test-particle insertion on the traj dumps confirms the
+# solvent chemical potential is uniform (Δμ = +0.005 kT at ε=0, +0.034 kT at
+# ε=0.10), i.e. p_pore really is the reservoir value everywhere.
 variable sigma_p_zz atom -c_stress_polymer[3]/(lx*ly*${binWidth})
 variable sigma_s_zz atom -c_stress_solvent[3]/(lx*ly*${binWidth})
 variable sigma_p_xx atom -c_stress_polymer[1]/(lx*ly*${binWidth})
@@ -781,13 +837,18 @@ variable sigma_s_xx atom -c_stress_solvent[1]/(lx*ly*${binWidth})
 variable sigma_p_yy atom -c_stress_polymer[2]/(lx*ly*${binWidth})
 variable sigma_s_yy atom -c_stress_solvent[2]/(lx*ly*${binWidth})
 
-# ── NON-VOLUME solvent zz virial (energy units) ──────────────────────────
-# Per-atom zz virial with NO division by bin volume.  Summed per z-bin below
-# (compute virialzz_solv) it gives the bin's total solvent zz virial in energy
-# units.  The notebook divides this by the SOLVENT partial volume in each bin
-# (Voronoi) to recover the true solvent-phase stress -- instead of dividing by
-# the whole bin volume (lx*ly*binWidth), which dilutes it with empty/polymer
-# space.  Sign matches v_sigma_s_zz (so virialzz_solv / V_solvent == a stress).
+# ── NON-VOLUME solvent zz stress (energy units) ──────────────────────────
+# Per-atom zz stress with NO division by bin volume.  Summed per z-bin below
+# (compute virialzz_solv) it gives the bin's total solvent zz contribution in
+# energy units.  §2b of the notebook divides this by the SOLVENT partial volume
+# per bin (mass-fraction and Voronoi φ_s) instead of by the whole bin volume.
+# Sign matches v_sigma_s_zz (so virialzz_solv / V_solvent == a stress).
+#
+# Despite the variable name this is NOT virial-only -- it inherits the kinetic
+# term from c_stress_solvent (see the KINETIC TERM note above), so
+#     virialzz_solv/V_bin = W_ss/V_bin + n_s*kT + (1/2)*W_sp/V_bin
+# and §2b is a DIAGNOSTIC of φ_s and of the cross-virial magnitude, not a
+# measurement of p_pore.  See the "HOW TO GET p_pore" note above.
 variable virial_s_zz atom -c_stress_solvent[3]
 
 compute sigmazz_poly polymer reduce/chunk chunk_z_poly_zz sum v_sigma_p_zz
@@ -850,8 +911,16 @@ compute ids_local solvent property/local patom1 patom2 ptype1 ptype2
 #   force magnitude along the bond).  Force on atom I is F_I = −(force/|r|)·r_IJ.
 #   W_zz = −(r_z · F_I,z) = (force/|r|)·r_z²   (matches the pair sign convention).
 #   Assign to the bond-midpoint z-bin; σ_pp_bond,zz(bin) = Σ W_zz / (lx·ly·binW).
-# sigma_p,pp is virial-only (no kinetic term); the notebook validates it against
-# the group-based sigma_p (sign check via BOND_SIGN).
+# What comes out of LAMMPS here is virial-only -- pair/local and bond/local carry
+# forces, not velocities.  The notebook then adds the polymer kinetic term n_p*kT
+# per bin (ADD_KINETIC / KIN_T in its Config cell) so sigma_p,pp is comparable to
+# the group-based sigma_p, which includes kinetic (see the KINETIC TERM note above).
+# The remaining gap between them is (1/2)*W_sp, the solvent-polymer cross virial,
+# and it must match the value the solvent side reports -- the notebook checks this
+# (~+0.26 in the gel core from both sides) alongside the BOND_SIGN sign check.
+# Note the cross-check must be done in the gel CORE: pair_coeff 1 4 / 1 5 / 2 4 /
+# 2 5 are all 1.0, so the group polymer stress also picks up half the polymer-WALL
+# cross virial in the contact layers, which this reconstruction excludes.
 compute pl_local_poly  polymer pair/local  fx fy fz
 compute ids_local_poly polymer property/local patom1 patom2 ptype1 ptype2
 compute bnd_local      all     bond/local   force dist
