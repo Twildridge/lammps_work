@@ -29,8 +29,9 @@
 #       same averaging as a stage hold, writing stress_tensor_{polymer,solvent}_ref_*.
 #       Gives a MEASURED P'_net at zero strain instead of the assumed zero that
 #       K_single would otherwise use. (Ported from slab_with_flow's ref_ block.)
-#   2/3 STAGED (slope method, 3 stages) — for each of 3 cumulative VOLUMETRIC
-#       strain targets (compress_strain_vol = 0.015, 0.030, 0.045):
+#   2/3 STAGED (slope method, N stages) — for each cumulative VOLUMETRIC
+#       strain target in the batch-supplied ${stage_targets} list (default
+#       0.015, 0.030, 0.045 — see PARAMETERS):
 #         (a) drive all 6 plates inward (gel on Langevin+NVE) until
 #             compress_strain_vol reaches that stage's target (checked every
 #             halt_freq steps — see the halt_freq note in PARAMETERS)
@@ -38,18 +39,22 @@
 #             equilibration length — see NOTE below) so the solvent can
 #             redistribute/drain before anything is measured
 #         (c) average the equilibrated stress tensor over that hold
-#       Stress/strain data from all 3 stages accumulate into the SAME output
-#       files (stage 1 creates them, stages 2-3 append), so downstream
-#       analysis can read one continuous file per quantity and fit ΔP'_net
-#       vs ε_vol across the 3 equilibrated points (the slope = K), rather
-#       than trusting a single point.
-#       All 3 stages lie inside the estimated linear-elastic window (see STAGE
-#       TARGETS in PARAMETERS for the linearity table), so this ladder measures
-#       the linear-elastic K only — the deliberately-nonlinear ε_vol = 0.060
-#       and 0.120 rungs that probed strain stiffening have been removed.
+#       Stress/strain data from all N stages accumulate into the SAME output
+#       files (stage 1 creates them, later stages append — detected via
+#       is_file(), not a stage counter), so downstream analysis can read one
+#       continuous file per quantity and fit ΔP'_net vs ε_vol across the N
+#       equilibrated points (the slope = K), rather than trusting a single
+#       point. The number of stages and each one's cumulative strain target
+#       are set entirely from the batch script (COMPRESSION_1, COMPRESSION_2,
+#       ... -> COMPRESS_STAGES -> -var stage_targets); this file has no fixed
+#       stage count.
+#       The default ladder (0.015/0.030/0.045) lies inside the estimated
+#       linear-elastic window (see STAGE TARGETS in PARAMETERS for the
+#       linearity table) — deeper targets probe strain stiffening instead of
+#       the linear-elastic K, so choose batch targets accordingly.
 #
 #   NOTE on drainage / hold length: nsteps (below) means the length of
-#   EACH of the 3 equilibration holds, not one single Phase-3 run. No
+#   EACH stage's equilibration hold, not one single Phase-3 run. No
 #   cooperative diffusivity (D_c) value was available when this was written,
 #   so nsteps is NOT yet derived from τ ~ L_gel²/D_c — it is passed through
 #   unchanged from the previous single-point launch command as a starting
@@ -84,7 +89,7 @@
 #   NOTE on bulk region: the poly_bulk/solv_bulk groups (3σ near-plate
 #   exclusion) are defined ONCE, right after Phase 1b, using the
 #   PRE-compression gel geometry — the same specific atoms are tracked
-#   through all 3 stages (Lagrangian), rather than re-snapshotting which
+#   through all stages (Lagrangian), rather than re-snapshotting which
 #   atoms fall in the exclusion box after each stage's compression (which
 #   the original single-point script never had to do, and which would
 #   require deleting/redefining LAMMPS regions and computes mid-run — avoided
@@ -144,36 +149,41 @@ variable timestep_prod  equal 0.005
 # with φ = φ0/(1-ε_vol), so P'_net(ε_vol) deviates from a straight line by
 #   ε_vol :  0.015   0.030   0.045
 #   dev   :   2.5%    5.1%    7.8%
-# All three stages sit inside that window, so the 3-point fit (plus the
-# measured ε_vol = 0 origin) gives the linear-elastic K. Per-axis equivalents
-# (for reference only): 0.0050  0.0101  0.0152
+# The default ladder below sits inside that window, so an N-point fit (plus
+# the measured ε_vol = 0 origin) gives the linear-elastic K. Per-axis
+# equivalents (for reference only): 0.0050  0.0101  0.0152
 # NOTE: this window is a SCALING ESTIMATE, not a measurement. Collinearity of
-# the 3 points is the check that the ladder stayed inside it. The deeper
-# ε_vol = 0.060 / 0.120 rungs (which deliberately probed strain stiffening)
-# have been removed — add them back if K(ε) is wanted.
-variable stage1_target equal 0.015
-variable stage2_target equal 0.030
-variable stage3_target equal 0.045
-
-# Deepest volumetric strain, and its per-axis equivalent.
-# target_strain_comp is used ONLY to set the plate ramp velocity below; the
-# halt conditions all key off compress_strain_vol.
-#   ε_axis = 1 - (1-ε_vol)^(1/3)
-variable target_strain_vol  equal ${stage3_target}
-variable target_strain_comp equal 1.0-(1.0-${target_strain_vol})^(1.0/3.0)
+# the points is the check that the ladder stayed inside it. Deeper targets
+# (e.g. 0.060 / 0.120, which deliberately probe strain stiffening) can be
+# added via the batch script if K(ε) is wanted.
+#
+# ${stage_targets} is an index-style variable: EACH cumulative volumetric
+# strain target, in order, is one value in the list. The number of stages is
+# simply the length of this list — there is no separate stage-count variable.
+# Set entirely from the batch script: COMPRESSION_1, COMPRESSION_2, ... are
+# collected into COMPRESS_STAGES there and passed through by run_lammps*.sh as
+# -var stage_targets <list>. The defaults below (index-style, so a bare `lmp`
+# invocation without -var reproduces them) match the original fixed 3-stage
+# ladder exactly.
+variable stage_targets      index 0.015 0.030 0.045
+variable stage_targets_list index "0.015 0.030 0.045"
 
 # Phase lengths
 variable nsteps_phase0        equal 50000    # Phase 0:   NVT settle at fixed box (new; = old nsteps_npt)
 variable nsteps_npt           equal 50000    # Phase 0.5: Langevin+NPH — find equilibrium volume at P_target
 variable nsteps_equil         equal 50000    # Phase 1b:  NVT — equilibrate at NPH-final volume
 variable nsteps_ref           equal 100000   # Stage 0:   ε_vol = 0 reference hold (own file, own length)
-# Ramp velocity reference. vcompress is set so the plates cover the FULL ladder
-# (0 -> target_strain_vol = 0.045) in nsteps_compress_base/1.1 steps. The three
-# rungs are equally spaced (+0.015 each), so each ramp is ~1/3 of that:
-#   33000/1.1/3 = 10000 steps per stage ramp.
+# Ramp velocity reference: vcompress is recomputed INSIDE the stage loop
+# (see PHASE 2/3 below) from each stage's own incremental strain (this
+# target minus the previous cumulative target), sized to cover that
+# increment in ~nsteps_compress_base/1.1 steps. For the default evenly-
+# spaced 0.015 ladder this reproduces the original fixed-velocity behavior
+# (33000/1.1/3 ≈ 10000 steps per stage ramp); for a non-uniform batch list
+# it keeps every stage's ramp roughly the same number of steps regardless
+# of how deep that particular increment is.
 variable nsteps_compress_base equal 33000
 variable nsteps_compress      equal 30000    # 3× safety buffer PER STAGE ramp — halt fires ~10000
-# nsteps: the length of EACH of the 3 per-stage equilibration/drain holds
+# nsteps: the length of EACH per-stage equilibration/drain hold
 # (NOT a single Phase-3 production length, and NOT the Stage 0 reference —
 # that has its own nsteps_ref above). Passed from bash via -var nsteps.
 # See NOTE at top of file: this has NOT yet been validated against a
@@ -207,10 +217,10 @@ variable stress_freq     equal 10000
 # fix halt check interval — DECOUPLED from stress_freq on purpose.
 # fix halt only tests its condition every halt_freq steps, so the ramp always
 # overshoots its target by up to one check interval. Overshoot in ε_vol is
-# halt_freq * (target_strain_vol / ramp_steps_total) = halt_freq * 1.5e-6 at
-# the current ramp speed (0.045 over ~30000 steps).
-#   halt_freq = 500 -> 0.00075 overshoot = 5.0% of the 0.015 first rung
-#   halt_freq = 100 -> 0.00015 overshoot = 1.0% of the 0.015 first rung
+# halt_freq * (stage_increment / ramp_steps_total) — for the default 0.015
+# per-stage increment at ~10000 ramp steps that's ~1.5e-6 per halt_freq step:
+#   halt_freq = 500 -> 0.00075 overshoot = 5.0% of a 0.015 increment
+#   halt_freq = 100 -> 0.00015 overshoot = 1.0% of a 0.015 increment
 # 100 is used because the shortened ramps (10000 steps/stage, ~9.5x faster than
 # the previous 285000-step reference) made 500 too coarse. Cost is evaluating
 # the six plate-COM computes 5x more often during ramps only — negligible next
@@ -232,8 +242,8 @@ variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 
 print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
-print ">>> Compression (plate-driven, isotropic): ε_vol ladder = ${stage1_target} ${stage2_target} ${stage3_target}"
-print ">>> Deepest ε_vol=${target_strain_vol} -> ε_axis=${target_strain_comp}  halt_freq=${halt_freq}  nsteps_compress=${nsteps_compress}"
+print ">>> Compression (plate-driven, isotropic): ε_vol ladder = ${stage_targets_list}"
+print ">>> halt_freq=${halt_freq}  nsteps_compress=${nsteps_compress}"
 
 # Spatial binning
 variable binWidth    equal 2.0
@@ -300,7 +310,7 @@ print "========================================"
 print "Compression slab simulation (plate-driven): ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
 print "Production steps: ${nsteps}"
-print "Target compressive strain (per axis): ${target_strain_comp}"
+print "Cumulative volumetric strain ladder: ${stage_targets_list}"
 print "========================================"
 
 
@@ -750,16 +760,10 @@ variable compress_strain_y   equal (v_gap_y_0 - v_gap_y_current) / v_gap_y_0
 variable compress_strain_x   equal (v_gap_x_0 - v_gap_x_current) / v_gap_x_0
 variable compress_strain_vol equal 1.0 - (1.0-v_compress_strain_x)*(1.0-v_compress_strain_y)*(1.0-v_compress_strain_z)
 
-# Plate velocities: 1.1× the speed that reaches target_strain in nsteps_compress_base steps.
-# Each plate moves inward by (target_strain * gap_0 / 2) over nsteps_compress_base steps.
-# The run is halted by fix halt, so nsteps_compress is just a 3× safety buffer
-# (30000 cap vs ~10000 actual per stage ramp).
-variable vcompress_z equal $(v_target_strain_comp * v_gap_z_0 / (2.0 * v_nsteps_compress_base * v_timestep_prod) * 1.1)
-variable vcompress_y equal $(v_target_strain_comp * v_gap_y_0 / (2.0 * v_nsteps_compress_base * v_timestep_prod) * 1.1)
-variable vcompress_x equal $(v_target_strain_comp * v_gap_x_0 / (2.0 * v_nsteps_compress_base * v_timestep_prod) * 1.1)
-
-print ">>> vcompress_z = ${vcompress_z}  vcompress_y = ${vcompress_y}  vcompress_x = ${vcompress_x}"
-print ">>> (1.1× base speed; halt fires on compress_strain_vol, checked every ${halt_freq} steps)"
+# Plate ramp velocities (vcompress_x/y/z) are NOT set here — they are
+# recomputed at the top of EACH stage in the PHASE 2/3 loop below, sized off
+# that stage's own incremental strain target so the loop generalizes to any
+# batch-supplied ladder (uniform or not). See the loop for the formula.
 
 
 # ==========================================================================
@@ -880,16 +884,18 @@ fix out_polymer_com all print ${stress_freq} &
 # ==========================================================================
 #      PHASE 2/3 STAGED: COMPRESS -> FREEZE -> DRAIN/EQUILIBRATE -> MEASURE
 # ==========================================================================
-# 3 stages, cumulative compress_strain_vol targets = stage1..stage3_target.
-# Each stage: (a) drive plates to that stage's target strain (Langevin+NVE,
-# same as the old single-shot Phase 2), (b) freeze all 6 plates and hold NVT
-# for `nsteps` steps so the solvent can redistribute/drain, (c) average the
-# equilibrated stress tensor over that hold. stress_tensor_polymer/solvent
-# and stress_profile_z_* accumulate ALL 3 stages into the same file (stage 1
-# creates it, stages 2-3 append) — only equilibrated-hold data goes in, ramp
-# periods are skipped. compress_strain_*.dat and the dims/COM files above are
-# never unfixed, so they run continuously across ramps AND holds for all 3
-# stages in one file each (this is what shows the staircase downstream).
+# N stages, one per value in the batch-supplied ${stage_targets} list
+# (cumulative compress_strain_vol targets). Each stage: (a) drive plates to
+# that stage's target strain (Langevin+NVE, same as the old single-shot
+# Phase 2), (b) freeze all 6 plates and hold NVT for `nsteps` steps so the
+# solvent can redistribute/drain, (c) average the equilibrated stress tensor
+# over that hold. stress_tensor_polymer/solvent and stress_profile_z_*
+# accumulate ALL stages into the same file (stage 1 creates it — detected via
+# is_file(), not a counter — later stages append) — only equilibrated-hold
+# data goes in, ramp periods are skipped. compress_strain_*.dat and the
+# dims/COM files above are never unfixed, so they run continuously across
+# ramps AND holds for all stages in one file each (this is what shows the
+# staircase downstream).
 #
 # Sign convention (each plate moves toward gel center):
 #   Top   (+z face): vz = -vcompress_z   Bot   (-z face): vz = +vcompress_z
@@ -914,7 +920,7 @@ fix out_compress_strain all print ${stress_freq} &
 # Ported from slab_with_flow.lmp's ref_ fix block. Records the bulk-region
 # polymer and solvent stresses at ZERO strain, over the same poly_bulk/
 # solv_bulk groups, the same bulk_vol normalisation and the same averaging
-# window (nevery/nrepeat/nfreq) as the 3 stage holds — so P'_net(ε_vol=0) is
+# window (nevery/nrepeat/nfreq) as the stage holds — so P'_net(ε_vol=0) is
 # measured, not assumed. Its LENGTH is nsteps_ref, set independently of the
 # stage-hold length so the baseline can be averaged for as long as it needs
 # without lengthening every stage.
@@ -922,22 +928,22 @@ fix out_compress_strain all print ${stress_freq} &
 # WHY: bulk_modulus_analysis.ipynb's K_single = P'_net(ε)/ε carries an
 # "implicit zero at the pre-compression state". For a swollen, pre-stressed
 # network the at-rest Terzaghi effective stress is NOT generally zero, so that
-# assumption biases K_single by an unknown amount. The 3-point linear fit is
+# assumption biases K_single by an unknown amount. The N-point linear fit is
 # reference-independent and doesn't need this, but with the tighter ε_vol
 # ladder the signals are small enough that an anchored zero is worth having —
-# it also gives the fit a 4th point at the origin and lets you check the
+# it also gives the fit an extra point at the origin and lets you check the
 # fitted intercept against a measured value.
 #
 # Plates are frozen and the gel is on NVT — identical dynamics to a stage
 # hold, just with no preceding ramp. Uses `file` (not `append`) so the ref
-# lands in its own *_ref_*.dat, leaving the 3-stage files untouched.
+# lands in its own *_ref_*.dat, leaving the per-stage files untouched.
 #
 # Only fix ave/time here (no ave/chunk), so no compute chunk/atom lock is
 # taken; the run is still epoch-aligned so the final averaging window
 # actually completes and writes its row.
 
 print "========================================"
-print "Stage 0/3: ε_vol = 0 reference (undeformed baseline, ${nsteps_ref} steps)"
+print "Stage 0: ε_vol = 0 reference (undeformed baseline, ${nsteps_ref} steps)"
 print "========================================"
 
 fix freeze_top   plate_top   move linear 0 0 0
@@ -983,10 +989,32 @@ unfix freeze_top
 print ">>> Stage 0 (ref) done: compress_strain_vol=$(v_compress_strain_vol) (should be ~0) stress_p_zz=$(v_stress_p_zz) stress_s_zz=$(v_stress_s_zz)"
 
 
-# ---------------------------------------------------------------- Stage 1 --
+# ------------------------------------------------------------ Stage loop --
+# One iteration per value in ${stage_targets} (batch-controlled list; see
+# PARAMETERS). Same next/jump SELF idiom already used by this codebase's
+# slab_with_support.lmp (snap_loop) and triaxial_compression.lmp (comp_loop).
+variable stage_prev_target equal 0.0
+print ">>> STAGE SWEEP LIST: ${stage_targets_list}"
+
+label stage_loop
+
 print "========================================"
-print "Stage 1/3: compress to compress_strain_vol = ${stage1_target}  (ε_axis ~ 0.005)"
+print "Stage: compress to compress_strain_vol = ${stage_targets}"
 print "========================================"
+
+# Per-stage ramp velocity: sized off THIS stage's incremental strain
+# (current cumulative target minus the previous one), not a single global
+# constant — necessary now that stages need not be evenly spaced. Reuses
+# nsteps_compress_base as the nominal per-stage ramp step budget (the same
+# role it played implicitly before, when even spacing made 1/3 of it work
+# out per stage). fix halt (below) is still what actually stops the ramp;
+# this only has to be "fast enough not to blow the nsteps_compress cap".
+variable stage_target_comp equal 1.0-(1.0-${stage_targets})^(1.0/3.0)
+variable stage_prev_comp   equal 1.0-(1.0-${stage_prev_target})^(1.0/3.0)
+variable vcompress_z equal $((v_stage_target_comp-v_stage_prev_comp)*v_gap_z_0/(2.0*v_nsteps_compress_base*v_timestep_prod)*1.1)
+variable vcompress_y equal $((v_stage_target_comp-v_stage_prev_comp)*v_gap_y_0/(2.0*v_nsteps_compress_base*v_timestep_prod)*1.1)
+variable vcompress_x equal $((v_stage_target_comp-v_stage_prev_comp)*v_gap_x_0/(2.0*v_nsteps_compress_base*v_timestep_prod)*1.1)
+print ">>> vcompress_z=${vcompress_z}  vcompress_y=${vcompress_y}  vcompress_x=${vcompress_x}"
 
 fix drive_top   plate_top   move linear  0             0            -${vcompress_z}
 fix drive_bot   plate_bot   move linear  0             0             ${vcompress_z}
@@ -1000,7 +1028,7 @@ fix lang_compress gel     langevin ${temp_target} ${temp_target} ${lang_T_damp} 
 fix mom_lin_c     gel     momentum 100 linear 1 1 1
 fix mom_rot_c     gel     momentum 100 angular
 
-fix halt_compress all halt ${halt_freq} v_compress_strain_vol >= ${stage1_target} error continue
+fix halt_compress all halt ${halt_freq} v_compress_strain_vol >= ${stage_targets} error continue
 
 run ${nsteps_compress}
 
@@ -1016,8 +1044,8 @@ unfix drive_front
 unfix drive_bot
 unfix drive_top
 
-print ">>> Stage 1 compression done: compress_strain_z=$(v_compress_strain_z) compress_strain_vol=$(v_compress_strain_vol)"
-print "Stage 1/3: freeze + NVT drain/equilibrate (${nsteps} steps)"
+print ">>> compression done: compress_strain_z=$(v_compress_strain_z) compress_strain_vol=$(v_compress_strain_vol)"
+print "freeze + NVT drain/equilibrate (${nsteps} steps)"
 
 fix freeze_top   plate_top   move linear 0 0 0
 fix freeze_bot   plate_bot   move linear 0 0 0
@@ -1028,37 +1056,47 @@ fix freeze_left  plate_left  move linear 0 0 0
 fix nvt_prod     gel         nvt  temp ${temp_target} ${temp_target} 1.0
 fix mom_prod     gel         momentum 100 linear 1 1 1 angular
 
+# file vs append: detected via is_file() (same function slab_with_support.lmp
+# uses for its is_restart check), NOT a stage counter, so this works for any
+# list length — first stage's file doesn't exist yet -> file; every later
+# stage finds it already there -> append.
+variable stress_file_exists equal is_file(output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}.dat)
+if "${stress_file_exists} == 0" then &
+    "variable stress_write_mode string file" &
+else &
+    "variable stress_write_mode string append"
+
 fix avg_stress_polymer all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     v_stress_p_xx v_stress_p_yy v_stress_p_zz &
     v_stress_p_xy v_stress_p_zx v_stress_p_yz &
-    file output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}.dat
+    ${stress_write_mode} output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}.dat
 
 fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     v_stress_s_xx v_stress_s_yy v_stress_s_zz &
     v_stress_s_xy v_stress_s_zx v_stress_s_yz &
-    file output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}.dat
+    ${stress_write_mode} output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}.dat
 
 fix prof_z_polymer poly_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_polymer &
     v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_zx v_s_p_yz &
     norm none &
-    file output_files/stress_data/stress_profile_z_polymer_${dataname}_${interaction}_${nsteps}.dat
+    ${stress_write_mode} output_files/stress_data/stress_profile_z_polymer_${dataname}_${interaction}_${nsteps}.dat
 
 fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_solvent &
     v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_zx v_s_s_yz &
     norm none &
-    file output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
+    ${stress_write_mode} output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
 
 # ── Epoch-aligned hold length (see NOTE on epoch alignment at top of file) ────
 # Pads the hold to the first multiple of nfreq_stress at or beyond
 # step+nsteps, so fix ave/chunk finishes its last epoch and releases the
 # compute chunk/atom lock before the unfix below. Always >= nsteps.
-# $(step) is expanded immediately, so this line MUST be repeated at each
-# stage rather than hoisted (equal-style variables are redefinable, so
-# reusing the name across stages is fine).
+# $(step) is expanded immediately, so this line MUST be re-evaluated at each
+# loop iteration rather than hoisted (equal-style variables are redefinable,
+# so reusing the name across iterations is fine).
 variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
-print ">>> Stage 1 hold aligned: ${hold_steps} steps (requested ${nsteps}, nfreq_stress=${nfreq_stress})"
+print ">>> hold aligned: ${hold_steps} steps (requested ${nsteps}, nfreq_stress=${nfreq_stress})"
 
 run ${hold_steps}
 
@@ -1075,201 +1113,27 @@ unfix freeze_front
 unfix freeze_bot
 unfix freeze_top
 
-print ">>> Stage 1 hold done: compress_strain_vol=$(v_compress_strain_vol) stress_p_zz=$(v_stress_p_zz) stress_s_zz=$(v_stress_s_zz)"
+print ">>> hold done: compress_strain_vol=$(v_compress_strain_vol) stress_p_zz=$(v_stress_p_zz) stress_s_zz=$(v_stress_s_zz)"
 
-
-# ---------------------------------------------------------------- Stage 2 --
-print "========================================"
-print "Stage 2/3: compress to compress_strain_vol = ${stage2_target}  (ε_axis ~ 0.0101)"
-print "========================================"
-
-fix drive_top   plate_top   move linear  0             0            -${vcompress_z}
-fix drive_bot   plate_bot   move linear  0             0             ${vcompress_z}
-fix drive_front plate_front move linear  0            -${vcompress_y}  0
-fix drive_back  plate_back  move linear  0             ${vcompress_y}  0
-fix drive_right plate_right move linear -${vcompress_x}  0           0
-fix drive_left  plate_left  move linear  ${vcompress_x}  0           0
-
-fix nve_compress  gel     nve
-fix lang_compress gel     langevin ${temp_target} ${temp_target} ${lang_T_damp} 71623
-fix mom_lin_c     gel     momentum 100 linear 1 1 1
-fix mom_rot_c     gel     momentum 100 angular
-
-fix halt_compress all halt ${halt_freq} v_compress_strain_vol >= ${stage2_target} error continue
-
-run ${nsteps_compress}
-
-unfix halt_compress
-unfix mom_rot_c
-unfix mom_lin_c
-unfix lang_compress
-unfix nve_compress
-unfix drive_left
-unfix drive_right
-unfix drive_back
-unfix drive_front
-unfix drive_bot
-unfix drive_top
-
-print ">>> Stage 2 compression done: compress_strain_z=$(v_compress_strain_z) compress_strain_vol=$(v_compress_strain_vol)"
-print "Stage 2/3: freeze + NVT drain/equilibrate (${nsteps} steps)"
-
-fix freeze_top   plate_top   move linear 0 0 0
-fix freeze_bot   plate_bot   move linear 0 0 0
-fix freeze_front plate_front move linear 0 0 0
-fix freeze_back  plate_back  move linear 0 0 0
-fix freeze_right plate_right move linear 0 0 0
-fix freeze_left  plate_left  move linear 0 0 0
-fix nvt_prod     gel         nvt  temp ${temp_target} ${temp_target} 1.0
-fix mom_prod     gel         momentum 100 linear 1 1 1 angular
-
-fix avg_stress_polymer all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    v_stress_p_xx v_stress_p_yy v_stress_p_zz &
-    v_stress_p_xy v_stress_p_zx v_stress_p_yz &
-    append output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    v_stress_s_xx v_stress_s_yy v_stress_s_zz &
-    v_stress_s_xy v_stress_s_zx v_stress_s_yz &
-    append output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}.dat
-
-fix prof_z_polymer poly_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    chunk_z_polymer &
-    v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_zx v_s_p_yz &
-    norm none &
-    append output_files/stress_data/stress_profile_z_polymer_${dataname}_${interaction}_${nsteps}.dat
-
-fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    chunk_z_solvent &
-    v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_zx v_s_s_yz &
-    norm none &
-    append output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
-
-# Epoch-aligned hold length — see Stage 1 and the NOTE at top of file.
-variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
-print ">>> Stage 2 hold aligned: ${hold_steps} steps (requested ${nsteps}, nfreq_stress=${nfreq_stress})"
-
-run ${hold_steps}
-
-unfix prof_z_solvent
-unfix prof_z_polymer
-unfix avg_stress_solvent
-unfix avg_stress_polymer
-unfix mom_prod
-unfix nvt_prod
-unfix freeze_left
-unfix freeze_right
-unfix freeze_back
-unfix freeze_front
-unfix freeze_bot
-unfix freeze_top
-
-print ">>> Stage 2 hold done: compress_strain_vol=$(v_compress_strain_vol) stress_p_zz=$(v_stress_p_zz) stress_s_zz=$(v_stress_s_zz)"
-
-
-# ---------------------------------------------------------------- Stage 3 --
-print "========================================"
-print "Stage 3/3: compress to compress_strain_vol = ${stage3_target}  (ε_axis ~ 0.0152)"
-print "========================================"
-
-fix drive_top   plate_top   move linear  0             0            -${vcompress_z}
-fix drive_bot   plate_bot   move linear  0             0             ${vcompress_z}
-fix drive_front plate_front move linear  0            -${vcompress_y}  0
-fix drive_back  plate_back  move linear  0             ${vcompress_y}  0
-fix drive_right plate_right move linear -${vcompress_x}  0           0
-fix drive_left  plate_left  move linear  ${vcompress_x}  0           0
-
-fix nve_compress  gel     nve
-fix lang_compress gel     langevin ${temp_target} ${temp_target} ${lang_T_damp} 71623
-fix mom_lin_c     gel     momentum 100 linear 1 1 1
-fix mom_rot_c     gel     momentum 100 angular
-
-fix halt_compress all halt ${halt_freq} v_compress_strain_vol >= ${stage3_target} error continue
-
-run ${nsteps_compress}
-
-unfix halt_compress
-unfix mom_rot_c
-unfix mom_lin_c
-unfix lang_compress
-unfix nve_compress
-unfix drive_left
-unfix drive_right
-unfix drive_back
-unfix drive_front
-unfix drive_bot
-unfix drive_top
-
-print ">>> Stage 3 compression done: compress_strain_z=$(v_compress_strain_z) compress_strain_vol=$(v_compress_strain_vol)"
-print "Stage 3/3: freeze + NVT drain/equilibrate (${nsteps} steps)"
-
-fix freeze_top   plate_top   move linear 0 0 0
-fix freeze_bot   plate_bot   move linear 0 0 0
-fix freeze_front plate_front move linear 0 0 0
-fix freeze_back  plate_back  move linear 0 0 0
-fix freeze_right plate_right move linear 0 0 0
-fix freeze_left  plate_left  move linear 0 0 0
-fix nvt_prod     gel         nvt  temp ${temp_target} ${temp_target} 1.0
-fix mom_prod     gel         momentum 100 linear 1 1 1 angular
-
-fix avg_stress_polymer all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    v_stress_p_xx v_stress_p_yy v_stress_p_zz &
-    v_stress_p_xy v_stress_p_zx v_stress_p_yz &
-    append output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}.dat
-
-fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    v_stress_s_xx v_stress_s_yy v_stress_s_zz &
-    v_stress_s_xy v_stress_s_zx v_stress_s_yz &
-    append output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}.dat
-
-fix prof_z_polymer poly_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    chunk_z_polymer &
-    v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_zx v_s_p_yz &
-    norm none &
-    append output_files/stress_data/stress_profile_z_polymer_${dataname}_${interaction}_${nsteps}.dat
-
-fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    chunk_z_solvent &
-    v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_zx v_s_s_yz &
-    norm none &
-    append output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
-
-# Epoch-aligned hold length — see Stage 1 and the NOTE at top of file.
-# Still required on this (final) stage: the ave/chunk fixes are unfixed below,
-# and leaving a dangling lock would poison any continuation run.
-variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
-print ">>> Stage 3 hold aligned: ${hold_steps} steps (requested ${nsteps}, nfreq_stress=${nfreq_stress})"
-
-run ${hold_steps}
-
-unfix prof_z_solvent
-unfix prof_z_polymer
-unfix avg_stress_solvent
-unfix avg_stress_polymer
-
-print ">>> Stage 3 hold done: compress_strain_vol=$(v_compress_strain_vol) stress_p_zz=$(v_stress_p_zz) stress_s_zz=$(v_stress_s_zz)"
+variable stage_prev_target equal ${stage_targets}
+next stage_targets
+jump SELF stage_loop
 
 
 # ==========================================================================
 #                            CLEANUP
 # ==========================================================================
-# Plates are left frozen at their Stage-3 (final) positions, matching the
-# original single-shot script's end state. The freeze/nvt/mom fixes from the
-# Stage 3 hold are still active here — that is why they are torn down below
-# rather than at the end of the stage block.
+# Every loop iteration now fully tears down its own hold fixes (freeze_*,
+# nvt_prod, mom_prod) at the end of that iteration — there's no "last stage"
+# special case to hang onto here, since the loop has no fixed length. Plates
+# are already physically stationary (they were frozen for the final hold),
+# so there's nothing left dangling to unfix; this section just closes the
+# dump and reports the final state.
 
 undump traj_prod
-unfix mom_prod
-unfix nvt_prod
-unfix freeze_left
-unfix freeze_right
-unfix freeze_back
-unfix freeze_front
-unfix freeze_bot
-unfix freeze_top
 
 print "========================================"
-print "Compression slab simulation complete (3-stage slope method)"
+print "Compression slab simulation complete (${stage_targets_list} slope method)"
 print "  compress_strain_z   = $(v_compress_strain_z)"
 print "  compress_strain_y   = $(v_compress_strain_y)"
 print "  compress_strain_x   = $(v_compress_strain_x)"

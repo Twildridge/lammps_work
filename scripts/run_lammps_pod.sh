@@ -14,6 +14,18 @@ INTERACTION=$3
 NSTEPS=$4
 TOTSTEPS=$NSTEPS
 
+# COMPRESS_STAGES: space-separated CUMULATIVE volumetric-strain ladder
+# (compress_slab only) — one value per compression stage, passed through to
+# LAMMPS as an index variable. Set in compress_slab_pod.batch via
+# COMPRESSION_1, COMPRESSION_2, ... -> STAGE_TARGETS -> COMPRESS_STAGES. The
+# number of stages is just the length of this list. Default reproduces
+# compress_slab.lmp's original fixed 3-stage ladder. Same stale-batch caveat
+# as elsewhere: the batch must self-sync BEFORE exporting this.
+if [ -z "${COMPRESS_STAGES:-}" ]; then
+    echo ">>> NOTE: COMPRESS_STAGES unset — compress_slab falls back to the default 0.015 0.030 0.045 ladder."
+fi
+COMPRESS_STAGES=${COMPRESS_STAGES:-"0.015 0.030 0.045"}
+
 # Scratch directory for trajectories
 SCRATCH_DIR="/scratch/$USER"
 
@@ -105,6 +117,8 @@ mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "node:pe=${OMP_NUM
     -var nsteps $NSTEPS \
     -var oldsteps 0 \
     -var totsteps $TOTSTEPS \
+    -var stage_targets $COMPRESS_STAGES \
+    -var stage_targets_list "$COMPRESS_STAGES" \
     -in $LAMMPS_FILE
 
 

@@ -38,6 +38,18 @@ if [ -z "${COMPRESSIONS:-}" ]; then
 fi
 COMPRESSIONS=${COMPRESSIONS:-0.1}
 
+# COMPRESS_STAGES: space-separated CUMULATIVE volumetric-strain ladder
+# (compress_slab only) — one value per compression stage, passed as a LAMMPS
+# index variable exactly like STRAINS/COMPRESSIONS. Set in compress_slab*.batch
+# via COMPRESSION_1, COMPRESSION_2, ... -> STAGE_TARGETS -> COMPRESS_STAGES.
+# The number of stages is just the length of this list. Default reproduces
+# compress_slab.lmp's original fixed 3-stage ladder. Same stale-batch caveat
+# as STRAINS/COMPRESSIONS: the batch must self-sync BEFORE exporting this.
+if [ -z "${COMPRESS_STAGES:-}" ]; then
+    echo ">>> NOTE: COMPRESS_STAGES unset — compress_slab falls back to the default 0.015 0.030 0.045 ladder."
+fi
+COMPRESS_STAGES=${COMPRESS_STAGES:-"0.015 0.030 0.045"}
+
 # P-sweep parameters (only used for pure_solvent; ignored by other scripts)
 NSTEPS_EQ=200000    # equilibration steps per state point
 NSTEPS_PROD=100000  # production/averaging steps per state point (must be divisible by 100)
@@ -186,6 +198,8 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var strains_list "$STRAINS" \
     -var compressions $COMPRESSIONS \
     -var compressions_list "$COMPRESSIONS" \
+    -var stage_targets $COMPRESS_STAGES \
+    -var stage_targets_list "$COMPRESS_STAGES" \
     \
     -in $LAMMPS_FILE &
 MPIRUN_PID=$!
