@@ -211,7 +211,14 @@ variable lang_T_damp equal 1.0   # Langevin damping (τ)
 # each run and each minimize.
 variable thermo_freq     index 25000
 variable dump_freq_setup equal 25000
-variable dump_freq_prod  equal 25000
+# dump_freq_prod: 12000 (was 25000) -> ~2x more frames through the staged
+# compression run, sized to stay under a 1.5 GB traj_files/prod_*.lammpstrj
+# cap. Empirically ~23.06 MB/frame at this system size (586676 atoms), so
+# 12000 -> ~61 frames -> ~1.41 GB over the ~725000-step prod span from the
+# last completed run (20260814_162608). If atom count or stage-hold length
+# changes materially, re-check size = frames * 23.06 MB before assuming this
+# still fits.
+variable dump_freq_prod  equal 12000
 variable stress_freq     equal 10000
 
 # fix halt check interval — DECOUPLED from stress_freq on purpose.
