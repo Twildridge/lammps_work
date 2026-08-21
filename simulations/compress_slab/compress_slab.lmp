@@ -229,8 +229,14 @@ variable sigP_zz equal c_sumS_p_zz/v_gel_vol_rg
 variable sigP_xy equal c_sumS_p_xy/v_gel_vol_rg
 variable sigP_zx equal c_sumS_p_zx/v_gel_vol_rg
 variable sigP_yz equal c_sumS_p_yz/v_gel_vol_rg
-# Total osmotic pressure = (1/3) tr(σ^poly); take |Π| for a positive value.
-variable Pi_osm  equal (v_sigP_xx+v_sigP_yy+v_sigP_zz)/3.0
+# Total osmotic pressure Π = -(1/3) tr(σ^poly). The leading minus is required:
+# LAMMPS stress/atom uses the continuum-mechanics sign convention (tension
+# positive, compression negative) — summed over atoms and divided by volume,
+# it equals -P, not +P (docs.lammps.org/compute_stress_atom.html). Without
+# this minus sign Pi_osm is the NEGATIVE of the physical osmotic pressure
+# (negative under compression, backwards from what a swollen/compressed
+# network should show).
+variable Pi_osm  equal -(v_sigP_xx+v_sigP_yy+v_sigP_zz)/3.0
 
 thermo_style custom step c_gel_temp pe ke etotal press c_gel_press &
     v_sigP_xx v_sigP_yy v_sigP_zz v_Pi_osm vol lx ly lz xy xz yz
