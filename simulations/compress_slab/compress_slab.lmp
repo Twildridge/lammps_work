@@ -3,238 +3,84 @@
 # Atom types: 1=polymer, 2=crosslinker, 3=solvent, 4=plate
 # Bond types:  1=FENE (polymer-polymer only; plates interact via WCA, no bonds)
 #
-# Compression method: fix move linear on all six plate groups simultaneously.
-#   Top   plate (+z face): vz = -vcompress_z   Bot   plate (-z face): vz = +vcompress_z
-#   Front plate (+y face): vy = -vcompress_y   Back  plate (-y face): vy = +vcompress_y
-#   Right plate (+x face): vx = -vcompress_x   Left  plate (-x face): vx = +vcompress_x
-#   Plates move only along their normal axis → isotropic compression.
-#   Plate atoms are bonded (harmonic) to surface polymer → gel compresses internally.
-#   No direct force on FENE bonds; harmonic bonds transmit load at each face safely.
+# Compression: fix move linear on all six plates (isotropic, box fixed) — NOT
+# fix deform, since that would conflict with the plate-polymer harmonic bonds.
 #
-# Plate-plate interactions disabled (neigh_modify exclude type 4 4) to prevent
-# spurious cross-face forces between the six independent plate molecules.
+# Phases: 0 NVT settle -> 0.5 Langevin+NPH iso (find P_target volume) -> 1b NVT
+# relax -> Stage 0 ε_vol=0 reference hold -> Stage loop (compress to each
+# target in ${stage_targets}, freeze+drain, measure) -> cleanup.
+# Stage count/targets come entirely from the batch script via -var stage_targets;
+# defaults below (0.015 0.030 0.045) reproduce the original fixed 3-stage ladder.
+# All stages' stress data append into the same output files so K = slope of
+# P'_net vs ε_vol across stages (see bulk_modulus_analysis.ipynb).
 #
-# Why NOT fix deform (box compression):
-#   fix deform rescales ALL atom positions, which conflicts with the plate-polymer
-#   harmonic bonds and risks FENE failure at the driven surfaces.
-#   Plate-driven compression keeps the box fixed; plates mechanically transmit
-#   the load to the gel through harmonic bonds (same logic as shear_slab).
+# NOTE: nsteps (per-stage hold length) has NOT been validated against a solvent
+# drainage timescale (τ ~ L_gel²/D_c) — check stress_tensor_solvent_*.dat has
+# plateaued within each stage's hold before trusting the fitted slope.
 #
-# Phases:  (equilibration ported from slab_with_flow.lmp — Langevin beats FENE heating)
-#   0.  NVT settle (nsteps_phase0) — fixed box, all 6 plates frozen (fix move 0 0 0)
-#   0.5 Langevin+NPH iso (nsteps_npt) — find equilibrium box volume at P = P_target;
-#       plates released to nve+setforce so they scale isotropically with the box
-#   1b. NVT (nsteps_equil) — relax internal stresses at NPH-final volume, plates frozen
-#   0/3 ε_vol = 0 REFERENCE — plates frozen, NVT hold of nsteps_ref steps with the
-#       same averaging as a stage hold, writing stress_tensor_{polymer,solvent}_ref_*.
-#       Gives a MEASURED P'_net at zero strain instead of the assumed zero that
-#       K_single would otherwise use. (Ported from slab_with_flow's ref_ block.)
-#   2/3 STAGED (slope method, N stages) — for each cumulative VOLUMETRIC
-#       strain target in the batch-supplied ${stage_targets} list (default
-#       0.015, 0.030, 0.045 — see PARAMETERS):
-#         (a) drive all 6 plates inward (gel on Langevin+NVE) until
-#             compress_strain_vol reaches that stage's target (checked every
-#             halt_freq steps — see the halt_freq note in PARAMETERS)
-#         (b) freeze all 6 plates, hold NVT for ~nsteps steps (per-stage
-#             equilibration length — see NOTE below) so the solvent can
-#             redistribute/drain before anything is measured
-#         (c) average the equilibrated stress tensor over that hold
-#       Stress/strain data from all N stages accumulate into the SAME output
-#       files (stage 1 creates them, later stages append — detected via
-#       is_file(), not a stage counter), so downstream analysis can read one
-#       continuous file per quantity and fit ΔP'_net vs ε_vol across the N
-#       equilibrated points (the slope = K), rather than trusting a single
-#       point. The number of stages and each one's cumulative strain target
-#       are set entirely from the batch script (COMPRESSION_1, COMPRESSION_2,
-#       ... -> COMPRESS_STAGES -> -var stage_targets); this file has no fixed
-#       stage count.
-#       The default ladder (0.015/0.030/0.045) lies inside the estimated
-#       linear-elastic window (see STAGE TARGETS in PARAMETERS for the
-#       linearity table) — deeper targets probe strain stiffening instead of
-#       the linear-elastic K, so choose batch targets accordingly.
+# NOTE: hold `run`s are padded to end on an nfreq_stress boundary — required,
+# not cosmetic: fix ave/chunk only releases its compute chunk/atom lock at an
+# epoch boundary, and unfixing mid-epoch aborts the NEXT stage's ave/chunk with
+# "Two fix commands using same compute chunk/atom command in incompatible ways".
 #
-#   NOTE on drainage / hold length: nsteps (below) means the length of
-#   EACH stage's equilibration hold, not one single Phase-3 run. No
-#   cooperative diffusivity (D_c) value was available when this was written,
-#   so nsteps is NOT yet derived from τ ~ L_gel²/D_c — it is passed through
-#   unchanged from the previous single-point launch command as a starting
-#   point, not a validated drainage time. Before trusting the fitted slope:
-#   pull D_c from compression_analysis.ipynb, compute τ = L_gel²/D_c, and
-#   confirm nsteps ≳ a few τ. Also check drainage empirically —
-#   stress_tensor_solvent_*.dat and stress_profile_z_solvent_*.dat are written
-#   continuously through the whole staged run, so you can plot the solvent
-#   stress within each stage's hold window and confirm it has actually
-#   plateaued (not still drifting) before the next compression stage begins.
-#   If any stage looks undrained, increase nsteps and rerun.
+# Plate mol IDs (from add_more_plates_to_gel.ipynb): max_mol_gel + 1..6, in
+# order top/bot/front/back/right/left. Resolved at runtime via compute reduce
+# max mol (spatial region grouping fails: right/left plates span the full
+# box y-range, overlapping front/back).
 #
-#   NOTE on epoch alignment (why the holds do NOT run exactly `nsteps`):
-#   each hold's `run` is padded to end ON an nfreq_stress boundary via the
-#   hold_steps variable defined at each stage. This is REQUIRED, not cosmetic.
-#   fix ave/chunk (ave = one, the default) locks its compute chunk/atom at the
-#   first sample of each Nfreq epoch and only releases the lock when that epoch
-#   COMPLETES; FixAveChunk's destructor unlocks only for ave = running/window,
-#   so `unfix` on a mid-epoch fix leaves the chunk compute locked by a deleted
-#   fix. The next stage's fix ave/chunk then requests a different lock window
-#   and LAMMPS aborts with:
-#       ERROR: Two fix commands using same compute chunk/atom command in
-#              incompatible ways (src/compute_chunk_atom.cpp:680)
-#   That check is literally `startstep != lockstart || stopstep != lockstop`.
-#   Ending each hold on an epoch boundary lets end_of_step() call unlock()
-#   naturally, so the following unfix sees lockfix == nullptr.
-#   Same failure and same remedy as the pre-roll alignment block in
-#   slab_with_flow.lmp (see its notes around the ref_ fix teardown).
-#   Consequence: each hold runs between nsteps and nsteps+nfreq_stress-1 steps
-#   (<= ~10% longer than requested), never fewer than nsteps.
-#
-#   NOTE on bulk region: the poly_bulk/solv_bulk groups (3σ near-plate
-#   exclusion) are defined ONCE, right after Phase 1b, using the
-#   PRE-compression gel geometry — the same specific atoms are tracked
-#   through all stages (Lagrangian), rather than re-snapshotting which
-#   atoms fall in the exclusion box after each stage's compression (which
-#   the original single-point script never had to do, and which would
-#   require deleting/redefining LAMMPS regions and computes mid-run — avoided
-#   here for robustness since it can't be tested against a running LAMMPS
-#   instance in this environment). Flag if you'd rather have per-stage
-#   regrouping; it's a bigger change and worth doing deliberately, not as a
-#   silent default.
-#
-# Plate mol IDs (assigned by add_more_plates_to_gel.ipynb):
-#   top   = max_mol_gel + 1      bot   = max_mol_gel + 2
-#   front = max_mol_gel + 3      back  = max_mol_gel + 4
-#   right = max_mol_gel + 5      left  = max_mol_gel + 6
-# These are resolved at runtime via compute reduce max mol on the gel group.
-# (Spatial region grouping fails because right/left plates span the full y-range,
-#  overlapping with the y-extent of front/back plates.)
-#
-# Outputs (all continuous across the whole staged run, Phase 0 -> Stage 3 hold,
-#          unless noted; compress_strain_vol will show a 3-step staircase):
-#   stress_data/bulk_modulus_plot_data_*.dat   step  sigP_xx/yy/zz/xy/zx/yz  Pi  V_gel_rg  lx/ly/lz_rg
-#                                               (whole-polymer, Rg-normalised; osmotic path — NOT for K)
-#   stress_data/plate_force_*.dat              step  {top,bot,front,back,right,left}_{fx,fy,fz}
-#                                               (net pairwise force on each plate; continuous from the
-#                                                point the six plates are individually resolved onward)
-#   stress_data/stress_tensor_{polymer,solvent}_ref_*.dat
-#                                               ε_vol = 0 baseline (Stage 0), same columns/averaging
-#                                               as the staged files below; own file, not appended
-#   stress_data/stress_tensor_polymer_*.dat    6-component polymer stress, EQUILIBRATED-HOLD windows only
-#                                               (3 stages appended into one file — this is the K data)
-#   stress_data/stress_tensor_solvent_*.dat    6-component solvent stress, EQUILIBRATED-HOLD windows only
-#                                               (same 3-stage append; use for baseline + drainage check)
-#   stress_data/stress_profile_z_polymer_*.dat z-binned polymer stress, EQUILIBRATED-HOLD windows only
-#   stress_data/stress_profile_z_solvent_*.dat z-binned solvent stress, EQUILIBRATED-HOLD windows only
-#   stress_data/compress_strain_*.dat          step  gap_z_0  gap_z  strain_z  strain_vol (staircase, all stages)
-#   volume_data/gel_dimensions_rg_*.dat        Rg-based gel dimensions (continuous, all stages)
-#   volume_data/box_dimensions_*.dat           box dims vs step (continuous, all stages)
-#   volume_data/polymer_com_*.dat              polymer COM vs step (continuous, all stages)
+# Outputs (continuous across the whole staged run unless noted):
+#   stress_data/bulk_modulus_plot_data_*.dat   Rg-normalised osmotic path (NOT for K)
+#   stress_data/plate_force_*.dat              net force per plate
+#   stress_data/stress_tensor_{polymer,solvent}_ref_*.dat   ε_vol=0 baseline
+#   stress_data/stress_tensor_{polymer,solvent}_*.dat       per-stage stress (the K data)
+#   stress_data/stress_profile_z_{polymer,solvent}_*.dat    z-binned stress
+#   stress_data/compress_strain_*.dat          strain vs step (staircase)
+#   volume_data/{gel_dimensions_rg,box_dimensions,polymer_com}_*.dat
 
 
-# ==========================================================================
-#                              PARAMETERS
-# ==========================================================================
+# ── PARAMETERS ──
 
 variable sigma          equal 1.0
 variable temp_target    equal 1.0
 variable P_target       equal 1.5
 variable timestep_prod  equal 0.005
 
-# ── STAGE TARGETS: VOLUMETRIC strain (NOT per-axis) ───────────────────────────
-# The ladder is expressed in compress_strain_vol, because that is the strain K
-# is defined against (K = dP'_net/dε_vol) and the quantity bulk_modulus_
-# analysis.ipynb fits. Compression here is ISOTROPIC (all six plates move, all
-# three axes strain equally), so ε_vol = 1-(1-ε_axis)^3 ≈ 3·ε_axis — a per-axis
-# ladder is ~3x deeper than it looks, which is how the previous 0.02..0.10
-# per-axis ladder ended up spanning ε_vol = 0.068..0.279.
-#
-# Linear-elastic window: for a swollen network in athermal solvent Π ~ φ^(9/4)
-# with φ = φ0/(1-ε_vol), so P'_net(ε_vol) deviates from a straight line by
-#   ε_vol :  0.015   0.030   0.045
-#   dev   :   2.5%    5.1%    7.8%
-# The default ladder below sits inside that window, so an N-point fit (plus
-# the measured ε_vol = 0 origin) gives the linear-elastic K. Per-axis
-# equivalents (for reference only): 0.0050  0.0101  0.0152
-# NOTE: this window is a SCALING ESTIMATE, not a measurement. Collinearity of
-# the points is the check that the ladder stayed inside it. Deeper targets
-# (e.g. 0.060 / 0.120, which deliberately probe strain stiffening) can be
-# added via the batch script if K(ε) is wanted.
-#
-# ${stage_targets} is an index-style variable: EACH cumulative volumetric
-# strain target, in order, is one value in the list. The number of stages is
-# simply the length of this list — there is no separate stage-count variable.
-# Set entirely from the batch script: COMPRESSION_1, COMPRESSION_2, ... are
-# collected into COMPRESS_STAGES there and passed through by run_lammps*.sh as
-# -var stage_targets <list>. The defaults below (index-style, so a bare `lmp`
-# invocation without -var reproduces them) match the original fixed 3-stage
-# ladder exactly.
+# Cumulative VOLUMETRIC strain targets (ε_vol, not per-axis — isotropic
+# compression means ε_vol ≈ 3·ε_axis). Defaults sit inside the estimated
+# linear-elastic window, so the N-point fit (+ ε_vol=0 origin) gives K.
+# Set entirely from the batch script via -var stage_targets <list>.
 variable stage_targets      index 0.015 0.030 0.045
 variable stage_targets_list index "0.015 0.030 0.045"
 
-# Phase lengths
-variable nsteps_phase0        equal 50000    # Phase 0:   NVT settle at fixed box (new; = old nsteps_npt)
+variable nsteps_phase0        equal 50000    # Phase 0:   NVT settle at fixed box
 variable nsteps_npt           equal 50000    # Phase 0.5: Langevin+NPH — find equilibrium volume at P_target
 variable nsteps_equil         equal 50000    # Phase 1b:  NVT — equilibrate at NPH-final volume
 variable nsteps_ref           equal 100000   # Stage 0:   ε_vol = 0 reference hold (own file, own length)
-# Ramp velocity reference: vcompress is recomputed INSIDE the stage loop
-# (see PHASE 2/3 below) from each stage's own incremental strain (this
-# target minus the previous cumulative target), sized to cover that
-# increment in ~nsteps_compress_base/1.1 steps. For the default evenly-
-# spaced 0.015 ladder this reproduces the original fixed-velocity behavior
-# (33000/1.1/3 ≈ 10000 steps per stage ramp); for a non-uniform batch list
-# it keeps every stage's ramp roughly the same number of steps regardless
-# of how deep that particular increment is.
+# vcompress is recomputed per stage in the loop below, sized off that stage's
+# own incremental strain to cover it in ~nsteps_compress_base/1.1 steps.
 variable nsteps_compress_base equal 33000
-variable nsteps_compress      equal 30000    # 3× safety buffer PER STAGE ramp — halt fires ~10000
-# nsteps: the length of EACH per-stage equilibration/drain hold
-# (NOT a single Phase-3 production length, and NOT the Stage 0 reference —
-# that has its own nsteps_ref above). Passed from bash via -var nsteps.
-# See NOTE at top of file: this has NOT yet been validated against a
-# diffusion timescale.
+variable nsteps_compress      equal 30000    # 3x safety buffer per-stage ramp; halt fires ~10000
+# nsteps (from -var nsteps): length of EACH per-stage drain hold, not Stage 0.
 
-# ----- Phase 0.5: Langevin + NPH barostat (replaces Nosé-Hoover NPT) -----
-# Ported from slab_with_flow.lmp (compression_mode=1).  Nosé-Hoover NPT was
-# replaced because FENE bonds inject kinetic energy faster than the NH chain
-# can remove it (T runs away, bonds stretch toward R0=1.5 → "FENE bond too
-# long").  A Langevin thermostat's per-atom friction removes energy in direct
-# proportion to velocity and always wins against FENE heating; an NPH barostat
-# sets the volume.
-variable npt_P_damp equal 50.0   # NPH barostat damping (τ); raise to 500–1000 if FENE warnings persist
+# Langevin+NPH (not Nose-Hoover NPT): FENE bonds heat faster than an NH chain
+# can remove ("FENE bond too long"); Langevin's per-atom friction always wins.
+variable npt_P_damp equal 50.0   # NPH barostat damping (τ); raise to 500-1000 if FENE warnings persist
 variable lang_T_damp equal 1.0   # Langevin damping (τ)
-# NOTE: NPH targets the TOTAL pressure (incl. barostat virial).  We target
-# P_target directly; if c_gel_press does not converge to ~${P_target}, add a
-# small offset to the NPH target (slab_with_flow needed ≈ +0.41 for its system).
+# NOTE: NPH targets TOTAL pressure incl. barostat virial; if c_gel_press
+# doesn't converge to ~P_target, add an offset to the NPH target.
 
-# Output frequencies
-# index (not equal) style so a debug run can crank it up from the command line
-# without editing the script:  lmp ... -var thermo_freq 1
-# At the production value of 25000 there is a 25k-step blind spot between
-# prints, which makes "hung" and "merely slow" look identical, and means the
-# ONLY steps that appear are multiples of 25000 plus the first/last step of
-# each run and each minimize.
+# thermo_freq is index-style so a debug run can override it: lmp ... -var thermo_freq 1
 variable thermo_freq     index 25000
 variable dump_freq_setup equal 25000
-# dump_freq_prod: 12000 (was 25000) -> ~2x more frames through the staged
-# compression run, sized to stay under a 1.5 GB traj_files/prod_*.lammpstrj
-# cap. Empirically ~23.06 MB/frame at this system size (586676 atoms), so
-# 12000 -> ~61 frames -> ~1.41 GB over the ~725000-step prod span from the
-# last completed run (20260814_162608). If atom count or stage-hold length
-# changes materially, re-check size = frames * 23.06 MB before assuming this
-# still fits.
+# dump_freq_prod sized to stay under a ~1.5 GB traj_files/prod_*.lammpstrj cap
+# (~23 MB/frame at this system size) — recheck if atom count changes materially.
 variable dump_freq_prod  equal 12000
 variable stress_freq     equal 10000
 
-# fix halt check interval — DECOUPLED from stress_freq on purpose.
-# fix halt only tests its condition every halt_freq steps, so the ramp always
-# overshoots its target by up to one check interval. Overshoot in ε_vol is
-# halt_freq * (stage_increment / ramp_steps_total) — for the default 0.015
-# per-stage increment at ~10000 ramp steps that's ~1.5e-6 per halt_freq step:
-#   halt_freq = 500 -> 0.00075 overshoot = 5.0% of a 0.015 increment
-#   halt_freq = 100 -> 0.00015 overshoot = 1.0% of a 0.015 increment
-# 100 is used because the shortened ramps (10000 steps/stage, ~9.5x faster than
-# the previous 285000-step reference) made 500 too coarse. Cost is evaluating
-# the six plate-COM computes 5x more often during ramps only — negligible next
-# to the holds.
+# fix halt checks every halt_freq steps, so the ramp overshoots its target by
+# up to one interval (~1% of a 0.015 increment at halt_freq=100).
 variable halt_freq       equal 100
 
-# Time averaging (stress) — adaptive
 variable num_stress_curves equal 10
 variable nevery_target     equal 100
 variable nrepeat_max       equal 2000
@@ -252,15 +98,12 @@ print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress} 
 print ">>> Compression (plate-driven, isotropic): ε_vol ladder = ${stage_targets_list}"
 print ">>> halt_freq=${halt_freq}  nsteps_compress=${nsteps_compress}"
 
-# Spatial binning
 variable binWidth    equal 2.0
 variable rg_scale    equal 1.8
 variable region_frac equal 1
 
 
-# ==========================================================================
-#                           INITIALIZATION
-# ==========================================================================
+# ── INITIALIZATION ──
 
 units lj
 dimension 3
@@ -268,37 +111,10 @@ boundary p p p
 atom_style molecular
 atom_modify map array
 
-# ── Domain decomposition / comm style ─────────────────────────────────────────
-# balance_style selects BOTH the decomposition and the comm style — they are
-# coupled: `balance rcb` REQUIRES comm_style tiled, `balance shift` REQUIRES the
-# default regular grid (comm_style brick).  Set here (before read_data) so the
-# very first decomposition already uses the chosen style.
-#
-#   shift (DEFAULT) — regular processor grid, movable cut planes per dimension.
-#       Subdomains stay boxes on a regular lattice and ghost exchange stays on
-#       the well-trodden brick code path.  Recovers most of the imbalance
-#       because cuts move in all three dims (shift xyz).  Critically, `shift`
-#       has a documented guard rcb does NOT: "if any pair of adjacent planes
-#       are closer together than the neighbor skin distance ... the plane
-#       positions are shifted to separate them by at least this amount ... to
-#       prevent particles being lost when dynamics are run with processor
-#       subdomains that are too narrow" (docs.lammps.org/balance.html).
-#
-#   rcb — recursive coordinate bisection (comm_style tiled).  Balances an
-#       irregular density field better in principle, but on THIS geometry (a
-#       dense gel block sitting in a sparse rho04 solvent box, 128 ranks over a
-#       ~47.8 x 47.4 x 212 box) it carves the gel into thin tiles.  Once a tile
-#       dimension approaches comm_modify cutoff (2.0 below) the tiled ghost
-#       exchange degrades into multi-hop swaps and the run slows to a crawl or
-#       stops making progress altogether.
-#
-#       This is the suspected cause of the 2026-07-24 stall (job 286541 on
-#       node20): Phase 0 printed its step-25000 thermo line normally (T=0.998,
-#       PE flat, dangerous builds 0 — no numerical problem), the next scheduled
-#       `fix balance` rebalance was due at step 30000, and the job then produced
-#       no output for ~2 h until it was cancelled.
-#
-#       Kept selectable so the two can be A/B'd:  lmp ... -var balance_style rcb
+# balance_style couples decomposition+comm style (rcb needs comm_style tiled).
+# Default `shift` is safer on this geometry — `rcb` carved the gel into thin
+# tiles and is the suspected cause of a ~2h stall (job 286541, 2026-07-24).
+# Kept selectable for A/B: lmp ... -var balance_style rcb
 variable balance_style index shift
 
 if "${balance_style} == rcb" then "comm_style tiled"
@@ -308,9 +124,8 @@ bond_style fene
 
 read_data data_files/${dataname}.data nocoeff
 
-# Ghost-atom communication cutoff. Must be >= the longest bond (FENE R0 = 1.5);
-# 2.0 leaves margin. Previously 5.0, which made Nghost ~4x Nlocal and drove Comm
-# to ~47% of wall time while Pair was only 0.14% (pair cutoff is just 1.122).
+# Must be >= longest bond (FENE R0=1.5). Previously 5.0, which made Comm ~47%
+# of wall time (Nghost ~4x Nlocal) while Pair was only 0.14%.
 comm_modify cutoff 2.0
 
 print "========================================"
@@ -321,9 +136,7 @@ print "Cumulative volumetric strain ladder: ${stage_targets_list}"
 print "========================================"
 
 
-# ==========================================================================
-#                          GROUP DEFINITIONS
-# ==========================================================================
+# ── GROUP DEFINITIONS ──
 
 group polymer    type 1 2
 group backbone   type 1
@@ -332,31 +145,20 @@ group solvent    type 3
 group gel        type 1 2 3      # all mobile gel atoms (NVT target)
 group plate      type 4          # all plate atoms (all 6 plates combined)
 
-# Individual plate subgroups (plate_top, plate_bot, etc.) are defined after
-# Phase 1 equilibration in the GEL CHARACTERIZATION section below, once
-# the plate mol IDs have been computed via compute reduce max mol.
+# Individual plate subgroups defined later, once plate mol IDs are resolved.
 
 
-# ==========================================================================
-#                       INTERATOMIC POTENTIALS
-# ==========================================================================
+# ── INTERATOMIC POTENTIALS ──
 
-# WCA (purely repulsive) for all pairs by default
 pair_coeff * * 1.0 ${sigma} 1.122
 
-# Tunable polymer-solvent and solvent-solvent
 pair_coeff 1 3 ${epsSP} ${sigma} 1.122
 pair_coeff 2 3 ${epsSP} ${sigma} 1.122
 pair_coeff 3 3 ${epsSS} ${sigma} 1.122
 
-# Plate interactions:
-#   Plate-plate interactions DISABLED — the six plates must not repel each
-#   other across the gel (unlike shear_slab which only has two plates).
-#   Plate-gel interactions: WCA (soft repulsive wall contact).
-#   Plate-SOLVENT interactions DISABLED — plates must be transparent to solvent
-#   so it flows through freely; measuring the NETWORK bulk modulus only.
-#   (Previously WCA, which made plates push on the dense rho04 solvent layer at
-#    the box faces → ~7.7e8 pressure → "Domain too large for neighbor bins".)
+# Plate-plate and plate-solvent interactions DISABLED: plates must not repel
+# each other, and must be transparent to solvent (measuring NETWORK modulus
+# only — WCA here previously caused ~7.7e8 pressure / "Domain too large").
 neigh_modify exclude type 4 4
 neigh_modify exclude type 3 4
 pair_coeff 4 4 0.0 ${sigma} 0.0               # plate-plate DISABLED
@@ -364,14 +166,9 @@ pair_coeff 1 4 1.0 ${sigma} 1.122             # polymer-plate WCA
 pair_coeff 2 4 1.0 ${sigma} 1.122             # crosslinker-plate WCA
 pair_coeff 3 4 0.0 ${sigma} 0.0               # solvent-plate DISABLED (solvent flows through)
 
-# Type 5: orphan atoms left over from the pre-plate equilibration file (a
-# single-axis "piston" support that add_more_plates_to_gel.py never strips
-# out — it only deletes polymer near the boundary and passes every other
-# atom type through unchanged). Not a real plate in this script's design.
-# Without these lines it silently inherits the wildcard `pair_coeff * *`
-# (full-strength WCA against solvent), which breaks the "plates transparent
-# to solvent" design elsewhere. Mirror the type-4 treatment so it behaves
-# the same way (frozen wall vs polymer, invisible to solvent) instead.
+# Type 5: leftover orphan atoms from the pre-plate file (add_more_plates_to_gel.py
+# doesn't strip them out). Mirror the type-4 treatment so they don't silently
+# inherit full-strength WCA against solvent via pair_coeff * *.
 neigh_modify exclude type 4 5
 neigh_modify exclude type 5 5
 pair_coeff 5 5 0.0 ${sigma} 0.0               # orphan-orphan DISABLED
@@ -380,36 +177,18 @@ pair_coeff 1 5 1.0 ${sigma} 1.122             # polymer-orphan WCA
 pair_coeff 2 5 1.0 ${sigma} 1.122             # crosslinker-orphan WCA
 pair_coeff 3 5 0.0 ${sigma} 0.0               # solvent-orphan DISABLED (transparent)
 
-# Bond coefficients
 bond_coeff 1 30.0 1.5 1.0 1.0   # polymer-polymer FENE (Kremer-Grest)
 
 special_bonds fene
 neigh_modify delay 0 every 1 check yes
 
-# ── Load balancing ────────────────────────────────────────────────────────────
-# One-time repartition now (also speeds the upcoming minimize), then a periodic
-# rebalance to track density changes through NPH (Phase 0.5) and compression
-# (Phase 2).  Decomposition style is chosen by balance_style in the
-# INITIALIZATION section above (default `shift`; `rcb` is the old behaviour).
-#
-# Cadence and threshold relaxed from the old (10000, 1.05):
-#   - The box is FIXED through Phase 0 and Phase 1b, and across the ENTIRE
-#     compression ladder the gel changes by only ε_vol = 0.045 (~1.5% per axis).
-#     Density simply does not redistribute fast enough to justify a rebalance
-#     every 10000 steps.
-#   - A rebalance is not free: it forces a full atom migration plus neighbor-list
-#     rebuild, and each one is another chance to land in a pathological
-#     decomposition.  Fewer, looser rebalances is strictly safer here.
-# Threshold 1.10 = rebalance only when the busiest rank exceeds the average by
-# >10% (was 5%).
-# index (not equal) style so both can be overridden from the command line
-# alongside balance_style, e.g. -var balance_freq 20000
+# One-time repartition, then periodic rebalance (density barely moves here —
+# ε_vol only reaches 0.045 — so cadence/threshold are relaxed vs. the old
+# 10000/1.05 defaults). xyz (not just z): the six-plate geometry compacts the
+# gel in all three directions.
 variable balance_freq   index 50000
 variable balance_thresh index 1.10
 
-# shift: `shift <dims> <Niter> <stopthresh>` — iteratively move the cut planes
-# in x, y and z.  xyz (not just z) because the six-plate geometry makes the gel
-# compact in all three directions, so the imbalance is not purely axial.
 if "${balance_style} == rcb" then &
     "balance 1.0 rcb" &
     "fix balance all balance ${balance_freq} ${balance_thresh} rcb" &
@@ -420,35 +199,21 @@ else &
 print ">>> Load balancing: style=${balance_style}  every ${balance_freq} steps  threshold=${balance_thresh}"
 
 
-# ==========================================================================
-#                           THERMO OUTPUT
-# ==========================================================================
+# ── THERMO OUTPUT ──
 
 compute gel_temp  gel   temp
 compute gel_press all   pressure gel_temp pair bond
 
-# ── Global polymer osmotic stress (whole polymer / Rg gel volume) ──────────
-# Defined here (before thermo_style) so σ_ii^poly and Π print from Phase 0
-# onward — the gel volume V_gel(Rg) co-evolves with compression, which is
-# exactly the Π-vs-V data the osmotic bulk modulus needs.
-# See slab_with_flow.lmp for the stress/atom + Rg conventions reused below.
-#
-# compute stress/atom NULL → per-atom virial stress in pressure·volume units
-#   (no kinetic term → configurational network stress only).  Summing the
-#   diagonal over ALL polymer atoms and dividing by the gel volume converts
-#   pressure·volume → pressure:        σ_ii^poly = Σ_a S_ii^a / V_gel.
-# V_gel is the Rg-based gel volume (NOT the box volume).  For a uniform prism
-#   L_i = 2√3·√(Rg_ii²)  and  V_gel = Lx_rg·Ly_rg·Lz_rg.  This is the same
-#   Rg→length mapping used in slab_with_flow.lmp and later in this script.
+# Global polymer osmotic stress (whole polymer / Rg gel volume), defined here
+# so it prints from Phase 0 onward. stress/atom NULL = per-atom virial stress
+# (pressure*volume units, no kinetic term); dividing the summed diagonal by
+# V_gel (Rg-based, not box volume) gives σ_ii^poly. Component order:
+# [1]=xx [2]=yy [3]=zz [4]=xy [5]=xz [6]=yz.
 compute rg_tensor       polymer gyration
 compute stress_poly_all polymer stress/atom NULL
 compute sumS_p_xx       polymer reduce sum c_stress_poly_all[1]
 compute sumS_p_yy       polymer reduce sum c_stress_poly_all[2]
 compute sumS_p_zz       polymer reduce sum c_stress_poly_all[3]
-# Off-diagonal (shear) components of the same whole-polymer, Rg-normalised
-# stress — added so σ_xy/σ_zx/σ_yz are available continuously (Phase 0->3)
-# alongside the normal stresses, for the same time axis as Π and V_gel.
-# stress/atom component order: [1]=xx [2]=yy [3]=zz [4]=xy [5]=xz [6]=yz.
 compute sumS_p_xy       polymer reduce sum c_stress_poly_all[4]
 compute sumS_p_zx       polymer reduce sum c_stress_poly_all[5]
 compute sumS_p_yz       polymer reduce sum c_stress_poly_all[6]
@@ -458,57 +223,34 @@ variable gel_ly_rg  equal 2.0*sqrt(3.0*c_rg_tensor[2])
 variable gel_lz_rg  equal 2.0*sqrt(3.0*c_rg_tensor[3])
 variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
 
-# Polymer normal stresses normalised by the Rg gel volume → true pressure units.
 variable sigP_xx equal c_sumS_p_xx/v_gel_vol_rg
 variable sigP_yy equal c_sumS_p_yy/v_gel_vol_rg
 variable sigP_zz equal c_sumS_p_zz/v_gel_vol_rg
-# Off-diagonal counterparts (same normalisation).
 variable sigP_xy equal c_sumS_p_xy/v_gel_vol_rg
 variable sigP_zx equal c_sumS_p_zx/v_gel_vol_rg
 variable sigP_yz equal c_sumS_p_yz/v_gel_vol_rg
-# Total osmotic pressure = (1/3) tr(σ^poly).  (Sign follows the LAMMPS virial
-# convention; take |Π| for a positive osmotic pressure — see plot script.)
+# Total osmotic pressure = (1/3) tr(σ^poly); take |Π| for a positive value.
 variable Pi_osm  equal (v_sigP_xx+v_sigP_yy+v_sigP_zz)/3.0
 
-# thermo_style: P_ij (pxx..pyz) removed; replaced by the polymer-only normal
-# stresses and the total osmotic pressure Π so they are logged every thermo step.
 thermo_style custom step c_gel_temp pe ke etotal press c_gel_press &
     v_sigP_xx v_sigP_yy v_sigP_zz v_Pi_osm vol lx ly lz xy xz yz
-# ── Lost-atom handling ────────────────────────────────────────────────────────
-# WAS: `lost warn`.  That setting is why the 2026-07-24 runs "died with no
-# error": with `warn`, LAMMPS does NOT abort when atoms go missing — it prints a
-# warning and keeps integrating a now-inconsistent system.  Whatever touches the
-# missing atoms next (FENE bonds, the plate fixes, the stress/atom + reduce
-# computes feeding sigP_*) then reads garbage or walks off an array, and the
-# process dies silently instead of printing a diagnosable ERROR line.
-#
-# `error` restores the abort so LAMMPS names the actual failure.  Revert with
-#   -var lost_atoms warn
-# once the underlying problem is found (or if legitimately-escaping orphan
-# type-5 atoms turn out to be the reason `warn` was set in the first place).
+
+# `error` (not `warn`) so lost atoms abort with a diagnosable error instead of
+# silently corrupting the run (this is why 2026-07-24's runs died with no
+# error). Revert to `warn` only if legitimate orphan (type-5) escapes need it.
 variable lost_atoms index error
 
-# flush yes: force a flush after every thermo line.  Without it the tail of the
-# output is lost in the stdio buffer when the process dies abnormally — so the
-# last thing you see is NOT the last thing that happened.
+# flush yes: without it, output near an abnormal death is lost in the stdio buffer.
 thermo_modify lost ${lost_atoms} flush yes
 thermo ${thermo_freq}
 
 
-# ==========================================================================
-#   PHASE 1: EQUILIBRATION  (Phase 0 NVT → Phase 0.5 Langevin+NPH → Phase 1b NVT)
-# ==========================================================================
-# Ported from slab_with_flow.lmp (compression_mode=1).  Replaces the previous
-# Nosé-Hoover NPT (which let FENE bonds heat the system: "FENE bond too long").
-#
-# Phase 0   — NVT at fixed box volume, all plates frozen.  Settles the (cold)
-#             starting config before any volume change.
-# Phase 0.5 — Langevin thermostat + NPH iso barostat → P_target.  Plates are
-#             released to nve+setforce so they scale isotropically with the box
-#             (the old fix-move-0 pinned plates in absolute space while the box
-#             shrank around them — a latent bug).  Re-frozen afterward.
-# Phase 1b  — NVT at the new (NPH-final) box volume, plates re-frozen.  Relaxes
-#             internal stresses at the correct density before compression.
+# ── PHASE 1: EQUILIBRATION  (Phase 0 NVT → Phase 0.5 Langevin+NPH → Phase 1b NVT) ──
+# Phase 0: NVT, fixed box, plates frozen — settle the cold starting config.
+# Phase 0.5: Langevin+NPH iso -> P_target; plates released to nve+setforce so
+#   they scale isotropically with the box (fix-move-0 would pin them in
+#   absolute space while the box shrinks — a latent bug), then re-frozen.
+# Phase 1b: NVT at the NPH-final volume, plates re-frozen.
 
 print "========================================"
 print "Phase 0: NVT equilibration (${nsteps_phase0} steps, fixed box, all plates frozen)"
@@ -530,43 +272,26 @@ velocity plate set 0.0 0.0 0.0
 minimize 1.0e-4 1.0e-6 5000 50000
 unfix freeze_plates_min
 
-# Phase marker.  `minimize` advances the timestep counter by its ITERATION count,
-# so the step number after this line is the number of CG iterations taken (11 in
-# the 2026-07-24 run), not a dynamics step.  Because thermo_freq is 25000, a
-# thermo line at a small step number like ~158 can ONLY have come from a minimize
-# or from the first/last step of a run — this marker disambiguates which.
+# step here = CG iteration count, not a dynamics step (minimize advances the
+# counter by iterations) — disambiguates minimize output from a run's.
 print ">>> Minimize COMPLETE: step=$(step) (= CG iterations)  T=$(c_gel_temp)  PE=$(pe)  Press=$(press)"
 
-# Seed gel velocities at temp_target.  The input config is cold (T=0); without
-# this the thermostats must heat from exactly zero, which is slow and leaves
-# bonds pinned near R0.  (Addition beyond slab_with_flow, which starts from an
-# already-equilibrated config that carries velocities.)
+# Seed velocities: input config is cold (T=0); without this the thermostats
+# must heat from zero, leaving bonds pinned near R0.
 velocity gel create ${temp_target} 90210 mom yes rot yes dist gaussian
 
-# ── OSMOTIC BULK-MODULUS DATA (Π, σ_ii^poly, gel volume) — all phases ──────
-# Defined here (before Phase 0) and never unfixed, so it records continuously
-# from Phase 0 through Phase 3.  Pairs the instantaneous polymer osmotic stress
-# with the co-evolving Rg gel volume → the Π-vs-V_gel curve for the osmotic
-# bulk modulus K = -V (dΠ/dV).  Post-processed in bulk_modulus_analysis.ipynb.
-# Columns: step  σ_xx  σ_yy  σ_zz  σ_xy  σ_zx  σ_yz  Π  V_gel_rg  lx_rg  ly_rg  lz_rg
-# (off-diagonal columns added so bulk_modulus_analysis.ipynb can plot the
-#  shear stresses on the same continuous time axis as everything else; older
-#  9-column data files from before this change remain readable — the notebook
-#  reader detects the column count.)
+# Never unfixed — records continuously through the whole run. Pairs Π with the
+# co-evolving Rg gel volume for the osmotic bulk modulus K = -V(dΠ/dV) in
+# bulk_modulus_analysis.ipynb.
+# Columns: step sigP_xx sigP_yy sigP_zz sigP_xy sigP_zx sigP_yz Pi_osm V_gel_rg lx_rg ly_rg lz_rg
 fix out_bulk_modulus all print ${stress_freq} &
     "$(step) $(v_sigP_xx) $(v_sigP_yy) $(v_sigP_zz) $(v_sigP_xy) $(v_sigP_zx) $(v_sigP_yz) $(v_Pi_osm) $(v_gel_vol_rg) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
     title "# step sigP_xx sigP_yy sigP_zz sigP_xy sigP_zx sigP_yz Pi_osm V_gel_rg lx_rg ly_rg lz_rg" &
     file output_files/stress_data/bulk_modulus_plot_data_${dataname}_${interaction}_${nsteps}.dat screen no
 
-# --- Phase 0: Langevin+NVE at fixed box volume ---
-# Was plain Nosé-Hoover `fix nvt`. Swapped for the same reason Phase 0.5's
-# barostat thermostat was swapped (see note above Phase 0.5): FENE bonds can
-# inject kinetic energy faster than an NH chain can remove it, and this phase
-# immediately follows `velocity gel create` dumping a fresh Gaussian velocity
-# distribution onto a previously cold, minimized, dense (rho04) system —
-# exactly the situation where NH falls behind. Langevin's per-atom friction
-# does not have that lag. Box is still fixed here (no barostat), so nothing
-# else about Phase 0 changes.
+# Langevin+NVE, not Nose-Hoover: right after `velocity gel create` dumps a
+# fresh Gaussian distribution onto a cold, dense system, NH lags and FENE
+# bonds overheat before it catches up.
 fix freeze_plates_0 plate   move linear 0 0 0
 fix nve_phase0      gel     nve
 fix lang_phase0     gel     langevin ${temp_target} ${temp_target} ${lang_T_damp} 90211
@@ -581,18 +306,16 @@ unfix freeze_plates_0
 
 print ">>> Post-Phase-0 NVT  T = $(c_gel_temp)  P = $(press)  c_gel_press = $(c_gel_press)"
 
-# --- Phase 0.5: Langevin + NPH iso to P_target (plates scale with box) ---
 print "========================================"
 print "Phase 0.5: Langevin+NPH iso to P = ${P_target} (${nsteps_npt} steps, plates scale with box)"
 print "========================================"
 
-# Release plates: nve + setforce 0 → zero net force, integrated, and remapped
-# by the NPH barostat (dilate all) so they scale isotropically with the box.
+# Release plates: nve + setforce 0 -> zero net force, remapped by the NPH
+# barostat (dilate all) so they scale isotropically with the box.
 velocity plate set 0.0 0.0 0.0
 fix nve_plate      plate nve
 fix setforce_plate plate setforce 0.0 0.0 0.0
 
-# Langevin (per-atom friction beats FENE heating) + NPH barostat.
 fix lang_p05 gel langevin ${temp_target} ${temp_target} ${lang_T_damp} 48279
 fix nph_p05  gel nph iso ${P_target} ${P_target} ${npt_P_damp}
 
@@ -608,7 +331,6 @@ unfix nve_plate
 unfix setforce_plate
 velocity plate set 0.0 0.0 0.0
 
-# --- Phase 1b: NVT at the NPH-final volume ---
 print "========================================"
 print "Phase 1b: NVT equilibration (${nsteps_equil} steps, plates frozen at NPH volume)"
 print "========================================"
@@ -627,16 +349,7 @@ print ">>> Post-NVT T = $(c_gel_temp)  P = $(press)  c_gel_press = $(c_gel_press
 print ">>> Box after Phase 1: $(lx) x $(ly) x $(lz)"
 
 
-# ==========================================================================
-#          GEL CHARACTERIZATION & PLATE SETUP (post-equilibration)
-# ==========================================================================
-# Identify individual plates by mol ID. add_more_plates_to_gel.ipynb assigns
-# mol IDs max_mol_gel+1..+6 (top, bot, front, back, right, left in order).
-# We compute the max mol ID of gel atoms (types 1 2 3) at this point.
-#
-# Note: spatial region grouping cannot be used here because the right/left
-# plates span the full box y-range, which overlaps the y-positions of the
-# front/back plates. Mol ID is the only unambiguous identifier.
+# ── GEL CHARACTERIZATION & PLATE SETUP (post-equilibration) ──
 
 compute polymer_com  polymer com
 compute minx_polymer polymer reduce min x
@@ -645,11 +358,7 @@ compute miny_polymer polymer reduce min y
 compute maxy_polymer polymer reduce max y
 compute minz_polymer polymer reduce min z
 compute maxz_polymer polymer reduce max z
-# compute rg_tensor and the gel_lx/ly/lz/vol_rg variables are now defined
-# earlier (THERMO OUTPUT section) so they are available from Phase 0; the
-# duplicate definitions that lived here have been removed.
 
-# Atom-style variable used to access mol ID per atom in compute reduce
 variable mol_id atom mol
 compute max_mol_gel gel reduce max v_mol_id
 
@@ -676,7 +385,6 @@ variable hw_x equal v_region_frac*v_rg_scale*sqrt(v_Rg_xx + v_eps)
 variable hw_y equal v_region_frac*v_rg_scale*sqrt(v_Rg_yy + v_eps)
 variable hw_z equal v_region_frac*v_rg_scale*sqrt(v_Rg_zz + v_eps)
 
-# ── Assign individual plate groups by mol ID ──────────────────────────────────
 variable mol_top_plate   equal round($(c_max_mol_gel)+1)
 variable mol_bot_plate   equal round($(c_max_mol_gel)+2)
 variable mol_front_plate equal round($(c_max_mol_gel)+3)
@@ -686,10 +394,8 @@ variable mol_left_plate  equal round($(c_max_mol_gel)+6)
 
 print ">>> Plate mol IDs: top=${mol_top_plate}  bot=${mol_bot_plate}  front=${mol_front_plate}  back=${mol_back_plate}  right=${mol_right_plate}  left=${mol_left_plate}"
 
-# Use the group command's native 'molecule' style (works on all LAMMPS
-# versions). The earlier atom-style-variable approach used the 'mol' keyword,
-# which is only a valid atom-style vector in newer LAMMPS builds and fails with
-# "Invalid syntax in variable formula" on older cluster builds.
+# 'molecule' group style (not the atom-style 'mol' variable) works on all
+# LAMMPS versions — the variable approach fails on older cluster builds.
 group plate_top   molecule ${mol_top_plate}
 group plate_bot   molecule ${mol_bot_plate}
 group plate_front molecule ${mol_front_plate}
@@ -701,7 +407,6 @@ print ">>> plate_top: $(count(plate_top))  plate_bot: $(count(plate_bot))"
 print ">>> plate_front: $(count(plate_front))  plate_back: $(count(plate_back))"
 print ">>> plate_right: $(count(plate_right))  plate_left: $(count(plate_left))"
 
-# ── Plate COM computes (for strain tracking and velocity scaling) ─────────────
 compute com_top   plate_top   com
 compute com_bot   plate_bot   com
 compute com_front plate_front com
@@ -709,19 +414,9 @@ compute com_back  plate_back  com
 compute com_right plate_right com
 compute com_left  plate_left  com
 
-# ── Plate force computes (net force from the gel on each plate) ────────────────
-# reduce sum f{x,y,z} over each plate's atoms = the net pair+bond force LAMMPS
-# computed on those atoms this step. Plates are held with `fix move linear`
-# (kinematic — sets x/v directly, does NOT zero the per-atom force array), so
-# this is the genuine reaction force the gel exerts on the plate, during Phase
-# 1b, Phase 2 (driven), and Phase 3 (frozen post-compression).
-# EXCEPTION: during Phase 0.5 (Langevin+NPH) the plates run under
-# `fix setforce 0 0 0`, which DOES zero the force array — expect exactly 0
-# there; that is correct, not a bug.
-# SCOPE: individual plate identity (top vs bot vs ...) only exists once the
-# mol-ID resolution above has run, i.e. after Phase 0/0.5/1b equilibration —
-# so this is the earliest point these six plates can be tracked separately;
-# it is not available from step 0 of Phase 0.
+# Net reaction force gel exerts on each plate (fix move linear doesn't zero the
+# force array). Reads 0 during Phase 0.5 (fix setforce zeroes it there) — that
+# is expected, not a bug.
 compute f_top_x   plate_top   reduce sum fx
 compute f_top_y   plate_top   reduce sum fy
 compute f_top_z   plate_top   reduce sum fz
@@ -749,7 +444,6 @@ fix out_plate_force all print ${stress_freq} &
 
 run 0
 
-# Initial plate-to-plate gaps (frozen as reference values)
 variable gap_z_0 equal $(c_com_top[3]   - c_com_bot[3])
 variable gap_y_0 equal $(c_com_front[2] - c_com_back[2])
 variable gap_x_0 equal $(c_com_right[1] - c_com_left[1])
@@ -767,22 +461,12 @@ variable compress_strain_y   equal (v_gap_y_0 - v_gap_y_current) / v_gap_y_0
 variable compress_strain_x   equal (v_gap_x_0 - v_gap_x_current) / v_gap_x_0
 variable compress_strain_vol equal 1.0 - (1.0-v_compress_strain_x)*(1.0-v_compress_strain_y)*(1.0-v_compress_strain_z)
 
-# Plate ramp velocities (vcompress_x/y/z) are NOT set here — they are
-# recomputed at the top of EACH stage in the PHASE 2/3 loop below, sized off
-# that stage's own incremental strain target so the loop generalizes to any
-# batch-supplied ladder (uniform or not). See the loop for the formula.
 
-
-# ==========================================================================
-#             BULK REGION (exclude 3σ near each plate face)
-# ==========================================================================
-# Atoms within 3σ of any plate face carry artifactual constraint stresses
-# from the harmonic plate-polymer bonds. Exclude all six faces.
-#
-# Defined ONCE here, using the PRE-compression gel geometry (gel_xlo/xhi/...
-# from the GEL CHARACTERIZATION section above) — see NOTE at top of file.
-# The same physical atoms (poly_bulk/solv_bulk) are tracked through all 5
-# compression stages below, rather than re-snapshotted per stage.
+# ── BULK REGION (exclude 3σ near each plate face) ──
+# Atoms within 3σ of any plate face carry artifactual constraint stresses from
+# the harmonic plate-polymer bonds. Defined ONCE, on the pre-compression gel
+# geometry — the same physical atoms are tracked through every stage
+# (Lagrangian), not re-snapshotted per stage.
 
 variable xlo_bulk equal ${gel_xlo}+3.0
 variable xhi_bulk equal ${gel_xhi}-3.0
@@ -807,14 +491,11 @@ print ">>> bulk_vol = $(v_bulk_vol)"
 print ">>> poly_bulk: $(count(poly_bulk))  solv_bulk: $(count(solv_bulk))"
 
 
-# ==========================================================================
-#                    ANALYSIS: PARTIAL STRESSES
-# ==========================================================================
+# ── ANALYSIS: PARTIAL STRESSES ──
 
 compute stress_polymer poly_bulk stress/atom NULL
 compute stress_solvent solv_bulk stress/atom NULL
 
-# Box-integrated polymer stress (bulk only)
 compute sig_p_xx poly_bulk reduce sum c_stress_polymer[1]
 compute sig_p_yy poly_bulk reduce sum c_stress_polymer[2]
 compute sig_p_zz poly_bulk reduce sum c_stress_polymer[3]
@@ -829,7 +510,6 @@ variable stress_p_xy equal c_sig_p_xy/v_bulk_vol
 variable stress_p_zx equal c_sig_p_zx/v_bulk_vol
 variable stress_p_yz equal c_sig_p_yz/v_bulk_vol
 
-# Box-integrated solvent stress (bulk only)
 compute sig_s_xx solv_bulk reduce sum c_stress_solvent[1]
 compute sig_s_yy solv_bulk reduce sum c_stress_solvent[2]
 compute sig_s_zz solv_bulk reduce sum c_stress_solvent[3]
@@ -861,19 +541,14 @@ variable s_s_zx atom c_stress_solvent[5]/(${binWidth}*lx*ly)
 variable s_s_yz atom c_stress_solvent[6]/(${binWidth}*lx*ly)
 
 
-# ==========================================================================
-#                    ANALYSIS: SPATIAL CHUNKS (z-binning)
-# ==========================================================================
-# Bin along z (top/bot compression direction; also the long axis of the gel)
+# ── ANALYSIS: SPATIAL CHUNKS (z-binning) ──
 
 variable binWidth_reduced equal $(v_binWidth/lz)
 compute chunk_z_polymer poly_bulk chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
 compute chunk_z_solvent  solv_bulk chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
 
 
-# ==========================================================================
-#    OUTPUT: GEL AND BOX DIMENSIONS (continuous through all 3 stages)
-# ==========================================================================
+# ── OUTPUT: GEL AND BOX DIMENSIONS (continuous through all stages) ──
 
 fix out_gel_dims_rg all print ${stress_freq} &
     "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
@@ -888,22 +563,7 @@ fix out_polymer_com all print ${stress_freq} &
     file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}.dat screen no
 
 
-# ==========================================================================
-#      PHASE 2/3 STAGED: COMPRESS -> FREEZE -> DRAIN/EQUILIBRATE -> MEASURE
-# ==========================================================================
-# N stages, one per value in the batch-supplied ${stage_targets} list
-# (cumulative compress_strain_vol targets). Each stage: (a) drive plates to
-# that stage's target strain (Langevin+NVE, same as the old single-shot
-# Phase 2), (b) freeze all 6 plates and hold NVT for `nsteps` steps so the
-# solvent can redistribute/drain, (c) average the equilibrated stress tensor
-# over that hold. stress_tensor_polymer/solvent and stress_profile_z_*
-# accumulate ALL stages into the same file (stage 1 creates it — detected via
-# is_file(), not a counter — later stages append) — only equilibrated-hold
-# data goes in, ramp periods are skipped. compress_strain_*.dat and the
-# dims/COM files above are never unfixed, so they run continuously across
-# ramps AND holds for all stages in one file each (this is what shows the
-# staircase downstream).
-#
+# ── PHASE 2/3 STAGED: COMPRESS -> FREEZE -> DRAIN/EQUILIBRATE -> MEASURE ──
 # Sign convention (each plate moves toward gel center):
 #   Top   (+z face): vz = -vcompress_z   Bot   (-z face): vz = +vcompress_z
 #   Front (+y face): vy = -vcompress_y   Back  (-y face): vy = +vcompress_y
@@ -915,39 +575,17 @@ dump traj_prod all custom ${dump_freq_prod} &
     id type mol x y z
 
 # Output: step  gap_z_0  gap_z_current  compress_strain_z  compress_strain_vol
-# Defined once, never unfixed — covers ramps + holds for all 3 stages.
+# Defined once, never unfixed — covers ramps + holds for all stages.
 fix out_compress_strain all print ${stress_freq} &
     "$(step) ${gap_z_0} $(v_gap_z_current) $(v_compress_strain_z) $(v_compress_strain_vol)" &
     file output_files/stress_data/compress_strain_${dataname}_${interaction}_${nsteps}.dat screen no
 
 
-# ==========================================================================
-#          STAGE 0: ε_vol = 0 REFERENCE (undeformed baseline)
-# ==========================================================================
-# Ported from slab_with_flow.lmp's ref_ fix block. Records the bulk-region
-# polymer and solvent stresses at ZERO strain, over the same poly_bulk/
-# solv_bulk groups, the same bulk_vol normalisation and the same averaging
-# window (nevery/nrepeat/nfreq) as the stage holds — so P'_net(ε_vol=0) is
-# measured, not assumed. Its LENGTH is nsteps_ref, set independently of the
-# stage-hold length so the baseline can be averaged for as long as it needs
-# without lengthening every stage.
-#
-# WHY: bulk_modulus_analysis.ipynb's K_single = P'_net(ε)/ε carries an
-# "implicit zero at the pre-compression state". For a swollen, pre-stressed
-# network the at-rest Terzaghi effective stress is NOT generally zero, so that
-# assumption biases K_single by an unknown amount. The N-point linear fit is
-# reference-independent and doesn't need this, but with the tighter ε_vol
-# ladder the signals are small enough that an anchored zero is worth having —
-# it also gives the fit an extra point at the origin and lets you check the
-# fitted intercept against a measured value.
-#
-# Plates are frozen and the gel is on NVT — identical dynamics to a stage
-# hold, just with no preceding ramp. Uses `file` (not `append`) so the ref
-# lands in its own *_ref_*.dat, leaving the per-stage files untouched.
-#
-# Only fix ave/time here (no ave/chunk), so no compute chunk/atom lock is
-# taken; the run is still epoch-aligned so the final averaging window
-# actually completes and writes its row.
+# ── STAGE 0: ε_vol = 0 REFERENCE (undeformed baseline) ──
+# Measures P'_net at zero strain instead of assuming it — a swollen,
+# pre-stressed network's at-rest stress is not generally zero, so an assumed
+# zero would bias K_single by an unknown amount. Same dynamics as a stage
+# hold (plates frozen, gel on NVT), own length (nsteps_ref) and own file.
 
 print "========================================"
 print "Stage 0: ε_vol = 0 reference (undeformed baseline, ${nsteps_ref} steps)"
@@ -972,11 +610,7 @@ fix ref_avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfr
     v_stress_s_xy v_stress_s_zx v_stress_s_yz &
     file output_files/stress_data/stress_tensor_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
 
-# Epoch-aligned (same formula as the stage holds — see NOTE at top of file).
-# Uses nsteps_ref, NOT nsteps: the reference hold has its own length. The
-# averaging window (nevery/nrepeat/nfreq_stress) is still the stage window, so
-# the ref rows are directly comparable to the stage rows — nsteps_ref just
-# controls how many such rows the baseline gets.
+# Epoch-aligned (see NOTE at top of file). Uses nsteps_ref, not nsteps.
 variable hold_steps equal (floor(($(step)+${nsteps_ref}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
 print ">>> Stage 0 (ref) aligned: ${hold_steps} steps (requested ${nsteps_ref}, nfreq_stress=${nfreq_stress})"
 
@@ -996,10 +630,8 @@ unfix freeze_top
 print ">>> Stage 0 (ref) done: compress_strain_vol=$(v_compress_strain_vol) (should be ~0) stress_p_zz=$(v_stress_p_zz) stress_s_zz=$(v_stress_s_zz)"
 
 
-# ------------------------------------------------------------ Stage loop --
-# One iteration per value in ${stage_targets} (batch-controlled list; see
-# PARAMETERS). Same next/jump SELF idiom already used by this codebase's
-# slab_with_support.lmp (snap_loop) and triaxial_compression.lmp (comp_loop).
+# One iteration per value in ${stage_targets} (see PARAMETERS). next/jump SELF
+# idiom, same as slab_with_support.lmp and triaxial_compression.lmp.
 variable stage_prev_target equal 0.0
 print ">>> STAGE SWEEP LIST: ${stage_targets_list}"
 
@@ -1009,13 +641,9 @@ print "========================================"
 print "Stage: compress to compress_strain_vol = ${stage_targets}"
 print "========================================"
 
-# Per-stage ramp velocity: sized off THIS stage's incremental strain
-# (current cumulative target minus the previous one), not a single global
-# constant — necessary now that stages need not be evenly spaced. Reuses
-# nsteps_compress_base as the nominal per-stage ramp step budget (the same
-# role it played implicitly before, when even spacing made 1/3 of it work
-# out per stage). fix halt (below) is still what actually stops the ramp;
-# this only has to be "fast enough not to blow the nsteps_compress cap".
+# Ramp velocity sized off THIS stage's incremental strain (current cumulative
+# target minus the previous one) — fix halt (below) is what actually stops
+# the ramp; this only needs to be fast enough not to blow the nsteps_compress cap.
 variable stage_target_comp equal 1.0-(1.0-${stage_targets})^(1.0/3.0)
 variable stage_prev_comp   equal 1.0-(1.0-${stage_prev_target})^(1.0/3.0)
 variable vcompress_z equal $((v_stage_target_comp-v_stage_prev_comp)*v_gap_z_0/(2.0*v_nsteps_compress_base*v_timestep_prod)*1.1)
@@ -1063,10 +691,8 @@ fix freeze_left  plate_left  move linear 0 0 0
 fix nvt_prod     gel         nvt  temp ${temp_target} ${temp_target} 1.0
 fix mom_prod     gel         momentum 100 linear 1 1 1 angular
 
-# file vs append: detected via is_file() (same function slab_with_support.lmp
-# uses for its is_restart check), NOT a stage counter, so this works for any
-# list length — first stage's file doesn't exist yet -> file; every later
-# stage finds it already there -> append.
+# file vs append via is_file() (not a stage counter) — works for any list
+# length: first stage's file doesn't exist -> file, later stages -> append.
 variable stress_file_exists equal is_file(output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}.dat)
 if "${stress_file_exists} == 0" then &
     "variable stress_write_mode string file" &
@@ -1095,13 +721,8 @@ fix prof_z_solvent solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfre
     norm none &
     ${stress_write_mode} output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}.dat
 
-# ── Epoch-aligned hold length (see NOTE on epoch alignment at top of file) ────
-# Pads the hold to the first multiple of nfreq_stress at or beyond
-# step+nsteps, so fix ave/chunk finishes its last epoch and releases the
-# compute chunk/atom lock before the unfix below. Always >= nsteps.
-# $(step) is expanded immediately, so this line MUST be re-evaluated at each
-# loop iteration rather than hoisted (equal-style variables are redefinable,
-# so reusing the name across iterations is fine).
+# Epoch-aligned hold length — see NOTE at top of file. Re-evaluated each loop
+# iteration since $(step) is expanded immediately.
 variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
 print ">>> hold aligned: ${hold_steps} steps (requested ${nsteps}, nfreq_stress=${nfreq_stress})"
 
@@ -1127,15 +748,9 @@ next stage_targets
 jump SELF stage_loop
 
 
-# ==========================================================================
-#                            CLEANUP
-# ==========================================================================
-# Every loop iteration now fully tears down its own hold fixes (freeze_*,
-# nvt_prod, mom_prod) at the end of that iteration — there's no "last stage"
-# special case to hang onto here, since the loop has no fixed length. Plates
-# are already physically stationary (they were frozen for the final hold),
-# so there's nothing left dangling to unfix; this section just closes the
-# dump and reports the final state.
+# ── CLEANUP ──
+# Each loop iteration tears down its own hold fixes, so nothing is left
+# dangling here — this just closes the dump and reports the final state.
 
 undump traj_prod
 
