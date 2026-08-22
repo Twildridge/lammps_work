@@ -28,7 +28,7 @@ module load openmpi5
 FOLDER="slab_with_support"
 DATANAME="slab_support_5beads_tall_rho04_new_02"
 INTERACTION="1.0_1.2"
-NSTEPS=500000
+NSTEPS=10000000
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
 # Navigate to the scripts directory
