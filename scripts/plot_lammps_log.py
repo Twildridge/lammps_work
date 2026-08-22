@@ -531,9 +531,19 @@ def plot_compression_diagnostics(data, folder, run_id, output):
       1. Temperature                    — thermo c_gel_temp
       2. Polymer normal stresses        — σ_xx, σ_yy, σ_zz vs step
                                           (all polymer / V_gel(Rg))
-      3. |mean normal stress| = |Π|     — osmotic pressure magnitude vs step
-                                          (absolute value → positive convention)
+      3. Mean normal stress Π           — osmotic pressure vs step (signed;
+                                          compress_slab.lmp bakes in the sign
+                                          so +Π = compression, no abs() here —
+                                          see NOTE below)
       4. Gel volume V_gel(Rg)           — context for the Π-vs-V bulk modulus
+
+    NOTE on sign: compress_slab.lmp's Pi_osm column already applies the
+    -(1/3)tr(sigma) sign (fixed 2026-08-20) so this column is the physical,
+    positive-under-compression osmotic pressure directly — do not take abs()
+    of it (that folds any real negative excursion, e.g. during equilibration,
+    into a spurious zero-crossing kink). Data from a run made before that fix
+    will still be sign-inverted; re-run or negate Pi manually if plotting
+    legacy data.
 
     Data source: output_files/stress_data/bulk_modulus_plot_data_<run_id>.dat
       cols: step  σ_xx  σ_yy  σ_zz  Π  V_gel_rg  lx_rg  ly_rg  lz_rg
@@ -587,14 +597,14 @@ def plot_compression_diagnostics(data, folder, run_id, output):
             ax.set_ylabel('Polymer normal stress\n(all polymer / V_gel(Rg))')
             ax.legend(fontsize=8, ncol=3)
 
-        # ── |mean normal stress| = |Π| (osmotic pressure magnitude) ───────
+        # ── Mean normal stress Π (osmotic pressure, signed) ───────────────
         elif panel == 'osmotic':
-            absPi = np.abs(Pi)
-            ax.plot(t, absPi, color='crimson', lw=1.5, marker='o', markersize=3,
-                    label='|Π| = |(σ_xx+σ_yy+σ_zz)/3|')
-            ax.set_ylabel('|Osmotic pressure|')
+            ax.plot(t, Pi, color='crimson', lw=1.5, marker='o', markersize=3,
+                    label='Π = -(σ_xx+σ_yy+σ_zz)/3')
+            ax.axhline(0, color='k', ls=':', lw=0.8)
+            ax.set_ylabel('Osmotic pressure Π')
             ax.legend(fontsize=8)
-            _annotate_last30(ax, absPi, fmt='.4f')
+            _annotate_last30(ax, Pi, fmt='.4f')
 
         # ── Gel volume (Rg) — context for Π-vs-V bulk modulus ─────────────
         elif panel == 'volume':

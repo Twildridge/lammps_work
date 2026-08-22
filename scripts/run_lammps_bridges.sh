@@ -14,6 +14,12 @@ INTERACTION=$3
 NSTEPS=$4
 TOTSTEPS=$NSTEPS
 STRAINS=${STRAINS:-0.1}  # Space-separated shear-strain list (shear_slab only); LAMMPS index var
+# COMPRESS_STAGES: space-separated CUMULATIVE volumetric-strain ladder
+# (compress_slab only) — one value per compression stage, LAMMPS index var.
+# Set in compress_slab_bridges.batch via COMPRESSION_1, COMPRESSION_2, ...
+# -> STAGE_TARGETS -> COMPRESS_STAGES. Stage count = length of this list.
+# Default reproduces compress_slab.lmp's original fixed 3-stage ladder.
+COMPRESS_STAGES=${COMPRESS_STAGES:-"0.015 0.030 0.045"}
 
 # Scratch directory for trajectories
 SCRATCH_DIR="/ocean/projects/chm250028p/$USER"
@@ -106,6 +112,8 @@ if [ $NGPUS -gt 0 ]; then
         -var totsteps $TOTSTEPS \
         -var strains $STRAINS \
         -var strains_list "$STRAINS" \
+        -var stage_targets $COMPRESS_STAGES \
+        -var stage_targets_list "$COMPRESS_STAGES" \
         -in $LAMMPS_FILE
 else
     # CPU-only mode
@@ -122,6 +130,8 @@ else
         -var totsteps $TOTSTEPS \
         -var strains $STRAINS \
         -var strains_list "$STRAINS" \
+        -var stage_targets $COMPRESS_STAGES \
+        -var stage_targets_list "$COMPRESS_STAGES" \
         -in $LAMMPS_FILE
 fi
 

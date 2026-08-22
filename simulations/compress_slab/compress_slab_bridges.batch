@@ -41,20 +41,34 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 # Simulation parameters
 # DATANAME: isolated swollen gel with six plates (from add_more_plates_to_gel.ipynb)
 #   Input data file: lammps_data/input_data/${DATANAME}.data
-# NSTEPS: length of EACH per-stage hold (3 stages); all other phase lengths
-#         live in compress_slab.lmp
+# NSTEPS: length of EACH per-stage hold (one per COMPRESSION_N below); all
+#         other phase lengths live in compress_slab.lmp
 #   Phase 0   (NVT settle):   nsteps_phase0   = 50000
 #   Phase 0.5 (NPH equil):    nsteps_npt      = 50000
 #   Phase 1b  (NVT equil):    nsteps_equil    = 50000
 #   Stage 0   (eps=0 ref):    nsteps_ref      = 100000
 #   Stage ramps:              nsteps_compress = 30000 cap (halts at ~10000)
-#   Stage holds:              NSTEPS (set here), x3
+#   Stage holds:              NSTEPS (set here), once per stage
 # -----------------------------------------------------------------------
 FOLDER="compress_slab"
 DATANAME="isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_with_six_plates"
 INTERACTION="1.0_1.0"   # epsSS_epsSP (solvent-solvent _ polymer-solvent)
 NSTEPS=200000
 TYPE=""                 # Options: stress, volume, stressvol, or leave empty
+
+# -----------------------------------------------------------------------
+# Compression ladder: cumulative volumetric strain target for each stage, in
+# order. This — not compress_slab.lmp — is the one place that controls both
+# how many compression stages run and how deep each one goes. Add or remove
+# COMPRESSION_N lines to change the stage count; each value is a TOTAL
+# (cumulative) strain target, not an increment on top of the previous one.
+COMPRESSION_1=0.015
+COMPRESSION_2=0.030
+COMPRESSION_3=0.045
+STAGE_TARGETS=("$COMPRESSION_1" "$COMPRESSION_2" "$COMPRESSION_3")
+export COMPRESS_STAGES="${STAGE_TARGETS[*]}"   # scalar, space-separated —
+    # arrays do NOT survive into a child process's environment, so this must
+    # stay a plain string (same gotcha documented in triaxial_compression.batch).
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

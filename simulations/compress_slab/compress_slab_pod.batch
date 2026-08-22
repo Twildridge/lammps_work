@@ -8,6 +8,27 @@
 #SBATCH --output=%x.o%j.%N
 # #SBATCH --error=%x.e%j.%N
 
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (must run BEFORE COMPRESS_STAGES is defined below).
+# sbatch submits whatever copy of this file is on disk at submit time. If
+# that local copy is STALE, the run silently does the wrong thing — a plain
+# `git pull` further down this same script (as this file used to have) is
+# too late to matter, because by the time it runs, this SAME execution has
+# already read whatever NSTEPS/COMPRESSION_N values were baked into the
+# submitted copy. Fix: pull the repo FIRST, then re-exec the freshly pulled
+# batch so every parameter below is always read from the current file. The
+# guard var prevents an exec loop. (Mirrors shear_slab.batch /
+# triaxial_compression.batch, which already use this pattern.)
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${COMPRESS_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining COMPRESS_STAGES..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export COMPRESS_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/compress_slab/compress_slab_pod.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (COMPRESS_BATCH_SYNCED=1)"
+
 # note that Pod has 40 cores per node
 
 # MPI settings for Intel Omni-Path (Pod)
@@ -28,10 +49,10 @@ module load openmpi5
 FOLDER="compress_slab"
 DATANAME="isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600002_with_six_plates"
 INTERACTION="1.0_1.0"
-# NSTEPS = length of EACH per-stage equilibration/drain hold (3 stages), not
-# total production steps and NOT the Stage 0 reference — that has its own
-# nsteps_ref = 100000 inside compress_slab.lmp.
-# Estimated total: ~0.88M steps
+# NSTEPS = length of EACH per-stage equilibration/drain hold (one per
+# COMPRESSION_N below), not total production steps and NOT the Stage 0
+# reference — that has its own nsteps_ref = 100000 inside compress_slab.lmp.
+# Estimated total for the default 3-stage ladder: ~0.88M steps
 #   150k equil (50k phase0 + 50k NPH + 50k NVT) + 100k reference hold
 # + 30k ramps (3 x ~10k) + 3 x ~200k holds (epoch-aligned, up to +nfreq_stress).
 # CHECK THIS FITS THE 6h WALLTIME above: grep the "Performance:" / "Loop time"
@@ -41,12 +62,19 @@ INTERACTION="1.0_1.0"
 NSTEPS=200000
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
-# Sync latest scripts from GitHub before running so run_lammps_pod.sh is up-to-date
-if command -v git &>/dev/null; then
-    git -C ~/Documents/lammps_work pull --rebase --autostash || true
-else
-    echo ">>> git not available on this node — skipping sync"
-fi
+# -----------------------------------------------------------------------
+# Compression ladder: cumulative volumetric strain target for each stage, in
+# order. This — not compress_slab.lmp — is the one place that controls both
+# how many compression stages run and how deep each one goes. Add or remove
+# COMPRESSION_N lines to change the stage count; each value is a TOTAL
+# (cumulative) strain target, not an increment on top of the previous one.
+COMPRESSION_1=0.015
+COMPRESSION_2=0.030
+COMPRESSION_3=0.045
+STAGE_TARGETS=("$COMPRESSION_1" "$COMPRESSION_2" "$COMPRESSION_3")
+export COMPRESS_STAGES="${STAGE_TARGETS[*]}"   # scalar, space-separated —
+    # arrays do NOT survive into a child process's environment, so this must
+    # stay a plain string (same gotcha documented in triaxial_compression.batch).
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

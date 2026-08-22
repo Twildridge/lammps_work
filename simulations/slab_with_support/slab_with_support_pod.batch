@@ -26,9 +26,9 @@ module load openmpi5
 
 # Set simulation parameters
 FOLDER="slab_with_support"
-DATANAME="slab_support_5beads_tall_rho04_new_01"
+DATANAME="slab_support_5beads_tall_rho04_new_02"
 INTERACTION="1.0_1.2"
-NSTEPS=70000
+NSTEPS=500000
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
 # Navigate to the scripts directory
