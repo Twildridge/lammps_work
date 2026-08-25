@@ -4,7 +4,7 @@
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=40
 #SBATCH --cpus-per-task=1
-#SBATCH --time=36:00:00 # shortening this will reduce queue time but might risk killing job
+#SBATCH --time=40:00:00 # shortening this will reduce queue time but might risk killing job
 #SBATCH --output=%x.o%j.%N
 # #SBATCH --error=%x.e%j.%N
 
