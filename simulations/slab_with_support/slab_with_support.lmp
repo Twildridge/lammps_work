@@ -18,8 +18,8 @@ variable sigma equal 1.0
 variable binWidth equal 2
 
 # Time averaging parameters
-variable nevery_avg_stress equal 100 
-variable nrepeat_avg_stress equal 1000 # 625 or 50
+variable nevery_avg_stress equal 100
+variable nrepeat_avg_stress equal 100 # nevery*nrepeat must not exceed nfreq (was 1000 — invalid)
 variable nfreq_avg_stress equal 10000 # 125000 or 10000
 
 # Output frequencies
@@ -238,6 +238,26 @@ compute rg_polymer polymer gyration
 variable rg_cubed equal c_rg_polymer^3
 
 
+# ========== Polymer Stress Tensor ==========
+# Off-diagonal/diagonal ratio (see plot_lammps_log.py::plot_swelling_anisotropy)
+# diagnoses how much the periodic images squeeze the gel and prevent
+# isotropic expansion during equilibration.
+compute stress_poly polymer stress/atom NULL
+compute sig_p_xx polymer reduce sum c_stress_poly[1]
+compute sig_p_yy polymer reduce sum c_stress_poly[2]
+compute sig_p_zz polymer reduce sum c_stress_poly[3]
+compute sig_p_xy polymer reduce sum c_stress_poly[4]
+compute sig_p_xz polymer reduce sum c_stress_poly[5]
+compute sig_p_yz polymer reduce sum c_stress_poly[6]
+
+variable stress_p_xx equal c_sig_p_xx/v_gel_vol_box
+variable stress_p_yy equal c_sig_p_yy/v_gel_vol_box
+variable stress_p_zz equal c_sig_p_zz/v_gel_vol_box
+variable stress_p_xy equal c_sig_p_xy/v_gel_vol_box
+variable stress_p_xz equal c_sig_p_xz/v_gel_vol_box
+variable stress_p_yz equal c_sig_p_yz/v_gel_vol_box
+
+
 
 # ========== Box Dimensions ==========
 variable box_lx equal lx
@@ -276,6 +296,11 @@ fix gel_dims_output all print ${volume_freq} "$(step) ${gel_lx} ${gel_ly} ${gel_
 fix box_dims_output all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_lz}" &
     ${restartFlag} output_files/volume_data/box_dimensions_${dataname}_${interaction}_${totsteps}.dat screen no
 
+fix avg_stress_polymer all ave/time ${nevery_avg_stress} ${nrepeat_avg_stress} ${nfreq_avg_stress} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz &
+    v_stress_p_xy v_stress_p_xz v_stress_p_yz &
+    ${restartFlag} output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${totsteps}.dat
+
 
 
 
@@ -303,6 +328,7 @@ label snap_loop
 # ========== Cleanup ==========
 unfix 1
 unfix remove_drift
+unfix avg_stress_polymer
 undump poly_traj
 
 
