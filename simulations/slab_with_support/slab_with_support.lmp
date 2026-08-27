@@ -18,9 +18,14 @@ variable sigma equal 1.0
 variable binWidth equal 2
 
 # Time averaging parameters
-variable nevery_avg_stress equal 100
-variable nrepeat_avg_stress equal 100 # nevery*nrepeat must not exceed nfreq (was 1000 — invalid)
-variable nfreq_avg_stress equal 10000 # 125000 or 10000
+# Stress sampled as a single instantaneous snapshot every nfreq_avg_stress
+# steps (nrepeat=1) — not time-averaged over an inner window — since it's
+# only used for eyeballing convergence, not a precise mean. This keeps the
+# (relatively expensive) per-atom stress/atom compute off the hot path:
+# it only runs once every nfreq_avg_stress steps instead of every nevery.
+variable nevery_avg_stress equal 50000
+variable nrepeat_avg_stress equal 1
+variable nfreq_avg_stress equal 50000
 
 # Output frequencies
 variable thermo_freq equal 100000
