@@ -40,7 +40,7 @@ lammps_work/                    ← This git repository
 │   ├── triaxial_permeation.ipynb            ← CURRENT: piston/thickness/stress/density/permeate + partial-vs-ss, with Phase 1.5 reference overlays (triaxial_permeation runs)
 │   ├── bulk_modulus_analysis.ipynb          ← Drained vs osmotic bulk modulus K
 │   ├── shear_analysis.ipynb                 ← G, N1/N2, stress profiles (shear_slab output)
-│   ├── volume_of_mixing.ipynb               ← ΔV_mix(P*) and φ(P*) across pressure sweep (syncs from Expanse via paramiko; requires isolated_* data files)
+│   ├── (volume_of_mixing.ipynb, cavity_widom.py, clearance_sensitivity_cell.py → moved to archive/, 2026-08)
 │   ├── plot_lammps_log.py      ← Plot T, P, volume convergence from log.lammps (+ shear diagnostics)
 │   ├── plot_compression_strain_sweep.py ← Plot stress-strain / M across a triaxial_compression sweep
 │   ├── plot_shear_strain_sweep.py ← Plot stress-strain / G across a shear_slab sweep

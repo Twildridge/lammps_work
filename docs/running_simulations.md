@@ -165,6 +165,8 @@ Benchmarks across system sizes are in [`documenting_pod_runs.md`](../documenting
 
 ### 5g. Volume-of-mixing sweep (`volmix_sweep.sh`)
 
+> **Archived 2026-08** — superseded by the calibration sweep (partial-molar-volume NPT sweeps; see `lammps_work/archive/README.md`). The script now lives in `lammps_work/archive/volmix_sweep.sh`; this section is kept because the calibration driver inherits its SLURM machinery.
+
 Computes ΔV_mix(P*) = V_gel_mixed − V_polymer_pure − V_solvent_pure across 11 pressures (P* = 1.0–2.0, step 0.1).
 
 **Pipeline per pressure** (SLURM chain):

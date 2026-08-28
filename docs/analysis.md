@@ -96,7 +96,7 @@ Reads a `triaxial_permeation` run. Six panels — piston, thickness, stress, den
 **`bulk_modulus_analysis.ipynb`**
 Drained vs. osmotic bulk modulus K. The osmotic K_osm = Π − dW/dV carries the absolute swelling pressure (large); the *drained* K should be computed like M (network stress response), not from the osmotic branch.
 
-**`volume_of_mixing.ipynb`**
+**`volume_of_mixing.ipynb`** *(archived 2026-08 → `lammps_work/archive/`; superseded by the calibration-sweep analysis — see `archive/README.md`)*
 Computes ΔV_mix(P*) = V_mixed − V_pure_solvent − V_pure_polymer across the pressure sweep (P* = 1.0–2.0). Cell 2 syncs `box_dimensions_*.dat` files directly from Expanse via `paramiko` SFTP — no SSH keys required; prompts for password and TOTP code in the notebook. Subsequent cells parse the box dimension files, time-average volumes over the last 50% of each run, and plot both ΔV_mix and the individual component volumes vs P*. Requires `paramiko` (`pip install paramiko`). Data lands in `flow_data_local/volmix_sweep/p{P}/`.
 
 **`shear_analysis.ipynb`**
@@ -141,6 +141,8 @@ module load anaconda3/2024.10-1
 ---
 
 #### `cavity_widom.py` — excess chemical potential μ_ex(z)
+
+> **Archived 2026-08** — moved to `lammps_work/archive/`; the widom_traj dumps that feed it are now off by default (`SKIP_WIDOM=1`). See `archive/README.md` for how to re-enable.
 
 This is the main script to run manually, especially on Bridges-2 where it is not called automatically by `run_lammps_bridges.sh`.
 
