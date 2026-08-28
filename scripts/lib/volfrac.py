@@ -150,7 +150,8 @@ def phi_voronoi_frame(box, types, xyz, bin_width, mobile_only=True, norm='bin',
     assumption — it measures the space the polymer actually leaves the solvent.
     norm='bin'    → φ_s = Σ V_cell(solvent) / V_bin              [absolute]
     norm='mobile' → φ_s = Σ V_cell(solvent) / Σ V_cell(in bin)   [exact
-                     saturation; the choice for the CALIBRATED φ]."""
+                     saturation; the choice for the CALIBRATED φ]
+    norm='both'   → (centers, φ_bin, φ_mobile) from ONE tessellation."""
     p, t_k, vol, origin, L = _tessellate(box, types, xyz, mobile_only, mobile_types)
     _, _, edges, centers, widths, V_bin_k = _frame_bins(box, bin_width)
     nbz = len(centers)
@@ -158,9 +159,11 @@ def phi_voronoi_frame(box, types, xyz, bin_width, mobile_only=True, norm='bin',
     s   = (t_k == solvent_type)
     V_s = np.bincount(bi[s], weights=vol[s], minlength=nbz)[:nbz]
     V_t = np.bincount(bi,    weights=vol,    minlength=nbz)[:nbz]
-    den = V_bin_k if norm == 'bin' else np.where(V_t > 0, V_t, np.nan)
+    den_mob = np.where(V_t > 0, V_t, np.nan)
     with np.errstate(invalid='ignore', divide='ignore'):
-        return centers, V_s / den
+        if norm == 'both':
+            return centers, V_s / V_bin_k, V_s / den_mob
+        return centers, V_s / (V_bin_k if norm == 'bin' else den_mob)
 
 
 def phi_voronoi_box(box, types, xyz, mobile_only=True,
