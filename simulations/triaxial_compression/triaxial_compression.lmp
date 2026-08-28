@@ -185,6 +185,13 @@ variable strain_freq     equal 1000
 # Cavity Widom dump cadence — all-atom frames for cavity_widom.py post-processing.
 # More frames → lower noise in time-averaged μ_ex(z): noise ∝ 1/√num_widom_frames.
 # Dump starts after the ε=0 reference recording block (production phase only).
+# GATED OFF by default (feature archived 2026-08; cavity_widom.py lives in
+# lammps_work/archive/): skip_widom=1 skips the widom_traj dumps. run_lammps.sh
+# passes -var skip_widom from $SKIP_WIDOM (its default is also 1); the index
+# default below only applies when the engine is invoked directly. The solvent
+# density profiles in output_files/chemical_potential/ are NOT gated — the
+# production notebooks still read them.
+variable skip_widom index 1
 variable num_widom_frames equal 50
 variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
 
@@ -1338,8 +1345,8 @@ dump pairlocal_poly polymer local ${nfreq_stress} &
 dump bondlocal_dump all local ${nfreq_stress} &
     output_files/pair_data/bonds_${dataname}_${interaction}_${nsteps}_c${compressions}.dump &
     c_bnd_ids[1] c_bnd_ids[2] c_bnd_ids[3] c_bnd_local[1] c_bnd_local[2]
-dump widom_traj all custom ${nfreq_widom_dump} &
-    traj_files/widom_${dataname}_${interaction}_${nsteps}_c${compressions}.lammpstrj id type x y z
+if "${skip_widom} == 0" then &
+    "dump widom_traj all custom ${nfreq_widom_dump} traj_files/widom_${dataname}_${interaction}_${nsteps}_c${compressions}.lammpstrj id type x y z"
 
 fix avg_stress_x_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     c_press_x_polymer mode vector file output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
@@ -1428,7 +1435,7 @@ unfix avg_stress_x_solv
 unfix avg_stress_z_poly
 unfix avg_stress_y_poly
 unfix avg_stress_x_poly
-undump widom_traj
+if "${skip_widom} == 0" then "undump widom_traj"
 undump bondlocal_dump
 undump pairlocal_poly
 undump traj_stress_sync

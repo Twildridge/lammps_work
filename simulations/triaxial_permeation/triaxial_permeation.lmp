@@ -69,6 +69,13 @@ variable volume_freq     equal 5000 # 1000 # 5000
 # Cavity Widom dump cadence — all-atom frames for cavity_widom.py post-processing.
 # More frames → lower noise in time-averaged μ_ex(z): noise ∝ 1/√num_widom_frames.
 # Dump runs during the production phase.
+# GATED OFF by default (feature archived 2026-08; cavity_widom.py lives in
+# lammps_work/archive/): skip_widom=1 skips the widom_traj dump. run_lammps.sh
+# passes -var skip_widom from $SKIP_WIDOM (its default is also 1); the index
+# default below only applies when the engine is invoked directly. The solvent
+# density profile in output_files/chemical_potential/ is NOT gated — the
+# production notebook still reads it.
+variable skip_widom index 1
 variable num_widom_frames equal 50
 variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
 
@@ -1302,8 +1309,8 @@ fix avg_solv_density all ave/chunk ${nevery_density} ${nrepeat_density} ${nfreq_
     file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${totsteps}.dat
 
 # All-atom trajectory for cavity_widom.py (solvent type 3 + all others for WCA energy)
-dump widom_traj all custom ${nfreq_widom_dump} &
-    traj_files/widom_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z
+if "${skip_widom} == 0" then &
+    "dump widom_traj all custom ${nfreq_widom_dump} traj_files/widom_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z"
 
 
 print ">>> Starting Phase 2 production run (nsteps = ${nsteps})"
@@ -1341,7 +1348,7 @@ unfix avg_disp_z_poly
 undump traj_flow
 undump pairlocal_dump
 undump traj_stress_sync
-undump widom_traj
+if "${skip_widom} == 0" then "undump widom_traj"
 unfix avg_solv_density
 
 print "========================================"
