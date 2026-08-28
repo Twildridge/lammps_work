@@ -102,7 +102,7 @@ WINDOW=1
 LAMMPS_DATA="$HOME/Documents/lammps_data"
 LAMMPS_RUNS="$HOME/Documents/lammps_runs"
 INPUT_DATA_DIR="${LAMMPS_DATA}/input_data"
-SLAB_DATA_DIR="${LAMMPS_DATA}/slab_with_support"
+SLAB_DATA_DIR="${INPUT_DATA_DIR}"
 
 CALIB_RUNS="${LAMMPS_RUNS}/calibration_sweep"
 MANIFEST_DIR="${CALIB_RUNS}/sweep_manifest"
