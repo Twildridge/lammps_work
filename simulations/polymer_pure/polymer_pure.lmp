@@ -28,11 +28,24 @@
 #
 # Atom types:  1 = Crosslink,  2 = Chain bead,  3 = Solvent (mix only)
 #
+# CALIBRATION-SWEEP UPDATE (2026-08): the barostat is now ANISO (was iso) —
+# lx, ly, lz relax independently so residual normal-stress anisotropy from the
+# generator/isolation relaxes out instead of freezing into the aspect ratio.
+# CONVERGENCE GATE (checked in calibration_analysis.ipynb, NOT enforced here):
+# production averages are only valid if Pxx≈Pyy≈Pzz within CI and the aspect
+# ratio is stable over the averaged window. Off-diagonal stresses (Pxy,Pxz,Pyz)
+# are logged and flagged only — no silent switch to a triclinic barostat.
+#
 # Outputs:
 #   vol_pure_polymer_${dataname}_${interaction}.dat
 #     → columns: step  press_mean  vol_mean  rho_mean  (one row per block)
 #   output_files/volume_data/box_dimensions_${dataname}_${interaction}_${totsteps}.dat
 #     → columns: step  lx  ly  lz   ← V_mix / V_pol read from here
+#   output_files/volume_data/pressure_tensor_${dataname}_${interaction}_${totsteps}.dat
+#     → columns: step  pxx pyy pzz pxy pxz pyz  (window-averaged, aniso gate input)
+#   traj_files/calib_${dataname}_${interaction}_${totsteps}.lammpstrj
+#     → calib_frames+1 all-atom frames near the end (Voronoi input; Python-
+#       side tessellation only — NO Voronoi computes in any .lmp)
 #
 # Variables passed from bash:
 #   dataname     — data file name (no extension)
@@ -58,6 +71,12 @@ variable nsteps_gentle   equal 1000
 
 variable thermo_freq   equal 10000
 variable volume_freq   equal 10000
+
+# Calibration dump: a few decorrelated all-atom frames appended AFTER the
+# production run (barostat still on), ~calib_dump_every*dt/tau apart.
+# Driver-configurable via -var; index → command line wins.
+variable calib_frames     index 5
+variable calib_dump_every index 2000
 
 variable block_steps   equal ${nsteps}/${n_blocks}
 variable nrepeat_block equal ${block_steps}/100
@@ -166,13 +185,25 @@ variable num_density equal v_N_mobile/v_box_vol
 variable inst_press  equal press
 
 reset_timestep 0
+# aniso (2026-08): lx, ly, lz couple to Pxx, Pyy, Pzz independently — see the
+# convergence-gate note in the header. Box stays orthogonal.
 fix 1 mobile npt temp ${temp_target} ${temp_target} ${tdamp} &
-    iso ${press_target} ${press_target} ${pdamp}
+    aniso ${press_target} ${press_target} ${pdamp}
 timestep ${timestep_prod}
 
 fix box_out all print ${volume_freq} "$(step) $(lx) $(ly) $(lz)" &
     file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${totsteps}.dat &
     screen no title "# step lx ly lz"
+
+# Full pressure tensor, window-averaged every volume_freq steps — input for
+# the analysis-side aniso gate (Pxx≈Pyy≈Pzz; off-diagonals flagged only).
+variable nrepeat_ptens equal ${volume_freq}/100
+fix ptens_out all ave/time 100 ${nrepeat_ptens} ${volume_freq} &
+    c_thermo_press[1] c_thermo_press[2] c_thermo_press[3] &
+    c_thermo_press[4] c_thermo_press[5] c_thermo_press[6] &
+    file output_files/volume_data/pressure_tensor_${dataname}_${interaction}_${totsteps}.dat &
+    title1 "# window-averaged pressure tensor, one row per ${volume_freq} steps" &
+    title2 "# step  pxx  pyy  pzz  pxy  pxz  pyz"
 
 fix block_avg all ave/time 100 ${nrepeat_block} ${block_steps} &
     v_inst_press v_box_vol v_num_density &
@@ -184,6 +215,21 @@ fix block_avg all ave/time 100 ${nrepeat_block} ${block_steps} &
 run ${nsteps}
 
 unfix block_avg
+
+# ----- Calibration dump: all-atom frames near the end -----
+# Writes calib_frames+1 frames: the production-end frame (run start is a
+# multiple of the dump interval) plus calib_frames more, calib_dump_every
+# steps apart for decorrelation. Barostat (and box_out/ptens_out) stay on —
+# these extra steps are equilibrium NPT sampling. Voronoi runs Python-side on
+# these frames (lib/volfrac.py) — never in the engine.
+variable calib_dump_steps equal v_calib_frames*v_calib_dump_every
+shell mkdir -p traj_files
+dump calib_dump all custom ${calib_dump_every} &
+    traj_files/calib_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z
+run ${calib_dump_steps}
+undump calib_dump
+
+unfix ptens_out
 unfix box_out
 unfix 1
 

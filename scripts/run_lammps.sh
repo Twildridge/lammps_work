@@ -19,7 +19,11 @@ NSTEPS=$4
 TOTSTEPS=$NSTEPS
 PRESS_TARGET=${6:-1.5}  # Default pressure; overrides press_target in .lmp file
 VEL_SEED=${7:-12345}    # RNG seed for create_velocity and fix langevin; vary per replica
-SKIP_WIDOM=${SKIP_WIDOM:-0}  # Set to 1 (via env) to minimize Widom output and skip cavity_widom.py
+SKIP_WIDOM=${SKIP_WIDOM:-1}  # Cavity-Widom output is OFF by default (feature archived 2026-08;
+                             # see lammps_work/archive/). Set to 0 (via env) to re-enable the
+                             # widom_traj dumps and cavity_widom.py post-processing.
+CALIB_FRAMES=${CALIB_FRAMES:-5}          # calibration-dump frames near run end (polymer_pure /
+CALIB_DUMP_EVERY=${CALIB_DUMP_EVERY:-2000}  # solvent_pure only; other engines ignore these vars)
 if [ -z "${STRAINS:-}" ]; then
     echo ">>> WARNING: STRAINS is unset — falling back to single strain 0.1."
     echo ">>>          For shear_slab this means NO sweep. If you intended a sweep,"
@@ -194,6 +198,8 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var press_target $PRESS_TARGET \
     -var vel_seed $VEL_SEED \
     -var skip_widom $SKIP_WIDOM \
+    -var calib_frames $CALIB_FRAMES \
+    -var calib_dump_every $CALIB_DUMP_EVERY \
     -var strains $STRAINS \
     -var strains_list "$STRAINS" \
     -var compressions $COMPRESSIONS \
