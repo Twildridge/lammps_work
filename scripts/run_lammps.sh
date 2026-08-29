@@ -24,6 +24,14 @@ SKIP_WIDOM=${SKIP_WIDOM:-1}  # Cavity-Widom output is OFF by default (feature ar
                              # widom_traj dumps and cavity_widom.py post-processing.
 CALIB_FRAMES=${CALIB_FRAMES:-5}          # calibration-dump frames near run end (polymer_pure /
 CALIB_DUMP_EVERY=${CALIB_DUMP_EVERY:-2000}  # solvent_pure only; other engines ignore these vars)
+# PRERELAXED=1 tells polymer_pure to skip its Stage 0 harmonic pre-relaxation:
+# the input data file already holds an equilibrated FENE configuration (e.g. the
+# isolated_* files from isolate_gel.py) rather than a fresh diamond lattice.
+# Velocities are still seeded from VEL_SEED and Stage 1 still runs, so replicas
+# stay independent. Not the same as continue_sim.sh's cont=1, which also assumes
+# the file carries its own Velocities section. Engines that don't define the
+# variable simply ignore it.
+PRERELAXED=${PRERELAXED:-0}
 if [ -z "${STRAINS:-}" ]; then
     echo ">>> WARNING: STRAINS is unset — falling back to single strain 0.1."
     echo ">>>          For shear_slab this means NO sweep. If you intended a sweep,"
@@ -197,6 +205,7 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var nsteps_prod $NSTEPS_PROD \
     -var press_target $PRESS_TARGET \
     -var vel_seed $VEL_SEED \
+    -var prerelaxed $PRERELAXED \
     -var skip_widom $SKIP_WIDOM \
     -var calib_frames $CALIB_FRAMES \
     -var calib_dump_every $CALIB_DUMP_EVERY \
@@ -248,7 +257,14 @@ if grep -q "Total wall time" "$LAMMPS_LOG" 2>/dev/null; then
 else
     echo "LAMMPS did not reach 'Total wall time' in ${LAMMPS_LOG} (mpirun RC ${LAMMPS_RC})."
     echo "Treating as a genuine failure — skipping post-processing."
-    exit "${LAMMPS_RC:-1}"
+    # Never propagate a zero here: ${LAMMPS_RC:-1} substitutes only when RC is
+    # unset or empty, so an RC of 0 on an incomplete log would exit 0 and report
+    # a crashed run as a success. The log check is the authority, so a failure
+    # it detects must always exit nonzero.
+    if [ -z "${LAMMPS_RC}" ] || [ "${LAMMPS_RC}" -eq 0 ]; then
+        exit 1
+    fi
+    exit "${LAMMPS_RC}"
 fi
 
 # ── Post-processing ───────────────────────────────────────────────────────────

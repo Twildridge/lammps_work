@@ -36,13 +36,25 @@
 #                      p${P}_nf${NF}_rep${rep}_mixed.workdir
 #                      p${P}_nf${NF}_rep${rep}_solvent.workdir
 #
+# Queue discipline (64-job MaxSubmitJobsPerAccount on the `normal` QOS):
+#   - WINDOW=1 and the next-batch launcher depends (afterany) on EVERY job of
+#     the current batch, so only one pressure's ~42 jobs are ever queued.
+#   - All dependent jobs are submitted --kill-on-invalid-dep=yes, so a failed
+#     prep cancels its dependents instead of parking them in
+#     DependencyNeverSatisfied where they would silently eat the submit quota.
+#   - A pre-flight scancels any calibration jobs already stranded that way.
+#
 # Usage:
 #   bash calibration_sweep.sh                  # full sweep from the first pressure
 #   bash calibration_sweep.sh --only 1.5       # single-pressure smoke test
 #   bash calibration_sweep.sh --from 3         # resume from pressure index 3
 #   bash calibration_sweep.sh --skip-prep      # prep artifacts already exist
 #
-# SLURM log  → simulations/calibration_sweep/calibration_sweep_YYYYMMDD_HHMMSS.log
+# SLURM logs → simulations/calibration_sweep/calibration_sweep_YYYYMMDD_HHMMSS/
+#              one file per job (calib_prep.log, cpol_p<P>.log,
+#              cmix_p<P>_nf<NF>_r<rep>.log, csol_..., calib_launch_from<i>.log).
+#              A whole chained sweep shares one directory: the launcher passes
+#              it down through CALIB_SWEEP_LOG_DIR.
 # Run data   → ~/Documents/lammps_runs/calibration_sweep/
 # Manifests  → ~/Documents/lammps_runs/calibration_sweep/sweep_manifest/
 # =============================================================================
@@ -66,12 +78,23 @@ BASE_SNAPSHOT="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_
 PRESSURES=(0.50 0.75 1.00 1.25 1.50 1.75 2.00)
 
 # Composition grid: exact solvent counts N_f, identical at every pressure.
-# The base snapshot isolates to N_p = 104283, N_f = 53407 (equilibrium-swollen
+# The base snapshot isolates to N_p = 104490, N_f = 55868 (equilibrium-swollen
 # at P = 1.5). Defaults: 10 geometric steps (ratio ≈ 0.90) from N_f_eq down to
 # ~0.39×N_f_eq. EDIT the lower end to match the max φ_p reached in the c0.40
 # triaxial_compression profiles before production (validation needs the grid
 # to span it).
-NF_GRID=(53400 48100 43300 39000 35100 31600 28400 25600 23000 20800)
+#
+# NOTE (2026-08-29): N_f_eq moved 53407 -> 55868 when isolate_gel.py stopped
+# trimming the polymer surface (the finite z faces now sit at the full polymer
+# span and keep ~2.4k more gel-internal solvent beads). The grid was regridded
+# geometrically from a new top of 55800 so the first point again sits on
+# N_f_eq — a 68-bead deletion, i.e. effectively the native loading. That point
+# is the sweep's only independent check: at P=1.5 it should relax back to the
+# parent snapshot's V and phi_p, because it IS the parent composition.
+# Ratio 0.900 -> 0.896; ln N_f span widens 4.7%. Bottom end unchanged.
+# Whole grid stays deletion-only (no target exceeds N_f_eq), so no bead is
+# ever inserted at a random position and left for the run to equilibrate.
+NF_GRID=(55800 50000 44800 40200 36000 32300 28900 25900 23200 20800)
 
 # NPT thermal replicas per (P, N_f) grid point (velocity-seed variation only —
 # same input file via symlink).
@@ -95,6 +118,10 @@ INTERACTION="1.0_1.0"
 PURE_INTERACTION="1.0_0.0"
 
 # Pressures per submission batch (auto-chained launcher submits the next batch).
+# Keep at 1: the launcher waits for EVERY job of the current batch to terminate
+# before submitting the next, so at most one pressure's jobs (plus the launcher)
+# sit in the queue at a time. Raising it multiplies the queued job count by the
+# same factor and will trip the 64-job MaxSubmitJobsPerAccount limit.
 WINDOW=1
 
 # =============================================================================
@@ -111,7 +138,18 @@ LOG_DIR="${SCRIPT_DIR}"
 mkdir -p "$CALIB_RUNS" "$MANIFEST_DIR" "$INPUT_DATA_DIR"
 
 SWEEP_TS="$(date +%Y%m%d_%H%M%S)"
-SWEEP_LOG="${LOG_DIR}/calibration_sweep_${SWEEP_TS}.log"
+
+# One log FILE PER JOB, in one directory per sweep. Every job used to share a
+# single --output path; SLURM opens that file per job without O_APPEND, so ~42
+# concurrent jobs wrote at independent offsets and overwrote each other, leaving
+# a NUL-riddled binary in which only the last writer's output survived. That is
+# what hid 21 crashed runs. Distinct paths make each job's log complete and
+# greppable, and `file` no longer reports the result as `data`.
+#
+# CALIB_SWEEP_LOG_DIR is inherited from the launcher so an auto-chained sweep
+# keeps every pressure's logs together instead of starting a new directory.
+SWEEP_LOG_DIR="${CALIB_SWEEP_LOG_DIR:-${LOG_DIR}/calibration_sweep_${SWEEP_TS}}"
+mkdir -p "$SWEEP_LOG_DIR"
 
 # Isolated stem derived from the snapshot name (final_config_X.data → isolated_X)
 ISOLATED_STEM="isolated_${BASE_SNAPSHOT#final_config_}"
@@ -120,6 +158,43 @@ ISOLATED_STEM="${ISOLATED_STEM%.data}"
 if ! command -v sbatch &>/dev/null; then
     echo "ERROR: sbatch not found. Are you on the Expanse login node?"
     exit 1
+fi
+
+# Cancel a dependent job as soon as its dependency becomes unsatisfiable rather
+# than leaving it PENDING/DependencyNeverSatisfied, where it counts against the
+# 64-job MaxSubmitJobsPerAccount limit until cancelled by hand.
+KILL_DEAD_DEP="--kill-on-invalid-dep=yes"
+
+# sbatch wrapper with retry. Slurm counts a cancelled job against MaxSubmitJobs
+# until MinJobAge elapses (300 s here), so resubmitting straight after a scancel
+# can bounce off the 64-job limit part-way through a batch. Under `set -e` that
+# aborted the script mid-loop and left a partial batch with no launcher and no
+# per-loading resume path. Retrying rides out the purge window instead.
+SUBMIT_RETRIES=10
+SUBMIT_BACKOFF=60
+submit() {
+    local out attempt=1
+    while true; do
+        if out=$(sbatch --parsable "$@" 2>&1); then printf '%s' "$out"; return 0; fi
+        if [ "$attempt" -ge "$SUBMIT_RETRIES" ]; then
+            echo "ERROR: sbatch failed after ${attempt} attempts: ${out}" >&2
+            return 1
+        fi
+        echo "  sbatch rejected (attempt ${attempt}/${SUBMIT_RETRIES}), retrying in ${SUBMIT_BACKOFF}s: ${out}" >&2
+        sleep "$SUBMIT_BACKOFF"
+        attempt=$((attempt + 1))
+    done
+}
+
+# Pre-flight: sweep up any already-stranded jobs from an earlier run (submitted
+# before KILL_DEAD_DEP, or orphaned some other way). Scoped to this sweep's own
+# job names in exactly the DependencyNeverSatisfied state — nothing else.
+STRANDED=$(squeue -u "${USER:-$(whoami)}" -h -o "%i|%j|%r" 2>/dev/null \
+           | awk -F'|' '$3 == "DependencyNeverSatisfied" && $2 ~ /^(calib_prep|calib_launch|cpol_|cmix_|csol_)/ {print $1}' \
+           | tr '\n' ' ')
+if [ -n "${STRANDED// /}" ]; then
+    echo ">>> clearing $(echo $STRANDED | wc -w) stranded calibration job(s): ${STRANDED}"
+    scancel $STRANDED || true
 fi
 
 # Parse arguments
@@ -157,7 +232,7 @@ echo "Composition grid:   ${#NF_GRID[@]} loadings (${NF_GRID[0]} … ${NF_GRID[$
 echo "NPT reps per point: ${NREPS}"
 echo "Runs per pressure:  $(( ${#NF_GRID[@]} * NREPS * 2 + 1 )) (mixed + solvent per point, polymer once)"
 echo "Run data  → ${CALIB_RUNS}/"
-echo "SLURM log → ${SWEEP_LOG}"
+echo "SLURM logs → ${SWEEP_LOG_DIR}/ (one file per job)"
 echo "======================================"
 
 # Record the sweep configuration for the analysis notebook
@@ -206,14 +281,27 @@ else
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --time=1:00:00
-#SBATCH --output=${SWEEP_LOG}
+#SBATCH --output=${SWEEP_LOG_DIR}/calib_prep.log
 
 set -euo pipefail
 module reset
 module load gcc/10.2.0
 module load python/3.8.12
+# numpy/scipy are NOT in python/3.8.12 — without them isolate_gel.py silently
+# skips the PBC unwrap and the rotation (falling back to an axis-aligned
+# bounding box) and adjust_solvent.py loses its cKDTree distance checks, which
+# changes N_p. These are the only builds in the gcc/10.2.0 + python/3.8.12 tree.
+module load py-numpy/1.20.3/4o6jrav
+module load py-scipy/1.5.4/u7skc52
 
 echo ""; echo "====== calib_prep | \$(date) | \$(hostname) ======"
+
+# Fail loudly rather than degrade silently: the fallback path is a valid run
+# that produces subtly different geometry, so it must never happen unnoticed.
+python3 -c "import numpy, scipy; from scipy.spatial import ConvexHull, cKDTree" || {
+    echo "ERROR: numpy/scipy unavailable — refusing to run prep on the degraded fallback path"
+    exit 1
+}
 
 SNAP_FILE="${SLAB_DATA_DIR}/${BASE_SNAPSHOT}"
 ISOLATED_OUT="${SLAB_DATA_DIR}/${ISOLATED_STEM}.data"
@@ -257,7 +345,7 @@ fi
 echo "prep complete"
 HEREDOC
 
-    PREP_JID=$(sbatch --parsable "$PREP_BATCH")
+    PREP_JID=$(submit "$PREP_BATCH")
     echo "prep: submitted isolate+adjust+split    JID=${PREP_JID}"
     PREP_DEP="--dependency=afterok:${PREP_JID}"
 fi
@@ -265,6 +353,10 @@ fi
 # ------------------------------------------------------------------
 # Pressure loop
 # ------------------------------------------------------------------
+# Every job ID submitted in this batch — the next-batch launcher depends on all
+# of them, so the next pressure is not queued until this one has fully drained.
+BATCH_JIDS=()
+
 for (( i=FROM; i<END; i++ )); do
     P="${PRESSURES[$i]}"
     IS_LAST_IN_BATCH=$([ "$i" -eq "$((END-1))" ] && echo "yes" || echo "no")
@@ -273,8 +365,6 @@ for (( i=FROM; i<END; i++ )); do
     TPN=$(awk -v p="$P" 'BEGIN{print (p>=1.6)?64:128}')
     NSTEPS=$(awk -v p="$P" -v lo="$LOWP_MAX" -v a="$CALIB_STEPS_LOWP" -v b="$CALIB_STEPS" \
              'BEGIN{print (p<=lo)?a:b}')
-
-    LAST_JID=""
 
     # ------------------------------------------------------------------
     # polymer_pure companion — ONCE per pressure (N_p loading-independent)
@@ -291,7 +381,7 @@ for (( i=FROM; i<END; i++ )); do
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=5:00:00
-#SBATCH --output=${SWEEP_LOG}
+#SBATCH --output=${SWEEP_LOG_DIR}/cpol_p${P}.log
 
 declare -xr OMPI_UNIT='core'
 declare -xr OMPI_MCA_btl='self,vader'
@@ -301,6 +391,13 @@ declare -xr UCX_NET_DEVICES='mlx5_2:1'
 declare -xir UCX_MAX_RNDV_RAILS=1
 declare -xir OMP_NUM_THREADS="\${SLURM_CPUS_PER_TASK}"
 
+# Abort the job the moment any step fails. Without this the batch body ran on
+# past a failed run_lammps.sh to the manifest write, which always succeeds, so
+# the job exited 0 and SLURM recorded a crashed run as COMPLETED with a
+# manifest pointing at an empty directory. With set -e a failed run leaves no
+# manifest entry at all, which is what the analysis notebooks should see.
+set -euo pipefail
+
 module reset
 module load gcc/10.2.0
 module load openmpi/4.1.3
@@ -309,6 +406,11 @@ module load python/3.8.12
 echo ""; echo "====== cpol_p${P} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${CALIB_RUNS}"
 export CALIB_FRAMES="${CALIB_FRAMES}" CALIB_DUMP_EVERY="${CALIB_DUMP_EVERY}"
+# The isolated_* inputs are equilibrated FENE configurations, not fresh diamond
+# lattices: skip polymer_pure's Stage 0 harmonic pre-relax, which assumes ~0.52σ
+# bonds and crashes on an already-relaxed network. Velocities are still seeded
+# per replica and Stage 1 still runs. Solvent companions do NOT set this.
+export PRERELAXED=1
 
 POL_SRC="${INPUT_DATA_DIR}/${ISOLATED_STEM}_polymer_only.data"
 POL_LNK="${INPUT_DATA_DIR}/${POL_RUN_DATANAME}.data"
@@ -322,9 +424,9 @@ WORK_DIR=\$(ls -dt "${CALIB_RUNS}/polymer_pure_${POL_RUN_DATANAME}_${PURE_INTERA
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_polymer.workdir"
 HEREDOC
 
-    POL_JID=$(sbatch --parsable ${PREP_DEP} "$POL_BATCH")
+    POL_JID=$(submit ${KILL_DEAD_DEP} ${PREP_DEP} "$POL_BATCH")
     echo "P=${P}: submitted polymer companion   JID=${POL_JID}  (dep: ${PREP_DEP:-none})"
-    LAST_JID="$POL_JID"
+    BATCH_JIDS+=("$POL_JID")
 
     # ------------------------------------------------------------------
     # Loading × replica loop — mixed + solvent companion, all concurrent
@@ -350,7 +452,7 @@ HEREDOC
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=5:00:00
-#SBATCH --output=${SWEEP_LOG}
+#SBATCH --output=${SWEEP_LOG_DIR}/cmix_p${P}_nf${NF}_r${rep}.log
 
 declare -xr OMPI_UNIT='core'
 declare -xr OMPI_MCA_btl='self,vader'
@@ -360,6 +462,13 @@ declare -xr UCX_NET_DEVICES='mlx5_2:1'
 declare -xir UCX_MAX_RNDV_RAILS=1
 declare -xir OMP_NUM_THREADS="\${SLURM_CPUS_PER_TASK}"
 
+# Abort the job the moment any step fails. Without this the batch body ran on
+# past a failed run_lammps.sh to the manifest write, which always succeeds, so
+# the job exited 0 and SLURM recorded a crashed run as COMPLETED with a
+# manifest pointing at an empty directory. With set -e a failed run leaves no
+# manifest entry at all, which is what the analysis notebooks should see.
+set -euo pipefail
+
 module reset
 module load gcc/10.2.0
 module load openmpi/4.1.3
@@ -368,6 +477,11 @@ module load python/3.8.12
 echo ""; echo "====== cmix_p${P}_nf${NF}_r${rep} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${CALIB_RUNS}"
 export CALIB_FRAMES="${CALIB_FRAMES}" CALIB_DUMP_EVERY="${CALIB_DUMP_EVERY}"
+# The isolated_* inputs are equilibrated FENE configurations, not fresh diamond
+# lattices: skip polymer_pure's Stage 0 harmonic pre-relax, which assumes ~0.52σ
+# bonds and crashes on an already-relaxed network. Velocities are still seeded
+# per replica and Stage 1 still runs. Solvent companions do NOT set this.
+export PRERELAXED=1
 
 MIX_SRC="${INPUT_DATA_DIR}/${ISOLATED_STEM}_nf${NF}.data"
 MIX_LNK="${INPUT_DATA_DIR}/${MIX_RUN_DATANAME}.data"
@@ -381,8 +495,9 @@ WORK_DIR=\$(ls -dt "${CALIB_RUNS}/polymer_pure_${MIX_RUN_DATANAME}_${INTERACTION
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_nf${NF}_rep${rep}_mixed.workdir"
 HEREDOC
 
-    MIX_JID=$(sbatch --parsable ${PREP_DEP} "$MIX_BATCH")
+    MIX_JID=$(submit ${KILL_DEAD_DEP} ${PREP_DEP} "$MIX_BATCH")
     echo "P=${P} nf=${NF} rep=${rep}: submitted mixed NPT    JID=${MIX_JID}"
+    BATCH_JIDS+=("$MIX_JID")
 
     # ---- solvent_pure companion (same N_f — scale=1 ΔV_mix reference) ----
     SOL_BATCH=$(mktemp "${TMPDIR:-/tmp}/calib_sol_p${P}_nf${NF}_r${rep}_XXXXXX.batch")
@@ -396,7 +511,7 @@ HEREDOC
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=2:00:00
-#SBATCH --output=${SWEEP_LOG}
+#SBATCH --output=${SWEEP_LOG_DIR}/csol_p${P}_nf${NF}_r${rep}.log
 
 declare -xr OMPI_UNIT='core'
 declare -xr OMPI_MCA_btl='self,vader'
@@ -405,6 +520,13 @@ declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
 declare -xr UCX_NET_DEVICES='mlx5_2:1'
 declare -xir UCX_MAX_RNDV_RAILS=1
 declare -xir OMP_NUM_THREADS="\${SLURM_CPUS_PER_TASK}"
+
+# Abort the job the moment any step fails. Without this the batch body ran on
+# past a failed run_lammps.sh to the manifest write, which always succeeds, so
+# the job exited 0 and SLURM recorded a crashed run as COMPLETED with a
+# manifest pointing at an empty directory. With set -e a failed run leaves no
+# manifest entry at all, which is what the analysis notebooks should see.
+set -euo pipefail
 
 module reset
 module load gcc/10.2.0
@@ -427,18 +549,20 @@ WORK_DIR=\$(ls -dt "${CALIB_RUNS}/solvent_pure_${SOL_RUN_DATANAME}_${PURE_INTERA
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_nf${NF}_rep${rep}_solvent.workdir"
 HEREDOC
 
-    SOL_JID=$(sbatch --parsable ${PREP_DEP} "$SOL_BATCH")
+    SOL_JID=$(submit ${KILL_DEAD_DEP} ${PREP_DEP} "$SOL_BATCH")
     echo "P=${P} nf=${NF} rep=${rep}: submitted solvent NPT  JID=${SOL_JID}"
-
-    LAST_JID="$SOL_JID"
+    BATCH_JIDS+=("$SOL_JID")
 
     done  # end replica loop
     NF_IDX=$((NF_IDX+1))
     done  # end loading loop
 
-    # Submit launcher for the next batch — depends on the last job submitted
-    # for this pressure (inherited volmix pattern; jobs run concurrently, so
-    # this is an approximation of after-all that has worked in practice).
+    # Submit launcher for the next batch — depends on EVERY job in this batch,
+    # so the next pressure is submitted only once this one has left the queue
+    # (keeps the queue to one pressure at a time, under the 64-job account cap).
+    # afterany, not afterok: one failed run must not break the chain, and an
+    # afterany dependency can never become unsatisfiable, so the launcher
+    # itself can never strand in DependencyNeverSatisfied.
     if [ "$IS_LAST_IN_BATCH" = "yes" ] && [ "$NEXT_FROM" -lt "$TOTAL" ]; then
         LAUNCH_BATCH=$(mktemp "${TMPDIR:-/tmp}/calib_launch_XXXXXX.batch")
         cat > "$LAUNCH_BATCH" << HEREDOC
@@ -451,14 +575,20 @@ HEREDOC
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=0:05:00
-#SBATCH --output=${SWEEP_LOG}
+#SBATCH --output=${SWEEP_LOG_DIR}/calib_launch_from${NEXT_FROM}.log
+
+set -euo pipefail
 
 echo ""; echo "====== launcher --from ${NEXT_FROM} | \$(date) | \$(hostname) ======"
 module reset
+# Keep the whole chained sweep's logs in one directory instead of starting a
+# fresh timestamped one at every pressure.
+export CALIB_SWEEP_LOG_DIR="${SWEEP_LOG_DIR}"
 bash "${SCRIPT_DIR}/calibration_sweep.sh" --from ${NEXT_FROM} --skip-prep
 HEREDOC
-        LAUNCH_JID=$(sbatch --parsable --dependency=afterok:${LAST_JID} "$LAUNCH_BATCH")
-        echo "P=${P}: submitted next-batch launcher JID=${LAUNCH_JID}  (after ${LAST_JID}, --from ${NEXT_FROM})"
+        DEP_ALL=$(IFS=:; echo "${BATCH_JIDS[*]}")
+        LAUNCH_JID=$(submit ${KILL_DEAD_DEP} --dependency=afterany:${DEP_ALL} "$LAUNCH_BATCH")
+        echo "P=${P}: submitted next-batch launcher JID=${LAUNCH_JID}  (after all ${#BATCH_JIDS[@]} batch jobs, --from ${NEXT_FROM})"
     fi
 
     echo "--------------------------------------"

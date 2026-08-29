@@ -83,12 +83,61 @@ ROTATE_TYPES  = POLYMER_TYPES | SOLVENT_TYPES
 # of edge atoms ~1σ apart at t=0 to avoid self-overlap. (Was 0.2 when this box
 # WAS the reported V_mix.)
 BOX_CLEARANCE = 0.5
+# Maximum extent of the FENE bond used by the engines (bond_coeff 1 30.0 1.5 1.0 1.0).
+# Any bond longer than this in the written file is a broken network, not a stretched one.
+FENE_R0_MAX = 1.5
 
 
 # ---------------------------------------------------------------------------
 # Geometry helpers
 # ---------------------------------------------------------------------------
-def unwrap_atoms_via_bonds(atoms, bonds, box):
+def detect_percolating_dims(atoms, bonds, box):
+    """
+    Return the set of dimensions ('x','y','z') in which the polymer network
+    percolates, i.e. in which at least one bond crosses the periodic boundary.
+
+    This distinguishes the two geometries this script can be handed:
+
+      * A FINITE gel blob floating in a bath (no bond crosses any boundary).
+        It can legitimately be unwrapped, rotated onto its principal axes and
+        re-boxed to a tight bounding box — the original operations here.
+
+      * A gel that is PERIODIC (percolating) in one or more directions, e.g.
+        the slab_support_periodic snapshots, which percolate in x and y and
+        are finite only in z.
+
+    A percolating direction must be left completely alone. Unwrapping a
+    network that closes on itself through the boundary is ill-defined: BFS
+    over the bond graph assigns images consistently until it reaches a loop
+    that wraps the box, and that loop-closure bond is then left stretched by
+    a full box length. Rotating or re-boxing such a direction breaks every
+    boundary-crossing bond in the same way, because the periodic images no
+    longer tile the new box.
+    """
+    lengths = {'x': box['xhi'] - box['xlo'],
+               'y': box['yhi'] - box['ylo'],
+               'z': box['zhi'] - box['zlo']}
+    pos = {a['id']: a for a in atoms}
+    crossings = {'x': 0, 'y': 0, 'z': 0}
+    for b in bonds:
+        a1 = pos.get(b['atom1']);  a2 = pos.get(b['atom2'])
+        if a1 is None or a2 is None:
+            continue
+        for d in ('x', 'y', 'z'):
+            if abs(a2[d] - a1[d]) > lengths[d] / 2.0:
+                crossings[d] += 1
+    periodic = {d for d in ('x', 'y', 'z') if crossings[d] > 0}
+    desc = ", ".join(f"{d}:{crossings[d]}" for d in ('x', 'y', 'z'))
+    print(f"  Boundary-crossing bonds ({desc})")
+    if periodic:
+        print(f"  Network PERCOLATES in {sorted(periodic)} — those directions "
+              f"keep the original box, coordinates and periodicity")
+    else:
+        print("  Network is finite in all directions — free to unwrap/rotate/re-box")
+    return periodic
+
+
+def unwrap_atoms_via_bonds(atoms, bonds, box, periodic_dims=frozenset()):
     """
     Unwrap polymer atoms using BFS over the bond graph so that the
     entire gel network lands in one continuous piece (no periodic splits).
@@ -98,14 +147,25 @@ def unwrap_atoms_via_bonds(atoms, bonds, box):
     at lower pressures / larger boxes) produces a convex hull that spans
     the whole simulation box, corrupting the MABR angle and the gel-extent
     bounding box — leaving the gel rotated and retaining bath solvent.
+
+    Dimensions listed in `periodic_dims` are skipped: the network closes on
+    itself through those boundaries, so there is no consistent unwrapping and
+    the wrapped coordinates are already the correct ones.
     """
     if not _NUMPY_AVAILABLE:
         print("  Skipping PBC unwrap (numpy unavailable)")
         return atoms
 
-    lx = box['xhi'] - box['xlo']
-    ly = box['yhi'] - box['ylo']
-    lz = box['zhi'] - box['zlo']
+    free = [d for d in ('x', 'y', 'z') if d not in periodic_dims]
+    if not free:
+        print("  Skipping PBC unwrap — network percolates in all three directions")
+        return atoms
+    if periodic_dims:
+        print(f"  Unwrapping only in {free} (periodic: {sorted(periodic_dims)})")
+
+    L = {'x': box['xhi'] - box['xlo'],
+         'y': box['yhi'] - box['ylo'],
+         'z': box['zhi'] - box['zlo']}
 
     atom_by_id   = {a['id']: a for a in atoms}
     polymer_ids  = {a['id'] for a in atoms if a['type'] in POLYMER_TYPES}
@@ -131,9 +191,8 @@ def unwrap_atoms_via_bonds(atoms, bonds, box):
             if nb_id in visited:
                 continue
             nb = atom_by_id[nb_id]
-            nb['x'] -= lx * round((nb['x'] - curr['x']) / lx)
-            nb['y'] -= ly * round((nb['y'] - curr['y']) / ly)
-            nb['z'] -= lz * round((nb['z'] - curr['z']) / lz)
+            for d in free:
+                nb[d] -= L[d] * round((nb[d] - curr[d]) / L[d])
             visited.add(nb_id)
             queue.append(nb_id)
 
@@ -141,20 +200,17 @@ def unwrap_atoms_via_bonds(atoms, bonds, box):
         print(f"  WARNING: bond graph has {len(polymer_ids) - len(visited)} "
               f"disconnected polymer atoms — they keep their wrapped positions")
 
-    # Fold solvent to nearest image of polymer COM
+    # Fold solvent to nearest image of polymer COM (free dimensions only)
     poly_atoms = [atom_by_id[pid] for pid in polymer_ids]
-    cx = float(np.mean([a['x'] for a in poly_atoms]))
-    cy = float(np.mean([a['y'] for a in poly_atoms]))
-    cz = float(np.mean([a['z'] for a in poly_atoms]))
+    com = {d: float(np.mean([a[d] for a in poly_atoms])) for d in ('x', 'y', 'z')}
 
     for a in atoms:
         if a['type'] in SOLVENT_TYPES:
-            a['x'] -= lx * round((a['x'] - cx) / lx)
-            a['y'] -= ly * round((a['y'] - cy) / ly)
-            a['z'] -= lz * round((a['z'] - cz) / lz)
+            for d in free:
+                a[d] -= L[d] * round((a[d] - com[d]) / L[d])
 
-    print(f"  Unwrapped {len(visited)} polymer atoms; "
-          f"folded solvent near COM ({cx:.1f}, {cy:.1f}, {cz:.1f})")
+    print(f"  Unwrapped {len(visited)} polymer atoms; folded solvent near COM "
+          f"({com['x']:.1f}, {com['y']:.1f}, {com['z']:.1f})")
     return atoms
 
 
@@ -178,9 +234,17 @@ def find_min_bounding_rect_angle(hull_points):
     return best_angle
 
 
-def rotate_mobile_atoms(atoms):
+def rotate_mobile_atoms(atoms, periodic_dims=frozenset()):
     if not (_NUMPY_AVAILABLE and _SCIPY_AVAILABLE):
         print("  Skipping rotation (numpy/scipy unavailable) — using axis-aligned bounding box")
+        return atoms
+    # The MABR rotation is about the z axis, so it moves x and y. A rotation is
+    # only a symmetry of the system when both are non-periodic: rotating a
+    # percolating direction leaves the periodic images no longer tiling the
+    # box, which stretches every boundary-crossing bond past the FENE limit.
+    if periodic_dims & {'x', 'y'}:
+        print(f"  Skipping rotation — network percolates in "
+              f"{sorted(periodic_dims & {'x', 'y'})} (rotation is not a symmetry there)")
         return atoms
     poly = [a for a in atoms if a['type'] in POLYMER_TYPES]
     if not poly:
@@ -199,43 +263,136 @@ def rotate_mobile_atoms(atoms):
     return atoms
 
 
-def find_gel_extent(atoms, clearance, percentile=0.1):
+def find_gel_extent(atoms, clearance, percentile=0.1,
+                    box=None, periodic_dims=frozenset()):
+    """
+    Bounding box around the polymer, per dimension.
+
+    A percolating dimension keeps the ORIGINAL box bounds exactly. Shrinking
+    it would change that direction's box length, so bonds that cross the
+    boundary — which are correct only under the original length — would all
+    break. Only the finite directions are re-boxed.
+
+    A finite dimension spans EVERY polymer atom, not a percentile of them.
+    The box has to contain the whole network for two reasons: any polymer atom
+    left outside would be wrapped to the opposite face on read_data, and
+    deleting it instead severs its bonds and leaves dangling chain ends. So the
+    only thing trimmed off a finite face is bath solvent, which is exactly what
+    "isolating the gel" means here.
+
+    `percentile` no longer cuts the network; it is now purely diagnostic,
+    reporting how far the outermost beads reach beyond the bulk of the surface.
+    The extra box length that buys is harmless — this box is only the starting
+    configuration, and V_mix comes from the downstream NPT run.
+    """
     poly = [a for a in atoms if a['type'] in POLYMER_TYPES]
-    xs = [a['x'] for a in poly]
-    ys = [a['y'] for a in poly]
-    zs = [a['z'] for a in poly]
     if _NUMPY_AVAILABLE:
         pct = lambda arr, p: float(np.percentile(arr, p))
     else:
         pct = _percentile
-    xmin, xmax = pct(xs, percentile),     pct(xs, 100-percentile)
-    ymin, ymax = pct(ys, percentile),     pct(ys, 100-percentile)
-    zmin, zmax = pct(zs, percentile),     pct(zs, 100-percentile)
-    print(f"  Polymer extent  x: {xmin:.2f}–{xmax:.2f}  "
-          f"y: {ymin:.2f}–{ymax:.2f}  z: {zmin:.2f}–{zmax:.2f}")
-    return dict(xmin=xmin-clearance, xmax=xmax+clearance,
-                ymin=ymin-clearance, ymax=ymax+clearance,
-                zmin=zmin-clearance, zmax=zmax+clearance)
+
+    ext = {}
+    for d in ('x', 'y', 'z'):
+        if d in periodic_dims:
+            if box is None:
+                raise ValueError("box is required to preserve periodic dimensions")
+            lo, hi = box[f'{d}lo'], box[f'{d}hi']
+            ext[f'{d}min'], ext[f'{d}max'] = lo, hi
+            print(f"  {d}: {lo:.2f}–{hi:.2f} (periodic — original box kept)")
+        else:
+            vals = [a[d] for a in poly]
+            lo, hi = min(vals), max(vals)
+            ext[f'{d}min'], ext[f'{d}max'] = lo - clearance, hi + clearance
+            plo, phi = pct(vals, percentile), pct(vals, 100 - percentile)
+            n_out = sum(1 for v in vals if v < plo or v > phi)
+            print(f"  {d}: {lo:.2f}–{hi:.2f} (finite — full polymer span, "
+                  f"+{clearance} clearance)")
+            print(f"     surface roughness: {n_out} polymer atoms beyond "
+                  f"p{percentile}/p{100-percentile} ({plo:.2f}–{phi:.2f}) — kept, not trimmed")
+    return ext
 
 
-def remove_non_gel_atoms(atoms, ext):
+def remove_non_gel_atoms(atoms, ext, periodic_dims=frozenset()):
     # Whitelist gel types (1,2,3): drop support/piston AND any other stray type
     # so the isolated mixed file is always exactly polymer+solvent. This keeps
     # the mixed-gel NPT atom counts identical to the split pure-species files.
+    #
+    # Percolating dimensions are not tested: their bounds are the original box,
+    # so every atom is inside by construction, and a floating-point comparison
+    # at the boundary could otherwise delete an atom and orphan its bonds.
+    # The polymer network is NEVER trimmed. find_gel_extent sizes the box to
+    # contain every polymer atom, so the only thing a face cuts away is bath
+    # solvent. Deleting a bead instead would orphan its bonds — write_lammps_data
+    # silently drops any bond whose partner is gone, so the file would still load
+    # and run, just with severed chain ends nobody asked for.
     gel_types = POLYMER_TYPES | SOLVENT_TYPES
+    test_dims = [d for d in ('x', 'y', 'z') if d not in periodic_dims]
     kept = []
     n_nongel = n_outside = 0
     for a in atoms:
         if a['type'] not in gel_types:
             n_nongel += 1;  continue
-        if (a['x'] < ext['xmin'] or a['x'] > ext['xmax'] or
-            a['y'] < ext['ymin'] or a['y'] > ext['ymax'] or
-            a['z'] < ext['zmin'] or a['z'] > ext['zmax']):
+        if (a['type'] not in POLYMER_TYPES and
+                any(a[d] < ext[f'{d}min'] or a[d] > ext[f'{d}max'] for d in test_dims)):
             n_outside += 1;  continue
         kept.append(a)
+
+    n_poly_in  = sum(1 for a in atoms if a['type'] in POLYMER_TYPES)
+    n_poly_out = sum(1 for a in kept  if a['type'] in POLYMER_TYPES)
+    if n_poly_in != n_poly_out:
+        raise ValueError(f"{n_poly_in - n_poly_out} polymer atoms were dropped; "
+                         f"the network must be preserved intact")
     print(f"  Removed {n_nongel} non-gel atoms (support/piston/other), "
-          f"{n_outside} atoms outside gel bounds")
+          f"{n_outside} bath solvent atoms outside gel bounds")
+    print(f"  Kept all {n_poly_out} polymer atoms (network intact)")
     return kept
+
+
+def validate_bonds(atoms, bonds, box, max_bond=FENE_R0_MAX):
+    """
+    Post-condition check: every surviving bond must be shorter than the FENE
+    maximum extent under the minimum-image convention of the NEW box.
+
+    A violation means the geometry pipeline broke the network (see
+    detect_percolating_dims). Downstream this surfaces only as an opaque
+    'Bond atom missing in image check' at LAMMPS runtime, hours later and
+    after the job has been recorded as submitted, so fail here instead.
+    """
+    L = {'x': box['xhi'] - box['xlo'],
+         'y': box['yhi'] - box['ylo'],
+         'z': box['zhi'] - box['zlo']}
+    pos = {a['id']: a for a in atoms}
+    worst = 0.0
+    n_bad = 0
+    n_orphan = 0
+    for b in bonds:
+        a1 = pos.get(b['atom1']);  a2 = pos.get(b['atom2'])
+        if a1 is None or a2 is None:
+            n_orphan += 1
+            continue
+        r2 = 0.0
+        for d in ('x', 'y', 'z'):
+            delta = a2[d] - a1[d]
+            delta -= L[d] * round(delta / L[d])
+            r2 += delta * delta
+        r = r2 ** 0.5
+        worst = max(worst, r)
+        if r > max_bond:
+            n_bad += 1
+    print(f"  Bond check: longest min-image bond = {worst:.3f} σ "
+          f"(FENE limit {max_bond}); {len(bonds) - n_orphan} bonds kept, "
+          f"{n_orphan} severed")
+    if n_orphan:
+        raise ValueError(
+            f"{n_orphan} bond(s) lost an endpoint to trimming. The network must "
+            f"come through whole — a severed bond is silently dropped by "
+            f"write_lammps_data and leaves a dangling chain end in the run.")
+    if n_bad:
+        raise ValueError(
+            f"{n_bad} bond(s) exceed the FENE maximum extent of {max_bond} σ "
+            f"(longest {worst:.3f} σ). The isolated configuration is not a "
+            f"valid FENE network and would fail in LAMMPS. This usually means "
+            f"a percolating direction was unwrapped, rotated or re-boxed.")
 
 
 # ---------------------------------------------------------------------------
@@ -336,10 +493,11 @@ def isolate_gel(input_file, output_file, clearance=BOX_CLEARANCE, percentile=0.1
     print(f"Clearance: {clearance}  |  Percentile: {percentile}")
     atoms, bonds, box, masses = parse_lammps_data(input_file)
     print(f"Read {len(atoms)} atoms, {len(bonds)} bonds")
-    atoms = unwrap_atoms_via_bonds(atoms, bonds, box)
-    atoms = rotate_mobile_atoms(atoms)
-    ext   = find_gel_extent(atoms, clearance, percentile)
-    atoms = remove_non_gel_atoms(atoms, ext)
+    periodic = detect_percolating_dims(atoms, bonds, box)
+    atoms = unwrap_atoms_via_bonds(atoms, bonds, box, periodic)
+    atoms = rotate_mobile_atoms(atoms, periodic)
+    ext   = find_gel_extent(atoms, clearance, percentile, box, periodic)
+    atoms = remove_non_gel_atoms(atoms, ext, periodic)
     new_box = {'xlo': ext['xmin'], 'xhi': ext['xmax'],
                'ylo': ext['ymin'], 'yhi': ext['ymax'],
                'zlo': ext['zmin'], 'zhi': ext['zmax']}
@@ -348,6 +506,10 @@ def isolate_gel(input_file, output_file, clearance=BOX_CLEARANCE, percentile=0.1
     lz = new_box['zhi']-new_box['zlo']
     print(f"  New box: Lx={lx:.2f}  Ly={ly:.2f}  Lz={lz:.2f}  "
           f"V={lx*ly*lz:.1f} σ³")
+    # Validate BEFORE writing: a broken network must never reach the disk, or
+    # the split/adjust steps downstream will happily propagate it into every
+    # per-loading input file.
+    validate_bonds(atoms, bonds, new_box)
     write_lammps_data(output_file, atoms, bonds, new_box, masses)
     print(f"Wrote {len(atoms)} atoms → {output_file}")
 

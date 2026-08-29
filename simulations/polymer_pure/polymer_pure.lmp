@@ -91,6 +91,21 @@ variable nrepeat_block equal ${block_steps}/100
 #     aren't stored in the data file).
 variable cont index 0
 
+# ----- Pre-relaxed-coordinates flag -----
+# 0 = coordinates come from the diamond-lattice builder (default): bonds are
+#     at ~0.52σ and need Stage 0's harmonic expansion before FENE is safe.
+# 1 = coordinates come from an already-equilibrated FENE configuration that
+#     carries NO Velocities section — e.g. the isolated_* files produced by
+#     isolate_gel.py for the calibration sweep. Bonds are already at FENE
+#     scale, so Stage 0's harmonic pre-relax is skipped, but velocities are
+#     still seeded from ${vel_seed} and Stage 1's gentle ramp still runs, so
+#     the run follows exactly the same path a fresh one does from that point.
+#
+# Distinct from cont=1, which additionally assumes the data file HAS
+# velocities and so skips the seeding and Stage 1 as well. Setting cont=1 on a
+# velocity-less file would start every replica from rest with identical
+# initial conditions, collapsing the NREPS replica average.
+variable prerelaxed index 0
 
 
 # ========== Initialization ==========
@@ -120,9 +135,27 @@ print ">>> N_polymer=$(count(polymer))  N_solvent=$(count(solvent))  N_mobile=${
 thermo_style custom step temp pe ke etotal press vol lx ly lz
 thermo ${thermo_freq}
 
+# Bonded-neighbour pair exclusions. Set once, before any branch, so all three
+# entry paths (fresh, prerelaxed, cont) use identical exclusions. This used to
+# live inside Stage 0, which meant cont=1 runs silently fell back to LAMMPS's
+# 0 0 0 default and dropped the 1-3/1-4 pair interactions a fresh run keeps.
+special_bonds lj 0.0 1.0 1.0
+
 # cont=1: the continued data file already holds beads at a safe (FENE-scale)
-# separation — skip the harmonic pre-relax entirely.
+# separation AND its own velocities — skip the seeding and the pre-relax both.
 if "${cont} == 1" then "jump SELF label_skip_stage0"
+
+# Seed velocities on every non-continuation path. The data file carries no
+# Velocities section in either case, and this is the ONLY per-replica
+# difference in a calibration sweep, so it must happen whether or not the
+# harmonic pre-relax below is needed.
+reset_timestep 0
+velocity mobile create 0.01 ${vel_seed} mom yes rot no
+
+# prerelaxed=1: bonds already sit at FENE scale, so the harmonic expansion is
+# not just unnecessary but actively wrong — it re-relaxes an equilibrated
+# network under a different bond style.
+if "${prerelaxed} == 1" then "jump SELF label_skip_stage0"
 
 # =====================================================================
 #   STAGE 0 — Harmonic pre-relaxation
@@ -139,10 +172,6 @@ pair_coeff * * ${epsSS} ${sigma} 1.122
 bond_style harmonic
 bond_coeff 1 30.0 0.96
 
-special_bonds lj 0.0 1.0 1.0
-
-reset_timestep 0
-velocity mobile create 0.01 ${vel_seed} mom yes rot no
 fix pre  mobile nve/limit 0.05
 fix lang mobile langevin 0.01 0.01 ${tdamp} 904297
 timestep ${timestep_gentle}
