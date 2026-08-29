@@ -56,8 +56,36 @@ git pull --rebase --autostash || {
 }
 
 # ── 2. Check for changes ───────────────────────────────────────────────────
+# A clean working tree does NOT mean the remote is up to date. Anything already
+# committed by hand (or by an agent) still needs pushing, and this branch used
+# to exit 0 here with "Already up to date" without ever reaching step 5 —
+# reporting success while leaving the work local-only. Check the upstream too.
 if git diff --quiet && git diff --staged --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
-    echo ">>> Nothing to commit. Already up to date."
+    BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+    UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+
+    if [ -z "$UPSTREAM" ]; then
+        echo ">>> Nothing to commit, but '${BRANCH}' has no upstream branch."
+        echo "    Nothing was pushed. Set one with:"
+        echo "        git push -u origin ${BRANCH}"
+        exit 1
+    fi
+
+    # The pull above already refreshed this remote-tracking ref.
+    AHEAD="$(git rev-list --count "${UPSTREAM}..HEAD")"
+    if [ "$AHEAD" -eq 0 ]; then
+        echo ">>> Nothing to commit. Already up to date."
+        exit 0
+    fi
+
+    echo ">>> Nothing to commit, but ${AHEAD} local commit(s) are not on ${UPSTREAM}:"
+    git log --oneline "${UPSTREAM}..HEAD" | sed 's/^/     /'
+    echo ">>> Pushing to origin..."
+    git push
+    echo "======================================"
+    echo "Done! Pushed ${AHEAD} existing commit(s); nothing new to commit."
+    echo "Run 'git pull' on Expanse / Bridges-2 / Pod to sync clusters."
+    echo "======================================"
     exit 0
 fi
 
