@@ -101,9 +101,11 @@ NGPUS=${SLURM_GPUS_ON_NODE:-0}
 echo "SLURM_GPUS_ON_NODE: $SLURM_GPUS_ON_NODE"
 echo "GPUs allocated: $SLURM_GPUS"
 
-# Pull latest scripts from GitHub before running (safe: skips if no network/conflict)
+# ── Pull latest scripts from GitHub before running ────────────────────────────
+# Serialised, fast-forward-only, best-effort. See scripts/node_git_sync.sh.
+source "$SCRIPT_DIR/node_git_sync.sh"
 echo ">>> Syncing lammps_work from GitHub..."
-git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+sync_lammps_work || true
 
 # CPU-only mode (NOT USING OMP FOR NOW (not on Expanse 2021 version)
 echo "Running CPU-only with $SLURM_NTASKS tasks"

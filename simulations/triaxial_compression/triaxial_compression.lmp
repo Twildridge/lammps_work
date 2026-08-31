@@ -1183,7 +1183,11 @@ label label_after_ref_rec
 
 variable gel_strain_pct    equal v_gel_strain*100.0
 variable gel_strain_bb_pct equal v_gel_strain_bb*100.0
-shell mkdir -p output_files/chemical_potential
+# NOTE: LAMMPS `shell mkdir` is not /bin/sh — every argument is taken as a
+#       directory name and intermediate dirs are created anyway. Passing -p
+#       here silently created a stray directory literally named "-p" in every
+#       run dir (fixed 2026-08-30); do not add it back.
+shell mkdir output_files/chemical_potential
 
 # ----- Piston stays VELOCITY-controlled (rigid, forces off) for the sweep -----
 # The piston is already rigid with all forces off (from Phase 1.25).  Loading is

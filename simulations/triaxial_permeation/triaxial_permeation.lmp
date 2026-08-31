@@ -1296,7 +1296,11 @@ fix avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_str
 # production phase. Active for the full run ${nsteps} + relax/perm_relax runs.
 # NOTE: output_files/chemical_potential/ must exist before the run.
 #       run_lammps.sh creates it automatically; for direct LAMMPS invocation:
-shell mkdir -p output_files/chemical_potential
+# NOTE: LAMMPS `shell mkdir` is not /bin/sh — every argument is taken as a
+#       directory name and intermediate dirs are created anyway. Passing -p
+#       here silently created a stray directory literally named "-p" in every
+#       run dir (fixed 2026-08-30); do not add it back.
+shell mkdir output_files/chemical_potential
 
 variable nevery_density  equal 100
 variable nrepeat_density equal floor(v_nfreq_widom_dump/v_nevery_density)

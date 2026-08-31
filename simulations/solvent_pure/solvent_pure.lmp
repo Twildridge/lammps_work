@@ -230,7 +230,11 @@ unfix block_avg
 # these extra steps are equilibrium NPT sampling. Voronoi runs Python-side on
 # these frames (lib/volfrac.py) — never in the engine.
 variable calib_dump_steps equal v_calib_frames*v_calib_dump_every
-shell mkdir -p traj_files
+# NOTE: LAMMPS `shell mkdir` is not /bin/sh — every argument is taken as a
+#       directory name and intermediate dirs are created anyway. Passing -p
+#       here silently created a stray directory literally named "-p" in every
+#       run dir (fixed 2026-08-30); do not add it back.
+shell mkdir traj_files
 dump calib_dump all custom ${calib_dump_every} &
     traj_files/calib_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z
 run ${calib_dump_steps}

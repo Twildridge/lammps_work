@@ -48,10 +48,17 @@ is buried, nothing is hard-coded in any `.lmp` (fully `-var` driven via
 | Variable | Default | Meaning |
 |---|---|---|
 | `PRESSURES` | 0.50 … 2.00 step 0.25 | pressure grid |
-| `NF_GRID` | 10 values, 53400 → 20800 | exact solvent counts (geometric, ratio ≈ 0.90 from the base snapshot's equilibrium N_f = 53407; N_p = 104283 fixed) |
+| `NF_GRID` | 10 values, 55800 → 20800 | exact solvent counts (geometric, ratio ≈ 0.896 from the base snapshot's equilibrium N_f = 55868; N_p = 104490 fixed) |
 | `NREPS` | 2 | NPT thermal replicas per grid point |
 | `CALIB_STEPS` / `_LOWP` | 300k / 500k (P ≤ 0.75) | NPT run length — verify convergence from the ⟨V⟩ trace, don't assume |
 | `CALIB_FRAMES`, `CALIB_DUMP_EVERY` | 5, 2000 | all-atom Voronoi frames near each run's end (engines write frames+1) |
+
+`calibration_sweep.sh` is the single source of truth for these. The config cell
+of `scripts/calibration_analysis.ipynb` restates `NF_GRID`, `N_P`, `PRESSURES`
+and the step counts and **must be updated with it** — the notebook addresses
+runs by exact filename stem, so a stale grid doesn't error, it just reports the
+mismatched loadings as missing. (Both this table and the notebook were left
+stale by the 2026-08-29 regrid; fixed 2026-08-30.)
 
 Base snapshot (`BASE_SNAPSHOT`): the 14M-step P=1.5
 `slab_with_support_periodic` equilibration. No per-pressure slab runs — NPT
