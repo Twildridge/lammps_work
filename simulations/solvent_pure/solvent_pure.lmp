@@ -25,13 +25,15 @@
 #   2–3  support–piston    : off
 #   3–3  piston–piston     : off
 #
-# CALIBRATION-SWEEP UPDATE (2026-08): the barostat is now ANISO (was iso) —
-# lx, ly, lz relax independently so residual normal-stress anisotropy from the
-# generator/isolation relaxes out instead of freezing into the aspect ratio.
+# BAROSTAT (2026-09): ISO coupling. The 2026-08 sweep ran aniso, but for a
+# pure fluid the box shape is a free diffusive mode (no shear restoring
+# force) — the aspect ratio random-walked 30–45% while ⟨V⟩ stayed converged.
+# The fluid rearranges freely within the box, so iso gives the same ⟨V⟩(P)
+# with a fixed shape. Mixed gel boxes (polymer_pure engine) remain aniso.
 # CONVERGENCE GATE (checked in calibration_analysis.ipynb, NOT enforced here):
-# production averages are only valid if Pxx≈Pyy≈Pzz within CI and the aspect
-# ratio is stable over the averaged window. Off-diagonal stresses (Pxy,Pxz,Pyz)
-# are logged and flagged only — no silent switch to a triclinic barostat.
+# production averages are only valid if Pxx≈Pyy≈Pzz within CI. Aspect-ratio
+# drift and off-diagonal stresses (Pxy,Pxz,Pyz) are logged and flagged only —
+# no silent switch to a triclinic barostat.
 #
 # Outputs:
 #   vol_pure_solvent_${dataname}_${interaction}.dat
@@ -192,10 +194,12 @@ variable num_density equal v_N_solvent/v_box_vol
 variable inst_press  equal press
 
 reset_timestep 0
-# aniso (2026-08): lx, ly, lz couple to Pxx, Pyy, Pzz independently — see the
-# convergence-gate note in the header. Box stays orthogonal.
+# iso (2026-09): back to isotropic coupling for the PURE-SOLVENT companions —
+# a fluid rearranges freely within the box, so aniso adds nothing here and only
+# lets the aspect ratio random-walk (30–45% drift seen in the 2026-08 sweep).
+# The mixed gel boxes (polymer_pure engine) stay aniso.
 fix 1 solvent npt temp ${temp_target} ${temp_target} ${tdamp} &
-    aniso ${press_target} ${press_target} ${pdamp}
+    iso ${press_target} ${press_target} ${pdamp}
 timestep ${timestep_prod}
 
 fix box_out all print ${volume_freq} "$(step) $(lx) $(ly) $(lz)" &

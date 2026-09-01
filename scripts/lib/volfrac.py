@@ -32,10 +32,12 @@ voro++ only — NO tessellation in any .lmp):
 
     φ_f^vor = Σ_{i∈solvent} v_i^voro / V        (per box, or per z-bin)
 
-Calibration surface, joint fit over (φ_p, P) with the exact anchor λ(0,P)=1,
-so reservoir bins are NEVER shifted:
+Calibration surface, per-pressure quadratics with the exact anchor λ(0,P)=1,
+so reservoir bins are NEVER shifted; a(P), b(P) linearly interpolated between
+sweep pressures (a single polynomial-in-P surface was too stiff to track the
+isotherms):
 
-    λ(φ_p, P) = 1 + (a₁ + b₁P)·φ_p + (a₂ + b₂P)·φ_p²
+    λ(φ_p, P) = 1 + a(P)·φ_p + b(P)·φ_p²
 
 Application per z-bin, per frame (solvent primary; polymer by complement):
 
@@ -199,8 +201,10 @@ def phi_voronoi_traj(traj_file, want_ts=None, verbose=True, **kw):
 # ---------------------------------------------------------------------------
 def load_calibration(path=None):
     """Read calibration_lambda.json → dict with (at least) 'coeffs':
-    {'a1','b1','a2','b2'}, 'covariance', 'raw_table', 'metadata'. Raises with
-    a pointed message if the artifact has not been generated yet."""
+    {'pressures','a','b'} (per-sweep-pressure quadratic coefficients),
+    'per_pressure', 'raw_table', 'metadata'. Raises with a pointed message if
+    the artifact has not been generated yet or uses the retired global-surface
+    schema."""
     p = Path(path) if path is not None else CALIBRATION_JSON
     if not p.exists():
         raise FileNotFoundError(
@@ -209,20 +213,36 @@ def load_calibration(path=None):
             f"(see simulations/calibration_sweep/README.md).")
     with open(p) as f:
         calib = json.load(f)
-    for k in ('a1', 'b1', 'a2', 'b2'):
-        if k not in calib.get('coeffs', {}):
+    coeffs = calib.get('coeffs', {})
+    if 'a1' in coeffs:
+        raise KeyError(
+            f"calibration json uses the retired global-surface schema (a1..b2); "
+            f"re-run scripts/calibration_analysis.ipynb to regenerate ({p})")
+    for k in ('pressures', 'a', 'b'):
+        if k not in coeffs:
             raise KeyError(f"calibration json missing coeffs['{k}'] ({p})")
     return calib
 
 
 def lambda_of(phi_p, P, calib):
-    """λ(φ_p, P) = 1 + (a₁ + b₁P)·φ_p + (a₂ + b₂P)·φ_p².
+    """λ(φ_p, P) = 1 + a(P)·φ_p + b(P)·φ_p².
+
+    a, b are fit per sweep pressure (the global polynomial-in-P surface was
+    too stiff — reduced χ² ≈ 35 and the P=0.5 isotherm missed entirely) and
+    linearly interpolated in P here; P outside the sweep range clamps to the
+    nearest sweep pressure. P may be a scalar or an array broadcastable
+    against phi_p (per-bin P_local).
 
     The exact anchor λ(0, P) = 1 is structural: a polymer-free (reservoir) bin
-    is never shifted, and the correction scales with local polymer content."""
+    is never shifted, and the correction scales with local polymer content.
+    In φ_p the quadratic extrapolates beyond the sweep's data window
+    (φ_p ≈ 0.55–0.80), pinned to the anchor at φ_p = 0."""
     c = calib['coeffs']
+    Ps = np.asarray(c['pressures'], float)
+    a = np.interp(P, Ps, np.asarray(c['a'], float))
+    b = np.interp(P, Ps, np.asarray(c['b'], float))
     phi_p = np.asarray(phi_p, float)
-    return 1.0 + (c['a1'] + c['b1'] * P) * phi_p + (c['a2'] + c['b2'] * P) * phi_p**2
+    return 1.0 + a * phi_p + b * phi_p**2
 
 
 def phi_calibrated(phi_f_vor, P, calib):
@@ -256,16 +276,21 @@ def read_pressure_tensor(path):
 
 
 def aniso_gate(steps, ptens, lx, ly, lz, tail_frac=0.5,
-               normal_tol=0.05, aspect_tol=0.02, offdiag_tol=0.05):
+               normal_tol=0.05, aspect_tol=0.10, offdiag_tol=0.05):
     """The convergence gate (checked in ANALYSIS, never enforced in-run).
 
     Over the last tail_frac of the run:
       * normal-stress isotropy: max pairwise |⟨Pii⟩−⟨Pjj⟩| / |⟨P⟩| ≤ normal_tol
-      * aspect-ratio stability: drift of lx/lz and ly/lz ≤ aspect_tol (relative)
+      * aspect-ratio drift of lx/lz and ly/lz > aspect_tol — FLAGGED only:
+        under `fix npt aniso` the box shape is a soft/diffusive mode (a pure
+        fluid has no shear restoring force at all, so lx/lz random-walks tens
+        of percent while ⟨V⟩ stays converged); shape drift alone therefore
+        cannot invalidate a volume average
       * off-diagonals: |⟨Pij⟩| / |⟨P⟩| ≤ offdiag_tol — FLAGGED only (no tri)
 
     Returns dict(passed, flags[list of str], stats). Production averages are
-    only valid when 'passed'; off-diagonal flags do not fail the gate."""
+    only valid when 'passed'; the hard criterion is normal-stress isotropy —
+    aspect-ratio and off-diagonal flags do not fail the gate."""
     n  = len(steps)
     k0 = int(n * (1 - tail_frac))
     pt = ptens[k0:]
@@ -285,8 +310,7 @@ def aniso_gate(steps, ptens, lx, ly, lz, tail_frac=0.5,
     for name, a in (('lx/lz', ax), ('ly/lz', ay)):
         drift = np.ptp(a) / a.mean()
         if drift > aspect_tol:
-            passed = False
-            flags.append(f'aspect ratio {name} drift {100*drift:.1f}% > {100*aspect_tol:.0f}%')
+            flags.append(f'aspect ratio {name} drift {100*drift:.1f}% > {100*aspect_tol:.0f}% — flagged only')
 
     for name, v in zip(('Pxy', 'Pxz', 'Pyz'), off):
         if abs(v) / abs(pbar) > offdiag_tol:
