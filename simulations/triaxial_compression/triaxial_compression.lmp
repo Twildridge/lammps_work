@@ -122,6 +122,44 @@ variable compressions_list index "STALE-run_lammps.sh--no-list-passed--running-s
 # buffer so a level cannot run away if the halt somehow never fires.
 variable nsteps_comp equal 500000
 
+# ---- AUTO-SIZED measurement HOLD, one length per strain level ---------------
+# WHY: the hold must outlast the gel's poroelastic (consolidation) relaxation.
+# If it does not, the piston reaction force is still DECAYING when the notebook
+# averages it, so M_piston reads HIGH -- which is exactly the M_piston ~6% above
+# M_network seen on the 5M-step hold (measured +6.5%, predicted +7.3%, below).
+#
+# MODEL: both faces of the slab are solvent-permeable (pair_coeff 3 4 / 3 5 are
+# OFF), so the held gel is the two-sided 1-D consolidation problem and its
+# SLOWEST mode decays as exp(-t/tau_1) with
+#       tau_1 = L^2 / (pi^2 * D_c),      L = compressed gel thickness.
+# Holding n_tau_hold * tau_1 leaves an end-of-hold residual exp(-n_tau_hold);
+# averaged over the trailing quarter of the hold (the notebook's plateau window)
+# n_tau_hold = 5.5 leaves ~1% residual stress.  L is read LIVE from the BB gel
+# thickness the moment the piston freezes, so EVERY sweep level is sized on its
+# own compressed thickness: tau_1 ~ (1-eps)^2 and deeper levels automatically get
+# proportionally SHORTER holds.  (Conservative: D_c also GROWS with compression,
+# by roughly M/K, which this fixed-D_c sizing ignores.)
+#
+# D_c ~ 0.17 sigma^2/tau comes from the 14M-step slab_with_support equilibration
+# that produced this run's input .data file: the free-swelling gel volume (both
+# the BB and the Rg^3 measure) decays to its plateau with a late-time constant
+# tau_1 ~ 2e6 steps = 1e4 tau at L ~ 131 sigma, so D_c = L^2/(pi^2 tau_1) ~ 0.17.
+# NOTE this is 2-3x SMALLER than the D_c the notebook's section-7 displacement fit
+# returns (~0.41): that fit is dominated by the FAST face-skin relaxation early in
+# the hold, while the piston force follows the slow k=1 mode.  Size on the SLOW one.
+#
+# WALL TIME: at L0_bb ~ 131 sigma this gives ~9.1M steps at eps=0.10, falling to
+# ~7.2M at eps=0.20 -- roughly 2x the old flat 5M hold, and a 4-level sweep is
+# ~33M steps of MD.  Size #SBATCH --time in triaxial_compression.batch accordingly
+# (or lean on continue_sim.sh); the banner below prints the estimate per level.
+variable Dc_est      equal 0.17      # sigma^2/tau, SLOW (collective) gel-solvent diffusivity
+variable n_tau_hold  equal 5.5       # holds per slowest mode; ~1% residual over the plateau window
+variable hold_min    equal 500000    # floor on any auto-sized hold (safety)
+variable pi_sq       equal 9.86960440108936   # pi^2 (LAMMPS-version-proof; no PI constant needed)
+# hold_auto: 1 = size every level from tau_1 (default).  0 = old behaviour, a flat
+# ${nsteps} hold at every level.  Override on the command line with -var hold_auto 0.
+variable hold_auto   index 1
+
 # ----- Phase 1.25: piston approach to gel contact (records the Rg reference L0) -----
 # The generator suspends the gel ~10-12 sigma ABOVE the support.  There is NO
 # body-force pre-seating: the applied piston PRESSURE (Phase 2) pushes the gel
@@ -215,7 +253,14 @@ variable nrepeat_stress equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepea
 variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 
-print ">>> Stress: nevery=${nevery_stress} nrepeat=${nrepeat_stress} nfreq=${nfreq_stress}"
+# NOTE: these globals are only the BASELINE (sized on ${nsteps}).  With
+# hold_auto=1 the sweep loop RE-DERIVES nfreq_raw/nrepeat/nevery/nfreq_stress,
+# dump_freq_prod and nfreq_widom_dump from each level's own auto-sized hold, so
+# every level still gets ~num_stress_curves stress frames and ~num_dump_frames
+# movie frames however long its hold turns out to be (output volume per level
+# stays put instead of growing with the hold).  Nothing between here and the
+# sweep loop uses them -- the epsilon=0 reference window has its own ref_* cadence.
+print ">>> Stress (baseline from nsteps): nevery=${nevery_stress} nrepeat=${nrepeat_stress} nfreq=${nfreq_stress}"
 print ">>> Mode: COMPRESSION (piston-loaded gel)"
 
 # ----- Spatial Binning -----
@@ -1209,7 +1254,9 @@ variable movie_open equal 1
 
 print "############################################################"
 print ">>> STRAIN SWEEP LIST (raw from run_lammps.sh): ${compressions_list}"
-print ">>>   first strain=${compressions}   drive cap=${nsteps_comp}   hold=${nsteps} per level"
+print ">>>   first strain=${compressions}   drive cap=${nsteps_comp}"
+print ">>>   HOLD: auto=${hold_auto} (1=sized per level from tau_1=L^2/(pi^2 D_c))"
+print ">>>         Dc_est=${Dc_est}  n_tau_hold=${n_tau_hold}  hold_min=${hold_min}  flat fallback nsteps=${nsteps}"
 print ">>>   BB reference thickness L0_bb = ${L0_bb}  (strain denominator)"
 print ">>>   If the line above reads 'STALE-run_lammps.sh...', only ONE level"
 print ">>>   will run -- update run_lammps.sh on the cluster and resubmit."
@@ -1324,6 +1371,50 @@ label label_skip_drive
 velocity piston set 0.0 0.0 0.0
 print ">>> [strain=${compressions}] drive done: gel_strain_bb = $(v_gel_strain_bb:%.4f)  gel_strain_rg = $(v_gel_strain:%.4f)  piston_z = $(c_piston_com[3]:%.2f)  step=$(step)"
 
+# ----- THIS level's HOLD length from its own consolidation time -----
+# tau_1 = L^2/(pi^2 D_c) with L = the BB gel thickness RIGHT NOW (piston just
+# frozen), so the hold is sized on the compressed thickness of this level, not
+# on the uncompressed L0_bb: tau_1 shrinks like (1-eps)^2 across the sweep.
+# $(...) forces immediate evaluation, storing constants -- v_gel_lz_bb is live
+# and would otherwise be re-evaluated (and drift) every time it is read.
+# delete-first everywhere: this build refuses to redefine an equal-style
+# variable, and 'variable X delete' on an undefined X is a silent no-op.
+variable tau_cons  delete
+variable hold_raw  delete
+variable hold_want delete
+variable hold_len  delete
+variable tau_cons  equal $(v_gel_lz_bb*v_gel_lz_bb/(v_pi_sq*v_Dc_est))
+variable hold_raw  equal $(ceil(v_n_tau_hold*v_tau_cons/v_timestep_prod))
+variable hold_want equal (v_hold_raw>v_hold_min)*v_hold_raw+(v_hold_raw<=v_hold_min)*v_hold_min
+variable hold_len  equal ${hold_auto}*${hold_want}+(1-${hold_auto})*${nsteps}
+print ">>> [strain=${compressions}] hold sizing: L_bb=$(v_gel_lz_bb:%.2f) sigma  D_c=${Dc_est}  tau_1=$(v_tau_cons:%.1f) tau = $(v_tau_cons/v_timestep_prod:%.0f) steps"
+print ">>> [strain=${compressions}] hold_len=${hold_len} steps (= ${n_tau_hold} tau_1; auto=${hold_auto}, floor=${hold_min}, flat fallback=${nsteps})"
+
+# ----- Per-level output cadences, re-derived from THIS level's hold -----
+# Same clamping logic as the baseline block near the top of the file, but keyed
+# on hold_len instead of nsteps, so each level keeps its ~num_stress_curves
+# stress frames / ~num_dump_frames movie frames no matter how long its hold is.
+# nfreq_stress must stay fixed for the LIFETIME of the ave/chunk fixes below
+# (the chunk/atom lock epoch) -- it is, since they are created and destroyed
+# inside this iteration, after this block.
+variable nfreq_raw        delete
+variable nrepeat_raw      delete
+variable nr_lo            delete
+variable nrepeat_stress   delete
+variable nevery_stress    delete
+variable nfreq_stress     delete
+variable dump_freq_prod   delete
+variable nfreq_widom_dump delete
+variable nfreq_raw        equal floor(${hold_len}/v_num_stress_curves)
+variable nrepeat_raw      equal floor(v_nfreq_raw/v_nevery_target)
+variable nr_lo            equal (v_nrepeat_raw>v_nrepeat_min)*v_nrepeat_raw+(v_nrepeat_raw<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress   equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepeat_max)*v_nrepeat_max
+variable nevery_stress    equal floor(v_nfreq_raw/v_nrepeat_stress)
+variable nfreq_stress     equal v_nevery_stress*v_nrepeat_stress
+variable dump_freq_prod   equal floor(${hold_len}/v_num_dump_frames)
+variable nfreq_widom_dump equal floor(${hold_len}/v_num_widom_frames)
+print ">>> [strain=${compressions}] stress cadence: nevery=${nevery_stress} nrepeat=${nrepeat_stress} nfreq=${nfreq_stress}  |  movie every ${dump_freq_prod}"
+
 # ----- Reset the displacement reference to the loaded state so
 #       u_z(z,0)=0 at the onset of THIS level's measurement hold (for D_c). -----
 variable uz_poly delete
@@ -1410,8 +1501,8 @@ fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_str
     chunk_z_polymer v_uz_poly &
     file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
 
-variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
-print ">>> [strain=${compressions}] measurement HOLD (piston frozen, stress relaxes) for ${hold_steps} steps (>= ${nsteps}, aligned to nfreq_stress=${nfreq_stress})"
+variable hold_steps equal (floor(($(step)+${hold_len}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print ">>> [strain=${compressions}] measurement HOLD (piston frozen, stress relaxes) for ${hold_steps} steps (>= hold_len=${hold_len}, aligned to nfreq_stress=${nfreq_stress})"
 run ${hold_steps}
 
 # ----- Teardown this level's hold fixes/dumps (lock released on the epoch-
