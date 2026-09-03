@@ -51,9 +51,12 @@ module load python/3.8.12
 FOLDER="triaxial_compression"
 DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000"
 INTERACTION="1.0_1.0" # first number is solvent–solvent; second is polymer–solvent
-# NSTEPS is (a) the tag baked into every output filename -- keep it in sync with
-# NSTEPS in triaxial_compression.ipynb's Config cell -- and (b) the FALLBACK hold
-# length when the .lmp is run with -var hold_auto 0.
+# NSTEPS is (a) the FALLBACK hold length when the .lmp is run with -var hold_auto 0
+# and (b) the tag of the setup-phase files only.  Since 2026-09-03 every reference
+# and production file is tagged with its level's AUTO-SIZED HOLD LENGTH in steps
+# (..._<hold>_c<strain>.dat, e.g. _9123456_c0.10), the role the flat 5000000 used to
+# play; a sweep therefore carries one tag per level and the reference files carry
+# the first level's.  The notebooks resolve the tags from the files (NSTEPS=None).
 #
 # It is NO LONGER the hold length by default.  triaxial_compression.lmp now
 # AUTO-SIZES each strain level's measurement hold from that level's own

@@ -158,6 +158,10 @@ variable hold_min    equal 500000    # floor on any auto-sized hold (safety)
 variable pi_sq       equal 9.86960440108936   # pi^2 (LAMMPS-version-proof; no PI constant needed)
 # hold_auto: 1 = size every level from tau_1 (default).  0 = old behaviour, a flat
 # ${nsteps} hold at every level.  Override on the command line with -var hold_auto 0.
+# NOTE on ${nsteps}: it is the flat-hold fallback and the tag of the SETUP-phase files
+# (gel_setup traj, Phase-0.5 box/gel trackers) only.  Every reference and production
+# file is tagged with its level's hold length instead -- see the OUTPUT-FILE TAG block
+# after the reference thicknesses are recorded.
 variable hold_auto   index 1
 
 # ----- Phase 1.25: piston approach to gel contact (records the Rg reference L0) -----
@@ -237,9 +241,9 @@ variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
 
 # ----- Time Averaging (stress) -----
 # nfreq = nevery * nrepeat  (LAMMPS constraint)
-variable num_stress_curves equal 40    # target output frames per hold (10 -> 40 on 2026-09-03: the
-                                       # sigma'_zz/sigma'_xx-vs-step and D_c fits want a denser time
-                                       # series; each frame still averages >= nrepeat_min samples)
+variable num_stress_curves equal 20    # stress/density/displacement frames per hold (10 -> 20 on
+                                       # 2026-09-03 for the sigma'_zz/sigma'_ii-vs-step plot; the
+                                       # notebooks still DRAW 10 evolution curves, n_curves)
 variable nevery_target     equal 100   # ~0.5 tau — near stress decorrelation time
 variable nrepeat_max       equal 2000  # cap to preserve transient resolution
 variable nrepeat_min       equal 50    # floor for adequate noise reduction
@@ -1144,6 +1148,30 @@ variable gel_lz_initial delete
 variable gel_lz_initial equal $(v_gel_lz_rg)
 print ">>> Reference thicknesses:  L0_bb=${L0_bb} (authoritative)  L0_rg=${gel_lz_initial}  L0_gap=${L0_gap}  piston_seat_z=${piston_seat_z}"
 
+# ----- OUTPUT-FILE TAG = the length of the measurement hold (2026-09-03) -----
+# Every reference and production file is named ..._${dataname}_${interaction}_<hold>[_c<strain>]
+# where <hold> is the auto-sized hold length of that strain level in steps -- the
+# role the flat NSTEPS tag played before hold_auto.  The hold is a deterministic
+# function of the level's TARGET compressed thickness L0_bb*(1-strain) (the drive
+# halts at exactly that displacement), so the tag is known at the start of each
+# level, before any of its files is opened; the sweep loop recomputes it per level.
+# The eps=0 reference files, shared by every level, carry the FIRST level's tag.
+# With -var hold_auto 0 every tag collapses back to ${nsteps} (old convention).
+# The analysis notebooks resolve the tags from the files themselves (NSTEPS=None).
+variable hold_L    delete
+variable tau_cons  delete
+variable hold_raw  delete
+variable hold_want delete
+variable hold_len  delete
+variable hold_tag  delete
+variable hold_L    equal ${L0_bb}*(1.0-${compressions})
+variable tau_cons  equal $(v_hold_L*v_hold_L/(v_pi_sq*v_Dc_est))
+variable hold_raw  equal $(ceil(v_n_tau_hold*v_tau_cons/v_timestep_prod))
+variable hold_want equal (v_hold_raw>v_hold_min)*v_hold_raw+(v_hold_raw<=v_hold_min)*v_hold_min
+variable hold_len  equal ${hold_auto}*${hold_want}+(1-${hold_auto})*${nsteps}
+variable hold_tag  string $(v_hold_len:%.0f)
+print ">>> reference files tagged _${hold_tag} (= hold length of the first level, strain ${compressions})"
+
 print '========================================'
 print 'Phase 1.5: ε=0 reference recording (${ref_avg_steps} steps, ref_nfreq=${ref_nfreq})'
 print '========================================'
@@ -1152,33 +1180,33 @@ print '========================================'
 velocity piston set 0.0 0.0 0.0
 
 # ----- Coarse partial-stress component references -----
-fix ref_sigmazz_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_sigmazz_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_virialzz_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_virialzz_solv mode vector file output_files/stress_data/virialzz_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_sigmaxx_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_sigmaxx_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_sigmayy_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_sigmayy_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_sigmazz_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmazz_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_virialzz_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_virialzz_solv mode vector file output_files/stress_data/virialzz_solvent_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmaxx_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmaxx_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmayy_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmayy_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_ref_${dataname}_${interaction}_${hold_tag}.dat
 
 # ----- Fine-binned σ_zz references (support + piston windows) -----
-fix ref_sigmazz_poly_fs all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly_fs mode vector file output_files/stress_data/sigmazz_polymer_fine_support_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_sigmazz_poly_fp all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly_fp mode vector file output_files/stress_data/sigmazz_polymer_fine_piston_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_sigmazz_solv_fs all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv_fs mode vector file output_files/stress_data/sigmazz_solvent_fine_support_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_sigmazz_solv_fp all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv_fp mode vector file output_files/stress_data/sigmazz_solvent_fine_piston_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_sigmazz_poly_fs all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly_fs mode vector file output_files/stress_data/sigmazz_polymer_fine_support_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmazz_poly_fp all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly_fp mode vector file output_files/stress_data/sigmazz_polymer_fine_piston_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmazz_solv_fs all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv_fs mode vector file output_files/stress_data/sigmazz_solvent_fine_support_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmazz_solv_fp all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv_fp mode vector file output_files/stress_data/sigmazz_solvent_fine_piston_ref_${dataname}_${interaction}_${hold_tag}.dat
 
 # ----- Solvent number + mass density references (coarse + fine) -----
-fix ref_dens     all ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_solv_density density/number density/mass file output_files/chemical_potential/solvent_density_z_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_dens_fs  all ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_zf_dens_sup    density/number density/mass file output_files/chemical_potential/solvent_density_z_fine_support_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_dens_fp  all ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_zf_dens_pis    density/number density/mass file output_files/chemical_potential/solvent_density_z_fine_piston_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_dens     all ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_solv_density density/number density/mass file output_files/chemical_potential/solvent_density_z_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_dens_fs  all ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_zf_dens_sup    density/number density/mass file output_files/chemical_potential/solvent_density_z_fine_support_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_dens_fp  all ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_zf_dens_pis    density/number density/mass file output_files/chemical_potential/solvent_density_z_fine_piston_ref_${dataname}_${interaction}_${hold_tag}.dat
 
 # ----- ss / pp / bond / traj reference dumps (one frame per ref_nfreq) -----
 # dump local/custom carry no fix ave/time epoch-lock issue, so they may run
 # freely through the window; each emits ≈ref_avg_steps/ref_nfreq frames that
 # the notebook averages (with CIs) for the σ_s,ss and σ_p,pp references.
-dump pairlocal_ref      solvent local  ${ref_nfreq} output_files/pair_data/pairs_ref_${dataname}_${interaction}_${nsteps}.dump c_ids_local[1] c_ids_local[2] c_ids_local[3] c_ids_local[4] c_pl_local[1] c_pl_local[2] c_pl_local[3]
-dump pairlocal_poly_ref polymer local  ${ref_nfreq} output_files/pair_data/polymer_pairs_ref_${dataname}_${interaction}_${nsteps}.dump c_ids_local_poly[1] c_ids_local_poly[2] c_ids_local_poly[3] c_ids_local_poly[4] c_pl_local_poly[1] c_pl_local_poly[2] c_pl_local_poly[3]
-dump bondlocal_ref      all     local  ${ref_nfreq} output_files/pair_data/bonds_ref_${dataname}_${interaction}_${nsteps}.dump c_bnd_ids[1] c_bnd_ids[2] c_bnd_ids[3] c_bnd_local[1] c_bnd_local[2]
-dump traj_ref           gel_system custom ${ref_nfreq} traj_files/traj_ref_${dataname}_${interaction}_${nsteps}.lammpstrj id type mol x y z
+dump pairlocal_ref      solvent local  ${ref_nfreq} output_files/pair_data/pairs_ref_${dataname}_${interaction}_${hold_tag}.dump c_ids_local[1] c_ids_local[2] c_ids_local[3] c_ids_local[4] c_pl_local[1] c_pl_local[2] c_pl_local[3]
+dump pairlocal_poly_ref polymer local  ${ref_nfreq} output_files/pair_data/polymer_pairs_ref_${dataname}_${interaction}_${hold_tag}.dump c_ids_local_poly[1] c_ids_local_poly[2] c_ids_local_poly[3] c_ids_local_poly[4] c_pl_local_poly[1] c_pl_local_poly[2] c_pl_local_poly[3]
+dump bondlocal_ref      all     local  ${ref_nfreq} output_files/pair_data/bonds_ref_${dataname}_${interaction}_${hold_tag}.dump c_bnd_ids[1] c_bnd_ids[2] c_bnd_ids[3] c_bnd_local[1] c_bnd_local[2]
+dump traj_ref           gel_system custom ${ref_nfreq} traj_files/traj_ref_${dataname}_${interaction}_${hold_tag}.lammpstrj id type mol x y z
 
 # Run for ref_avg_steps, PADDED up to the next ref_nfreq epoch boundary so the
 # ave/time + ave/chunk locks release cleanly on end_of_step (see note above).
@@ -1281,45 +1309,66 @@ print "########################################################"
 print "  STRAIN TARGET (cumulative) = ${compressions}"
 print "########################################################"
 
+# ----- THIS level's HOLD length (and output-file tag) from its TARGET thickness -----
+# tau_1 = L^2/(pi^2 D_c) with L = L0_bb*(1-strain), the compressed BB thickness the
+# drive below halts at, so the hold is sized on the compressed thickness of this
+# level: tau_1 shrinks like (1-eps)^2 across the sweep.  Computed BEFORE the level's
+# loggers open so that every file of the level is tagged _${hold_tag}_c${compressions}.
+# delete-first everywhere: this build refuses to redefine an equal-style variable.
+variable hold_L    delete
+variable tau_cons  delete
+variable hold_raw  delete
+variable hold_want delete
+variable hold_len  delete
+variable hold_tag  delete
+variable hold_L    equal ${L0_bb}*(1.0-${compressions})
+variable tau_cons  equal $(v_hold_L*v_hold_L/(v_pi_sq*v_Dc_est))
+variable hold_raw  equal $(ceil(v_n_tau_hold*v_tau_cons/v_timestep_prod))
+variable hold_want equal (v_hold_raw>v_hold_min)*v_hold_raw+(v_hold_raw<=v_hold_min)*v_hold_min
+variable hold_len  equal ${hold_auto}*${hold_want}+(1-${hold_auto})*${nsteps}
+variable hold_tag  string $(v_hold_len:%.0f)
+print ">>> [strain=${compressions}] hold sizing: target L_bb=$(v_hold_L:%.2f) sigma  D_c=${Dc_est}  tau_1=$(v_tau_cons:%.1f) tau = $(v_tau_cons/v_timestep_prod:%.0f) steps"
+print ">>> [strain=${compressions}] hold_len=${hold_len} steps (= ${n_tau_hold} tau_1; auto=${hold_auto}, floor=${hold_min}, flat fallback=${nsteps})  ->  files tagged _${hold_tag}_c${compressions}"
+
 # ----- Per-level loggers that span BOTH the settle and the hold -----
 # fix print (and one GLOBAL ave/time on c_piston_fz) -- none use a compute
 # chunk/atom, so they carry NO lock and may be unfixed at any step.  They record
 # the piston descent + strain rise during loading AND the equilibrated hold.
 fix out_piston_pos all print ${strain_freq} "$(step) $(c_piston_com[3])" &
-    file output_files/piston_data/piston_position_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/piston_data/piston_position_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 fix out_piston_vel all print ${strain_freq} "$(step) $(c_piston_vz)" &
-    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 fix out_piston_force all print ${volume_freq} '$(step) $(c_piston_fz)' &
-    file output_files/piston_data/piston_force_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/piston_data/piston_force_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 fix out_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
     c_piston_fz ave one &
-    file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix out_strain_zz all print ${strain_freq} &
     "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
-    file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/stress_data/strain_zz_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 # Boundary (piston-support) strain: step, L0_gap, piston_support_gap, piston_strain.
 # DIAGNOSTIC only now -- the authoritative strain is the PRESCRIBED target
 # (denominator) and the MEASURED BB strain (from gel_dimensions_bb).  All three
 # (BB, Rg, boundary) are logged so the notebook can overlay them.
 fix out_strain_piston all print ${strain_freq} &
     "$(step) ${L0_gap} $(v_piston_support_gap) $(v_piston_strain)" &
-    file output_files/stress_data/strain_piston_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/stress_data/strain_piston_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 fix out_gel_strain_thermo all print ${thermo_freq} &
     ">>> gel_strain = $(v_gel_strain_bb_pct:%.2f) %" screen yes &
-    file output_files/stress_data/gel_strain_log_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    file output_files/stress_data/gel_strain_log_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix out_gel_vol_bb all print ${strain_freq} "$(step) $(v_gel_vol_bb)" &
-    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 fix out_gel_dims_bb all print ${strain_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
-    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 fix out_gel_vol_rg all print ${strain_freq} "$(step) $(v_gel_vol_rg)" &
-    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 fix out_gel_dims_rg all print ${strain_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
-    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 fix out_box_dims all print ${strain_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
-    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 fix out_polymer_com all print ${strain_freq} &
     "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
-    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 # ----- Edge-overlap logger: gel BB bottom/top vs support/piston faces -----
 # For the notebook verification plot: columns = step, gel_bot_bb (c_minz),
 # gel_top_bb (c_maxz), piston_z, support_z.  Confirms the plates bracket the gel
@@ -1327,7 +1376,7 @@ fix out_polymer_com all print ${strain_freq} &
 # gel compresses -- i.e. the BB method captures the true gel thickness.
 fix out_gel_edges all print ${strain_freq} &
     "$(step) $(c_minz) $(c_maxz) $(c_piston_com[3]) $(c_support_com[3])" &
-    file output_files/volume_data/gel_edges_${dataname}_${interaction}_${nsteps}_c${compressions}.dat screen no
+    file output_files/volume_data/gel_edges_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 
 # ----- cont=1 CONTINUATION (single-level only): the data file already holds
 # the gel at whatever strain level was passed in via ${compressions} (continue_sim.sh
@@ -1373,24 +1422,8 @@ label label_skip_drive
 velocity piston set 0.0 0.0 0.0
 print ">>> [strain=${compressions}] drive done: gel_strain_bb = $(v_gel_strain_bb:%.4f)  gel_strain_rg = $(v_gel_strain:%.4f)  piston_z = $(c_piston_com[3]:%.2f)  step=$(step)"
 
-# ----- THIS level's HOLD length from its own consolidation time -----
-# tau_1 = L^2/(pi^2 D_c) with L = the BB gel thickness RIGHT NOW (piston just
-# frozen), so the hold is sized on the compressed thickness of this level, not
-# on the uncompressed L0_bb: tau_1 shrinks like (1-eps)^2 across the sweep.
-# $(...) forces immediate evaluation, storing constants -- v_gel_lz_bb is live
-# and would otherwise be re-evaluated (and drift) every time it is read.
-# delete-first everywhere: this build refuses to redefine an equal-style
-# variable, and 'variable X delete' on an undefined X is a silent no-op.
-variable tau_cons  delete
-variable hold_raw  delete
-variable hold_want delete
-variable hold_len  delete
-variable tau_cons  equal $(v_gel_lz_bb*v_gel_lz_bb/(v_pi_sq*v_Dc_est))
-variable hold_raw  equal $(ceil(v_n_tau_hold*v_tau_cons/v_timestep_prod))
-variable hold_want equal (v_hold_raw>v_hold_min)*v_hold_raw+(v_hold_raw<=v_hold_min)*v_hold_min
-variable hold_len  equal ${hold_auto}*${hold_want}+(1-${hold_auto})*${nsteps}
-print ">>> [strain=${compressions}] hold sizing: L_bb=$(v_gel_lz_bb:%.2f) sigma  D_c=${Dc_est}  tau_1=$(v_tau_cons:%.1f) tau = $(v_tau_cons/v_timestep_prod:%.0f) steps"
-print ">>> [strain=${compressions}] hold_len=${hold_len} steps (= ${n_tau_hold} tau_1; auto=${hold_auto}, floor=${hold_min}, flat fallback=${nsteps})"
+# ----- Hold-length check: the live compressed thickness vs the target it was sized on -----
+print ">>> [strain=${compressions}] live L_bb=$(v_gel_lz_bb:%.2f) vs target $(v_hold_L:%.2f) sigma (hold_len=${hold_len} steps was sized on the target)"
 
 # ----- Per-level output cadences, re-derived from THIS level's hold -----
 # Same clamping logic as the baseline block near the top of the file, but keyed
@@ -1426,82 +1459,82 @@ variable uz_poly atom c_displace_poly[3]
 
 # ----- PHASE 2b: production HOLD -- chunk-locked averaging fixes created HERE -----
 dump traj_flow gel_system custom ${dump_freq_prod} &
-    traj_files/gel_flow_${dataname}_${interaction}_${nsteps}_c${compressions}.lammpstrj &
+    traj_files/gel_flow_${dataname}_${interaction}_${hold_tag}_c${compressions}.lammpstrj &
     id type mol x y z
 dump pairlocal_dump solvent local ${nfreq_stress} &
-    output_files/pair_data/pairs_${dataname}_${interaction}_${nsteps}_c${compressions}.dump &
+    output_files/pair_data/pairs_${dataname}_${interaction}_${hold_tag}_c${compressions}.dump &
     c_ids_local[1] c_ids_local[2] c_ids_local[3] c_ids_local[4] &
     c_pl_local[1] c_pl_local[2] c_pl_local[3]
 dump traj_stress_sync gel_system custom ${nfreq_stress} &
-    traj_files/traj_stress_${dataname}_${interaction}_${nsteps}_c${compressions}.lammpstrj &
+    traj_files/traj_stress_${dataname}_${interaction}_${hold_tag}_c${compressions}.lammpstrj &
     id type mol x y z
 dump pairlocal_poly polymer local ${nfreq_stress} &
-    output_files/pair_data/polymer_pairs_${dataname}_${interaction}_${nsteps}_c${compressions}.dump &
+    output_files/pair_data/polymer_pairs_${dataname}_${interaction}_${hold_tag}_c${compressions}.dump &
     c_ids_local_poly[1] c_ids_local_poly[2] c_ids_local_poly[3] c_ids_local_poly[4] &
     c_pl_local_poly[1] c_pl_local_poly[2] c_pl_local_poly[3]
 dump bondlocal_dump all local ${nfreq_stress} &
-    output_files/pair_data/bonds_${dataname}_${interaction}_${nsteps}_c${compressions}.dump &
+    output_files/pair_data/bonds_${dataname}_${interaction}_${hold_tag}_c${compressions}.dump &
     c_bnd_ids[1] c_bnd_ids[2] c_bnd_ids[3] c_bnd_local[1] c_bnd_local[2]
 if "${skip_widom} == 0" then &
-    "dump widom_traj all custom ${nfreq_widom_dump} traj_files/widom_${dataname}_${interaction}_${nsteps}_c${compressions}.lammpstrj id type x y z"
+    "dump widom_traj all custom ${nfreq_widom_dump} traj_files/widom_${dataname}_${interaction}_${hold_tag}_c${compressions}.lammpstrj id type x y z"
 
 fix avg_stress_x_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_x_polymer mode vector file output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_press_x_polymer mode vector file output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_stress_y_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_y_polymer mode vector file output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_press_y_polymer mode vector file output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_stress_z_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_z_polymer mode vector file output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_press_z_polymer mode vector file output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_stress_x_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_x_solvent mode vector file output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_press_x_solvent mode vector file output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_stress_y_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_y_solvent mode vector file output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_press_y_solvent mode vector file output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_stress_z_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_z_piston mode vector file output_files/stress_data/stress_z_piston_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_press_z_piston mode vector file output_files/stress_data/stress_z_piston_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_press_z_support mode vector file output_files/stress_data/stress_z_support_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_press_z_support mode vector file output_files/stress_data/stress_z_support_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 
 fix avg_sigmazz_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_sigmazz_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_virialzz_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_virialzz_solv mode vector file output_files/stress_data/virialzz_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_virialzz_solv mode vector file output_files/stress_data/virialzz_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_sigmaxx_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_sigmaxx_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_sigmayy_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 
 fix avg_sigmazz_poly_fs all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_poly_fs mode vector file output_files/stress_data/sigmazz_polymer_fine_support_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_sigmazz_poly_fs mode vector file output_files/stress_data/sigmazz_polymer_fine_support_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_sigmazz_poly_fp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_poly_fp mode vector file output_files/stress_data/sigmazz_polymer_fine_piston_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_sigmazz_poly_fp mode vector file output_files/stress_data/sigmazz_polymer_fine_piston_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_sigmazz_solv_fs all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_solv_fs mode vector file output_files/stress_data/sigmazz_solvent_fine_support_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_sigmazz_solv_fs mode vector file output_files/stress_data/sigmazz_solvent_fine_support_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_sigmazz_solv_fp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
-    c_sigmazz_solv_fp mode vector file output_files/stress_data/sigmazz_solvent_fine_piston_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    c_sigmazz_solv_fp mode vector file output_files/stress_data/sigmazz_solvent_fine_piston_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 
 # Solvent density: use the STRESS cadence (not a separate density cadence) so
 # the ave/chunk teardown lands on the SAME nfreq_stress epoch boundary as the
 # run end -- guaranteeing a clean chunk/atom unlock before the next level.
 fix avg_solv_density all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_solv_density density/number density/mass &
-    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_solv_density_fs all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_zf_dens_sup density/number density/mass &
-    file output_files/chemical_potential/solvent_density_z_fine_support_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    file output_files/chemical_potential/solvent_density_z_fine_support_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_solv_density_fp all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_zf_dens_pis density/number density/mass &
-    file output_files/chemical_potential/solvent_density_z_fine_piston_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    file output_files/chemical_potential/solvent_density_z_fine_piston_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 
 fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_polymer v_uz_poly &
-    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}_c${compressions}.dat
+    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 
 variable hold_steps equal (floor(($(step)+${hold_len}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
 print ">>> [strain=${compressions}] measurement HOLD (piston frozen, stress relaxes) for ${hold_steps} steps (>= hold_len=${hold_len}, aligned to nfreq_stress=${nfreq_stress})"
@@ -1580,5 +1613,5 @@ unfix trk_vol_rg
 unfix trk_dims_rg
 unfix trk_box
 
-variable outfile string "final_tricomp_${dataname}_${interaction}_${nsteps}"
+variable outfile string "final_tricomp_${dataname}_${interaction}_${hold_tag}"
 write_data ${outfile}.data

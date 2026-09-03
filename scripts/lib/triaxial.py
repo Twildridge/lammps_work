@@ -98,7 +98,11 @@ class Config:
     INTERACTION: str                      # "epsSS_epsSP"
     RUN_ID: str                           # local folder under flow_data_local/{compression,plots}
     COMP_LEVELS: list                     # applied-strain targets, as STRINGS ("0.10"), = STRAIN_TARGETS in the .batch
-    NSTEPS: int = None                    # None -> auto-detect the largest NSTEPS present in DATA_DIR
+    NSTEPS: object = None                 # the <steps> tag in the file names.  None (default) -> resolved PER LEVEL
+                                          # from the files present (since 2026-09-03 the .lmp tags every level with its
+                                          # own auto-sized hold length, and the reference files with the first level's);
+                                          # an int forces one tag everywhere (old flat-hold runs); a dict {level: tag}
+                                          # (key 'ref' for the reference files) pins them by hand.
     base_dir: str = '../../flow_data_local'
     # ---- profile / window knobs -----------------------------------------
     binWidth: float = 2.0                 # coarse z-bin (sigma); must match triaxial_compression.lmp
@@ -154,32 +158,61 @@ class Config:
         self.TRAJ_DIR = base / 'traj_files.nosync'
         for d in (self.DATA_DIR, self.PLOT_DIR, self.TRAJ_DIR):
             d.mkdir(parents=True, exist_ok=True)
-        if self.NSTEPS is None:
-            pat = re.compile(rf'^sigmazz_polymer(?:_ref)?_{re.escape(self.DATANAME)}_'
-                             rf'{re.escape(self.INTERACTION)}_(\d+)(?:_c[\d.]+)?\.dat$')
-            hits = sorted({int(m.group(1)) for f in self.DATA_DIR.glob('sigmazz_polymer*.dat')
-                           if (m := pat.match(f.name))})
-            if not hits:
-                raise ValueError('NSTEPS is None and no sigmazz_polymer_*.dat in DATA_DIR yet '
-                                 '-- set NSTEPS explicitly, or run sync_from_expanse first.')
-            self.NSTEPS = hits[-1]
-            print(f'auto-detected NSTEPS = {self.NSTEPS} from {len(hits)} candidate(s): {hits}')
-        self.sim_name = f'{self.DATANAME}_{self.INTERACTION}_{self.NSTEPS}'
+        self._tags = {}
+        if isinstance(self.NSTEPS, dict):
+            self._tags = {str(k): str(v) for k, v in self.NSTEPS.items()}
+        elif self.NSTEPS is not None:
+            self.NSTEPS = int(self.NSTEPS)
+        # sim_name (titles, sweep plot names) carries the reference-file tag when it is known
+        base = f'{self.DATANAME}_{self.INTERACTION}'
+        rt = self.tag_for(None)
+        self.sim_name = f'{base}_{rt}' if rt is not None else base
+        found = {('ref' if l is None else l): self.tag_for(l) for l in [None] + list(self.COMP_LEVELS)}
         print(f'Config: {self.sim_name}  |  levels {self.COMP_LEVELS}\n'
-              f'  data  {self.DATA_DIR}\n  plots {self.PLOT_DIR}\n  traj  {self.TRAJ_DIR}')
+              f'  data  {self.DATA_DIR}\n  plots {self.PLOT_DIR}\n  traj  {self.TRAJ_DIR}\n'
+              f'  file tags (hold length): ' + ', '.join(f'{k}: {v if v else "not local yet"}' for k, v in found.items()))
 
-    # ---- path builders: *_ref files carry no level tag, production files do ----
-    def tag(self, lvl):
+    # ---- <steps> tag resolution ---------------------------------------------
+    def _glob_tag(self, lvl):
+        """largest <tag> among sigmazz_polymer[_ref]_<DATANAME>_<INTERACTION>_<tag>[_c<lvl>].dat
+        present in DATA_DIR (non-empty files only), else None."""
+        suf = '' if lvl is None else '_c' + re.escape(str(lvl))
+        pat = re.compile(rf'^sigmazz_polymer{"_ref" if lvl is None else ""}_{re.escape(self.DATANAME)}_'
+                         rf'{re.escape(self.INTERACTION)}_(\d+){suf}\.dat$')
+        hits = sorted({int(m.group(1)) for f in self.DATA_DIR.glob('sigmazz_polymer*.dat')
+                       if (m := pat.match(f.name)) and f.stat().st_size > 0})
+        return str(hits[-1]) if hits else None
+
+    def tag_for(self, lvl=None):
+        """the <steps> tag of level `lvl`'s files (None -> the shared reference files),
+        or None when the files are not on disk yet (sync first)."""
+        key = 'ref' if lvl is None else str(lvl)
+        if key in self._tags:
+            return self._tags[key]
+        t = str(self.NSTEPS) if isinstance(self.NSTEPS, int) else self._glob_tag(lvl)
+        if t is not None:
+            self._tags[key] = t
+        return t
+
+    # ---- path builders: *_ref files carry no level suffix, production files do ----
+    def csuf(self, lvl):
         return '' if lvl is None else f'_c{lvl}'
 
+    def stem(self, lvl=None):
+        """<DATANAME>_<INTERACTION>_<tag>[_c<lvl>]; '*' stands in for a tag not resolved yet
+        (so the name doubles as the sync glob pattern)."""
+        t = self.tag_for(lvl)
+        return f'{self.DATANAME}_{self.INTERACTION}_{t if t is not None else "*"}{self.csuf(lvl)}'
+
     def path(self, name, lvl=None, ext='dat'):
-        return self.DATA_DIR / f'{name}_{self.sim_name}{self.tag(lvl)}.{ext}'
+        return self.DATA_DIR / f'{name}_{self.stem(lvl)}.{ext}'
 
     def traj(self, name, lvl=None):
-        return self.TRAJ_DIR / f'{name}_{self.sim_name}{self.tag(lvl)}.lammpstrj'
+        return self.TRAJ_DIR / f'{name}_{self.stem(lvl)}.lammpstrj'
 
     def plot(self, stem, lvl=None):
-        return self.PLOT_DIR / f'{stem}_{self.sim_name}{self.tag(lvl)}.png'
+        t = self.tag_for(lvl) or 'untagged'
+        return self.PLOT_DIR / f'{stem}_{self.DATANAME}_{self.INTERACTION}_{t}{self.csuf(lvl)}.png'
 
 
 # ===========================================================================
@@ -744,7 +777,7 @@ def load_level(cfg, R, lvl, verbose=True):
     say = print if verbose else (lambda *a, **k: None)
     z = R['z']
     L = dict(lvl=lvl, eps=float(lvl), z=z)
-    say(f'\n=== level _c{lvl}  (applied strain {float(lvl):.3f}) ===')
+    say(f'\n=== level _c{lvl}  (applied strain {float(lvl):.3f};  files tagged _{cfg.tag_for(lvl)} = hold length) ===')
 
     # ---- production stress stacks per component -------------------------
     L['stress'] = {}
@@ -1039,6 +1072,13 @@ _REQUIRED_PROD = ('sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z', 'st
                   'piston_force', 'box_dimensions', 'gel_dimensions_bb', 'disp_z_polymer')
 
 
+def _present(p):
+    """a Path exists, or (pattern with '*' in the name) something matches it."""
+    if '*' in p.name:
+        return any(True for _ in p.parent.glob(p.name))
+    return p.exists()
+
+
 def sync_files(cfg, levels=None):
     """(data_files, traj_files, required) the notebooks read for `levels`
     (default: every level in cfg.COMP_LEVELS)."""
@@ -1071,10 +1111,10 @@ def sync_from_expanse(cfg, levels=None, force=False):
             absent = set(json.loads(absent_f.read_text()))
         except Exception:
             absent = set()
-    missing_dat = [f for f in data_files if not f.exists()]
+    missing_dat = [f for f in data_files if not _present(f)]
     missing_new = [f for f in missing_dat if f.name not in absent]
-    missing_all = missing_dat + [f for f in traj_files if not f.exists()]
-    missing_req = [f for f in required if not f.exists()]
+    missing_all = missing_dat + [f for f in traj_files if not _present(f)]
+    missing_req = [f for f in required if not _present(f)]
     if not force and not missing_new:
         known = len(missing_dat) - len(missing_new)
         print(f'All data files present locally' + (f' except {known} known absent on the cluster' if known else '')
@@ -1093,16 +1133,17 @@ def sync_from_expanse(cfg, levels=None, force=False):
 set -u
 RUNS="__RUNS__"; TRAJ="__TRAJ__"; STAGE="__STAGE__"
 rm -rf "$STAGE"; mkdir -p "$STAGE/data" "$STAGE/traj"
-declare -A NEWEST_D
-while IFS= read -r line; do p=${line#* }; b=${p##*/}
-  [ -z "${NEWEST_D[$b]:-}" ] && NEWEST_D[$b]="$p"
-done < <(find "$RUNS" -name '*.dat' -not -path '*/triaxial_stage/*' -printf '%T@ %p\n' 2>/dev/null | sort -rn)
-for B in __DATA_BN__; do S="${NEWEST_D[$B]:-}"; [ -n "$S" ] && cp -p "$S" "$STAGE/data/" 2>/dev/null || true; done
-declare -A NEWEST_T
-while IFS= read -r line; do p=${line#* }; b=${p##*/}
-  [ -z "${NEWEST_T[$b]:-}" ] && NEWEST_T[$b]="$p"
-done < <(find "$TRAJ" "$RUNS" -name '*.lammpstrj' -not -path '*/triaxial_stage/*' -printf '%T@ %p\n' 2>/dev/null | sort -rn)
-for B in __TRAJ_BN__; do S="${NEWEST_T[$B]:-}"; [ -n "$S" ] && cp -p "$S" "$STAGE/traj/" 2>/dev/null || true; done
+# newest-first lists of every candidate file; each requested name may be a glob
+# pattern (the <steps> tag is '*' until the level's files exist locally), and the
+# NEWEST match wins.
+mapfile -t ALL_D < <(find "$RUNS" -name '*.dat' -not -path '*/triaxial_stage/*' -size +0 -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
+for B in __DATA_BN__; do
+  for p in "${ALL_D[@]}"; do b=${p##*/}; if [[ "$b" == $B ]]; then cp -p "$p" "$STAGE/data/" 2>/dev/null || true; break; fi; done
+done
+mapfile -t ALL_T < <(find "$TRAJ" "$RUNS" -name '*.lammpstrj' -not -path '*/triaxial_stage/*' -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
+for B in __TRAJ_BN__; do
+  for p in "${ALL_T[@]}"; do b=${p##*/}; if [[ "$b" == $B ]]; then cp -p "$p" "$STAGE/traj/" 2>/dev/null || true; break; fi; done
+done
 echo "  staged: $(ls "$STAGE/data" 2>/dev/null | wc -l) data, $(ls "$STAGE/traj" 2>/dev/null | wc -l) traj"
 """
     script = (script.replace('__RUNS__', cfg.RUNS_ROOT).replace('__TRAJ__', cfg.TRAJ_ROOT)
@@ -1177,7 +1218,10 @@ echo "  staged: $(ls "$STAGE/data" 2>/dev/null | wc -l) data, $(ls "$STAGE/traj"
     pull(f'{stage}/traj', cfg.TRAJ_DIR)
     sftp.close()
     ssh.close()
-    still = [f.name for f in data_files if not f.exists()]
+    if not isinstance(cfg.NSTEPS, (int, dict)):
+        cfg._tags = {}                                     # re-resolve the tags from the new files
+    data_files, traj_files, required = sync_files(cfg, levels)
+    still = [f.name for f in data_files if not _present(f)]
     absent_f.write_text(json.dumps(sorted(set(still)), indent=1))
     if still:
         print(f'Sync complete; {len(still)} data file(s) not found on the cluster (remembered in {absent_f.name}): '

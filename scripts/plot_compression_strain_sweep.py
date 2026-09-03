@@ -107,6 +107,19 @@ def _level_colors(levels):
     return [cmap(norm(v)) if np.isfinite(v) else cmap(0.5) for v in vals]
 
 
+
+def find_file(path):
+    """Exact path if it exists; else the same name with the <steps> tag wild-carded
+    (production files are tagged with each level's auto-sized hold length, so the
+    stem's TOTSTEPS need not match). Returns the newest match, or the original path."""
+    if os.path.exists(path):
+        return path
+    import glob, re
+    pat = re.sub(r'_(\d+)(_c[\d.]+\.dat)$', r'_*\2', path)
+    hits = sorted(glob.glob(pat), key=os.path.getmtime)
+    return hits[-1] if hits else path
+
+
 def plot_piston_sweep(folder, stem, levels, colors, oldsteps=0):
     pd = os.path.join(folder, 'output_files', 'piston_data')
     plot_dir = os.path.join(folder, 'output_plots')
@@ -121,7 +134,7 @@ def plot_piston_sweep(folder, stem, levels, colors, oldsteps=0):
     any_data = False
     for ax, (prefix, ylabel, title) in zip(axes, panels):
         for s, c in zip(levels, colors):
-            steps, vals = read_xy(os.path.join(pd, f"{prefix}_{stem}_c{s}.dat"))
+            steps, vals = read_xy(find_file(os.path.join(pd, f"{prefix}_{stem}_c{s}.dat")))
             if steps is None:
                 continue
             ax.plot(steps, vals, lw=1.5, color=c, alpha=0.9, label=fr'$\varepsilon={s}$')
@@ -170,7 +183,7 @@ def plot_stress_profiles_sweep(folder, stem, levels, colors):
             total = None
             zfrac = None
             for pref in comp_prefixes:
-                rows, vals = read_ave_time_last(os.path.join(sd, f"{pref}_{stem}_c{s}.dat"))
+                rows, vals = read_ave_time_last(find_file(os.path.join(sd, f"{pref}_{stem}_c{s}.dat")))
                 if vals is None:
                     continue
                 if total is None:
