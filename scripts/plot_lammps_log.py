@@ -26,11 +26,6 @@ Output (saved inside <folder>/output_plots/convergence_plots/):
                                        (auto-generated when
                                        output_files/chemical_potential/ files present;
                                        produced by slab_with_support runs)
-    {run_id}_swelling_anisotropy.png — off-diagonal/diagonal polymer stress ratio
-                                       vs step (auto-generated for free-swelling
-                                       runs, i.e. not compress_slab/shear_slab,
-                                       when stress_tensor_polymer_*.dat is present;
-                                       produced by slab_with_support runs)
 """
 
 import argparse
@@ -623,74 +618,6 @@ def plot_compression_diagnostics(data, folder, run_id, output):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SWELLING ANISOTROPY DIAGNOSTICS  (free-swelling runs — e.g. slab_with_support)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def plot_swelling_anisotropy(folder, run_id, output):
-    """Off-diagonal / diagonal polymer stress ratio vs step.
-
-    A gel that is truly free-swelling only expands isotropically if it
-    doesn't feel its own periodic images. Once lateral expansion pushes the
-    gel into its neighboring image, the network gets squeezed rather than
-    swelling freely, and that squeezing shows up as a growing off-diagonal
-    (shear-like) polymer stress component relative to the diagonal (normal)
-    component. This tracks that effect through equilibration:
-
-        ratio(t) = mean(|sigma_xy|, |sigma_xz|, |sigma_yz|)
-                 / mean(|sigma_xx|, |sigma_yy|, |sigma_zz|)
-
-    Absolute values are used because the off-diagonal terms fluctuate
-    around zero by symmetry — a raw signed average would mostly cancel and
-    say nothing about the magnitude of the confinement.
-
-    Data source: output_files/stress_data/stress_tensor_polymer_<run_id>.dat
-      (fix ave/time, cols: xx yy zz xy xz yz)
-    """
-    sd = os.path.join(folder, 'output_files', 'stress_data')
-    stress_file = os.path.join(sd, f'stress_tensor_polymer_{run_id}.dat')
-    if not os.path.exists(stress_file):
-        print("No stress_tensor_polymer file found — skipping swelling anisotropy plot.")
-        return
-
-    ts, arr = read_ave_time(stress_file)
-    if not ts.size or arr.shape[1] < 6:
-        print("stress_tensor_polymer file empty/short — skipping swelling anisotropy plot.")
-        return
-
-    diag    = np.abs(arr[:, 0:3]).mean(axis=1)
-    offdiag = np.abs(arr[:, 3:6]).mean(axis=1)
-    ratio   = offdiag / diag
-
-    fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-    fig.suptitle(f'{run_id}  —  swelling anisotropy', fontsize=12, fontweight='bold')
-
-    ax = axes[0]
-    ax.plot(ts, diag,    color='royalblue', lw=1.5, marker='o', markersize=3,
-            label='mean |diagonal|  (xx, yy, zz)')
-    ax.plot(ts, offdiag, color='crimson',   lw=1.5, marker='s', markersize=3,
-            label='mean |off-diagonal|  (xy, xz, yz)')
-    ax.set_ylabel('Polymer stress\n(σ / gel volume)')
-    ax.grid(alpha=0.3)
-    ax.legend(fontsize=8)
-
-    ax = axes[1]
-    ax.plot(ts, ratio, color='darkorange', lw=1.5, marker='o', markersize=3)
-    ax.axhline(0, color='k', ls=':', lw=0.8)
-    ax.set_ylabel('Off-diag / diag ratio')
-    ax.set_xlabel('Step')
-    ax.grid(alpha=0.3)
-    _annotate_last30(ax, ratio, fmt='.4f', color='darkorange')
-    ax.text(0.02, 0.92,
-            '→ 0  ⇒ isotropic swelling\nelevated/non-decaying ⇒ periodic-image squeezing',
-            transform=ax.transAxes, fontsize=8, va='top',
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-
-    plt.tight_layout()
-    plt.savefig(output, dpi=150)
-    print(f"Swelling anisotropy → {output}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # FLOW / COMPRESSION DIAGNOSTICS PLOT
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1114,23 +1041,13 @@ if __name__ == '__main__':
 
     # Shear diagnostics (auto-triggered by presence of shear output files or
     # shear-specific thermo columns Pxz / Xz).  Skipped for compress_slab runs.
-    # NOTE: stress_tensor_polymer_*.dat is intentionally NOT part of this
-    # check — that file is now also produced by free-swelling runs (e.g.
-    # slab_with_support), and Pxz/Xz thermo columns already identify true
-    # shear runs (shear_slab always outputs both).
-    shear_files_present = os.path.exists(os.path.join(sd, f'shear_strain_{run_id}.dat'))
-    is_shear = shear_files_present or 'Pxz' in data or 'Xz' in data
-    if not is_compress and is_shear:
+    shear_files_present = (
+        os.path.exists(os.path.join(sd, f'stress_tensor_polymer_{run_id}.dat')) or
+        os.path.exists(os.path.join(sd, f'shear_strain_{run_id}.dat'))
+    )
+    if not is_compress and (shear_files_present or 'Pxz' in data or 'Xz' in data):
         plot_shear_diagnostics(data, args.folder, run_id,
                                os.path.join(out_dir, f'{run_id}_shear_diagnostics.png'))
-
-    # Swelling anisotropy diagnostics (free-swelling runs — e.g. slab_with_support).
-    # Auto-triggered when a polymer stress tensor file exists and this is neither
-    # a compress_slab nor a shear_slab run (those have their own dedicated
-    # stress panels already).
-    if not is_compress and not is_shear:
-        plot_swelling_anisotropy(args.folder, run_id,
-                                 os.path.join(out_dir, f'{run_id}_swelling_anisotropy.png'))
 
     # Flow/compression diagnostics (auto-triggered when piston force files are present).
     # Mode (compression vs permeation) is detected inside plot_flow_diagnostics from
