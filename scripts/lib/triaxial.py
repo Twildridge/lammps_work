@@ -50,6 +50,7 @@ from scipy.optimize import minimize_scalar
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -118,6 +119,7 @@ class Config:
     VOR_MOBILE_ONLY: bool = True          # tessellate types 1,2,3 only
     VOR_NORM: str = 'bin'                 # 'bin' (absolute) | 'mobile' (saturating) for the raw phi^vor
     P_CAL: float = 1.5                    # P_local for lambda(phi_p, P); reference-state P_target
+    P_BARO: float = 1.5                   # bath / barostat pressure: the total-stress panels are drawn as sigma^t / P_BARO
     PHI_FLOOR: float = 0.02
     REF_VOR_FRAMES: int = 3               # reference frames tessellated (~20 s each)
     VOR_MAX_FRAMES: int = 4               # plateau frames tessellated per level (~20 s each)
@@ -407,13 +409,40 @@ def plateau_window(steps, x, plateau_frac_auto=0.45, ci=0.95, fracs=None):
                 block=blk, tau=tau, frac=float(fracs[-1]), warn=True)
 
 
+def sig(x, n=3):
+    """x rounded to n significant figures, written without an exponent for
+    1e-4 <= |x| < 1e6 (figure text: never more than 3 sig figs)."""
+    x = float(x)
+    if not np.isfinite(x):
+        return 'n/a'
+    if x == 0:
+        return '0'
+    e = int(np.floor(np.log10(abs(x))))
+    if -4 <= e < 6:
+        dec = max(0, n - 1 - e)
+        return f'{round(x, n - 1 - e):.{dec}f}'
+    return f'{x:.{n - 1}e}'
+
+
+def fmt_step(t):
+    """timestep as 535k / 5.35M (3 sig figs)."""
+    t = float(t)
+    if abs(t) >= 1e6:
+        return sig(t / 1e6) + 'M'
+    if abs(t) >= 1e3:
+        return sig(t / 1e3) + 'k'
+    return sig(t)
+
+
 def fmt_val_unc(v, u):
-    """value +/- uncertainty, uncertainty rounded to 2 sig figs."""
-    v = float(v)
+    """value (3 sig figs) +/- uncertainty (2 sig figs)."""
     if np.isfinite(u) and u > 0:
-        dec = int(np.clip(1 - np.floor(np.log10(u)), 0, 6))
-        return f'{v:.{dec}f} ± {u:.{dec}f}'
-    return f'{v:.3g}'
+        return f'{sig(v, 3)} ± {sig(u, 2)}'
+    return sig(v, 3)
+
+
+def fmt_ci(v, lo, hi):
+    return f'{sig(v)} [{sig(lo)}, {sig(hi)}]'
 
 
 def fmt_mu(vals):
@@ -544,6 +573,8 @@ def load_reference(cfg):
         S['net_m'], S['net_lo'], S['net_hi'] = mean_ci(net, cfg.ci_level)
         S['pore'] = float(np.mean(pore))
         S['net_interior'] = float(np.nanmean(S['net_m'][R['interior']])) if R['interior'].any() else np.nan
+        _, ilo, ihi = mean_ci(S['net_m'][R['interior']], cfg.ci_level) if R['interior'].sum() > 1 else (np.nan, np.nan, np.nan)
+        S['net_interior_half'] = float(0.5 * (ihi - ilo)) if np.isfinite(ihi) else 0.0
     print('reference pore baseline p_pore  ' + '  '.join(
         f'{c}: {S["pore"]:.4f}' for c, S in R['stress'].items()))
     print('reference network stress in gel interior  ' + '  '.join(
@@ -843,20 +874,36 @@ def load_level(cfg, R, lvl, verbose=True):
         S = L['stress'].get(comp)
         if S is None:
             continue
+        # The lateral total stress JUMPS at the gel boundary (only sigma_zz is continuous
+        # there), so the 2-3 edge bins of the membrane carry no anisotropy information and
+        # inflate the bin scatter ~10x: G and the ratio use the wall_margin-trimmed interior.
+        im = L['interior'] if L['interior'].sum() >= 3 else L['in_mem']
         dxx = S['net'] - S['ref_net']
-        g_bins = (dzz[-1] - dxx[-1])[L['in_mem']] / (2.0 * eps)
+        g_bins = (dzz[-1] - dxx[-1])[im] / (2.0 * eps)
         g_bins = g_bins[np.isfinite(g_bins)]
         Gm, Glo, Ghi = mean_ci(g_bins, cfg.ci_level)
-        lam = float(np.nanmean(dxx[-1][L['in_mem']])) / eps
+        lam = float(np.nanmean(dxx[-1][im])) / eps
         with np.errstate(invalid='ignore', divide='ignore'):
-            ratio = np.array([np.nanmean(dzz[i][L['in_mem']]) / np.nanmean(dxx[i][L['in_mem']])
-                              for i in range(len(ts))])
-        L['G'][comp] = dict(G=Gm, lo=Glo, hi=Ghi, lam=lam, ratio=ratio, nbins=len(g_bins),
-                            G_pist=(0.5 * (L['M_pist'] - lam) if 'M_pist' in L else np.nan),
-                            ratio_final=float(ratio[-1]))
+            ratio = np.array([np.nanmean(dzz[i][im]) / np.nanmean(dxx[i][im]) for i in range(len(ts))])
+        # ---- ratio with propagated uncertainty (item: error bars on sigma'_zz/sigma'_ii) ----
+        # each membrane mean carries: the t-interval of its bin scatter (as M_network),
+        # the pore baseline uncertainty of that snapshot (common to all bins, so it does
+        # not average out), and the reference-state increment uncertainty; combined in
+        # quadrature, then  d(a/b)/(a/b) = sqrt((da/a)^2 + (db/b)^2).
+        def _mem_mean_err(D, Sx, Rx):
+            m = np.array([np.nanmean(D[i][im]) for i in range(len(ts))])
+            half = np.array([0.5 * (mean_ci(D[i][im], cfg.ci_level)[2]
+                                    - mean_ci(D[i][im], cfg.ci_level)[1]) for i in range(len(ts))])
+            ref_h = (Rx['net_interior_half'] if (cfg.G_SUBTRACT_REF and Rx is not None) else 0.0)
+            return m, np.sqrt(half ** 2 + np.asarray(Sx['pore_half']) ** 2 + ref_h ** 2)
+        a, da = _mem_mean_err(dzz, zz, R['stress'].get('zz'))
+        b, db = _mem_mean_err(dxx, S, R['stress'].get(comp))
+        with np.errstate(invalid='ignore', divide='ignore'):
+            ratio_err = np.abs(ratio) * np.sqrt((da / a) ** 2 + (db / b) ** 2)
+        L['G'][comp] = dict(G=Gm, lo=Glo, hi=Ghi, lam=lam, ratio=ratio, ratio_err=ratio_err,
+                            nbins=len(g_bins), ratio_final=float(ratio[-1]), ratio_final_err=float(ratio_err[-1]))
         say(f"  G from {comp}: {Gm:.4f} [{Glo:.4f}, {Ghi:.4f}]   lambda_{comp} = {lam:.4f}   "
-            f"sigma'_zz/sigma'_{comp} (final) = {ratio[-1]:.3f}"
-            + (f"   [G via M_piston = {L['G'][comp]['G_pist']:.4f}]" if 'M_pist' in L else '')
+            f"sigma'_zz/sigma'_{comp} (final) = {ratio[-1]:.3f} ± {ratio_err[-1]:.3f}"
             + (f"   (ref sigma'_{comp} subtracted: {S['ref_net']:+.4f})" if cfg.G_SUBTRACT_REF else ''))
 
     # ---- D_c and kappa ---------------------------------------------------
@@ -1176,11 +1223,162 @@ def finish_axes(ax, ylabel, title):
     ax.grid(alpha=0.3)
 
 
+def _data_obstacles(ax, renderer):
+    """Display-space sample points of everything drawn on ax (lines, fills,
+    markers) plus the boxes of its text annotations and existing legend."""
+    from matplotlib.collections import PathCollection
+
+    def dense(P, step=4.0, cap=4000):
+        """resample a display-space polyline every `step` px (so a curve crossing
+        a box counts however few vertices it has), capped at `cap` points."""
+        if len(P) < 2:
+            return P
+        seg = np.hypot(*np.diff(P, axis=0).T)
+        n_new = np.minimum(np.maximum((seg / step).astype(int), 1), 50)
+        if n_new.sum() > cap:
+            n_new = np.maximum((n_new * cap / n_new.sum()).astype(int), 1)
+        out = [P[:1]]
+        for i, k in enumerate(n_new):
+            t = np.linspace(0, 1, k + 1)[1:, None]
+            out.append(P[i] + t * (P[i + 1] - P[i]))
+        return np.concatenate(out)
+
+    pts, boxes = [], []
+    for ln in ax.lines:
+        if ln.get_transform() is not ax.transData:      # axhline / axvline guides are not data
+            continue
+        xy = ln.get_xydata()
+        xy = xy[np.isfinite(xy).all(axis=1)]
+        if len(xy):
+            pts.append(dense(ln.get_transform().transform(xy)))
+    for c in ax.collections:
+        try:
+            if isinstance(c, PathCollection):           # scatter: marker positions
+                off = np.asarray(c.get_offsets(), float)
+                off = off[np.isfinite(off).all(axis=1)]
+                if len(off):
+                    pts.append(c.get_offset_transform().transform(off))
+                continue
+            for path in c.get_paths():                  # fills, error bars: outline
+                v = path.vertices
+                v = v[np.isfinite(v).all(axis=1)]
+                if len(v):
+                    pts.append(dense(c.get_transform().transform(v)))
+        except Exception:
+            pass
+    for t in ax.texts:
+        try:
+            boxes.append(t.get_window_extent(renderer))
+        except Exception:
+            pass
+    leg = ax.get_legend()
+    if leg is not None:
+        try:
+            boxes.append(leg.get_window_extent(renderer))
+        except Exception:
+            pass
+    P = np.concatenate(pts) if pts else np.zeros((0, 2))
+    return P, boxes
+
+
+def _overlap_score(box, P, boxes):
+    """number of sampled data points inside `box` (+ a large penalty per unit
+    area-fraction of overlap with existing text / legend boxes)."""
+    x0, y0, x1, y1 = box
+    n_in = int(((P[:, 0] >= x0) & (P[:, 0] <= x1) & (P[:, 1] >= y0) & (P[:, 1] <= y1)).sum()) if len(P) else 0
+    area = max((x1 - x0) * (y1 - y0), 1e-9)
+    ov = 0.0
+    for b in boxes:
+        w = min(x1, b.x1) - max(x0, b.x0)
+        h = min(y1, b.y1) - max(y0, b.y0)
+        if w > 0 and h > 0:
+            ov += w * h / area
+    return n_in + 1000.0 * ov
+
+
+_LOC_ORDER = ('upper right', 'upper left', 'lower right', 'lower left', 'center right',
+              'center left', 'upper center', 'lower center', 'center')
+
+
+def _candidate_boxes(ax, w, h, pad, locs=_LOC_ORDER):
+    ab = ax.bbox
+    out = {}
+    for loc in locs:
+        if 'left' in loc:
+            x0 = ab.x0 + pad
+        elif 'right' in loc:
+            x0 = ab.x1 - pad - w
+        else:
+            x0 = 0.5 * (ab.x0 + ab.x1) - 0.5 * w
+        if 'lower' in loc:
+            y0 = ab.y0 + pad
+        elif 'upper' in loc:
+            y0 = ab.y1 - pad - h
+        else:
+            y0 = 0.5 * (ab.y0 + ab.y1) - 0.5 * h
+        out[loc] = (x0, y0, x0 + w, y0 + h)
+    return out
+
+
+def smart_legend(ax, *args, outside='auto', clear_tol=3, **kw):
+    """smart_legend(ax, ...) placed where it covers no data: scores the nine standard
+    positions against every plotted point / fill / annotation and takes the
+    clearest; if none is clear the legend goes OUTSIDE the axes (right, or below
+    when the axes carries a colorbar).  outside=False keeps it inside."""
+    kw.pop('loc', None)
+    leg = ax.legend(*args, loc='upper right', **kw)
+    try:
+        ax.figure.canvas.draw()          # final autoscaled limits + layout before measuring anything
+        renderer = ax.figure.canvas.get_renderer()
+        bb = leg.get_window_extent(renderer)
+        fs = leg._fontsize if hasattr(leg, '_fontsize') else 12.0
+        pad = leg.borderaxespad * fs * ax.figure.dpi / 72.0
+        leg.remove()                     # so the probe legend is not its own obstacle
+        P, boxes = _data_obstacles(ax, renderer)
+        cands = _candidate_boxes(ax, bb.width, bb.height, pad)
+        scores = {loc: _overlap_score(box, P, boxes) for loc, box in cands.items()}
+        best = min(_LOC_ORDER, key=lambda l: scores[l])
+    except Exception as e:
+        print(f'  (smart_legend fell back to loc="best": {type(e).__name__}: {e})')
+        if leg.axes is not None:
+            leg.remove()
+        return ax.legend(*args, loc='best', **kw)
+    if scores[best] <= clear_tol or outside is False:
+        return ax.legend(*args, loc=best, **kw)
+    if getattr(ax, '_tri_has_colorbar', False):     # a colorbar sits to the right -> go below
+        labels = [t.get_text() for t in leg.get_texts()]
+        ncol = 2 if max((len(l) for l in labels), default=0) > 24 else min(max(1, len(labels)), 4)
+        return ax.legend(*args, loc='upper center', bbox_to_anchor=(0.5, -0.16), ncol=ncol, **kw)
+    return ax.legend(*args, loc='upper left', bbox_to_anchor=(1.02, 1.0), **kw)
+
+
 def annotate_box(ax, text, loc='lower left', fontsize=14, color='k'):
-    x, ha = (0.02, 'left') if 'left' in loc else (0.98, 'right')
-    y, va = (0.03, 'bottom') if 'lower' in loc else (0.97, 'top')
-    ax.text(x, y, text, transform=ax.transAxes, va=va, ha=ha, fontsize=fontsize, color=color,
-            bbox=dict(boxstyle='round', fc='white', ec='0.7', alpha=0.85))
+    """Text box in an axes corner.  `loc` is the preferred corner; if it would
+    cover data or another box and a clearer corner exists, that one is used."""
+    corners = {'lower left': (0.02, 0.03, 'left', 'bottom'), 'lower right': (0.98, 0.03, 'right', 'bottom'),
+               'upper left': (0.02, 0.97, 'left', 'top'), 'upper right': (0.98, 0.97, 'right', 'top')}
+    x, y, ha, va = corners[loc]
+    t = ax.text(x, y, text, transform=ax.transAxes, va=va, ha=ha, fontsize=fontsize, color=color,
+                bbox=dict(boxstyle='round', fc='white', ec='0.7', alpha=0.85))
+    try:
+        ax.figure.canvas.draw()
+        renderer = ax.figure.canvas.get_renderer()
+        bb = t.get_window_extent(renderer)
+        P, boxes = _data_obstacles(ax, renderer)
+        boxes = [b for b in boxes if not (abs(b.x0 - bb.x0) < 1 and abs(b.y0 - bb.y0) < 1)]
+        pad = 0.02 * ax.bbox.width
+        cands = _candidate_boxes(ax, bb.width, bb.height, pad, locs=tuple(corners))
+        scores = {c: _overlap_score(cands[c], P, boxes) for c in corners}
+        if scores[loc] > 3:
+            best = min(corners, key=lambda c: (scores[c], c != loc))
+            if scores[best] < scores[loc]:
+                x, y, ha, va = corners[best]
+                t.set_position((x, y))
+                t.set_ha(ha)
+                t.set_va(va)
+    except Exception as e:
+        print(f'  (annotate_box placement check skipped: {type(e).__name__}: {e})')
+    return t
 
 
 def flat_inside(curve, z, mask, tol):
@@ -1243,7 +1441,7 @@ def plot_reference(ax, R, z, m, lo, hi, color, ylabel, title, annotate=True):
 
 
 def plot_evolution(ax, cfg, R, L, z, ts, stack, ylabel, title, ref=None, band=None, colorbar=True,
-                   annotate=True):
+                   annotate=True, legend=True):
     """Time-coloured profiles (cividis); final curve bold black; membrane shaded.
     ref=(mean, lo, hi) draws the eps = 0 reference profile (dashed, band) as the
     starting point of the evolution.  band = (n, nz) half-widths for 95 % bands."""
@@ -1275,6 +1473,9 @@ def plot_evolution(ax, cfg, R, L, z, ts, stack, ylabel, title, ref=None, band=No
         sm.set_array([])
         cb = ax.figure.colorbar(sm, ax=ax, fraction=0.046, pad=0.02)
         cb.set_label('timestep')
+        ax._tri_has_colorbar = True
+    if ref is not None and legend:
+        smart_legend(ax, fontsize=12)
     if annotate:
         interior = L['interior']
         if flat_inside(stack[-1], z, interior, cfg.flat_tol):
@@ -1282,12 +1483,10 @@ def plot_evolution(ax, cfg, R, L, z, ts, stack, ylabel, title, ref=None, band=No
         else:
             ax.text(0.02, 0.03, 'final not flat inside\n(means omitted)', transform=ax.transAxes,
                     va='bottom', ha='left', fontsize=13, color='0.35')
-    if ref is not None:
-        ax.legend(fontsize=12, loc='upper right')
 
 
 def overlay_levels(ax, R, levels, get_z, get_ts, get_stack, cfg, ref=None, autoscale_mask=None,
-                   ylabel='', title=''):
+                   ylabel='', title='', include_zero=True, pad=0.15, qlo=2):
     """Sweep overlay: colour = level; within a level the evolution ramps faint ->
     bold with the final curve opaque.  ref=(mean, lo, hi) is drawn dashed black."""
     finals = []
@@ -1319,7 +1518,8 @@ def overlay_levels(ax, R, levels, get_z, get_ts, get_stack, cfg, ref=None, autos
         ax.axvline(zn(R, L['z_pist']), color=level_color(i), ls='-.', lw=1.2, alpha=0.6, zorder=4)
     finish_axes(ax, ylabel, title)
     if finals:
-        robust_ylim(ax, finals, zmask=autoscale_mask, pad=0.15)
+        robust_ylim(ax, finals, zmask=autoscale_mask, pad=pad, qlo=qlo, qhi=100, include_zero=include_zero)
+    return finals
 
 
 def level_handles(levels, ref=False):
@@ -1366,7 +1566,7 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
                     label=r'$\varepsilon_\mathrm{piston}$ (diag)')
         ax.axvspan(L['halt_ts'], st[-1], color=col, alpha=0.06)
         ax.axhline(L['eps'], color=col, ls=':', lw=1.0, alpha=0.6)
-        ax.annotate(f'plateau: Rg {L.get("eps_rg", np.nan):.3f}  BB {L.get("eps_bb", np.nan):.3f}',
+        ax.annotate(f'plateau: Rg {sig(L.get("eps_rg", np.nan))}  BB {sig(L.get("eps_bb", np.nan))}',
                     (st[-1], eps_rg[-1]), textcoords='offset points', xytext=(-6, 9), ha='right',
                     va='bottom', fontsize=10, color=col,
                     bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='none', alpha=0.8))
@@ -1375,7 +1575,7 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
     ax.set_title('Strain diagnostic: solid $\\varepsilon_{Rg}$, dashed $\\varepsilon_{BB}$,\n'
                  'dotted = applied target, shaded = plateau window', fontsize=15)
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=10, loc='best')
+    smart_legend(ax, fontsize=10)
     if not any_:
         plt.close(fig)
         print('strain diagnostic skipped (no strain_zz files)')
@@ -1403,7 +1603,7 @@ def _phi_panel(ax, cfg, R, D, L=None, title='', bands=True):
     mark_walls(ax, R, L)
     finish_axes(ax, r'$\phi_s$', title)
     ax.set_ylim(0, 1.15)
-    ax.legend(fontsize=12, loc='lower left')
+    smart_legend(ax, fontsize=12)
     mask = L['interior'] if L is not None else R['interior']
     txt = '\n'.join(f'{"mf" if "mf" in lab else ("vor" if "vor" in lab else "cal")}: {fmt_mu(m[mask])}'
                     for lab, m in drawn)
@@ -1443,18 +1643,35 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
         ref = None
         if Rs is not None:
             ref = (Rs['t_m'], Rs['t_lo'], Rs['t_hi']) if kind == 't' else (Rs['net_m'], Rs['net_lo'], Rs['net_hi'])
-        plot_evolution(ax, cfg, R, L, R['z'], ts, ev, lab + '$(z,t)$', title, ref=ref, band=band)
+        if kind == 't':      # normalise by the bath pressure; leave headroom above the reservoir value ~1
+            Pb = cfg.P_BARO
+            ev = ev / Pb
+            ref = None if ref is None else tuple(np.asarray(r) / Pb for r in ref)
+            ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
+            lab = lab + r'$/P_{\rm bath}$'
+        plot_evolution(ax, cfg, R, L, R['z'], ts, ev, lab + '$(z,t)$', title, ref=ref, band=band,
+                       annotate=False, legend=False)
+        if kind == 't':      # zoom on the band around P_bath (edge bin excluded), keep 1 well inside
+            robust_ylim(ax, list(ev) + ([ref[0]] if ref is not None else []), pad=0.45, qlo=2, qhi=100,
+                        include_zero=False)
+            lo, hi = ax.get_ylim()
+            ax.set_ylim(min(lo, 1 - 0.3 * (hi - lo)), max(hi, 1 + 0.3 * (hi - lo)))
+            note = 'plateau mean in gel = ' + fmt_mu(ev[-1][L['interior']])
         if kind == 'net':
             mask = (R['z'] >= L['z_mem_lo'] + cfg.wall_margin)
             robust_ylim(ax, list(ev), zmask=mask, pad=0.15)
-            annotate_box(ax, 'final (plateau)\nmean in membrane = ' + fmt_mu(ev[-1][L['in_mem']]))
+            note = 'plateau mean in membrane = ' + fmt_mu(ev[-1][L['in_mem']])
+        h, lab = ax.get_legend_handles_labels()
+        h.append(Patch(alpha=0, label=note))          # the number rides in the legend, never on data
+        lab.append(note)
+        smart_legend(ax, handles=h, labels=lab, fontsize=12)
     return _save(fig, cfg, stem, L['lvl'])
 
 
 def fig_total_stress(cfg, R, L):
     return _stress_evo_panels(cfg, R, L, 't', 'total_stress_evolution',
-                              f'Total stress evolution, reference -> compressed (steps >= {L["evol_from"]}; '
-                              f'plateau >= {L["halt_ts"]})  |  {cfg.sim_name}')
+                              f'Total stress / bath pressure ($P_{{\\rm bath}}={sig(cfg.P_BARO)}$), reference -> compressed '
+                              f'(hold from step {fmt_step(L["evol_from"])}; plateau from {fmt_step(L["halt_ts"])})  |  {cfg.sim_name}')
 
 
 def fig_network_stress(cfg, R, L):
@@ -1492,7 +1709,7 @@ def fig_partial_stress(cfg, R, L):
     mark_walls(ax, R, L)
     finish_axes(ax, r'$\sigma_{zz}(z,t)$  (LJ)',
                 f'Partial and total $\\sigma_{{zz}}$: reference -> compressed ($\\varepsilon={L["eps"]:.2f}$)')
-    ax.legend(handles=handles, fontsize=12, loc='best')
+    smart_legend(ax, handles=handles, fontsize=12)
     return _save(fig, cfg, 'partial_stress_evolution', L['lvl'])
 
 
@@ -1505,10 +1722,10 @@ def fig_piston(cfg, R, L):
     P_roll = rolling_mean(P, cfg.roll_win)
     peak = int(steps[int(P.argmax())])
     fig, (axL, axG) = plt.subplots(1, 2, figsize=(17, 6), constrained_layout=True)
-    fig.suptitle(f'Piston pressure history ($A = {L["area"]:.1f}\\,\\sigma^2$, $F_z = P\\,A$)  |  {cfg.sim_name}',
+    fig.suptitle(f'Piston pressure history ($A = {sig(L["area"])}\\,\\sigma^2$, $F_z = P\\,A$)  |  {cfg.sim_name}',
                  fontsize=13, fontweight='bold')
     for ax in (axL, axG):
-        ax.axvline(peak, color=WONG['blue'], ls='--', lw=1.6, alpha=0.7, label=f'peak $P$ (t={peak})')
+        ax.axvline(peak, color=WONG['blue'], ls='--', lw=1.6, alpha=0.7, label=f'peak $P$ (step {fmt_step(peak)})')
         if 'PF' in L:
             ax.axvspan(L['PF']['step0'], float(steps[-1]), color=WONG['green'], alpha=0.10,
                        label='plateau window (auto)')
@@ -1521,7 +1738,7 @@ def fig_piston(cfg, R, L):
     axL.axhline(0, color='k', ls='--', lw=0.8, alpha=0.4)
     axL.set_ylabel(r'$P = F_z/A$  (LJ / $\sigma^2$)')
     axL.set_title('(a) piston pressure')
-    axL.legend(fontsize=12, loc='upper center')     # upper right is the plateau annotation box
+    smart_legend(axL, fontsize=12)
     pos = P > 0
     axG.plot(steps[pos], np.log(P[pos]), '-', color=WONG['vermillion'], lw=1.0, alpha=0.30, label=r'$\ln P$ (raw)')
     posr = P_roll > 0
@@ -1532,7 +1749,7 @@ def fig_piston(cfg, R, L):
         axG.plot(L['pfa_step'][posa], np.log(L['pfa_P'][posa]), '-', color='k', lw=1.8, alpha=0.8, label='LMP block-avg')
     axG.set_ylabel(r'$\ln P$')
     axG.set_title('(b) log piston pressure (relaxation view)')
-    axG.legend(fontsize=12, loc='best')
+    smart_legend(axG, fontsize=12)
     if 'PF' in L:
         p = L['PF']
         annotate_box(axL, f"plateau $\\langle P\\rangle$ = {fmt_val_unc(p['mean'], 0.5 * (p['hi'] - p['lo']))}\n"
@@ -1551,16 +1768,18 @@ def fig_ratio(cfg, R, L):
         G = L['G'].get(comp)
         if G is None:
             continue
-        ax.plot(L['ts'], G['ratio'], ls, color=col, lw=2.4, marker='o', ms=5,
-                label=fr"$\sigma'_{{zz}}/\sigma'_{{{comp}}}$   final = {G['ratio_final']:.3f}")
+        ax.errorbar(L['ts'], G['ratio'], yerr=G['ratio_err'], ls=ls, color=col, lw=2.0, marker='o', ms=5,
+                    capsize=4, elinewidth=1.2,
+                    label=fr"$\sigma'_{{zz}}/\sigma'_{{{comp}}}$   final = {fmt_val_unc(G['ratio_final'], G['ratio_final_err'])}")
     ax.axvspan(L['halt_ts'], float(L['ts'][-1]), color=WONG['green'], alpha=0.10, label='plateau window')
     ax.axhline(1.0, color='k', ls=':', lw=1.0, alpha=0.6)
+    robust_ylim(ax, [G['ratio'] for G in L['G'].values()], pad=0.35, qlo=0, qhi=100)   # error bars may run off
     ax.set_xlabel('step')
-    ax.set_ylabel(r"$\langle\sigma'_{zz}\rangle_{\rm mem}/\langle\sigma'_{ii}\rangle_{\rm mem}$")
+    ax.set_ylabel(r"$\langle\sigma'_{zz}\rangle_{\rm int}/\langle\sigma'_{ii}\rangle_{\rm int}$")
     ax.set_title(r"Network stress anisotropy $\sigma'_{zz}/\sigma'_{ii} = M/(M-2G)$"
                  + ('  (relative to $\\varepsilon=0$)' if cfg.G_SUBTRACT_REF else ''), fontsize=15)
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=13, loc='best')
+    smart_legend(ax, fontsize=13)
     return _save(fig, cfg, 'network_stress_ratio', L['lvl'])
 
 
@@ -1570,20 +1789,20 @@ def fig_M(cfg, R, L):
     ci = int(cfg.ci_level * 100)
     ax.errorbar([0], [L['M_net']], yerr=[[L['M_net'] - L['M_net_lo']], [L['M_net_hi'] - L['M_net']]],
                 fmt='o', ms=13, color=WONG['blue'], capsize=8, lw=2.5,
-                label=f"network  $M = {L['M_net']:.3f}$\n{ci}% CI [{L['M_net_lo']:.3f}, {L['M_net_hi']:.3f}]")
+                label=f"network  $M = {sig(L['M_net'])}$\n{ci}% CI [{sig(L['M_net_lo'])}, {sig(L['M_net_hi'])}]")
     ax.axhline(L['M_net'], color=WONG['blue'], ls='--', lw=1.2, alpha=0.5)
     if 'M_pist' in L:
         ax.errorbar([1], [L['M_pist']], yerr=[[L['M_pist'] - L['M_pist_lo']], [L['M_pist_hi'] - L['M_pist']]],
                     fmt='s', ms=13, color=WONG['vermillion'], capsize=8, lw=2.5,
-                    label=f"piston  $M = {L['M_pist']:.3f}$\n{ci}% CI [{L['M_pist_lo']:.3f}, {L['M_pist_hi']:.3f}]")
+                    label=f"piston  $M = {sig(L['M_pist'])}$\n{ci}% CI [{sig(L['M_pist_lo'])}, {sig(L['M_pist_hi'])}]")
         ax.axhline(L['M_pist'], color=WONG['vermillion'], ls='--', lw=1.2, alpha=0.5)
     ax.set_xticks([0, 1])
     ax.set_xticklabels([r"network ($\sigma'_{zz}/\varepsilon$)", r'piston ($P/\varepsilon$)'], fontsize=16)
     ax.set_ylabel(r'$M$  (LJ units)')
-    ax.set_title(f'Longitudinal modulus\n{cfg.RUN_ID}  |  $\\varepsilon = {L["eps"]:.3f}$', fontsize=15)
+    ax.set_title(f'Longitudinal modulus\n{cfg.RUN_ID}  |  $\\varepsilon = {L["lvl"]}$', fontsize=15)
     ax.set_xlim(-0.5, 1.5)
     ax.grid(axis='y', alpha=0.3)
-    ax.legend(fontsize=13, loc='best')
+    smart_legend(ax, fontsize=13)
     return _save(fig, cfg, 'M_comparison', L['lvl'])
 
 
@@ -1601,24 +1820,21 @@ def fig_G(cfg, R, L):
         if G is None:
             continue
         ax.errorbar([k], [G['G']], yerr=[[G['G'] - G['lo']], [G['hi'] - G['G']]], fmt=mk, ms=13, color=col,
-                    capsize=8, lw=2.5, label=f"from {comp}:  $G = {G['G']:.3f}$\n{ci}% CI [{G['lo']:.3f}, {G['hi']:.3f}]")
-        if np.isfinite(G['G_pist']):
-            ax.plot([k], [G['G_pist']], marker='x', ms=12, mew=2.5, color=col, ls='none', alpha=0.8,
-                    label=f'from {comp} with $M_\\mathrm{{piston}}$: {G["G_pist"]:.3f}')
+                    capsize=8, lw=2.5, label=f"from {comp}:  $G = {sig(G['G'])}$\n{ci}% CI [{sig(G['lo'])}, {sig(G['hi'])}]")
         xs.append(k)
         vals.append(G['G'])
     if vals:
         ax.axhline(np.mean(vals), color='0.3', ls='--', lw=1.2, alpha=0.6,
-                   label=f'mean of network estimates = {np.mean(vals):.3f}')
+                   label=f'mean of the two = {sig(np.mean(vals))}')
     ax.set_xticks([0, 1])
     ax.set_xticklabels([r"$G_x=(\sigma'_{zz}-\sigma'_{xx})/2\varepsilon$", r"$G_y=(\sigma'_{zz}-\sigma'_{yy})/2\varepsilon$"],
                        fontsize=14)
     ax.set_ylabel(r'$G$  (LJ units)')
-    ax.set_title(f'Shear modulus from network-stress anisotropy\n{cfg.RUN_ID}  |  $\\varepsilon = {L["eps"]:.3f}$',
+    ax.set_title(f'Shear modulus from network-stress anisotropy\n{cfg.RUN_ID}  |  $\\varepsilon = {L["lvl"]}$',
                  fontsize=15)
     ax.set_xlim(-0.5, 1.5)
     ax.grid(axis='y', alpha=0.3)
-    ax.legend(fontsize=11, loc='best')
+    smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'G_estimate', L['lvl'])
 
 
@@ -1641,16 +1857,17 @@ def fig_Dc(cfg, R, L):
         axr.plot(F['zf'], u0_b + F['uhat'][i][F['idx']], 'o', color=c, ms=3, alpha=0.35)
         axr.plot(zff, F['u_model'](zff, F['t_lj'][i]), '-', color=c, lw=2.0)
     for ax in (axl, axr):
+        ax._tri_has_colorbar = True
         ax.plot([0, 1], [0, -dlL], 'k:', lw=1.8, label=r'affine ($t\to\infty$):  $-(\Delta L/L)\,\zeta$')
         ax.plot(zff, u0f, '-', color='0.45', lw=1.6, label=r'IC: fitted hold-onset state')
         ax.plot(0, 0, 's', color=WONG['blue'], ms=9, zorder=5, label=r'BC: $u_z(0,t)=0$ (support)')
         ax.plot(1, -dlL, 'D', color=WONG['vermillion'], ms=9, zorder=5, label=r'BC: $u_z(1,t)=-\Delta L/L$ (piston)')
         ax.set(xlabel=r'$\zeta=(z-z_\mathrm{perm})/L$', ylabel=r'$u_z/L$', xlim=(0, 1))
         ax.grid(alpha=0.3)
-        ax.legend(fontsize=11)
+        smart_legend(ax, fontsize=11)
     axl.set_title(r'$u_z(\zeta,t)/L$ -- hold snapshots (data + fitted IC offset)', fontsize=15)
-    lbl = '' if cfg.DC_FREE_AMPS else rf"$\beta=p_0/M={F['beta']:.3f}$, "
-    axr.set_title(rf"Consolidation fit: $D_c={F['Dc']:.3e}\ \sigma^2/\tau$, " + lbl + rf"$R^2={F['R2']:.3f}$", fontsize=15)
+    lbl = '' if cfg.DC_FREE_AMPS else rf"$\beta=p_0/M={sig(F['beta'])}$, "
+    axr.set_title(rf"Consolidation fit: $D_c={sig(F['Dc'])}\ \sigma^2/\tau$, " + lbl + rf"$R^2={sig(F['R2'])}$", fontsize=15)
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     fig.colorbar(sm, ax=[axl, axr], fraction=0.015, pad=0.04).set_label('timestep')
@@ -1671,15 +1888,15 @@ def fig_kappa(cfg, R, L):
         if v is None:
             continue
         ax.errorbar([k], [v['k']], yerr=[[v['k'] - v['lo']], [v['hi'] - v['k']]], fmt=mk, ms=13, color=col,
-                    capsize=8, lw=2.5, label=f"{lab} = {v['k']:.3e}")
+                    capsize=8, lw=2.5, label=f"{lab} = {sig(v['k'])}")
     ax.set_xticks([0, 1])
     ax.set_xticklabels(['network $M$', 'piston $M$'], fontsize=16)
     ax.set_ylabel(r'$\kappa = D_c/M$  (LJ: $\sigma^5/(\epsilon\,\tau)$)')
-    ax.set_title(f'Hydraulic permeability $\\kappa = D_c/M$\n$D_c = {L["Dc"]["Dc"]:.3e}$  |  '
-                 f'$\\varepsilon = {L["eps"]:.3f}$', fontsize=15)
+    ax.set_title(f'Hydraulic permeability $\\kappa = D_c/M$\n$D_c = {sig(L["Dc"]["Dc"])}$  |  '
+                 f'$\\varepsilon = {L["lvl"]}$', fontsize=15)
     ax.set_xlim(-0.5, 1.5)
     ax.grid(axis='y', alpha=0.3)
-    ax.legend(fontsize=13, loc='best')
+    smart_legend(ax, fontsize=13)
     return _save(fig, cfg, 'kappa', L['lvl'])
 
 
@@ -1715,7 +1932,7 @@ def fig_volfrac_sweep(cfg, R, levels):
             ax.axvline(zn(R, R['z_support']), color='k', lw=1.5, alpha=0.85)
         finish_axes(ax, r'$\phi_s$', title)
         ax.set_ylim(0, 1.15)
-        ax.legend(handles=level_handles(levels, ref=True), fontsize=11, loc='lower left')
+        smart_legend(ax, handles=level_handles(levels, ref=True), fontsize=11)
         if txt:
             annotate_box(ax, 'in-gel means\n' + '\n'.join(txt), loc='lower right', fontsize=11)
         else:
@@ -1740,16 +1957,26 @@ def _sweep_stress_panels(cfg, R, levels, kind, stem, suptitle):
         ref = None
         if Rs is not None:
             ref = (Rs['t_m'], Rs['t_lo'], Rs['t_hi']) if kind == 't' else (Rs['net_m'], Rs['net_lo'], Rs['net_hi'])
+        scale = cfg.P_BARO if kind == 't' else 1.0
+        if kind == 't':
+            lab = lab + r'$/P_{\rm bath}$'
+            ref = None if ref is None else tuple(np.asarray(r) / scale for r in ref)
+            ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
         overlay_levels(ax, R, levels, lambda L: L['z'], lambda L: L['ts'],
-                       lambda L, c=comp: (L['stress'][c][kind] if c in L['stress'] else None), cfg,
-                       ref=ref, autoscale_mask=(mask if kind == 'net' else None), ylabel=lab, title=title)
-        ax.legend(handles=level_handles(levels, ref=Rs is not None), fontsize=11, loc='best')
+                       lambda L, c=comp, sc=scale: (L['stress'][c][kind] / sc if c in L['stress'] else None), cfg,
+                       ref=ref, autoscale_mask=(mask if kind == 'net' else None), ylabel=lab, title=title,
+                       include_zero=(kind != 't'), pad=(0.45 if kind == 't' else 0.15))
+        if kind == 't':
+            lo, hi = ax.get_ylim()
+            ax.set_ylim(min(lo, 1 - 0.3 * (hi - lo)), max(hi, 1 + 0.3 * (hi - lo)))
+        smart_legend(ax, handles=level_handles(levels, ref=Rs is not None), fontsize=11)
     return _save(fig, cfg, stem)
 
 
 def fig_total_stress_sweep(cfg, R, levels):
     return _sweep_stress_panels(cfg, R, levels, 't', 'sweep_total_stress_evolution',
-                                f'Total stress evolution, all levels (faint = early hold, bold = plateau)  |  {cfg.sim_name}')
+                                f'Total stress / bath pressure ($P_{{\\rm bath}}={sig(cfg.P_BARO)}$), all levels '
+                                f'(faint = early hold, bold = plateau)  |  {cfg.sim_name}')
 
 
 def fig_network_stress_sweep(cfg, R, levels):
@@ -1769,7 +1996,7 @@ def fig_partial_stress_sweep(cfg, R, levels):
         overlay_levels(ax, R, levels, lambda L: L['z'], lambda L: L['ts'],
                        lambda L, k=key: L['stress']['zz'][k], cfg, ref=(m, lo, hi),
                        ylabel=r'$\sigma_{zz}(z,t)$ (LJ)', title=title)
-        ax.legend(handles=level_handles(levels, ref=True), fontsize=11, loc='best')
+        smart_legend(ax, handles=level_handles(levels, ref=True), fontsize=11)
     return _save(fig, cfg, 'sweep_partial_stress_evolution')
 
 
@@ -1798,7 +2025,7 @@ def fig_piston_sweep(cfg, R, levels):
     axG.set_title('(b) log piston pressure (relaxation view)')
     for ax in (axP, axG):
         ax.grid(alpha=0.3)
-        ax.legend(handles=level_handles(levels), fontsize=11, loc='best')
+        smart_legend(ax, handles=level_handles(levels), fontsize=11)
     return _save(fig, cfg, 'sweep_piston_pressure_history')
 
 
@@ -1812,15 +2039,17 @@ def fig_ratio_sweep(cfg, R, levels):
             G = L['G'].get(comp)
             if G is None:
                 continue
-            ax.plot(L['ts'], G['ratio'], ls, color=level_color(i), lw=2.2, marker='o', ms=4)
+            ax.errorbar(L['ts'], G['ratio'], yerr=G['ratio_err'], ls=ls, color=level_color(i), lw=2.0,
+                        marker='o', ms=4, capsize=3, elinewidth=1.0)
     ax.axhline(1.0, color='k', ls=':', lw=1.0, alpha=0.6)
+    robust_ylim(ax, [G['ratio'] for L in levels for G in L['G'].values()], pad=0.35, qlo=0, qhi=100)
     h = level_handles(levels) + [Line2D([0], [0], color='0.3', ls='-', lw=2, label=r"$\sigma'_{zz}/\sigma'_{xx}$"),
                                  Line2D([0], [0], color='0.3', ls='--', lw=2, label=r"$\sigma'_{zz}/\sigma'_{yy}$")]
-    ax.legend(handles=h, fontsize=11, loc='best')
     ax.set_xlabel('step')
-    ax.set_ylabel(r"$\langle\sigma'_{zz}\rangle/\langle\sigma'_{ii}\rangle$")
+    ax.set_ylabel(r"$\langle\sigma'_{zz}\rangle_{\rm int}/\langle\sigma'_{ii}\rangle_{\rm int}$")
     ax.set_title(r"Network stress anisotropy $\sigma'_{zz}/\sigma'_{ii}=M/(M-2G)$, all levels", fontsize=15)
     ax.grid(alpha=0.3)
+    smart_legend(ax, handles=h, fontsize=11)
     return _save(fig, cfg, 'sweep_network_stress_ratio')
 
 
@@ -1846,19 +2075,19 @@ def fig_M_sweep(cfg, R, levels):
         if len(ep) >= 2:
             M_init = (Pp[1] - Pp[0]) / (ep[1] - ep[0])
             M_sec = (Pp[-1] - Pp[0]) / (ep[-1] - ep[0])
-            axPP.set_title(fr'(b) $P$ vs $\varepsilon$:  $M_\mathrm{{init}}\approx{M_init:.3g}$, '
-                           fr'$M_\mathrm{{secant}}\approx{M_sec:.3g}$', fontsize=15)
+            axPP.set_title(fr'(b) $P$ vs $\varepsilon$:  $M_\mathrm{{init}}\approx{sig(M_init)}$, '
+                           fr'$M_\mathrm{{secant}}\approx{sig(M_sec)}$', fontsize=15)
         else:
             axPP.set_title(r'(b) piston stress vs strain', fontsize=15)
     axM.set_xlabel(r'applied strain  $\varepsilon$')
     axM.set_ylabel(r'$M$  (LJ units)')
     axM.set_title('(a) longitudinal modulus, two estimates', fontsize=15)
     axM.grid(alpha=0.3)
-    axM.legend(fontsize=12, loc='best')
+    smart_legend(axM, fontsize=12)
     axPP.set_xlabel(r'applied strain  $\varepsilon$')
     axPP.set_ylabel(r'$P_\mathrm{piston}=\langle F_z\rangle/A$  (LJ)')
     axPP.grid(alpha=0.3)
-    axPP.legend(fontsize=12, loc='best')
+    smart_legend(axPP, fontsize=12)
     return _save(fig, cfg, 'sweep_modulus')
 
 
@@ -1877,14 +2106,11 @@ def fig_G_sweep(cfg, R, levels):
         ax.errorbar(e, g, yerr=[g - [L['G'][comp]['lo'] for L in Ls], [L['G'][comp]['hi'] for L in Ls] - g],
                     fmt=mk + '-', ms=10, lw=2, color=col, capsize=6,
                     label=fr"$G$ from {comp}:  $(\sigma'_{{zz}}-\sigma'_{{{comp}}})/2\varepsilon$")
-        gp = np.array([L['G'][comp]['G_pist'] for L in Ls])
-        if np.isfinite(gp).any():
-            ax.plot(e, gp, 'x', ms=11, mew=2.5, color=col, alpha=0.8, label=f'from {comp} with $M_\\mathrm{{piston}}$')
     ax.set_xlabel(r'applied strain  $\varepsilon$')
     ax.set_ylabel(r'$G$  (LJ units)')
     ax.set_title('Shear modulus from network-stress anisotropy vs strain', fontsize=15)
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=11, loc='best')
+    smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'sweep_G_estimate')
 
 
@@ -1902,16 +2128,16 @@ def fig_Dc_sweep(cfg, R, levels):
     v = np.array([L['Dc']['Dc'] for L in hd])
     ax.plot(e, v, 'o-', color=WONG['reddishpurple'], lw=2, ms=8)
     for L in hd:   # R^2 label under each point, clipped inside the axes
-        ax.annotate(f"$R^2$={L['Dc']['R2']:.2f}", (L['eps'], L['Dc']['Dc']), textcoords='offset points',
+        ax.annotate(f"$R^2$={sig(L['Dc']['R2'])}", (L['eps'], L['Dc']['Dc']), textcoords='offset points',
                     xytext=(0, -12), ha='center', va='top', fontsize=10, color='0.35',
                     annotation_clip=True)
     ax.margins(x=0.12, y=0.15)
-    ax.axhline(cfg.DC_SLOW_REF, color='0.4', ls=':', lw=1.5, label=f'slow reference $D_c$ = {cfg.DC_SLOW_REF}')
+    ax.axhline(cfg.DC_SLOW_REF, color='0.4', ls=':', lw=1.5, label=f'slow reference $D_c$ = {sig(cfg.DC_SLOW_REF)}')
     ax.set_xlabel(r'applied strain  $\varepsilon$')
     ax.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
     ax.set_title(r'(a) $D_c$ vs applied strain', fontsize=15)
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=11)
+    smart_legend(ax, fontsize=11)
     zff = np.linspace(0, 1, 300)
     for k, L in enumerate(hd):
         ax = axes[k + 1]
@@ -1926,7 +2152,7 @@ def fig_Dc_sweep(cfg, R, levels):
             ax.plot(zff, F['u_model'](zff, F['t_lj'][i]), '-', color=c, lw=1.5)
         ax.plot([0, 1], [0, -F['DL'] / F['L']], 'k:', lw=1.6)
         ax.set(xlabel=r'$\zeta$', ylabel=r'$u_z/L$', xlim=(0, 1))
-        ax.set_title(fr"({'bcdefgh'[k]}) $\varepsilon={L['eps']:.2f}$:  $D_c={F['Dc']:.2e}$, $R^2={F['R2']:.3f}$",
+        ax.set_title(fr"({'bcdefgh'[k]}) $\varepsilon={L['lvl']}$:  $D_c={sig(F['Dc'])}$, $R^2={sig(F['R2'])}$",
                      fontsize=14, color=level_color(i_lvl))
         ax.grid(alpha=0.3)
     return _save(fig, cfg, 'sweep_Dc')
@@ -1951,7 +2177,7 @@ def fig_kappa_sweep(cfg, R, levels):
     ax.set_ylabel(r'$\kappa = D_c/M$  (LJ)')
     ax.set_title(r'Hydraulic permeability $\kappa = D_c/M$ vs strain', fontsize=15)
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=12, loc='best')
+    smart_legend(ax, fontsize=12)
     return _save(fig, cfg, 'sweep_kappa')
 
 

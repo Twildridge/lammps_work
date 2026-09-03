@@ -237,7 +237,9 @@ variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
 
 # ----- Time Averaging (stress) -----
 # nfreq = nevery * nrepeat  (LAMMPS constraint)
-variable num_stress_curves equal 10    # target output frames
+variable num_stress_curves equal 40    # target output frames per hold (10 -> 40 on 2026-09-03: the
+                                       # sigma'_zz/sigma'_xx-vs-step and D_c fits want a denser time
+                                       # series; each frame still averages >= nrepeat_min samples)
 variable nevery_target     equal 100   # ~0.5 tau — near stress decorrelation time
 variable nrepeat_max       equal 2000  # cap to preserve transient resolution
 variable nrepeat_min       equal 50    # floor for adequate noise reduction
