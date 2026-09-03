@@ -1008,20 +1008,38 @@ def sync_files(cfg, levels=None):
 
 def sync_from_expanse(cfg, levels=None, force=False):
     """Pull every file the notebooks read from Expanse in ONE login (password +
-    TOTP prompts).  Logs in only when a REQUIRED core file is missing locally,
-    or when force=True (also refreshes the large trajectories).  Stages the
-    newest match per basename on the cluster, then SFTPs anything newer."""
+    TOTP prompts).  Logs in when ANY data (.dat) file is missing locally, or when
+    force=True (which also refreshes the large trajectories).  Files that a
+    previous sync looked for and did NOT find on the cluster are remembered in
+    DATA_DIR/.sync_absent.json so an old run that never wrote them does not
+    prompt for a login every time; force=True clears that memory."""
     import paramiko
     import getpass
+    import json
     data_files, traj_files, required = sync_files(cfg, levels)
+    absent_f = cfg.DATA_DIR / '.sync_absent.json'
+    absent = set()
+    if absent_f.exists() and not force:
+        try:
+            absent = set(json.loads(absent_f.read_text()))
+        except Exception:
+            absent = set()
+    missing_dat = [f for f in data_files if not f.exists()]
+    missing_new = [f for f in missing_dat if f.name not in absent]
+    missing_all = missing_dat + [f for f in traj_files if not f.exists()]
     missing_req = [f for f in required if not f.exists()]
-    missing_all = [f for f in data_files + traj_files if not f.exists()]
-    if not force and not missing_req:
-        print(f'All {len(required)} required files present locally '
-              f'({len(missing_all)} optional file(s) missing) -- skipping Expanse login.')
+    if not force and not missing_new:
+        known = len(missing_dat) - len(missing_new)
+        print(f'All data files present locally' + (f' except {known} known absent on the cluster' if known else '')
+              + f' ({len(missing_all)} target file(s) missing in total) -- skipping Expanse login.  '
+              f'FORCE_SYNC=True re-checks everything.')
+        if missing_req:
+            print('  WARNING: required files missing: ' + ', '.join(f.name for f in missing_req))
         return
-    why = 'force=True' if (force and not missing_req) else f'{len(missing_req)} required file(s) missing'
+    why = 'force=True' if (force and not missing_new) else f'{len(missing_new)} data file(s) missing'
     print(f'Syncing from Expanse ({why}); {len(missing_all)} of {len(data_files) + len(traj_files)} target files missing locally.')
+    if missing_new:
+        print('  missing: ' + ', '.join(f.name for f in missing_new[:6]) + (' ...' if len(missing_new) > 6 else ''))
     bn = lambda paths: ' '.join(f'"{p.name}"' for p in paths)
     stage = f'{cfg.RUNS_ROOT}/triaxial_stage'
     script = r"""
@@ -1082,7 +1100,13 @@ echo "  staged: $(ls "$STAGE/data" 2>/dev/null | wc -l) data, $(ls "$STAGE/traj"
     pull(f'{stage}/traj', cfg.TRAJ_DIR)
     sftp.close()
     ssh.close()
-    print('Sync complete.')
+    still = [f.name for f in data_files if not f.exists()]
+    absent_f.write_text(json.dumps(sorted(set(still)), indent=1))
+    if still:
+        print(f'Sync complete; {len(still)} data file(s) not found on the cluster (remembered in {absent_f.name}): '
+              + ', '.join(still[:6]) + (' ...' if len(still) > 6 else ''))
+    else:
+        print('Sync complete; every data file present.')
 
 
 # ===========================================================================
@@ -1326,7 +1350,8 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
         plt.close(fig)
         print('strain diagnostic skipped (no strain_zz files)')
         return None
-    return _save(fig, cfg, stem)
+    # one level -> tag the file with it (keeps clear of the long-form notebook's untagged file)
+    return _save(fig, cfg, stem, levels[0]['lvl'] if len(levels) == 1 else None)
 
 
 def _phi_panel(ax, cfg, R, D, L=None, title='', bands=True):
@@ -1600,7 +1625,7 @@ def fig_Dc(cfg, R, L):
     sm.set_array([])
     fig.colorbar(sm, ax=[axl, axr], fraction=0.015, pad=0.04).set_label('timestep')
     fig.suptitle(f'Cooperative diffusivity fit (level _c{L["lvl"]})  |  {cfg.sim_name}', fontsize=12, fontweight='bold')
-    return _save(fig, cfg, 'Dc_fourier_fit', L['lvl'])
+    return _save(fig, cfg, 'Dc_consolidation_fit', L['lvl'])
 
 
 def fig_kappa(cfg, R, L):
