@@ -1067,17 +1067,47 @@ echo "  staged: $(ls "$STAGE/data" 2>/dev/null | wc -l) data, $(ls "$STAGE/traj"
     def auth_handler(title, instructions, prompt_list):
         return [password if 'password' in p.strip().lower() else totp for p, _ in prompt_list]
 
-    print('Connecting to Expanse...')
-    transport = paramiko.Transport((cfg.EXPANSE_HOST, 22))
-    transport.connect()
-    transport.auth_interactive(cfg.EXPANSE_USER, auth_handler)
+    import socket
+    print(f'Connecting to {cfg.EXPANSE_HOST} ...')
+    if 'expanse' in socket.gethostname().lower() or 'sdsc' in socket.gethostname().lower():
+        print('  NOTE: this notebook seems to be running ON Expanse; the login node may not accept an SSH\n'
+              '  connection from here.  Set SYNC=False and point cfg.base_dir at the run directory instead.')
+    try:
+        sock = socket.create_connection((cfg.EXPANSE_HOST, 22), timeout=30)
+    except (socket.timeout, OSError) as e:
+        raise ConnectionError(f'cannot reach {cfg.EXPANSE_HOST}:22 ({type(e).__name__}: {e}).  '
+                              'Check network / VPN / that the host name resolves, then re-run this cell.') from e
+    transport = paramiko.Transport(sock)
+    transport.banner_timeout = 60
+    transport.set_keepalive(30)
+    try:
+        transport.connect()
+        transport.auth_interactive(cfg.EXPANSE_USER, auth_handler)
+    except paramiko.AuthenticationException as e:
+        transport.close()
+        raise ConnectionError('Expanse rejected the login: wrong password, or the TOTP code expired '
+                              '(codes last 30 s -- have the code ready before running the cell).') from e
+    except (paramiko.SSHException, OSError) as e:
+        transport.close()
+        raise ConnectionError(f'SSH handshake with {cfg.EXPANSE_HOST} failed ({type(e).__name__}: {e}).  '
+                              'Repeated failed logins get the connection dropped for a while; wait a minute and retry.') from e
+    if not transport.is_authenticated():
+        transport.close()
+        raise ConnectionError('Expanse login did not complete (transport not authenticated).')
     ssh = paramiko.SSHClient()
     ssh._transport = transport
-    print('Step 1 -- staging files on Expanse...')
-    _, stdout, _ = ssh.exec_command('bash -s', get_pty=False)
-    stdout.channel.sendall(script.encode())
-    stdout.channel.shutdown_write()
-    print(stdout.read().decode())
+    print('Step 1 -- staging files on Expanse (find over the runs tree; can take a minute)...')
+    try:
+        _, stdout, stderr = ssh.exec_command('bash -s', get_pty=False, timeout=600)
+        stdout.channel.sendall(script.encode())
+        stdout.channel.shutdown_write()
+        out, err = stdout.read().decode(), stderr.read().decode()
+    except (socket.timeout, OSError, paramiko.SSHException) as e:
+        transport.close()
+        raise ConnectionError(f'the staging command on Expanse failed ({type(e).__name__}: {e}).') from e
+    print(out)
+    if err.strip():
+        print('  (stderr) ' + err.strip().replace('\n', '\n  (stderr) '))
     print('Step 2 -- downloading via SFTP (skips files already present)...')
     sftp = ssh.open_sftp()
 
