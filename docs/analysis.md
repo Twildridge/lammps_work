@@ -87,8 +87,17 @@ python ~/Documents/lammps_work/scripts/plot_piston_data.py \
 
 Open these on your MacBook in JupyterLab (`jupyter lab`), pointing them at data files in `flow_data_local/<sim_type>/<RUN_ID>/`. Each notebook has a config cell near the top — only `RUN_ID` and `sim_name` change between runs; all paths derive from those.
 
-**`triaxial_compression.ipynb`** (current)
-Reads a `triaxial_compression` run (or cumulative pressure sweep). Extracts the longitudinal modulus M from the piston stress vs. strain relationship (M = pressure / strain), network stress σ′ = total − reservoir baseline, and flat pore-pressure profiles. Sweep conventions: `COMP_LEVELS`/`DETAIL_LEVEL` select which `_c<level>` tags to load; per-level reservoir normalisation; block-bootstrap piston CI; z-grid origin includes box zlo (the stress z-coordinates are plotted as z/Lz with support/piston lines). Supersedes `compression_analysis.ipynb`.
+**`triaxial_compression_single.ipynb`** (current — one strain level)
+Analysis of **one** applied-strain level of a `triaxial_compression` run: a single-level run, or one level picked out of a sweep (`LEVEL = "0.15"`). Eleven figures in a fixed order: strain diagnostic; solvent volume fraction (mass fraction / Voronoi / λ-calibrated Voronoi, reference vs compressed); total σ_zz, σ_xx, σ_yy evolution; solvent + polymer partial stress with the total superimposed; network stress σ′_zz, σ′_xx, σ′_yy (Terzaghi split); piston pressure (linear + log); M (network vs piston); the anisotropy σ′_zz/σ′_xx, σ′_zz/σ′_yy vs step; G = (σ′_zz − σ′_ii)/2ε from xx and from yy; the D_c consolidation fit; and κ = D_c/M. Layout: **Config → sync → load/compute** (one section), **figures** (one call per figure), and all method notes in a **Notes** markdown at the end. Requires the `sigmaxx_*` / `sigmayy_*` profiles the `.lmp` writes (synced automatically); the pair/bond dumps are *not* needed.
+
+**`triaxial_compression_sweep.ipynb`** (current — whole sweep)
+Same eleven figures for **every** level of a strain sweep, overlaid (colour = level, reference dashed): profiles per level, then M, G, D_c and κ **vs applied strain**. `COMP_LEVELS` must match `STRAIN_TARGETS=(...)` in `triaxial_compression.batch`. Per-level numbers come from the same `load_level` as the single-level notebook, so the two never disagree.
+
+**`lib/triaxial.py`** — the analysis code behind both notebooks
+Readers, the Terzaghi network/pore split, the drift-tested block-bootstrap plateau window behind M_piston, the G estimate, the D_c consolidation fit + hold-adequacy check, the λ-calibrated Voronoi φ_s (via `lib/volfrac.py`), the Expanse sync and every figure. Knobs live in `tri.Config` (defaults documented there; the ones that matter for M/G/D_c/κ are spelled out in each notebook's Config cell). Edit the module, re-run the first notebook cell (`importlib.reload`) — no kernel restart needed.
+
+**`triaxial_compression.ipynb`** (long-form original, kept)
+The full diagnostic notebook the two above were distilled from (2026-09-02). Still the place for the solvent-phase stress W_s,zz/V_solv diagnostics, the ss/pp pair-virial reconstruction and cross-virial check, the piston–gel contact analysis and the Widom-insertion appendix. Sweep conventions: `COMP_LEVELS`/`DETAIL_LEVEL` select which `_c<level>` tags to load; block-bootstrap piston CI; z-grid origin includes box zlo. Supersedes `compression_analysis.ipynb`.
 
 **`triaxial_permeation.ipynb`** (current)
 Reads a `triaxial_permeation` run. Six panels — piston, thickness, stress, density, permeate, and partial-vs-ss stress — with Phase 1.5 reference overlays. Supersedes `permeation_analysis.ipynb`.

@@ -36,7 +36,12 @@ lammps_work/                    ← This git repository
 │   ├── add_more_plates_to_gel.ipynb    ← Variant: plates on all six faces — input for compress_slab
 │   ├── pure_polymer.ipynb              ← Build pure polymer data file
 │   ├── pure_solvent_1.ipynb            ← Build pure solvent data file
-│   ├── triaxial_compression.ipynb           ← CURRENT: M, network stress, pore pressure vs compression-level sweep (triaxial_compression runs)
+│   ├── triaxial_compression_single.ipynb    ← CURRENT: one strain level — φ_s, σ/σ′ evolution (zz,xx,yy), piston P, M, G, D_c, κ (triaxial_compression runs)
+│   ├── triaxial_compression_sweep.ipynb     ← CURRENT: the same 11 figures overlaid for every sweep level; M, G, D_c, κ vs strain
+│   ├── triaxial_compression.ipynb           ← long-form original (solvent-phase stress, ss/pp virial, Widom diagnostics); the two above were distilled from it
+│   ├── lib/
+│   │   ├── triaxial.py                      ← all analysis code behind triaxial_compression_{single,sweep}.ipynb (Config, readers, Terzaghi, plateau bootstrap, G, D_c, figures)
+│   │   └── volfrac.py                       ← Voronoi volume fraction + λ calibration (shared with calibration_analysis.ipynb)
 │   ├── triaxial_permeation.ipynb            ← CURRENT: piston/thickness/stress/density/permeate + partial-vs-ss, with Phase 1.5 reference overlays (triaxial_permeation runs)
 │   ├── bulk_modulus_analysis.ipynb          ← Drained vs osmotic bulk modulus K
 │   ├── shear_analysis.ipynb                 ← G, N1/N2, stress profiles (shear_slab output)

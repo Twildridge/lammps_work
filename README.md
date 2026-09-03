@@ -38,6 +38,7 @@ Full annotated tree, including every notebook/script and what it's for: [docs/re
 | Building `.data` input files (which notebook, for which geometry) | [docs/building_data_files.md](docs/building_data_files.md) |
 | Downloading output & trajectories from a cluster | [docs/downloading_output.md](docs/downloading_output.md) |
 | Running analysis scripts and notebooks on output | [docs/analysis.md](docs/analysis.md) |
+| Triaxial-compression analysis: `triaxial_compression_single.ipynb` (one strain level) / `triaxial_compression_sweep.ipynb` (M, G, D_c, κ vs strain), code in `scripts/lib/triaxial.py` | [docs/analysis.md §7b](docs/analysis.md#7b-jupyter-analysis-notebooks) |
 | `lsync` / GitHub sync, credentials, SSH keys, merge conflicts | [docs/github_sync.md](docs/github_sync.md) |
 | First-time cluster account setup (SSH, Python env, `.data` transfer) | [docs/cluster_setup.md](docs/cluster_setup.md) |
 | Cluster login nodes, partitions, walltimes, scratch paths | [docs/cluster_reference.md](docs/cluster_reference.md) |
@@ -50,4 +51,4 @@ Full annotated tree, including every notebook/script and what it's for: [docs/re
 
 ---
 
-*Last updated: 2026-08-06. For questions, contact Dylan Pollard (pollard@ucsb.edu).*
+*Last updated: 2026-09-02. For questions, contact Dylan Pollard (pollard@ucsb.edu).*
