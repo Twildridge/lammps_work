@@ -255,7 +255,19 @@ variable box_lz equal lz
 # ratio (which is what `iso` did: it controls only the mean pressure and freezes
 # the aspect ratio, so the inherited z-swelling / z-padding never relaxes).
 # Cell stays orthogonal (no tilt) — use `tri` only if a real shear stress must relax.
-fix 1 mobile npt temp ${temp_target} ${temp_target} ${tdamp} aniso ${press_target} ${press_target} ${pdamp} # dilate mobile fixedpoint $(lx/2) $(ly/2) 0
+# THERMOSTAT (2026-09-05): Langevin + NPH, not Nose-Hoover NPT.  The Nose-Hoover
+# `fix npt` this used to be did NOT hold T = temp_target here -- the 14M-step
+# rho04 output data file carries velocities at T = 1.24 in all three directions
+# (FENE bonds feed KE in faster than a single Nose-Hoover chain removes it; the
+# triaxial script saw the same and switched to Langevin long ago).  Every
+# downstream run then had to cool the slab to T = 1 and re-shrink the box.
+# Langevin's per-atom friction always wins, so the state written at the end is
+# genuinely at temp_target.  The barostat is unchanged: `nph aniso` relaxes x, y
+# and z INDEPENDENTLY to press_target with the aspect ratio free (see the note
+# above); Langevin supplies the temperature, nph the pressure.  Both are unfixed
+# together in Cleanup.
+fix lang_prod mobile langevin ${temp_target} ${temp_target} ${tdamp} 480279
+fix 1 mobile nph aniso ${press_target} ${press_target} ${pdamp} # dilate mobile fixedpoint $(lx/2) $(ly/2) 0
 timestep ${timestep_prod}
 if "${is_restart} == 0 && ${cont} == 0" then "run ${nsteps_gentle}"
 
@@ -275,6 +287,39 @@ fix gel_dims_output all print ${volume_freq} "$(step) ${gel_lx} ${gel_ly} ${gel_
 
 fix box_dims_output all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_lz}" &
     ${restartFlag} output_files/volume_data/box_dimensions_${dataname}_${interaction}_${totsteps}.dat screen no
+
+# ========== Sparse stress-anisotropy check (2026-09-05) ==========
+# Under the aniso barostat the BOX-AVERAGE P_xx = P_yy = P_zz = press_target by
+# construction, so the total pressure tensor says nothing about whether the GEL
+# itself has relaxed.  The polymer partial stress does: sigma_p,ii = -sum_i S_ii/V
+# over the polymer group (stress/atom, kinetic term included) is anisotropic
+# (xx/zz, yy/zz != 1) until the slab has relaxed its inherited aspect ratio, and
+# the triaxial reference state inherits whatever anisotropy is left here.
+# plot_lammps_log.py draws sigma_p,xx/sigma_p,zz and sigma_p,yy/sigma_p,zz vs step
+# from this file (stress_anisotropy panel).
+#
+# COST: the per-atom virial is tallied only on the timesteps this fix samples
+# (fix ave/time registers them with addstep_compute), i.e. aniso_nrepeat one-step
+# tallies per aniso_nfreq steps -- 20 per 200k = 0.01% of the steps.  Reported
+# every 200k steps; each report averages 20 samples 10k steps apart (a single
+# global sum is noisy enough that the 20-sample mean is worth the free averaging).
+# The total pressure tensor (compute pressure) is logged alongside for context.
+shell mkdir output_files/stress_data
+compute stress_poly_aniso polymer stress/atom NULL
+compute sp_xx polymer reduce sum c_stress_poly_aniso[1]
+compute sp_yy polymer reduce sum c_stress_poly_aniso[2]
+compute sp_zz polymer reduce sum c_stress_poly_aniso[3]
+variable sig_p_xx equal -c_sp_xx/vol
+variable sig_p_yy equal -c_sp_yy/vol
+variable sig_p_zz equal -c_sp_zz/vol
+compute press_tensor all pressure thermo_temp
+variable aniso_nevery  equal 10000
+variable aniso_nrepeat equal 20
+variable aniso_nfreq   equal 200000     # = aniso_nevery * aniso_nrepeat
+fix stress_aniso_output all ave/time ${aniso_nevery} ${aniso_nrepeat} ${aniso_nfreq} &
+    v_sig_p_xx v_sig_p_yy v_sig_p_zz c_press_tensor[1] c_press_tensor[2] c_press_tensor[3] &
+    ${restartFlag} output_files/stress_data/stress_aniso_${dataname}_${interaction}_${totsteps}.dat &
+    title2 "# TimeStep sig_p_xx sig_p_yy sig_p_zz P_xx P_yy P_zz   (polymer partial stress = -sum S_ii/V, pressure sign; total pressure tensor)"
 
 
 
@@ -302,7 +347,9 @@ label snap_loop
 
 # ========== Cleanup ==========
 unfix 1
+unfix lang_prod
 unfix remove_drift
+unfix stress_aniso_output
 undump poly_traj
 
 

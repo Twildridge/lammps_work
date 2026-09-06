@@ -31,11 +31,14 @@
 # Behaviour:
 #   - Piston-solvent WCA is OFF throughout; the piston passes through the
 #     solvent freely and loads the gel network directly.
-#   - Phase 0:   NPT equilibration (Langevin + z-only NPH at Pzz=P_target).
-#                The input is already equilibrated at P_target, so a single
-#                pressure-controlled step keeps the gel's equilibrium swelling
-#                (no fixed-volume pre-phase that would bleed P and re-squeeze the
-#                gel).  Rigid bodies temporarily on nve+setforce so they scale
+#   - Phase 0:   NPT equilibration (Langevin + ANISO NPH at P_target), 2M steps.
+#                NOT a formality: the generator's data file is at T ~ 1.24 (its
+#                Nose-Hoover NPT does not hold T = 1), so this phase cools it to
+#                T = 1 and the barostat shrinks the box (~0.8% in x,y, ~5% in z)
+#                while the gel deswells ~5% -- a full poroelastic relaxation
+#                (tau_1 ~ 2M steps).  Tracked from step 0 by the trk_* loggers and
+#                10k-step thermo; check the convergence figure before trusting a
+#                run.  Rigid bodies temporarily on nve+setforce so they scale
 #                with the box; the box is frozen for every phase afterwards.
 #   - Phase 1.25: bring the piston down (velocity) to first gel contact and
 #                record L0 = gel_lz_rg (equilibrium-swollen Rg reference
@@ -43,8 +46,9 @@
 #                the gel on the support itself in Phase 2.
 #   - Phase 1.5: pre-compression REFERENCE window.  Piston held still for
 #                ref_avg_steps; ALL observables (partial stresses, σ_ss,
-#                σ_pp, solvent mass density) are averaged into "_ref_" files,
-#                emitting several snapshots so the notebook can form CIs.
+#                σ_pp, solvent mass density, AND the block-averaged piston
+#                force = the reference preload) are averaged into "_ref_"
+#                files, emitting several snapshots so the notebook can form CIs.
 #   - Phase 2 (production): STRESS-controlled.  A constant piston pressure is
 #                prescribed (force control) and the gel consolidates; the
 #                resulting strain is MEASURED.  M = pressure / strain.
@@ -176,7 +180,15 @@ variable hold_auto   index 1
 # released under load from its parked height would free-fall and slam the gel),
 # then record L0 = gel_lz_rg (the equilibrium-swollen reference thickness).
 variable seat_gamma   equal 1.0      # viscous damping on the force-controlled piston (damps its settle)
-variable contact_gap  equal 0.9      # each plate stops this many sigma short of the gel face at seating (was 1.0; nudged closer). WCA cutoff is 1.122 sigma, so 0.9 keeps gentle contact -- do NOT drop much below ~0.85 or the r^-12 repulsion on the outermost surface bead spikes and shocks the gel.
+variable contact_gap  equal 1.12     # each plate stops this many sigma short of the OUTERMOST gel bead at seating.
+                                     # 2026-09-05: raised 0.9 -> 1.12 (= the WCA cutoff 1.122) so the plates arrive
+                                     # just OUTSIDE the repulsive range of the extreme beads and the seated gel carries
+                                     # NO squeeze.  At 0.9 the outermost beads sat 0.2 sigma inside the WCA range, the
+                                     # gel was pre-compressed ~0.4 sigma in total, and the epsilon=0 reference (recorded
+                                     # only 50k steps later, i.e. still UNDRAINED) read sigma'_zz ~ +0.009 and
+                                     # sigma'_xx,yy ~ +0.02 instead of ~0.  Thermal motion still brings surface beads
+                                     # into gentle contact, so the plates are seated, not floating.  Do NOT drop much
+                                     # below ~0.85 or the r^-12 repulsion on the outermost bead spikes and shocks the gel.
 variable nsteps_seat  equal 500000   # safety cap for the piston-approach run
 
 # ----- Phase 1.5: pre-compression REFERENCE averaging window -----
@@ -476,11 +488,84 @@ print "========================================"
 # npt_p05_steps: equilibration length; increase if Press has not converged.
 
 variable npt_P_damp    equal 50.0    # barostat damping (tau); increase if FENE errors appear
-variable npt_p05_steps equal 120000  # equilibration length; increase if Press not converged
+variable npt_p05_steps equal 2000000 # equilibration length.  2026-09-05: 120k -> 2M (~ tau_1, the gel's
+                                     # poroelastic volume-relaxation time).  The input data file sits at
+                                     # T ~ 1.24 (the generator's Nose-Hoover NPT does not hold T = 1), so this
+                                     # phase cools it to T = 1 AND lets the barostat shrink the box (~0.8% in
+                                     # x,y, ~5% in z for the rho04 slab) while the gel deswells ~5% in volume.
+                                     # At 120k the box was still moving when frozen, leaving p_res = 1.4885
+                                     # (< P_target) and sigma'_xx,yy ~ +0.02 in the reference.  Verify with the
+                                     # convergence figure (box + gel volume flat over the last ~1/3 of Phase 0)
+                                     # and the 10k-step thermo below before trusting a run.
 variable npt_P05_target equal ${P_target}   # aniso barostat targets the full scalar pressure (x,y,z independently)
 
 reset_timestep 0
 timestep ${timestep_prod}
+
+# ==========================================================================
+#   GEL / BOX TRACKING COMPUTES + WHOLE-RUN CONVERGENCE LOGGERS
+#   (moved ABOVE Phase 0 on 2026-09-05 so the equilibration itself is tracked)
+# ==========================================================================
+# WHY HERE: the 2026-09-05 analysis of the setup trajectory showed Phase 0 still
+# moving when the box was frozen (lx, ly rising ~0.1 sigma and lz falling ~0.6 sigma
+# per 15k steps at step 120k) and the gel losing ~5% of its volume during it --
+# the input data file is at T ~ 1.24 (its Nose-Hoover NPT never held T = 1), so
+# cooling to T = 1 drops the pressure and the barostat has to compress the box.
+# These loggers now start at step 0 so plot_lammps_log.py's convergence figure
+# shows Phase 0 itself: box volume, BB and Rg gel volume must be FLAT for the
+# last ~1/3 of Phase 0 before the box is frozen.  If they are not, raise
+# npt_p05_steps.
+#
+# STEM-suffixed (NO _c<level> tag) to MATCH the filenames plot_lammps_log.py
+# reads (box_dimensions / gel_volume_bb / gel_volume_rg / gel_dimensions_rg with
+# the run stem = dataname_interaction_nsteps).  The per-level _c<level> loggers
+# inside the sweep loop are kept as-is for the notebook.  All are GLOBAL scalars
+# (no chunk/atom compute) -> no ave/time lock, so one fix spans every run command
+# unbroken (fix print is silent during the minimize); unfixed at the very end.
+#
+# Formats match the readers in plot_lammps_log.py:
+#   box_dimensions / gel_dimensions_rg : "step lx ly lz"  (read_fix_print)
+#   gel_volume_rg                      : "step vol"        (read_timestep_volume_file)
+#   gel_volume_bb                      : "vol"             (read_volume_file -> column 0)
+compute polymer_com polymer com
+
+# ----- Bounding Box (BB) — gel dimensions from min/max coordinates -----
+# Sensitive to outlier beads; kept for diagnostics and gel dimension output.
+compute minx polymer reduce min x
+compute maxx polymer reduce max x
+compute miny polymer reduce min y
+compute maxy polymer reduce max y
+compute minz polymer reduce min z
+compute maxz polymer reduce max z
+
+variable gel_lx_bb equal c_maxx-c_minx
+variable gel_ly_bb equal c_maxy-c_miny
+variable gel_lz_bb equal c_maxz-c_minz
+variable gel_vol_bb equal v_gel_lx_bb*v_gel_ly_bb*v_gel_lz_bb
+
+# ----- Radius of Gyration (Rg) — robust gel dimensions -----
+# For a uniform rectangular prism: Rg_ii² = L_i²/12  →  L_i = 2√3·√(Rg_ii²)
+# c_rg_tensor[i] returns Rg_ii² (diagonal component of gyration tensor).
+compute rg_tensor polymer gyration
+
+variable gel_lx_rg equal 2.0*sqrt(3.0*c_rg_tensor[1])
+variable gel_ly_rg equal 2.0*sqrt(3.0*c_rg_tensor[2])
+variable gel_lz_rg equal 2.0*sqrt(3.0*c_rg_tensor[3])
+variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
+
+# ----- Box dimensions -----
+variable box_lx equal lx
+variable box_ly equal ly
+variable box_lz equal lz
+
+fix trk_box all print ${strain_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_dims_rg all print ${strain_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_vol_rg all print ${strain_freq} "$(step) $(v_gel_vol_rg)" &
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_vol_bb all print ${strain_freq} "$(v_gel_vol_bb)" &
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
 
 # ----- cont=1: skip equilibration (data file already holds the equilibrated state) -----
 # Jump BEFORE opening traj_setup so a continuation does not open the setup movie
@@ -489,7 +574,14 @@ if "${cont} == 1" then "jump SELF label_after_phase05"
 
 # ----- Symmetric-seating / settle lengths (also feed the setup-movie cadence) --
 variable t_seat        equal 143000   # seating: common approach time (steps), v=d/t; raised from 100000 so the seating approach velocity drops ~30% (v∝1/t_seat) -> gentler contact, less bounce on convergence
-variable nsteps_settle equal 50000    # brief both-plates-fixed settle before the ε=0 reference
+variable nsteps_settle equal 1000000  # both-plates-fixed settle before the ε=0 reference.  2026-09-05: 50k -> 1M.
+                                      # The 50k settle recorded the reference while the gel was still relaxing
+                                      # (mostly the unfinished Phase 0, see npt_p05_steps).  With Phase 0 now 2M
+                                      # steps and contact_gap >= 1.12 (plates stop at the edge of the WCA range,
+                                      # so seating imposes no compression and there is no consolidation transient
+                                      # to wait out), 1M (~tau_1/2) is enough for the gel to come to rest against
+                                      # the just-seated plates.  Raise to ~2M if the reference piston preload
+                                      # (piston_force_avg_ref) is still drifting over the reference window.
 
 # ----- setup-movie cadence: ~num_dump_frames over the pre-production phases -----
 # gel_setup spans equilibration + seating + settle + reference (+ the short first
@@ -531,7 +623,12 @@ fix lang_p05 mobile langevin ${temp_target} ${temp_target} 1.0 48279
 # (Reverted from the z-only barostat: with both plates seated symmetrically the
 # transverse stresses are set by the equilibrium box, not pinned by hand.)
 fix nph_p05  mobile nph aniso ${npt_P05_target} ${npt_P05_target} ${npt_P_damp}
+# Dense thermo during Phase 0 (2026-09-05): thermo_freq = 250k printed only step 0
+# of the old 120k-step equilibration, so its convergence could not be read from
+# the log at all.  T, Press, lx, ly, lz every 10k steps -> ~200 lines over 2M.
+thermo 10000
 run ${npt_p05_steps}
+thermo ${thermo_freq}
 unfix lang_p05
 unfix nph_p05
 
@@ -568,43 +665,16 @@ print ">>> Pre-production: T=$(c_mobile_temp)  mobile_press=$(c_mobile_press)"
 # ==========================================================================
 #                    ANALYSIS: POLYMER TRACKING
 # ==========================================================================
-
-compute polymer_com polymer com
-
-# ----- Bounding Box (BB) — gel dimensions from min/max coordinates -----
-# Sensitive to outlier beads; kept for diagnostics and gel dimension output.
-compute minx polymer reduce min x
-compute maxx polymer reduce max x
-compute miny polymer reduce min y
-compute maxy polymer reduce max y
-compute minz polymer reduce min z
-compute maxz polymer reduce max z
-
-variable gel_lx_bb equal c_maxx-c_minx
-variable gel_ly_bb equal c_maxy-c_miny
-variable gel_lz_bb equal c_maxz-c_minz
-variable gel_vol_bb equal v_gel_lx_bb*v_gel_ly_bb*v_gel_lz_bb
-
-# ----- Radius of Gyration (Rg) — robust gel dimensions -----
-# For a uniform rectangular prism: Rg_ii² = L_i²/12  →  L_i = 2√3·√(Rg_ii²)
-# c_rg_tensor[i] returns Rg_ii² (diagonal component of gyration tensor).
-compute rg_tensor polymer gyration
-
-variable gel_lx_rg equal 2.0*sqrt(3.0*c_rg_tensor[1])
-variable gel_ly_rg equal 2.0*sqrt(3.0*c_rg_tensor[2])
-variable gel_lz_rg equal 2.0*sqrt(3.0*c_rg_tensor[3])
-variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
+# The polymer COM, bounding-box and gyration computes (polymer_com, minx..maxz,
+# rg_tensor) and the gel_l*_bb / gel_l*_rg / gel_vol_* / box_l* variables are
+# defined ABOVE Phase 0 (GEL / BOX TRACKING block) since 2026-09-05 so that the
+# equilibration is tracked too; everything below builds on them.
 
 # Robust gel-top estimate: polymer COM_z + half the Rg-based z-thickness.
 # c_maxz (raw maximum) is polluted by stray crosslinker/polymer beads that
 # diffuse into the solvent.  The Rg-based estimate is unaffected because
 # COM and Rg² are mean/variance over ~96k atoms — one outlier < 0.004%.
 variable gel_top_rg equal c_polymer_com[3]+0.5*v_gel_lz_rg
-
-# ----- Box dimensions -----
-variable box_lx equal lx
-variable box_ly equal ly
-variable box_lz equal lz
 
 # ----- Piston position/velocity computes -----
 # Defined here (before run 0) so they are initialized alongside polymer/rg computes.
@@ -668,7 +738,7 @@ variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
 # ==========================================================================
 #   WHOLE-RUN CONVERGENCE TRACKING (BB + Rg gel size, box size)
 # ==========================================================================
-# These span EVERY phase from here on — the piston contact approach, the ε=0
+# These span EVERY phase — Phase 0, the piston contact approach, the ε=0
 # reference window, and every sweep level's loading + hold — so the convergence
 # figure from plot_lammps_log.py shows BB & Rg gel dimensions and box size
 # across the ENTIRE multistep protocol.  The gel translating onto the support and
@@ -686,17 +756,9 @@ variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
 #   box_dimensions / gel_dimensions_rg : "step lx ly lz"  (read_fix_print)
 #   gel_volume_rg                      : "step vol"        (read_timestep_volume_file)
 #   gel_volume_bb                      : "vol"             (read_volume_file → column 0)
-# NOTE: tracking begins at the post-Phase-0.5 free-gel state (the gel-dimension
-# computes do not exist earlier); Phase 0/0.5 box changes are already in the log
-# thermo.  Move the gyration/BB computes above Phase 0 if you also want those.
-fix trk_box all print ${strain_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
-    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
-fix trk_dims_rg all print ${strain_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
-    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
-fix trk_vol_rg all print ${strain_freq} "$(step) $(v_gel_vol_rg)" &
-    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
-fix trk_vol_bb all print ${strain_freq} "$(v_gel_vol_bb)" &
-    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
+# 2026-09-05: the four trk_* fixes (trk_box, trk_dims_rg, trk_vol_rg, trk_vol_bb)
+# now live in the GEL / BOX TRACKING block ABOVE Phase 0, so the files start at
+# step 0 and include the equilibration.  They are still unfixed at the very end.
 
 
 # ==========================================================================
@@ -727,10 +789,16 @@ unfix rigid_support
 fix rigid_support support rigid single force * off off off torque * off off off
 label label_skip_comp_piston_setup
 
-# ----- Thermostat (x,y only — z is flow/compression direction) -----
-compute myTemp mobile temp/partial 1 1 0
+# ----- Thermostat: FULL 3-D Nose-Hoover on the mobile atoms (2026-09-05) -----
+# Was `compute myTemp mobile temp/partial 1 1 0` + `fix_modify nvt_prod temp myTemp`
+# (x,y only), a leftover from the flow mode where z was the streaming direction.
+# Nothing streams in compression, and the x,y-only thermostat left the z kinetic
+# term of every stress profile to equipartition alone.  This is the A/B test for
+# the constant ~0.002 (stress units) shortfall of the profile-based sigma'_zz
+# against the piston F_z/A seen at EVERY strain level 0.05-0.40 (2026-09-05
+# analysis): if the shortfall moves with this change, the kinetic term is the
+# culprit; if not, it is in the virial or the force balance.
 fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix_modify nvt_prod temp myTemp
 
 
 # ==========================================================================
@@ -1183,6 +1251,18 @@ print '========================================'
 # Hold the piston still (rigid + frozen at contact) during the reference window.
 velocity piston set 0.0 0.0 0.0
 
+# ----- Reference-state piston load (2026-09-05) -----
+# Block-averaged F_z on the seated, frozen piston over the whole reference window
+# (same cadence as the production piston_force_avg files).  This is the PRELOAD the
+# epsilon=0 state actually carries: the notebook prints it as P_ref = <F_z>/A next
+# to the reference gel-minus-reservoir sigma_zz step, so the two can be compared
+# directly (they must agree if the profile method is unbiased at zero strain), and
+# it is available for an incremental M = (P - P_ref)/eps.  c_piston_fz is a global
+# reduce (no chunk/atom lock), so this fix carries no epoch constraint.
+fix ref_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_piston_fz ave one &
+    file output_files/piston_data/piston_force_avg_ref_${dataname}_${interaction}_${hold_tag}.dat
+
 # ----- Coarse partial-stress component references -----
 fix ref_sigmazz_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_ref_${dataname}_${interaction}_${hold_tag}.dat
 fix ref_sigmazz_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_ref_${dataname}_${interaction}_${hold_tag}.dat
@@ -1219,6 +1299,7 @@ print '>>> Reference window: running ${ref_run_steps} steps (≥ ${ref_avg_steps
 run ${ref_run_steps}
 
 # Tear down reference dumps and fixes (locks already released at epoch boundary)
+unfix ref_piston_force_avg
 undump pairlocal_ref
 undump pairlocal_poly_ref
 undump bondlocal_ref

@@ -613,6 +613,22 @@ def load_reference(cfg):
     print('reference network stress in gel interior  ' + '  '.join(
         f"sigma'_{c}: {S['net_interior']:+.4f}" for c, S in R['stress'].items()))
 
+    # ---- reference piston load (runs since 2026-09-05 write piston_force_avg_ref) ----
+    # the preload the eps = 0 state carries; must match the reference sigma'_zz step
+    # above if the profile method is unbiased at zero strain
+    fp = cfg.path('piston_force_avg_ref')
+    if fp.exists():
+        pfa = read_print_file(fp, ['step', 'Fz'])
+        P = pfa['Fz'] / R['AREA']
+        m, lo, hi, blk, tau = block_bootstrap_ci(P, cfg.ci_level)
+        R.update(P_ref=float(m), P_ref_lo=float(lo), P_ref_hi=float(hi), P_ref_step=pfa['step'], P_ref_P=P)
+        d = R['stress']['zz']['net_interior'] - m
+        print(f'reference piston preload P_ref = <F_z>/A = {m:.4f} [{lo:.4f}, {hi:.4f}] (n={len(P)}, block={blk});  '
+              f"profile sigma'_zz(ref) - P_ref = {d:+.4f}  (zero-strain bias of the profile method)")
+    else:
+        R['P_ref'] = np.nan
+        print('reference piston preload: no piston_force_avg_ref file (runs before 2026-09-05) -> preload unknown')
+
     # ---- reference solvent density + mass-fraction volume fraction -----
     fd = cfg.path('solvent_density_z_ref')
     if fd.exists():
@@ -823,8 +839,20 @@ def load_level(cfg, R, lvl, verbose=True):
         S['net'], S['pore'], S['pore_half'], S['net_half'] = terzaghi_split(S['t'], bw, sd_bin, cfg.ci_level)
         S['ref_net'] = (Rs['net_interior'] if (cfg.G_SUBTRACT_REF and Rs is not None) else 0.0)
         S['net_mem'] = np.array([np.nanmean(S['net'][i][L['in_mem']]) for i in range(len(ts))])
+    # plateau-averaged profiles (mean over the snapshots of the last plateau_frac of the
+    # hold): M, G and the figure annotations read from these, not from the last snapshot
+    # alone (2026-09-05: a single snapshot averages only ~1/num_stress_curves of the hold and
+    # its membrane mean scatters by ~0.002 in stress = ~0.02 in M from snapshot to snapshot)
+    L['plat'] = ts >= L['halt_ts']
+    if L['plat'].sum() < 1:
+        L['plat'][-1] = True
+    for comp, S in L['stress'].items():
+        S['net_plat'] = np.nanmean(S['net'][L['plat']], axis=0)
+        S['t_plat'] = np.nanmean(S['t'][L['plat']], axis=0)
     say(f"  pore pressure (zz baseline): {zz['pore'][0]:.4f} -> {zz['pore'][-1]:.4f};  "
-        f"network sigma'_zz in membrane: {zz['net_mem'][0]:.4f} -> {zz['net_mem'][-1]:.4f}")
+        f"network sigma'_zz in membrane: {zz['net_mem'][0]:.4f} -> {zz['net_mem'][-1]:.4f}  "
+        f"(plateau mean over {int(L['plat'].sum())} snapshots: membrane {np.nanmean(zz['net_plat'][L['in_mem']]):.4f}, "
+        f"interior {np.nanmean(zz['net_plat'][L['interior']]):.4f})")
 
     # ---- strains ---------------------------------------------------------
     fs = cfg.path('strain_zz', lvl)
@@ -883,16 +911,24 @@ def load_level(cfg, R, lvl, verbose=True):
         say('  NOTE: no piston_force file -> M_piston skipped')
 
     # ---- M: network and piston ------------------------------------------
+    # network: plateau-averaged sigma'_zz over the WALL-TRIMMED interior bins (2026-09-05;
+    # was the last snapshot over the whole membrane).  The two bins that contain the wall
+    # planes are missing half of the wall-polymer virial (stress/atom hands it to the
+    # piston/support atoms) and read ~0.01-0.03 low, so they are excluded, as for G.
     eps = L['eps']
-    mn = zz['net'][-1][L['in_mem']] / eps
+    im = L['interior'] if L['interior'].sum() >= 3 else L['in_mem']
+    L['M_net_mask'] = 'interior' if im is L['interior'] else 'membrane'
+    mn = zz['net_plat'][im] / eps
     mn = mn[np.isfinite(mn)]
     L['M_net'], L['M_net_lo'], L['M_net_hi'] = mean_ci(mn, cfg.ci_level)
     L['M_net_nbins'] = len(mn)
+    L['M_net_final'] = float(np.nanmean(zz['net'][-1][L['in_mem']]) / eps)   # the pre-2026-09-05 estimator, for reference
     if 'PF' in L:
         p = L['PF']
         L['M_pist'], L['M_pist_lo'], L['M_pist_hi'] = p['mean'] / eps, p['lo'] / eps, p['hi'] / eps
         L['P_final'] = p['mean']
-    say(f"  M_network = {L['M_net']:.4f} [{L['M_net_lo']:.4f}, {L['M_net_hi']:.4f}]"
+    say(f"  M_network = {L['M_net']:.4f} [{L['M_net_lo']:.4f}, {L['M_net_hi']:.4f}] "
+        f"(plateau mean, {L['M_net_mask']}, {L['M_net_nbins']} bins; last-snapshot/membrane estimator: {L['M_net_final']:.4f})"
         + (f"   M_piston = {L['M_pist']:.4f} [{L['M_pist_lo']:.4f}, {L['M_pist_hi']:.4f}]"
            f"   ratio {L['M_pist'] / L['M_net']:.4f}" if 'M_pist' in L else ''))
 
@@ -903,6 +939,7 @@ def load_level(cfg, R, lvl, verbose=True):
     # lateral network stress need not vanish in the reference state).
     L['G'] = {}
     dzz = zz['net'] - zz['ref_net']
+    dzz_p = zz['net_plat'] - zz['ref_net']            # plateau-averaged (final G, lambda, ratio)
     for comp in ('xx', 'yy'):
         S = L['stress'].get(comp)
         if S is None:
@@ -912,10 +949,11 @@ def load_level(cfg, R, lvl, verbose=True):
         # inflate the bin scatter ~10x: G and the ratio use the wall_margin-trimmed interior.
         im = L['interior'] if L['interior'].sum() >= 3 else L['in_mem']
         dxx = S['net'] - S['ref_net']
-        g_bins = (dzz[-1] - dxx[-1])[im] / (2.0 * eps)
+        dxx_p = S['net_plat'] - S['ref_net']
+        g_bins = (dzz_p - dxx_p)[im] / (2.0 * eps)
         g_bins = g_bins[np.isfinite(g_bins)]
         Gm, Glo, Ghi = mean_ci(g_bins, cfg.ci_level)
-        lam = float(np.nanmean(dxx[-1][im])) / eps
+        lam = float(np.nanmean(dxx_p[im])) / eps
         with np.errstate(invalid='ignore', divide='ignore'):
             ratio = np.array([np.nanmean(dzz[i][im]) / np.nanmean(dxx[i][im]) for i in range(len(ts))])
         # ---- ratio with propagated uncertainty (item: error bars on sigma'_zz/sigma'_ii) ----
@@ -933,10 +971,14 @@ def load_level(cfg, R, lvl, verbose=True):
         b, db = _mem_mean_err(dxx, S, R['stress'].get(comp))
         with np.errstate(invalid='ignore', divide='ignore'):
             ratio_err = np.abs(ratio) * np.sqrt((da / a) ** 2 + (db / b) ** 2)
+        # final ratio from the plateau-averaged profiles; its error from the plateau snapshots' errors
+        with np.errstate(invalid='ignore', divide='ignore'):
+            ratio_plat = float(np.nanmean(dzz_p[im]) / np.nanmean(dxx_p[im]))
+        ratio_plat_err = float(np.sqrt(np.nanmean(ratio_err[L['plat']] ** 2) / max(int(L['plat'].sum()), 1)))
         L['G'][comp] = dict(G=Gm, lo=Glo, hi=Ghi, lam=lam, ratio=ratio, ratio_err=ratio_err,
-                            nbins=len(g_bins), ratio_final=float(ratio[-1]), ratio_final_err=float(ratio_err[-1]))
+                            nbins=len(g_bins), ratio_final=ratio_plat, ratio_final_err=ratio_plat_err)
         say(f"  G from {comp}: {Gm:.4f} [{Glo:.4f}, {Ghi:.4f}]   lambda_{comp} = {lam:.4f}   "
-            f"sigma'_zz/sigma'_{comp} (final) = {ratio[-1]:.3f} ± {ratio_err[-1]:.3f}"
+            f"sigma'_zz/sigma'_{comp} (plateau) = {ratio_plat:.3f} ± {ratio_plat_err:.3f}"
             + (f"   (ref sigma'_{comp} subtracted: {S['ref_net']:+.4f})" if cfg.G_SUBTRACT_REF else ''))
 
     # ---- D_c and kappa ---------------------------------------------------
@@ -1068,6 +1110,9 @@ _PROD_DAT = ('sigmazz_polymer', 'sigmazz_solvent', 'sigmaxx_polymer', 'sigmaxx_s
              'box_dimensions', 'gel_dimensions_bb', 'gel_dimensions_rg', 'polymer_com', 'gel_edges')
 _REF_DAT = ('sigmazz_polymer_ref', 'sigmazz_solvent_ref', 'sigmaxx_polymer_ref', 'sigmaxx_solvent_ref',
             'sigmayy_polymer_ref', 'sigmayy_solvent_ref', 'solvent_density_z_ref')
+# written only by runs since 2026-09-05: staged when a login happens anyway, but their
+# absence never triggers one (older runs never wrote them)
+_REF_DAT_OPT = ('piston_force_avg_ref',)
 _REQUIRED_PROD = ('sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z', 'strain_zz',
                   'piston_force', 'box_dimensions', 'gel_dimensions_bb', 'disp_z_polymer')
 
@@ -1083,7 +1128,7 @@ def sync_files(cfg, levels=None):
     """(data_files, traj_files, required) the notebooks read for `levels`
     (default: every level in cfg.COMP_LEVELS)."""
     levels = cfg.COMP_LEVELS if levels is None else [str(l) for l in levels]
-    data = [cfg.path(n) for n in _REF_DAT]
+    data = [cfg.path(n) for n in _REF_DAT + _REF_DAT_OPT]
     traj = [cfg.traj('traj_ref')]
     req = [cfg.path('sigmazz_polymer_ref'), cfg.path('sigmazz_solvent_ref'), cfg.path('solvent_density_z_ref')]
     for l in levels:
@@ -1111,13 +1156,16 @@ def sync_from_expanse(cfg, levels=None, force=False):
             absent = set(json.loads(absent_f.read_text()))
         except Exception:
             absent = set()
+    optional = {cfg.path(n).name for n in _REF_DAT_OPT}
     missing_dat = [f for f in data_files if not _present(f)]
-    missing_new = [f for f in missing_dat if f.name not in absent]
+    missing_new = [f for f in missing_dat if f.name not in absent and f.name not in optional]
     missing_all = missing_dat + [f for f in traj_files if not _present(f)]
     missing_req = [f for f in required if not _present(f)]
     if not force and not missing_new:
-        known = len(missing_dat) - len(missing_new)
+        n_opt = sum(1 for f in missing_dat if f.name in optional)
+        known = len(missing_dat) - len(missing_new) - n_opt
         print(f'All data files present locally' + (f' except {known} known absent on the cluster' if known else '')
+              + (f' (+{n_opt} optional file(s) this run never wrote, e.g. piston_force_avg_ref)' if n_opt else '')
               + f' ({len(missing_all)} target file(s) missing in total) -- skipping Expanse login.  '
               f'FORCE_SYNC=True re-checks everything.')
         if missing_req:
@@ -1700,11 +1748,11 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
                         include_zero=False)
             lo, hi = ax.get_ylim()
             ax.set_ylim(min(lo, 1 - 0.3 * (hi - lo)), max(hi, 1 + 0.3 * (hi - lo)))
-            note = 'plateau mean in gel = ' + fmt_mu(ev[-1][L['interior']])
+            note = 'plateau mean in gel interior = ' + fmt_mu(S['t_plat'][L['interior']] / cfg.P_BARO)
         if kind == 'net':
             mask = (R['z'] >= L['z_mem_lo'] + cfg.wall_margin)
             robust_ylim(ax, list(ev), zmask=mask, pad=0.15)
-            note = 'plateau mean in membrane = ' + fmt_mu(ev[-1][L['in_mem']])
+            note = 'plateau mean in gel interior = ' + fmt_mu(S['net_plat'][L['interior']])
         h, lab = ax.get_legend_handles_labels()
         h.append(Patch(alpha=0, label=note))          # the number rides in the legend, never on data
         lab.append(note)
@@ -1841,7 +1889,7 @@ def fig_M(cfg, R, L):
                     label=f"piston  $M = {sig(L['M_pist'])}$\n{ci}% CI [{sig(L['M_pist_lo'])}, {sig(L['M_pist_hi'])}]")
         ax.axhline(L['M_pist'], color=WONG['vermillion'], ls='--', lw=1.2, alpha=0.5)
     ax.set_xticks([0, 1])
-    ax.set_xticklabels([r"network ($\sigma'_{zz}/\varepsilon$)", r'piston ($P/\varepsilon$)'], fontsize=16)
+    ax.set_xticklabels([r"network ($\langle\sigma'_{zz}\rangle_{\rm int}/\varepsilon$)", r'piston ($P/\varepsilon$)'], fontsize=16)
     ax.set_ylabel(r'$M$  (LJ units)')
     ax.set_title(f'Longitudinal modulus\n{cfg.RUN_ID}  |  $\\varepsilon = {L["lvl"]}$', fontsize=15)
     ax.set_xlim(-0.5, 1.5)

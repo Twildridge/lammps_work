@@ -339,6 +339,86 @@ def plot_convergence(data, folder, run_id, output):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# STRESS-ANISOTROPY PLOT  (slab_with_support: sparse polymer partial stresses)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plot_stress_anisotropy(folder, run_id, output):
+    """Relaxation of the gel's stress anisotropy during the aniso-NPT equilibration.
+
+    Reads output_files/stress_data/stress_aniso_<run_id>.dat, written by
+    slab_with_support.lmp (fix ave/time every 200k steps):
+        step  sig_p_xx  sig_p_yy  sig_p_zz  P_xx  P_yy  P_zz
+    sig_p_ii = -sum_polymer S_ii / V (polymer partial stress, kinetic term
+    included, pressure sign); P_ii = total pressure tensor.
+
+    Panels: (1) the three polymer partial stresses, (2) sig_p_xx/sig_p_zz and
+    sig_p_yy/sig_p_zz -- the quantity to watch: both must sit at 1 (within the
+    last-30% scatter) before the slab is used as a triaxial input, (3) the same
+    ratios for the total pressure tensor, which the barostat pins to 1 by
+    construction (context only)."""
+    sd = os.path.join(folder, 'output_files', 'stress_data')
+    f = os.path.join(sd, f'stress_aniso_{run_id}.dat')
+    if not os.path.exists(f):
+        return
+    ts, d = read_ave_time(f)
+    if not ts.size or d.shape[1] < 3:
+        print(f'stress_aniso file has no usable rows: {f}')
+        return
+    sxx, syy, szz = d[:, 0], d[:, 1], d[:, 2]
+    has_tot = d.shape[1] >= 6
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rx, ry = sxx / szz, syy / szz
+    n_pan = 3 if has_tot else 2
+    fig, axes = plt.subplots(n_pan, 1, figsize=(10, 3.2 * n_pan), sharex=True)
+    fig.suptitle(f'{run_id}\nstress anisotropy relaxation (polymer partial stress, every 200k steps)',
+                 fontsize=12, fontweight='bold')
+
+    ax = axes[0]
+    ax.plot(ts, sxx, '-', color='tab:blue',   lw=1.5, marker='o', ms=3, label=r'$\sigma_{p,xx}$')
+    ax.plot(ts, syy, '-', color='tab:orange', lw=1.5, marker='o', ms=3, label=r'$\sigma_{p,yy}$')
+    ax.plot(ts, szz, '-', color='k',          lw=1.5, marker='o', ms=3, label=r'$\sigma_{p,zz}$')
+    ax.set_ylabel(r'$\sigma_{p,ii}$  ($\epsilon/\sigma^3$)')
+    ax.grid(alpha=0.3)
+    ax.legend(loc='best', fontsize=9, ncol=3)
+
+    ax = axes[1]
+    ax.plot(ts, rx, '-', color='tab:blue',   lw=1.8, marker='o', ms=3, label=r'$\sigma_{p,xx}/\sigma_{p,zz}$')
+    ax.plot(ts, ry, '-', color='tab:orange', lw=1.8, marker='o', ms=3, label=r'$\sigma_{p,yy}/\sigma_{p,zz}$')
+    ax.axhline(1.0, color='k', ls=':', lw=1.0)
+    ax.set_ylabel('polymer stress ratio')
+    ax.grid(alpha=0.3)
+    ax.legend(loc='best', fontsize=9, ncol=2)
+    # last-30% means and the deviation from isotropy they imply
+    n30 = max(1, int(0.3 * len(ts)))
+    mx, my = np.nanmean(rx[-n30:]), np.nanmean(ry[-n30:])
+    sx, sy = np.nanstd(rx[-n30:]), np.nanstd(ry[-n30:])
+    txt = (f'last 30%:  xx/zz = {mx:.4f} ± {sx:.4f}   yy/zz = {my:.4f} ± {sy:.4f}\n'
+           f'(lateral network stress excess ≈ {(0.5 * (mx + my) - 1) * np.nanmean(szz[-n30:]):+.4f} ε/σ³)')
+    flag = (abs(mx - 1) > 3 * max(sx, 1e-6)) or (abs(my - 1) > 3 * max(sy, 1e-6))
+    ax.text(0.02, 0.05, txt + ('\n⚠ not isotropic yet -- extend the run' if flag else ''),
+            transform=ax.transAxes, fontsize=9, va='bottom',
+            color='red' if flag else 'black',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.85))
+
+    if has_tot:
+        Pxx, Pyy, Pzz = d[:, 3], d[:, 4], d[:, 5]
+        ax = axes[2]
+        with np.errstate(divide='ignore', invalid='ignore'):
+            ax.plot(ts, Pxx / Pzz, '-', color='tab:blue',   lw=1.5, marker='o', ms=3, label=r'$P_{xx}/P_{zz}$')
+            ax.plot(ts, Pyy / Pzz, '-', color='tab:orange', lw=1.5, marker='o', ms=3, label=r'$P_{yy}/P_{zz}$')
+        ax.axhline(1.0, color='k', ls=':', lw=1.0)
+        ax.set_ylabel('total pressure ratio\n(barostat-pinned)')
+        ax.grid(alpha=0.3)
+        ax.legend(loc='best', fontsize=9, ncol=2)
+
+    axes[-1].set_xlabel('Step')
+    plt.tight_layout()
+    plt.savefig(output, dpi=150)
+    plt.close(fig)
+    print(f"Stress-anisotropy plot → {output}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SHEAR DIAGNOSTICS PLOT
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1027,6 +1107,13 @@ if __name__ == '__main__':
     # Convergence plot (always)
     plot_convergence(data, args.folder, run_id,
                      os.path.join(out_dir, f'{run_id}_convergence.png'))
+
+    # Stress-anisotropy relaxation (slab_with_support) — auto-triggered when the
+    # sparse polymer partial-stress file is present.
+    if os.path.exists(os.path.join(args.folder, 'output_files', 'stress_data',
+                                   f'stress_aniso_{run_id}.dat')):
+        plot_stress_anisotropy(args.folder, run_id,
+                               os.path.join(out_dir, f'{run_id}_stress_anisotropy.png'))
 
     # Compression diagnostics (compress_slab) — auto-triggered when the osmotic
     # bulk-modulus data file is present.  Takes precedence over (and suppresses)
