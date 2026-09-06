@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-node=128 # was 32, 128
 #SBATCH --cpus-per-task=1     # was 4, 1
 #SBATCH --mem=0
-#SBATCH --time=20:00:00
+#SBATCH --time=30:00:00
 #SBATCH --output=%x.o%j.%N
 # #SBATCH --error=%x.e%j.%N
 
@@ -30,9 +30,9 @@ module load python/3.8.12
 
 # Set simulation parameters
 FOLDER="slab_with_support"
-DATANAME="slab_support_5beads_tall_rho04_new_01" # slab_support_periodic_5beads_tall_rho04_new slab_support_5beads_tall_rho04_new
+DATANAME="slab_support_periodic_5beads_tall_rho04_new" # slab_support_periodic_5beads_tall_rho04_new slab_support_5beads_tall_rho04_new slab_support_5beads_tall_rho04_new_01 (the cube one)
 INTERACTION="1.0_1.0"
-NSTEPS=1000000
+NSTEPS=14000000
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
 SEED=12345          # RNG seed for create_velocity / langevin. Change this to test
