@@ -107,6 +107,20 @@ else
 fi
 mkdir -p "$WORK_DIR"/{data_files,output_files/{stress_data,volume_data,piston_data,permeation_data,displacement_data,pair_data,chemical_potential},output_plots}
 
+# Snapshot the input script into the run dir and run THAT copy, not the file in
+# the git working tree. LAMMPS reads its input lazily -- it keeps the file open
+# and only reads the next command when the current `run` returns, so a multi-day
+# job holds the repo file open for its whole life. Editing that file mid-run
+# shifts the byte offsets under LAMMPS: job 54220814 (slab_with_support, 14M
+# steps) had `compute mobile_temp` inserted 16 lines above the read point while
+# its last `run` block was in flight, and when that block finished LAMMPS resumed
+# mid-line and spliced two unrelated lines into a garbage command --
+# "ERROR: Unknown command: jumpniso_${dataname}..." -- after 12 h of good MD.
+# Copying first makes mid-run edits harmless, and archives the exact script that
+# produced each run's results alongside them. (2026-09-08)
+cp "$LAMMPS_FILE" "$WORK_DIR/$(basename "$LAMMPS_FILE")"
+LAMMPS_FILE="$WORK_DIR/$(basename "$LAMMPS_FILE")"
+
 # Create trajectory directory in scratch and symlink to it
 TRAJ_DIR="$SCRATCH_DIR/lammps_trajectories/${FOLDER}_${DATANAME}_${INTERACTION}_${RUN_TIMESTAMP}"
 mkdir -p "$TRAJ_DIR"
