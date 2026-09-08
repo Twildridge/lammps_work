@@ -32,11 +32,18 @@ module load python/3.8.12
 FOLDER="slab_with_support"
 DATANAME="slab_support_periodic_5beads_tall_rho04_new" # slab_support_periodic_5beads_tall_rho04_new slab_support_5beads_tall_rho04_new slab_support_5beads_tall_rho04_new_01 (the cube one)
 INTERACTION="1.0_1.0"
-NSTEPS=14000001
+NSTEPS=14000002     # 2026-09-07: rerun with the piston invisible to solvent (PISTON_TRANSPARENT=1 below)
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
 SEED=12345          # RNG seed for create_velocity / langevin. Change this to test
                     # whether the shear tilt is a stochastic one-off (e.g. 23456, 34567).
+
+# PISTON_TRANSPARENT=1 (2026-09-07): solvent-piston pair off.  The 14000001 run had
+# sig_p,xx = sig_p,yy = 1.0185 * sig_p,zz because the WCA piston sheet carries ~2.8
+# eps/sigma^2 of wall tension that the aniso barostat makes the gel absorb; the
+# 2M-step trial (job 54220423) with the sheet transparent gave 1.0005.  Set to 0
+# to restore the old behaviour.
+export PISTON_TRANSPARENT=1
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# chain_after_slab.batch -- submit with:
+#   sbatch --dependency=afterany:<slab_jobid> chain_after_slab.batch
+# Waits for the slab_with_support 14000002-step run, copies its final data file
+# into ~/Documents/lammps_data/input_data/ under the DATANAME that
+# triaxial_compression.batch expects, then execs that batch inside this
+# allocation.  #SBATCH resources mirror triaxial_compression.batch.
+# (2026-09-07, first used to chain the piston-transparent slab into the M/G sweep.)
+
+#SBATCH --job-name=triax_comp
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=0
+#SBATCH --time=24:00:00
+#SBATCH --output=%x.o%j.%N
+
+RUNS="$HOME/Documents/lammps_runs/slab_with_support"
+PATTERN="slab_with_support_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_"
+TARGET="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002.data"
+DEST="$HOME/Documents/lammps_data/input_data/$TARGET"
+
+# newest slab run dir that actually produced the 14000002 final file
+SRC=""
+for d in $(ls -dt "$RUNS"/${PATTERN}*/ 2>/dev/null); do
+    if [ -f "$d/$TARGET" ] && grep -q "Total wall time" "$d/log.lammps" 2>/dev/null; then
+        SRC="$d/$TARGET"; break
+    fi
+done
+if [ -z "$SRC" ]; then
+    echo "ERROR: no completed slab run with $TARGET under $RUNS -- not starting triaxial."
+    exit 1
+fi
+echo ">>> Slab final data: $SRC"
+if [ -e "$DEST" ]; then
+    echo ">>> $DEST already exists; leaving it in place (not overwriting)."
+else
+    cp "$SRC" "$DEST" && echo ">>> Copied to $DEST"
+fi
+ls -la "$DEST"
+
+exec bash "$HOME/Documents/lammps_work/simulations/triaxial_compression/triaxial_compression.batch"

@@ -375,6 +375,12 @@ pair_coeff 2 5 1.0 ${sigma} 1.122
 # Solvent-piston: OFF for compression — piston passes through solvent freely,
 # loads gel directly.
 pair_coeff 3 5 0.0 ${sigma} 0.0          # OFF (compression)
+# 2026-09-07: the INPUT slab (..._14000002.data) is now also equilibrated with this
+# pair OFF (slab_with_support.batch exports PISTON_TRANSPARENT=1).  With the sheet
+# visible to solvent its ~2.8 eps/sigma^2 wall tension was absorbed by the gel under
+# the aniso barostat (sig_p,xx/zz = 1.0185); with it off the slab arrives isotropic,
+# so Phase 0 below re-equilibrates a state that was made under identical potentials.
+# Turn 3-5 back on only in triaxial_permeation.lmp (slow push-in, constant volume).
 
 # Non-interacting pairs
 pair_coeff 3 4 0.0 ${sigma} 0.0   # solvent-support
