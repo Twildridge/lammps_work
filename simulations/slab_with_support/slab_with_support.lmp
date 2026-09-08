@@ -33,6 +33,18 @@ variable volume_freq equal 10000
 # warm-up are all skipped — the data file already holds an equilibrated config.
 variable cont       index 0
 
+# ----- Piston transparency (trial, 2026-09-07) -----
+# 0 = piston sheet is a WCA wall to solvent (default).  1 = solvent-piston pair
+# zeroed, so the sheet is invisible to solvent (it still repels polymer and is
+# still backstopped by the support).  Purpose: a stress-profile rerun on the
+# 14M-step rho04 snapshots showed the ONLY large deviatoric-stress source in the
+# box is the solvent-excluded layer on each side of the piston (~2.8 eps/sigma^2
+# of wall tension); the aniso barostat then forces the gel to carry the equal and
+# opposite in-plane stress, giving sig_p,xx = sig_p,yy = 1.0185 * sig_p,zz.  With
+# the piston transparent that offset should collapse to ~0.  Set via
+# PISTON_TRANSPARENT=1 in the batch file (run_lammps.sh passes it as -var).
+variable piston_transparent index 0
+
 # Equilibration parameters
 variable temp_target equal 1.0
 variable press_target index 1.5 # APPROPRIATE VALUE IMPORTANT — overridden by -var on command line
@@ -152,6 +164,10 @@ pair_coeff 4 5 1.0 ${sigma} 1.122      # support-piston (WCA backstop): if the
                                        #   stopped at contact instead of passing
                                        #   through into the gel from below.
 pair_coeff 5 5 0.0 ${sigma} 0.0        # piston-piston (off)
+if "${piston_transparent} == 1" then &
+    "pair_coeff 3 5 0.0 ${sigma} 0.0" &
+    "neigh_modify exclude type 3 5" &
+    "print '>>> PISTON TRANSPARENT TO SOLVENT (pair 3-5 off)'"
 
 bond_style fene
 bond_coeff * 30.0 1.5 1.0 1.0

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=slab_pistonoff
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=128 # was 32, 128
+#SBATCH --cpus-per-task=1     # was 4, 1
+#SBATCH --mem=0
+#SBATCH --time=04:00:00
+#SBATCH --output=%x.o%j.%N
+# #SBATCH --error=%x.e%j.%N
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# Set simulation parameters
+FOLDER="slab_with_support"
+DATANAME="slab_support_periodic_5beads_tall_rho04_new" # slab_support_periodic_5beads_tall_rho04_new slab_support_5beads_tall_rho04_new slab_support_5beads_tall_rho04_new_01 (the cube one)
+INTERACTION="1.0_1.0"
+NSTEPS=2000001      # trial: the xx-zz offset is fully formed by 200k steps, so 2M gives 10 stress_aniso reports
+TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
+PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
+SEED=12345          # RNG seed for create_velocity / langevin. Change this to test
+                    # whether the shear tilt is a stochastic one-off (e.g. 23456, 34567).
+
+# TRIAL (2026-09-07): piston invisible to solvent. Tests whether the piston wall
+# tension is what makes sig_p,xx/yy exceed sig_p,zz by ~1.85% in the 14M-step run.
+# Expect the stress_anisotropy panel of the convergence plot to sit at ~1.0.
+export PISTON_TRANSPARENT=1
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET VEL_SEED
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET" "$SEED"

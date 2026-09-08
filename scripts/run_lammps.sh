@@ -22,6 +22,10 @@ VEL_SEED=${7:-12345}    # RNG seed for create_velocity and fix langevin; vary pe
 SKIP_WIDOM=${SKIP_WIDOM:-1}  # Cavity-Widom output is OFF by default (feature archived 2026-08;
                              # see lammps_work/archive/). Set to 0 (via env) to re-enable the
                              # widom_traj dumps and cavity_widom.py post-processing.
+# PISTON_TRANSPARENT=1 (env) zeroes the solvent-piston pair (slab_with_support only):
+# trial to test whether the piston sheet's wall tension is what makes the polymer
+# partial stress anisotropic under the aniso barostat (2026-09-07). Default 0.
+PISTON_TRANSPARENT=${PISTON_TRANSPARENT:-0}
 CALIB_FRAMES=${CALIB_FRAMES:-5}          # calibration-dump frames near run end (polymer_pure /
 CALIB_DUMP_EVERY=${CALIB_DUMP_EVERY:-2000}  # solvent_pure only; other engines ignore these vars)
 # PRERELAXED=1 tells polymer_pure to skip its Stage 0 harmonic pre-relaxation:
@@ -213,6 +217,7 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var compressions_list "$COMPRESSIONS" \
     -var stage_targets $COMPRESS_STAGES \
     -var stage_targets_list "$COMPRESS_STAGES" \
+    -var piston_transparent "${PISTON_TRANSPARENT:-0}" \
     \
     -in $LAMMPS_FILE &
 MPIRUN_PID=$!
