@@ -98,6 +98,22 @@ group piston type 5
 group mobile type 1 2 3
 group polymer_and_support type 1 2 4 5
 
+# ---------- Thermostatted-group temperature (diagnostic) ----------
+# The thermo `temp` column is compute thermo_temp over group `all`, but only
+# `mobile` (types 1,2,3) is thermostatted: the support is frozen and the piston
+# is a force-constrained plate, so 46632 of the 238717 atoms carry no thermal
+# kinetic energy and drag the reported value down by exactly N_mobile/N_all =
+# 192085/238717 = 0.8047.  That is why the 14M-step runs log temp ~= 0.804 while
+# temp_target = 1.0 -- nothing is wrong with the thermostat (`fix langevin`
+# computes its own temperature internally on its own group).  c_mobile_temp
+# below is the physical temperature and should sit at ${temp_target}.
+# Naming matches triaxial_compression.lmp / triaxial_permeation.lmp so that
+# plot_lammps_log.py picks it up (it already prefers c_mobile_temp over Temp).
+# NOTE: diagnostic column only -- do NOT `thermo_modify temp mobile_temp`, that
+# would also feed the mobile temperature into thermo_press's kinetic term and
+# change the reported pressure the barostat diagnostics rely on.
+compute mobile_temp mobile temp
+
 
 
 # =====================================================================
@@ -123,7 +139,7 @@ velocity piston set 0.0 0.0 0.0
 fix freeze_piston piston setforce 0.0 0.0 0.0
 
 # Thermo output for monitoring push-off
-thermo_style custom step temp pe ke etotal press vol lx ly lz
+thermo_style custom step temp c_mobile_temp pe ke etotal press vol lx ly lz
 thermo 1000
 
 if "${is_restart} == 0 && ${cont} == 0" then &
@@ -216,7 +232,7 @@ fix piston_nve piston nve
 # =====================================================================
 #   THERMO OUTPUT
 # =====================================================================
-thermo_style custom step temp pe ke etotal press vol lx ly lz
+thermo_style custom step temp c_mobile_temp pe ke etotal press vol lx ly lz
 thermo ${thermo_freq}
 
 # Trajectory output
