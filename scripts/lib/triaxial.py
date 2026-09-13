@@ -31,7 +31,9 @@ Physics conventions (see the Notes section at the end of either notebook):
     reservoir at z/Lz ~ baseline_zf (one scalar per stress component)
   * uniaxial strain (fixed lateral box):  sigma'_zz = M eps,  sigma'_xx = lambda eps,
     lambda = M - 2G  ->  sigma'_zz/sigma'_xx = M/(M - 2G)  ->  G = (sigma'_zz - sigma'_xx)/(2 eps)
-  * M_network = <sigma'_zz>_membrane / eps_applied ;  M_piston = <F_z/A>_plateau / eps_applied
+  * M_network = (<sigma'_zz>_interior,plateau - sigma'_zz,ref) / eps_applied
+    M_piston  = (<F_z/A>_plateau - P_ref) / eps_applied          (M_SUBTRACT_REF; each estimator
+    subtracts its own eps = 0 reading -- the piston preload and the profile bias differ by ~0.002)
   * D_c from the two-sided consolidation fit of the polymer displacement u_z(z,t)
   * kappa = D_c / M   (Darcy permeability over viscosity, k/eta, in LJ units)
 """
@@ -127,7 +129,11 @@ class Config:
     PHI_FLOOR: float = 0.02
     REF_VOR_FRAMES: int = 3               # reference frames tessellated (~20 s each)
     VOR_MAX_FRAMES: int = 4               # plateau frames tessellated per level (~20 s each)
-    # ---- G from the lateral network stress -------------------------------
+    # ---- M and G as increments from the eps = 0 reference ------------------
+    M_SUBTRACT_REF: bool = True           # M = (stress - its own eps = 0 reading) / eps for BOTH estimators
+                                          # (2026-09-12: the seated piston carries a real preload ~+0.0014 and the
+                                          # profile method a constant ~-0.002 bias; absolute M inherits that
+                                          # ~0.002 gap.  Piston reference needs piston_force_avg_ref.)
     G_SUBTRACT_REF: bool = True           # use increments relative to the eps = 0 reference state
     # ---- D_c consolidation fit ------------------------------------------
     DC_N_MODES: int = 5
@@ -915,22 +921,62 @@ def load_level(cfg, R, lvl, verbose=True):
     # was the last snapshot over the whole membrane).  The two bins that contain the wall
     # planes are missing half of the wall-polymer virial (stress/atom hands it to the
     # piston/support atoms) and read ~0.01-0.03 low, so they are excluded, as for G.
+    #
+    # INCREMENT (2026-09-12, M_SUBTRACT_REF): each estimator subtracts ITS OWN eps = 0 reading,
+    #   M_network = (<sigma'_zz>_int,plateau - sigma'_zz,ref) / eps
+    #   M_piston  = (<P>_plateau - P_ref) / eps
+    # M is a slope, and the two eps = 0 readings differ: the seated piston carries a real
+    # thermal-contact preload (~+0.0014 at contact_gap 1.12, ~0.5 % pre-strain) while the
+    # profile method reads ~0.002 low at every strain (the total sigma_zz in the gel interior
+    # sits ~0.0017 below p_res + P both at eps = 0 and at eps = 0.10).  Absolute stress / eps
+    # therefore inherits a constant ~0.002 offset between the estimators (6 % of M at 0.29);
+    # the increments agree within their CIs.  The absolute values are kept as *_abs.
+    # The piston increment needs piston_force_avg_ref (runs since 2026-09-05); without it the
+    # piston M stays absolute and L['M_pist_ref'] says so.
     eps = L['eps']
     im = L['interior'] if L['interior'].sum() >= 3 else L['in_mem']
     L['M_net_mask'] = 'interior' if im is L['interior'] else 'membrane'
-    mn = zz['net_plat'][im] / eps
-    mn = mn[np.isfinite(mn)]
-    L['M_net'], L['M_net_lo'], L['M_net_hi'] = mean_ci(mn, cfg.ci_level)
-    L['M_net_nbins'] = len(mn)
-    L['M_net_final'] = float(np.nanmean(zz['net'][-1][L['in_mem']]) / eps)   # the pre-2026-09-05 estimator, for reference
+    Rzz = R['stress']['zz']
+    sub = bool(cfg.M_SUBTRACT_REF)
+    L['M_net_ref'] = float(Rzz['net_interior']) if (sub and np.isfinite(Rzz['net_interior'])) else 0.0
+    mn_abs = zz['net_plat'][im] / eps
+    mn_abs = mn_abs[np.isfinite(mn_abs)]
+    L['M_net_abs'], L['M_net_abs_lo'], L['M_net_abs_hi'] = mean_ci(mn_abs, cfg.ci_level)
+    # increment per bin (the reference is one scalar, so it shifts the mean, not the bin scatter);
+    # the reference's own CI half-width is added in quadrature to the bin-scatter interval
+    ref_h = float(Rzz.get('net_interior_half', 0.0)) / eps if sub else 0.0
+    m, lo, hi = mean_ci(mn_abs - L['M_net_ref'] / eps, cfg.ci_level)
+    half = np.sqrt(((hi - lo) / 2) ** 2 + ref_h ** 2)
+    L['M_net'], L['M_net_lo'], L['M_net_hi'] = float(m), float(m - half), float(m + half)
+    L['M_net_nbins'] = len(mn_abs)
+    L['M_net_final'] = float(np.nanmean(zz['net'][-1][L['in_mem']]) / eps)   # the pre-2026-09-05 estimator (absolute), for reference
     if 'PF' in L:
         p = L['PF']
-        L['M_pist'], L['M_pist_lo'], L['M_pist_hi'] = p['mean'] / eps, p['lo'] / eps, p['hi'] / eps
+        L['M_pist_abs'], L['M_pist_abs_lo'], L['M_pist_abs_hi'] = p['mean'] / eps, p['lo'] / eps, p['hi'] / eps
         L['P_final'] = p['mean']
+        have_pref = sub and np.isfinite(R.get('P_ref', np.nan))
+        L['M_pist_ref'] = 'measured' if have_pref else ('absent' if sub else 'off')
+        L['P_ref'] = float(R['P_ref']) if have_pref else 0.0
+        if have_pref:
+            # CI: piston plateau bootstrap half-width (+) reference preload bootstrap half-width, in quadrature
+            ph = (p['hi'] - p['lo']) / 2
+            rh = (R['P_ref_hi'] - R['P_ref_lo']) / 2
+            half = np.sqrt(ph ** 2 + rh ** 2) / eps
+            L['M_pist'] = (p['mean'] - R['P_ref']) / eps
+            L['M_pist_lo'], L['M_pist_hi'] = L['M_pist'] - half, L['M_pist'] + half
+        else:
+            L['M_pist'], L['M_pist_lo'], L['M_pist_hi'] = L['M_pist_abs'], L['M_pist_abs_lo'], L['M_pist_abs_hi']
+    how = 'increment from eps = 0' if sub else 'absolute'
     say(f"  M_network = {L['M_net']:.4f} [{L['M_net_lo']:.4f}, {L['M_net_hi']:.4f}] "
-        f"(plateau mean, {L['M_net_mask']}, {L['M_net_nbins']} bins; last-snapshot/membrane estimator: {L['M_net_final']:.4f})"
-        + (f"   M_piston = {L['M_pist']:.4f} [{L['M_pist_lo']:.4f}, {L['M_pist_hi']:.4f}]"
-           f"   ratio {L['M_pist'] / L['M_net']:.4f}" if 'M_pist' in L else ''))
+        f"({how}; plateau mean, {L['M_net_mask']}, {L['M_net_nbins']} bins"
+        + (f"; ref sigma'_zz subtracted: {L['M_net_ref']:+.4f}; absolute {L['M_net_abs']:.4f}" if sub else '')
+        + f"; last-snapshot/membrane estimator: {L['M_net_final']:.4f})")
+    if 'M_pist' in L:
+        note = {'measured': f"ref P_ref subtracted: {L['P_ref']:+.4f}; absolute {L['M_pist_abs']:.4f}",
+                'absent': 'NO piston_force_avg_ref -> piston M is ABSOLUTE (pre-2026-09-05 run)',
+                'off': 'absolute'}[L['M_pist_ref']]
+        say(f"  M_piston  = {L['M_pist']:.4f} [{L['M_pist_lo']:.4f}, {L['M_pist_hi']:.4f}] ({note})"
+            f"   ratio M_piston/M_network = {L['M_pist'] / L['M_net']:.4f}")
 
     # ---- G from the lateral network stress -------------------------------
     # uniaxial strain, fixed lateral box:  sigma'_zz = M eps,  sigma'_xx = (M - 2G) eps
@@ -1876,25 +1922,49 @@ def fig_ratio(cfg, R, L):
 
 
 def fig_M(cfg, R, L):
-    """Longitudinal modulus: network vs piston estimate with 95 % CIs."""
+    """Longitudinal modulus: network vs piston estimate with 95 % CIs.  Filled markers =
+    the reported (increment) values; hollow markers = the absolute stress / eps values
+    when M_SUBTRACT_REF, so the eps = 0 offset each estimator carries is visible."""
     fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
     ci = int(cfg.ci_level * 100)
+    sub = bool(cfg.M_SUBTRACT_REF)
     ax.errorbar([0], [L['M_net']], yerr=[[L['M_net'] - L['M_net_lo']], [L['M_net_hi'] - L['M_net']]],
                 fmt='o', ms=13, color=WONG['blue'], capsize=8, lw=2.5,
                 label=f"network  $M = {sig(L['M_net'])}$\n{ci}% CI [{sig(L['M_net_lo'])}, {sig(L['M_net_hi'])}]")
     ax.axhline(L['M_net'], color=WONG['blue'], ls='--', lw=1.2, alpha=0.5)
+    if sub:
+        ax.errorbar([0.15], [L['M_net_abs']], yerr=[[L['M_net_abs'] - L['M_net_abs_lo']], [L['M_net_abs_hi'] - L['M_net_abs']]],
+                    fmt='o', ms=10, mfc='none', color=WONG['blue'], capsize=5, lw=1.5, alpha=0.7,
+                    label=f"absolute $\\sigma'_{{zz}}/\\varepsilon = {sig(L['M_net_abs'])}$")
     if 'M_pist' in L:
+        pist_abs = (L['M_pist_ref'] != 'measured')
         ax.errorbar([1], [L['M_pist']], yerr=[[L['M_pist'] - L['M_pist_lo']], [L['M_pist_hi'] - L['M_pist']]],
                     fmt='s', ms=13, color=WONG['vermillion'], capsize=8, lw=2.5,
-                    label=f"piston  $M = {sig(L['M_pist'])}$\n{ci}% CI [{sig(L['M_pist_lo'])}, {sig(L['M_pist_hi'])}]")
+                    label=f"piston  $M = {sig(L['M_pist'])}$\n{ci}% CI [{sig(L['M_pist_lo'])}, {sig(L['M_pist_hi'])}]"
+                          + ('\n(absolute: no $P_{\\rm ref}$ file)' if pist_abs and sub else ''))
         ax.axhline(L['M_pist'], color=WONG['vermillion'], ls='--', lw=1.2, alpha=0.5)
+        if sub and not pist_abs:
+            ax.errorbar([1.15], [L['M_pist_abs']], yerr=[[L['M_pist_abs'] - L['M_pist_abs_lo']], [L['M_pist_abs_hi'] - L['M_pist_abs']]],
+                        fmt='s', ms=10, mfc='none', color=WONG['vermillion'], capsize=5, lw=1.5, alpha=0.7,
+                        label=f"absolute $P/\\varepsilon = {sig(L['M_pist_abs'])}$")
     ax.set_xticks([0, 1])
-    ax.set_xticklabels([r"network ($\langle\sigma'_{zz}\rangle_{\rm int}/\varepsilon$)", r'piston ($P/\varepsilon$)'], fontsize=16)
+    if sub:
+        pist_lab = (r'piston' + '\n' + r'$(P-P_{\rm ref})/\varepsilon$' if L.get('M_pist_ref') == 'measured'
+                    else r'piston' + '\n' + r'$P/\varepsilon$  (no $P_{\rm ref}$ file)')
+        ax.set_xticklabels([r'network' + '\n' + r"$(\langle\sigma'_{zz}\rangle_{\rm int}-\sigma'_{zz,\rm ref})/\varepsilon$",
+                            pist_lab], fontsize=14)
+        txt = f"$\\varepsilon=0$ readings subtracted:\n  $\\sigma'_{{zz,\\rm ref}} = {L['M_net_ref']:+.4f}$"
+        if 'M_pist' in L and L['M_pist_ref'] == 'measured':
+            txt += f"\n  $P_{{\\rm ref}} = {L['P_ref']:+.4f}$"
+        annotate_box(ax, txt, loc='lower right', fontsize=12)
+    else:
+        ax.set_xticklabels([r"network ($\langle\sigma'_{zz}\rangle_{\rm int}/\varepsilon$)", r'piston ($P/\varepsilon$)'], fontsize=16)
     ax.set_ylabel(r'$M$  (LJ units)')
-    ax.set_title(f'Longitudinal modulus\n{cfg.RUN_ID}  |  $\\varepsilon = {L["lvl"]}$', fontsize=15)
-    ax.set_xlim(-0.5, 1.5)
+    incr = ' (increment from $\\varepsilon=0$)' if sub else ''
+    ax.set_title('Longitudinal modulus' + incr + '\n' + cfg.RUN_ID + '  |  $\\varepsilon = ' + str(L['lvl']) + '$', fontsize=15)
+    ax.set_xlim(-0.5, 1.6)
     ax.grid(axis='y', alpha=0.3)
-    smart_legend(ax, fontsize=13)
+    smart_legend(ax, fontsize=12)
     return _save(fig, cfg, 'M_comparison', L['lvl'])
 
 
@@ -2146,39 +2216,70 @@ def fig_ratio_sweep(cfg, R, levels):
 
 
 def fig_M_sweep(cfg, R, levels):
-    """(a) M_network and M_piston vs applied strain; (b) piston stress vs strain."""
+    """(a) M_network and M_piston vs applied strain (per-level secant from eps = 0, i.e. the
+    increment estimators of load_level); (b) the stress-strain curve itself: plateau piston
+    stress and interior network stress vs strain, INCLUDING the eps = 0 readings, with a
+    least-squares slope through each series.  The slopes in (b) are a separate estimate of M
+    that uses only differences BETWEEN levels, so any constant offset an estimator carries
+    (piston preload, profile bias) cancels whether or not M_SUBTRACT_REF is on."""
     fig, (axM, axPP) = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
+    sub = bool(cfg.M_SUBTRACT_REF)
     fig.suptitle(f'Longitudinal modulus across the sweep  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
     eps = np.array([L['eps'] for L in levels])
     Mn = np.array([L['M_net'] for L in levels])
     axM.errorbar(eps, Mn, yerr=[Mn - [L['M_net_lo'] for L in levels], [L['M_net_hi'] for L in levels] - Mn],
                  fmt='o-', ms=10, lw=2, color=WONG['blue'], capsize=6,
-                 label=r"network  $\langle\sigma'_{zz}\rangle_\mathrm{mem}/\varepsilon$")
+                 label=(r"network  $(\langle\sigma'_{zz}\rangle_\mathrm{int}-\sigma'_{zz,\rm ref})/\varepsilon$" if sub
+                        else r"network  $\langle\sigma'_{zz}\rangle_\mathrm{int}/\varepsilon$"))
     hp = [L for L in levels if 'M_pist' in L]
+    Rzz = R['stress']['zz']
+    # ---- (b): stress vs strain, both estimators, with the eps = 0 point ----
+    fits = []
+    def _series(ax, e, s, err, color, marker, name, e0=None, s0=None, err0=None):
+        ax.errorbar(e, s, yerr=err, fmt=marker + '-', lw=2, ms=9, color=color, capsize=6, label=name)
+        ee, ss = list(e), list(s)
+        if e0 is not None and np.isfinite(s0):
+            ax.errorbar([e0], [s0], yerr=err0, fmt=marker, ms=9, mfc='none', color=color, capsize=6)
+            ee, ss = [e0] + ee, [s0] + ss
+        if len(ee) >= 2:
+            slope, icpt = np.polyfit(ee, ss, 1)
+            xs = np.linspace(0, max(ee) * 1.05, 20)
+            ax.plot(xs, slope * xs + icpt, ls=':', lw=1.5, color=color, alpha=0.8)
+            fits.append((name.split()[0], slope, len(ee)))
+    sn = np.array([L['M_net_abs'] * L['eps'] for L in levels])
+    sn_err = [np.abs(np.array([L['M_net_abs_lo'] * L['eps'] for L in levels]) - sn),
+              np.abs(np.array([L['M_net_abs_hi'] * L['eps'] for L in levels]) - sn)]
+    rh = float(Rzz.get('net_interior_half', 0.0))
+    _series(axPP, eps, sn, sn_err, WONG['blue'], 'o', "network $\\langle\\sigma'_{zz}\\rangle_{\\rm int}$ (plateau)",
+            e0=0.0, s0=float(Rzz['net_interior']), err0=rh)
     if hp:
         ep = np.array([L['eps'] for L in hp])
         Mp = np.array([L['M_pist'] for L in hp])
+        n_abs = sum(L['M_pist_ref'] != 'measured' for L in hp)
         axM.errorbar(ep, Mp, yerr=[Mp - [L['M_pist_lo'] for L in hp], [L['M_pist_hi'] for L in hp] - Mp],
                      fmt='s-', ms=10, lw=2, color=WONG['vermillion'], capsize=6,
-                     label=r'piston  $(F_z/A)/\varepsilon$  (block-bootstrap CI)')
+                     label=(r'piston  $(P-P_{\rm ref})/\varepsilon$' if (sub and n_abs == 0) else r'piston  $P/\varepsilon$')
+                           + ('  (absolute: no $P_{\\rm ref}$ file)' if (sub and n_abs) else ''))
         Pp = np.array([L['P_final'] for L in hp])
-        axPP.errorbar(ep, Pp, yerr=[Pp - [L['PF']['lo'] for L in hp], [L['PF']['hi'] for L in hp] - Pp],
-                      fmt='o-', lw=2, ms=9, color=WONG['green'], capsize=6, label='plateau piston stress')
-        if len(ep) >= 2:
-            M_init = (Pp[1] - Pp[0]) / (ep[1] - ep[0])
-            M_sec = (Pp[-1] - Pp[0]) / (ep[-1] - ep[0])
-            axPP.set_title(fr'(b) $P$ vs $\varepsilon$:  $M_\mathrm{{init}}\approx{sig(M_init)}$, '
-                           fr'$M_\mathrm{{secant}}\approx{sig(M_sec)}$', fontsize=15)
-        else:
-            axPP.set_title(r'(b) piston stress vs strain', fontsize=15)
+        pref = R.get('P_ref', np.nan)
+        _series(axPP, ep, Pp, [Pp - [L['PF']['lo'] for L in hp], [L['PF']['hi'] for L in hp] - Pp],
+                WONG['vermillion'], 's', 'piston $P=\\langle F_z\\rangle/A$ (plateau)',
+                e0=0.0, s0=pref, err0=(float(R['P_ref_hi'] - R['P_ref_lo']) / 2 if np.isfinite(pref) else None))
+    if fits:
+        axPP.set_title('(b) stress vs strain, LSQ slopes incl. $\\varepsilon=0$:  ' +
+                       ',  '.join(f"$M_{{\\rm {n[:4]}}}\\approx{sig(s)}$ ({k} pts)" for n, s, k in fits), fontsize=13)
+    else:
+        axPP.set_title(r'(b) stress vs strain', fontsize=15)
     axM.set_xlabel(r'applied strain  $\varepsilon$')
     axM.set_ylabel(r'$M$  (LJ units)')
-    axM.set_title('(a) longitudinal modulus, two estimates', fontsize=15)
+    axM.set_title('(a) longitudinal modulus per level' + (' (increment from $\\varepsilon=0$)' if sub else ''), fontsize=15)
     axM.grid(alpha=0.3)
     smart_legend(axM, fontsize=12)
     axPP.set_xlabel(r'applied strain  $\varepsilon$')
-    axPP.set_ylabel(r'$P_\mathrm{piston}=\langle F_z\rangle/A$  (LJ)')
+    axPP.set_ylabel(r'plateau stress  (LJ)')
+    axPP.plot([], [], 'o', mfc='none', color='0.4', label=r'hollow = $\varepsilon=0$ reading')
     axPP.grid(alpha=0.3)
+    axPP.set_xlim(left=-0.01)
     smart_legend(axPP, fontsize=12)
     return _save(fig, cfg, 'sweep_modulus')
 
@@ -2294,8 +2395,11 @@ def print_hold_check(cfg, levels):
                   f"(end {h['end'] * 100:5.2f}%)  |  {cfg.DC_TARGET_RESID:.0%} needs {h['need']:.1f} tau_1 "
                   f"= {h['need'] * h['tau1'] / cfg.dt_lj / 1e6:.1f}M steps{flag}")
         if 'M_pist' in L:
-            print(f"     observed M_piston/M_network - 1 = {L['M_pist'] / L['M_net'] - 1:+.1%}   vs   "
-                  f"predicted unrelaxed excess (slow D_c) = {F['hold_check']['slow']['avg']:+.1%}")
+            mixed = (L.get('M_pist_ref') == 'absent')
+            mp, mn = (L['M_pist_abs'], L['M_net_abs']) if mixed else (L['M_pist'], L['M_net'])
+            print(f"     observed M_piston/M_network - 1 = {mp / mn - 1:+.1%}   vs   "
+                  f"predicted unrelaxed excess (slow D_c) = {F['hold_check']['slow']['avg']:+.1%}"
+                  + ('   [both ABSOLUTE here: no piston_force_avg_ref, so the increment ratio is not like-for-like]' if mixed else ''))
     print(f'  (triaxial_compression.lmp sizes each hold as n_tau_hold * tau_1 from the live compressed '
           f'BB thickness and Dc_est = {cfg.DC_SLOW_REF:.2f}; tau_1 ~ (1-eps)^2.)')
 
@@ -2303,7 +2407,10 @@ def print_hold_check(cfg, levels):
 def print_summary(cfg, levels):
     """One line per level with the headline numbers, then the hold check."""
     ci = int(cfg.ci_level * 100)
-    print(f'\nSUMMARY  ({cfg.sim_name}; {ci}% CIs)')
+    how = 'M = increment from the eps = 0 reference' if cfg.M_SUBTRACT_REF else 'M = absolute stress / eps'
+    if cfg.M_SUBTRACT_REF and any(L.get('M_pist_ref') == 'absent' for L in levels):
+        how += '; piston M ABSOLUTE (no piston_force_avg_ref file)'
+    print(f'\nSUMMARY  ({cfg.sim_name}; {ci}% CIs; {how})')
     print(f"{'eps':>6s} {'M_net':>18s} {'M_pist':>18s} {'G_x':>18s} {'G_y':>18s} {'D_c':>10s} {'kappa_net':>10s} {'kappa_pist':>10s}")
     for L in levels:
         def ci_(v, lo, hi):
