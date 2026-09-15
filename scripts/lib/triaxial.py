@@ -2240,29 +2240,82 @@ def fig_ratio_sweep(cfg, R, levels):
 
 
 def fig_M_sweep(cfg, R, levels):
-    """(a) M_network and M_piston vs applied strain (per-level secant from eps = 0, i.e. the
-    increment estimators of load_level); (b) the stress-strain curve itself: plateau piston
-    stress and interior network stress vs strain, INCLUDING the eps = 0 readings, with a
-    least-squares slope through each series.  The slopes in (b) are a separate estimate of M
-    that uses only differences BETWEEN levels, so any constant offset an estimator carries
-    (piston preload, profile bias) cancels whether or not M_SUBTRACT_REF is on."""
-    fig, (axM, axPP) = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
+    """Longitudinal modulus vs applied strain, two panes (same layout as fig_M):
+    (a) diagnostic: the reported (increment) network and piston M per level, filled,
+        next to the absolute stress / eps values, hollow;
+    (b) presentation: the two increment M estimates per level alone, with CIs.
+    The stress-strain curve and its least-squares slopes live in fig_stress_strain_sweep."""
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
     sub = bool(cfg.M_SUBTRACT_REF)
-    fig.suptitle(f'Longitudinal modulus across the sweep  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    incr = ' (increment from $\\varepsilon=0$)' if sub else ''
+    fig.suptitle('Longitudinal modulus across the sweep' + incr + '   |   ' + cfg.sim_name, fontsize=13, fontweight='bold')
     eps = np.array([L['eps'] for L in levels])
-    Mn = np.array([L['M_net'] for L in levels])
-    axM.errorbar(eps, Mn, yerr=[Mn - [L['M_net_lo'] for L in levels], [L['M_net_hi'] for L in levels] - Mn],
-                 fmt='o-', ms=10, lw=2, color=WONG['blue'], capsize=6,
-                 label=(r"network  $(\langle\sigma'_{zz}\rangle_\mathrm{int}-\sigma'_{zz,\rm ref})/\varepsilon$" if sub
-                        else r"network  $\langle\sigma'_{zz}\rangle_\mathrm{int}/\varepsilon$"))
+    hp = [L for L in levels if 'M_pist' in L]
+    ep = np.array([L['eps'] for L in hp])
+    n_abs = sum(L['M_pist_ref'] != 'measured' for L in hp)
+    net_lab = (r"network  $(\langle\sigma'_{zz}\rangle_\mathrm{int}-\sigma'_{zz,\rm ref})/\varepsilon$" if sub
+               else r"network  $\langle\sigma'_{zz}\rangle_\mathrm{int}/\varepsilon$")
+    pist_lab = ((r'piston  $(P-P_{\rm ref})/\varepsilon$' if (sub and n_abs == 0) else r'piston  $P/\varepsilon$')
+                + ('  (absolute: no $P_{\\rm ref}$ file)' if (sub and n_abs) else ''))
+
+    def _ser(ax, e, key, Ls, marker, color, label, hollow=False, dx=0.0):
+        v = np.array([L[key] for L in Ls])
+        lo = np.array([L[key + '_lo'] for L in Ls]); hi = np.array([L[key + '_hi'] for L in Ls])
+        kw = dict(mfc='none', alpha=0.7, lw=1.5, ms=8, capsize=4, ls=':') if hollow else dict(lw=2, ms=10, capsize=6, ls='-')
+        ax.errorbar(e + dx, v, yerr=[v - lo, hi - v], fmt=marker, color=color, label=label, **kw)
+
+    # ---- (a) diagnostic ---------------------------------------------------------
+    _ser(axA, eps, 'M_net', levels, 'o', WONG['blue'], net_lab)
+    if sub:
+        _ser(axA, eps, 'M_net_abs', levels, 'o', WONG['blue'], r"network, absolute $\langle\sigma'_{zz}\rangle_\mathrm{int}/\varepsilon$",
+             hollow=True, dx=0.003)
+    if hp:
+        _ser(axA, ep, 'M_pist', hp, 's', WONG['vermillion'], pist_lab)
+        if sub and n_abs == 0:
+            _ser(axA, ep, 'M_pist_abs', hp, 's', WONG['vermillion'], r'piston, absolute $P/\varepsilon$', hollow=True, dx=-0.003)
+    if sub:
+        Rzz = R['stress']['zz']
+        txt = f"$\\varepsilon=0$ readings subtracted:\n  $\\sigma'_{{zz,\\rm ref}} = {float(Rzz['net_interior']):+.4f}$"
+        if hp and n_abs == 0:
+            txt += f"\n  $P_{{\\rm ref}} = {float(R['P_ref']):+.4f}$"
+        annotate_box(axA, txt, loc='lower right', fontsize=11)
+    axA.set_xlabel(r'applied strain  $\varepsilon$')
+    axA.set_ylabel(r'$M$  (LJ units)')
+    axA.set_title('(a) with the absolute values (hollow) they replace', fontsize=13)
+    axA.grid(alpha=0.3)
+    smart_legend(axA, fontsize=11)
+
+    # ---- (b) presentation ----------------------------------------------------
+    _ser(axB, eps, 'M_net', levels, 'o', WONG['blue'],
+         r"network  $\Delta\langle\sigma'_{zz}\rangle_\mathrm{int}/\varepsilon$" if sub else net_lab)
+    if hp:
+        _ser(axB, ep, 'M_pist', hp, 's', WONG['vermillion'],
+             (r'piston  $\Delta P/\varepsilon$' if (sub and n_abs == 0) else pist_lab))
+    axB.set_xlabel(r'applied strain  $\varepsilon$')
+    axB.set_ylabel(r'$M$  (LJ units)')
+    axB.set_title('(b) longitudinal modulus per level, two independent estimates', fontsize=13)
+    axB.grid(alpha=0.3)
+    smart_legend(axB, fontsize=13)
+    return _save(fig, cfg, 'sweep_modulus')
+
+
+def fig_stress_strain_sweep(cfg, R, levels):
+    """The stress-strain curve itself: plateau piston stress and interior network stress vs
+    applied strain, INCLUDING each estimator's eps = 0 reading (hollow), with a least-squares
+    line through each series.  The slopes are a separate estimate of M that uses only
+    differences BETWEEN levels, so any constant offset an estimator carries (piston preload,
+    profile bias) cancels whether or not M_SUBTRACT_REF is on; curvature of the points is the
+    stress-strain nonlinearity.  (Was panel (b) of fig_M_sweep until 2026-09-14.)"""
+    fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
+    eps = np.array([L['eps'] for L in levels])
     hp = [L for L in levels if 'M_pist' in L]
     Rzz = R['stress']['zz']
-    # ---- (b): stress vs strain, both estimators, with the eps = 0 point ----
     fits = []
-    def _series(ax, e, s, err, color, marker, name, e0=None, s0=None, err0=None):
+
+    def _series(e, s, err, color, marker, name, e0=None, s0=None, err0=None):
         ax.errorbar(e, s, yerr=err, fmt=marker + '-', lw=2, ms=9, color=color, capsize=6, label=name)
         ee, ss = list(e), list(s)
-        if e0 is not None and np.isfinite(s0):
+        if e0 is not None and s0 is not None and np.isfinite(s0):
             ax.errorbar([e0], [s0], yerr=err0, fmt=marker, ms=9, mfc='none', color=color, capsize=6)
             ee, ss = [e0] + ee, [s0] + ss
         if len(ee) >= 2:
@@ -2270,42 +2323,29 @@ def fig_M_sweep(cfg, R, levels):
             xs = np.linspace(0, max(ee) * 1.05, 20)
             ax.plot(xs, slope * xs + icpt, ls=':', lw=1.5, color=color, alpha=0.8)
             fits.append((name.split()[0], slope, len(ee)))
+
     sn = np.array([L['M_net_abs'] * L['eps'] for L in levels])
     sn_err = [np.abs(np.array([L['M_net_abs_lo'] * L['eps'] for L in levels]) - sn),
               np.abs(np.array([L['M_net_abs_hi'] * L['eps'] for L in levels]) - sn)]
-    rh = float(Rzz.get('net_interior_half', 0.0))
-    _series(axPP, eps, sn, sn_err, WONG['blue'], 'o', "network $\\langle\\sigma'_{zz}\\rangle_{\\rm int}$ (plateau)",
-            e0=0.0, s0=float(Rzz['net_interior']), err0=rh)
+    _series(eps, sn, sn_err, WONG['blue'], 'o', "network $\\langle\\sigma'_{zz}\\rangle_{\\rm int}$ (plateau)",
+            e0=0.0, s0=float(Rzz['net_interior']), err0=float(Rzz.get('net_interior_half', 0.0)))
     if hp:
         ep = np.array([L['eps'] for L in hp])
-        Mp = np.array([L['M_pist'] for L in hp])
-        n_abs = sum(L['M_pist_ref'] != 'measured' for L in hp)
-        axM.errorbar(ep, Mp, yerr=[Mp - [L['M_pist_lo'] for L in hp], [L['M_pist_hi'] for L in hp] - Mp],
-                     fmt='s-', ms=10, lw=2, color=WONG['vermillion'], capsize=6,
-                     label=(r'piston  $(P-P_{\rm ref})/\varepsilon$' if (sub and n_abs == 0) else r'piston  $P/\varepsilon$')
-                           + ('  (absolute: no $P_{\\rm ref}$ file)' if (sub and n_abs) else ''))
         Pp = np.array([L['P_final'] for L in hp])
         pref = R.get('P_ref', np.nan)
-        _series(axPP, ep, Pp, [Pp - [L['PF']['lo'] for L in hp], [L['PF']['hi'] for L in hp] - Pp],
+        _series(ep, Pp, [Pp - [L['PF']['lo'] for L in hp], [L['PF']['hi'] for L in hp] - Pp],
                 WONG['vermillion'], 's', 'piston $P=\\langle F_z\\rangle/A$ (plateau)',
                 e0=0.0, s0=pref, err0=(float(R['P_ref_hi'] - R['P_ref_lo']) / 2 if np.isfinite(pref) else None))
-    if fits:
-        axPP.set_title('(b) stress vs strain, LSQ slopes incl. $\\varepsilon=0$:  ' +
-                       ',  '.join(f"$M_{{\\rm {n[:4]}}}\\approx{sig(s)}$ ({k} pts)" for n, s, k in fits), fontsize=13)
-    else:
-        axPP.set_title(r'(b) stress vs strain', fontsize=15)
-    axM.set_xlabel(r'applied strain  $\varepsilon$')
-    axM.set_ylabel(r'$M$  (LJ units)')
-    axM.set_title('(a) longitudinal modulus per level' + (' (increment from $\\varepsilon=0$)' if sub else ''), fontsize=15)
-    axM.grid(alpha=0.3)
-    smart_legend(axM, fontsize=12)
-    axPP.set_xlabel(r'applied strain  $\varepsilon$')
-    axPP.set_ylabel(r'plateau stress  (LJ)')
-    axPP.plot([], [], 'o', mfc='none', color='0.4', label=r'hollow = $\varepsilon=0$ reading')
-    axPP.grid(alpha=0.3)
-    axPP.set_xlim(left=-0.01)
-    smart_legend(axPP, fontsize=12)
-    return _save(fig, cfg, 'sweep_modulus')
+    ax.plot([], [], 'o', mfc='none', color='0.4', label=r'hollow = $\varepsilon=0$ reading')
+    ax.set_title('Stress vs strain, least-squares slopes incl. $\\varepsilon=0$:  ' +
+                 ',  '.join(f"$M_{{\\rm {n[:4]}}}\\approx{sig(s)}$ ({k} pts)" for n, s, k in fits) + '\n' + cfg.sim_name,
+                 fontsize=12)
+    ax.set_xlabel(r'applied strain  $\varepsilon$')
+    ax.set_ylabel(r'plateau stress  (LJ)')
+    ax.grid(alpha=0.3)
+    ax.set_xlim(left=-0.01)
+    smart_legend(ax, fontsize=12)
+    return _save(fig, cfg, 'sweep_stress_strain')
 
 
 def fig_G_sweep(cfg, R, levels):
