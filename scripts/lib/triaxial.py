@@ -1922,49 +1922,73 @@ def fig_ratio(cfg, R, L):
 
 
 def fig_M(cfg, R, L):
-    """Longitudinal modulus: network vs piston estimate with 95 % CIs.  Filled markers =
-    the reported (increment) values; hollow markers = the absolute stress / eps values
-    when M_SUBTRACT_REF, so the eps = 0 offset each estimator carries is visible."""
-    fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
+    """Longitudinal modulus, two panes.
+    (a) diagnostic: the reported (increment) network and piston M, filled, next to the
+        absolute stress / eps values, hollow, with the eps = 0 readings each estimator
+        subtracts -- shows where the old ~0.002 offset between the estimators came from.
+    (b) presentation: the two increment M values alone, with their CIs."""
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(14, 6), constrained_layout=True)
     ci = int(cfg.ci_level * 100)
     sub = bool(cfg.M_SUBTRACT_REF)
-    ax.errorbar([0], [L['M_net']], yerr=[[L['M_net'] - L['M_net_lo']], [L['M_net_hi'] - L['M_net']]],
-                fmt='o', ms=13, color=WONG['blue'], capsize=8, lw=2.5,
-                label=f"network  $M = {sig(L['M_net'])}$\n{ci}% CI [{sig(L['M_net_lo'])}, {sig(L['M_net_hi'])}]")
-    ax.axhline(L['M_net'], color=WONG['blue'], ls='--', lw=1.2, alpha=0.5)
-    if sub:
-        ax.errorbar([0.15], [L['M_net_abs']], yerr=[[L['M_net_abs'] - L['M_net_abs_lo']], [L['M_net_abs_hi'] - L['M_net_abs']]],
-                    fmt='o', ms=10, mfc='none', color=WONG['blue'], capsize=5, lw=1.5, alpha=0.7,
-                    label=f"absolute $\\sigma'_{{zz}}/\\varepsilon = {sig(L['M_net_abs'])}$")
-    if 'M_pist' in L:
-        pist_abs = (L['M_pist_ref'] != 'measured')
-        ax.errorbar([1], [L['M_pist']], yerr=[[L['M_pist'] - L['M_pist_lo']], [L['M_pist_hi'] - L['M_pist']]],
-                    fmt='s', ms=13, color=WONG['vermillion'], capsize=8, lw=2.5,
-                    label=f"piston  $M = {sig(L['M_pist'])}$\n{ci}% CI [{sig(L['M_pist_lo'])}, {sig(L['M_pist_hi'])}]"
-                          + ('\n(absolute: no $P_{\\rm ref}$ file)' if pist_abs and sub else ''))
-        ax.axhline(L['M_pist'], color=WONG['vermillion'], ls='--', lw=1.2, alpha=0.5)
-        if sub and not pist_abs:
-            ax.errorbar([1.15], [L['M_pist_abs']], yerr=[[L['M_pist_abs'] - L['M_pist_abs_lo']], [L['M_pist_abs_hi'] - L['M_pist_abs']]],
-                        fmt='s', ms=10, mfc='none', color=WONG['vermillion'], capsize=5, lw=1.5, alpha=0.7,
-                        label=f"absolute $P/\\varepsilon = {sig(L['M_pist_abs'])}$")
-    ax.set_xticks([0, 1])
-    if sub:
-        pist_lab = (r'piston' + '\n' + r'$(P-P_{\rm ref})/\varepsilon$' if L.get('M_pist_ref') == 'measured'
-                    else r'piston' + '\n' + r'$P/\varepsilon$  (no $P_{\rm ref}$ file)')
-        ax.set_xticklabels([r'network' + '\n' + r"$(\langle\sigma'_{zz}\rangle_{\rm int}-\sigma'_{zz,\rm ref})/\varepsilon$",
-                            pist_lab], fontsize=14)
-        txt = f"$\\varepsilon=0$ readings subtracted:\n  $\\sigma'_{{zz,\\rm ref}} = {L['M_net_ref']:+.4f}$"
-        if 'M_pist' in L and L['M_pist_ref'] == 'measured':
-            txt += f"\n  $P_{{\\rm ref}} = {L['P_ref']:+.4f}$"
-        annotate_box(ax, txt, loc='lower right', fontsize=12)
-    else:
-        ax.set_xticklabels([r"network ($\langle\sigma'_{zz}\rangle_{\rm int}/\varepsilon$)", r'piston ($P/\varepsilon$)'], fontsize=16)
-    ax.set_ylabel(r'$M$  (LJ units)')
     incr = ' (increment from $\\varepsilon=0$)' if sub else ''
-    ax.set_title('Longitudinal modulus' + incr + '\n' + cfg.RUN_ID + '  |  $\\varepsilon = ' + str(L['lvl']) + '$', fontsize=15)
-    ax.set_xlim(-0.5, 1.6)
-    ax.grid(axis='y', alpha=0.3)
-    smart_legend(ax, fontsize=12)
+    fig.suptitle('Longitudinal modulus' + incr + '   |   ' + cfg.RUN_ID + '   |   $\\varepsilon = ' + str(L['lvl']) + '$',
+                 fontsize=14, fontweight='bold')
+    has_p = 'M_pist' in L
+    pist_abs = has_p and (L['M_pist_ref'] != 'measured')
+
+    def _pt(ax, x, key, marker, color, ms, label, mfc=None, alpha=1.0, lw=2.5, cap=8):
+        ax.errorbar([x], [L[key]], yerr=[[L[key] - L[key + '_lo']], [L[key + '_hi'] - L[key]]],
+                    fmt=marker, ms=ms, color=color, capsize=cap, lw=lw, alpha=alpha, label=label,
+                    **({'mfc': mfc} if mfc else {}))
+
+    # ---- (a) diagnostic pane ------------------------------------------------
+    _pt(axA, 0, 'M_net', 'o', WONG['blue'], 13,
+        f"network  $M = {sig(L['M_net'])}$\n{ci}% CI [{sig(L['M_net_lo'])}, {sig(L['M_net_hi'])}]")
+    axA.axhline(L['M_net'], color=WONG['blue'], ls='--', lw=1.2, alpha=0.5)
+    if sub:
+        _pt(axA, 0.15, 'M_net_abs', 'o', WONG['blue'], 10,
+            f"absolute $\\sigma'_{{zz}}/\\varepsilon = {sig(L['M_net_abs'])}$\n(ref $\\sigma'_{{zz}} = {L['M_net_ref']:+.4f}$ subtracted)",
+            mfc='none', alpha=0.7, lw=1.5, cap=5)
+    if has_p:
+        _pt(axA, 1, 'M_pist', 's', WONG['vermillion'], 13,
+            f"piston  $M = {sig(L['M_pist'])}$\n{ci}% CI [{sig(L['M_pist_lo'])}, {sig(L['M_pist_hi'])}]"
+            + ('\n(absolute: no $P_{\\rm ref}$ file)' if pist_abs and sub else ''))
+        axA.axhline(L['M_pist'], color=WONG['vermillion'], ls='--', lw=1.2, alpha=0.5)
+        if sub and not pist_abs:
+            _pt(axA, 1.15, 'M_pist_abs', 's', WONG['vermillion'], 10,
+                f"absolute $P/\\varepsilon = {sig(L['M_pist_abs'])}$\n(ref $P = {L['P_ref']:+.4f}$ subtracted)",
+                mfc='none', alpha=0.7, lw=1.5, cap=5)
+    axA.set_xticks([0, 1])
+    if sub:
+        pist_lab = (r'piston' + '\n' + r'$(P-P_{\rm ref})/\varepsilon$' if not pist_abs
+                    else r'piston' + '\n' + r'$P/\varepsilon$  (no $P_{\rm ref}$ file)')
+        axA.set_xticklabels([r'network' + '\n' + r"$(\langle\sigma'_{zz}\rangle_{\rm int}-\sigma'_{zz,\rm ref})/\varepsilon$",
+                             pist_lab], fontsize=13)
+    else:
+        axA.set_xticklabels([r"network ($\langle\sigma'_{zz}\rangle_{\rm int}/\varepsilon$)", r'piston ($P/\varepsilon$)'], fontsize=14)
+    axA.set_ylabel(r'$M$  (LJ units)')
+    axA.set_title('(a) with the absolute values (hollow) they replace', fontsize=13)
+    axA.set_xlim(-0.5, 1.6)
+    axA.grid(axis='y', alpha=0.3)
+    smart_legend(axA, fontsize=11)
+
+    # ---- (b) presentation pane: the two M values only -------------------------
+    _pt(axB, 0, 'M_net', 'o', WONG['blue'], 14,
+        f"network  $M = {sig(L['M_net'])}$\n{ci}% CI [{sig(L['M_net_lo'])}, {sig(L['M_net_hi'])}]")
+    axB.axhline(L['M_net'], color=WONG['blue'], ls='--', lw=1.2, alpha=0.5)
+    if has_p:
+        _pt(axB, 1, 'M_pist', 's', WONG['vermillion'], 14,
+            f"piston  $M = {sig(L['M_pist'])}$\n{ci}% CI [{sig(L['M_pist_lo'])}, {sig(L['M_pist_hi'])}]")
+        axB.axhline(L['M_pist'], color=WONG['vermillion'], ls='--', lw=1.2, alpha=0.5)
+    axB.set_xticks([0, 1])
+    axB.set_xticklabels([r'network' + '\n' + r"$\Delta\langle\sigma'_{zz}\rangle_{\rm int}/\varepsilon$",
+                         r'piston' + '\n' + r'$\Delta P/\varepsilon$'] if sub else
+                        [r"network ($\langle\sigma'_{zz}\rangle_{\rm int}/\varepsilon$)", r'piston ($P/\varepsilon$)'], fontsize=16)
+    axB.set_ylabel(r'$M$  (LJ units)')
+    axB.set_title('(b) longitudinal modulus, two independent estimates', fontsize=13)
+    axB.set_xlim(-0.5, 1.5)
+    axB.grid(axis='y', alpha=0.3)
+    smart_legend(axB, fontsize=13)
     return _save(fig, cfg, 'M_comparison', L['lvl'])
 
 
