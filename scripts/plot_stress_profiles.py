@@ -6,6 +6,7 @@ from matplotlib.cm import ScalarMappable
 import sys
 import os
 import re
+import glob
 
 # HOW TO RUN BY ITSELF
 # cd ~/Documents/lammps_runs/slab_with_flow_walled.....
@@ -95,6 +96,21 @@ def get_box_dims(folder, dataname):
                 break
     return box_dims
 
+def piston_sheet_files(data_dir, dim, dataname):
+    """[(label, path)] of every piston partial-stress file for this dim: the
+    one-piston stress_<dim>_piston_<stem>.dat plus the two-piston sheets
+    stress_<dim>_piston_<sheet>_<stem>.dat (sheet = feed / perm / dry), 2026-09-16."""
+    out = []
+    one = os.path.join(data_dir, f'stress_{dim}_piston_{dataname}.dat')
+    if os.path.exists(one):
+        out.append(('piston', one))
+    for path in sorted(glob.glob(os.path.join(data_dir, f'stress_{dim}_piston_*_{dataname}.dat'))):
+        sheet = os.path.basename(path)[len(f'stress_{dim}_piston_'):-len(f'_{dataname}.dat')]
+        if sheet:
+            out.append((f'piston_{sheet}', path))
+    return out
+
+
 def check_stress_data_exists(folder, dataname):
     """Check if any stress data files exist."""
     data_dir = os.path.join(folder, 'output_files', 'stress_data')
@@ -106,6 +122,8 @@ def check_stress_data_exists(folder, dataname):
             f = os.path.join(data_dir, f'stress_{dim}_{comp}_{dataname}.dat')
             if os.path.exists(f):
                 return True
+        if piston_sheet_files(data_dir, dim, dataname):
+            return True
     return False
 
 def plot_stress_profiles(folder, dataname, oldsteps):
@@ -189,6 +207,20 @@ def plot_stress_profiles(folder, dataname, oldsteps):
         for comp in components:
             fpath = os.path.join(data_dir, f'stress_{dim}_{comp}_{dataname}.dat')
             comp_data[comp] = read_ave_time_file(fpath) if os.path.exists(fpath) else []
+        # multi-piston (two-piston decks): every sheet file is drawn in the Piston
+        # column (distinct line styles) and summed into the Total column.  With a
+        # single stress_<dim>_piston file nothing changes.
+        sheets = piston_sheet_files(data_dir, dim, dataname)
+        extra_sheets = {}
+        if sheets and not comp_data['piston']:
+            comp_data['piston'] = read_ave_time_file(sheets[0][1])
+            sheets_extra = sheets[1:]
+            first_label = sheets[0][0]
+        else:
+            sheets_extra = [sh for sh in sheets if sh[0] != 'piston']
+            first_label = 'piston'
+        for sh_label, sh_path in sheets_extra:
+            extra_sheets[sh_label] = read_ave_time_file(sh_path)
 
         max_frames    = max((len(v) for v in comp_data.values()), default=1)
         plot_interval = max(1, max_frames // 10)
@@ -211,6 +243,19 @@ def plot_stress_profiles(folder, dataname, oldsteps):
                 ylims[col_idx][0] = min(ylims[col_idx][0], P.min())
                 ylims[col_idx][1] = max(ylims[col_idx][1], P.max())
                 ax.plot(coords_norm, P, linewidth=2.0, alpha=_alpha(t), color=cmap(norm(t)))
+            if comp == 'piston' and extra_sheets:
+                styles = ['--', ':', '-.']
+                for k, (sh_label, sh_data) in enumerate(extra_sheets.items()):
+                    for i, (t, rows, P) in enumerate(sh_data):
+                        if i % plot_interval != 0:
+                            continue
+                        coords_norm = (rows * binWidth - binWidth / 2) / box_dims[dim]
+                        ylims[col_idx][0] = min(ylims[col_idx][0], P.min())
+                        ylims[col_idx][1] = max(ylims[col_idx][1], P.max())
+                        ax.plot(coords_norm, P, linewidth=1.6, ls=styles[k % 3], alpha=_alpha(t), color=cmap(norm(t)))
+                ax.text(0.5, 0.02, 'solid: ' + first_label + '   ' + '   '.join(
+                    f'{styles[k % 3]} {lab}' for k, lab in enumerate(extra_sheets)),
+                    transform=ax.transAxes, fontsize=8, ha='center', va='bottom', color='0.3')
 
             _annotate(ax, data)
             ax.set_ylabel(f'Partial stress ({label})', fontsize=11)
@@ -220,9 +265,10 @@ def plot_stress_profiles(folder, dataname, oldsteps):
             if row == 0:
                 ax.set_title(col_titles[col_idx], fontweight='bold', fontsize=12)
 
-        # Column 4: total
+        # Column 4: total (every piston sheet counts)
         ax_tot    = axes[row, 4]
         available = {comp: comp_data[comp] for comp in components if comp_data[comp]}
+        available.update({k: v for k, v in extra_sheets.items() if v})
         if available:
             ts_maps = {comp: {t: (r, P) for t, r, P in data}
                        for comp, data in available.items()}

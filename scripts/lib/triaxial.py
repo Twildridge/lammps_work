@@ -24,6 +24,8 @@ Layout of this file
     9. figures, single level        fig_strain ... fig_kappa
    10. figures, sweep               fig_*_sweep
    11. summaries                    print_summary, print_hold_check
+   12. two-piston (2026-09-16)      mode='permeation' loader + figures, wet-piston
+                                    panels for two-piston compression runs
 
 Physics conventions (see the Notes section at the end of either notebook):
   * total stress sigma^t = sigma_p + sigma_s (group stress/atom, kinetic term included)
@@ -99,13 +101,21 @@ class Config:
     DATANAME: str
     INTERACTION: str                      # "epsSS_epsSP"
     RUN_ID: str                           # local folder under flow_data_local/{compression,plots}
-    COMP_LEVELS: list                     # applied-strain targets, as STRINGS ("0.10"), = STRAIN_TARGETS in the .batch
+    COMP_LEVELS: list = field(default_factory=list)   # applied-strain targets, as STRINGS ("0.10"), = STRAIN_TARGETS
+                                          # in the .batch (compression); leave empty for mode='permeation'
     NSTEPS: object = None                 # the <steps> tag in the file names.  None (default) -> resolved PER LEVEL
                                           # from the files present (since 2026-09-03 the .lmp tags every level with its
                                           # own auto-sized hold length, and the reference files with the first level's);
                                           # an int forces one tag everywhere (old flat-hold runs); a dict {level: tag}
                                           # (key 'ref' for the reference files) pins them by hand.
     base_dir: str = '../../flow_data_local'
+    # ---- which sequence (2026-09-16) ------------------------------------
+    mode: str = 'compression'             # 'compression' | 'permeation': data folder flow_data_local/<mode>/<RUN_ID>,
+                                          # Expanse folder triaxial_<mode>, and which loaders/figures apply
+    two_pist: bool = False                # two-piston (feed/permeate NPT-piston) run: Expanse folder
+                                          # triaxial_<mode>_two_pist; wet-piston files are synced and analysed.
+                                          # The file readers auto-detect multi-piston columns regardless.
+    DP_PISTON: object = None              # permeation: applied dP; None -> read from the piston_pressure file
     # ---- profile / window knobs -----------------------------------------
     binWidth: float = 2.0                 # coarse z-bin (sigma); must match triaxial_compression.lmp
     n_curves: int = 10                    # evolution curves drawn per profile
@@ -147,7 +157,7 @@ class Config:
     # ---- Expanse ---------------------------------------------------------
     EXPANSE_HOST: str = 'login.expanse.sdsc.edu'
     EXPANSE_USER: str = 'dpollard'
-    RUNS_ROOT: str = '/home/dpollard/Documents/lammps_runs/triaxial_compression'
+    RUNS_ROOT: str = None                 # None -> /home/dpollard/Documents/lammps_runs/triaxial_<mode>[_two_pist]
     TRAJ_ROOT: str = '/expanse/lustre/scratch/dpollard/temp_project/lammps_trajectories'
     # ---- derived (filled by __post_init__) -------------------------------
     DATA_DIR: Path = field(init=False)
@@ -156,11 +166,15 @@ class Config:
     sim_name: str = field(init=False)
 
     def __post_init__(self):
-        assert self.COMP_LEVELS, 'COMP_LEVELS is empty -- list at least one level, e.g. ["0.10"]'
+        assert self.mode in ('compression', 'permeation'), "mode must be 'compression' or 'permeation'"
+        if self.mode == 'compression':
+            assert self.COMP_LEVELS, 'COMP_LEVELS is empty -- list at least one level, e.g. ["0.10"]'
         self.COMP_LEVELS = [str(l) for l in self.COMP_LEVELS]
+        if self.RUNS_ROOT is None:
+            self.RUNS_ROOT = f'/home/dpollard/Documents/lammps_runs/triaxial_{self.mode}' + ('_two_pist' if self.two_pist else '')
         base = Path(self.base_dir)
-        self.DATA_DIR = base / 'compression' / self.RUN_ID
-        self.PLOT_DIR = base / 'plots' / 'compression' / self.RUN_ID
+        self.DATA_DIR = base / self.mode / self.RUN_ID
+        self.PLOT_DIR = base / 'plots' / self.mode / self.RUN_ID
         self.TRAJ_DIR = base / 'traj_files.nosync'
         for d in (self.DATA_DIR, self.PLOT_DIR, self.TRAJ_DIR):
             d.mkdir(parents=True, exist_ok=True)
@@ -236,6 +250,51 @@ def read_print_file(filepath, col_names=None):
     if col_names is None:
         col_names = [f'col_{i}' for i in range(arr.shape[1])]
     return {name: arr[:, i] for i, name in enumerate(col_names)}
+
+
+def read_piston_table(filepath):
+    """Multi-column fix print / fix ave/time file -> (names, array).  Names come
+    from the '# col col ...' header the two-piston decks write (2026-09-16); None
+    for the one-piston 'step value' files.  Missing file -> (None, empty)."""
+    filepath = Path(filepath)
+    if not filepath.exists():
+        return None, np.empty((0, 0))
+    names, rows = None, []
+    with open(filepath) as f:
+        for line in f:
+            t = line.strip()
+            if not t:
+                continue
+            if t.startswith('#'):
+                toks = t.lstrip('#').split()
+                if toks and not toks[0].replace('.', '').replace('-', '').isdigit():
+                    names = toks
+                continue
+            try:
+                rows.append([float(v) for v in t.split()])
+            except ValueError:
+                continue
+    if not rows:
+        return None, np.empty((0, 0))
+    ncol = min(len(r) for r in rows)
+    arr = np.array([r[:ncol] for r in rows])
+    if names is not None and len(names) < ncol:
+        names = None
+    return (names[:ncol] if names else None), arr
+
+
+def table_col(names, arr, prefix, default=None):
+    """column whose header name starts with `prefix` (case-insensitive), or column
+    `default`; None when absent."""
+    if arr.size == 0:
+        return None
+    if names is not None:
+        for j, nm in enumerate(names):
+            if nm.lower().startswith(prefix.lower()):
+                return arr[:, j] if j < arr.shape[1] else None
+    if default is not None and default < arr.shape[1]:
+        return arr[:, default]
+    return None
 
 
 def read_ave_time_file(filepath):
@@ -512,9 +571,21 @@ def _component_stacks(cfg, comp, lvl=None, ref=False):
     return dict(ts=np.array([x[0] for x in sp[:n]], float), bins=sp[0][1], p=P, s=S, t=P + S)
 
 
-def baseline_mask(z, cfg):
+def baseline_mask(z, cfg, R=None):
     """Flat far-reservoir bins used for the pore-pressure baseline (drops the
-    half-empty extreme-edge bin)."""
+    half-empty extreme-edge bin).  Two-piston runs (R carries finite z_feed):
+    the box top is VACUUM, so the baseline is the interior of the FEED reservoir
+    [gel top + 2 sigma, feed piston - 1.5 sigma] instead of z/Lz ~ baseline_zf."""
+    z = np.asarray(z, float)
+    if R is not None and np.isfinite(R.get('z_feed', np.nan)):
+        lo = R['z_gel_hi'] + 2.0 * cfg.binWidth
+        hi = R['z_feed'] - 1.5
+        m = (z >= lo) & (z <= hi)
+        if m.sum() >= 2:
+            return m
+        m = (z > R['z_gel_hi']) & (z < R['z_feed'] - 0.5)
+        if m.sum() >= 1:
+            return m
     zf = (z - z.min()) / (z.max() - z.min())
     return ((zf >= cfg.baseline_zf - cfg.baseline_zf_half)
             & (zf <= cfg.baseline_zf + cfg.baseline_zf_half) & (zf < 0.995))
@@ -566,11 +637,20 @@ def load_reference(cfg):
     R.update(BOX=box, Z_LO=box['z'][0], Z_HI=box['z'][1], LX=box['lx'], LY=box['ly'], LZ=box['lz'])
     R['AREA'] = box['lx'] * box['ly']
     R['V_BIN'] = R['AREA'] * cfg.binWidth
-    wz = wall_z_first_frame(cfg.traj('traj_ref'), (4, 5))
-    R['z_support'], R['z_piston'] = wz.get(4, np.nan), wz.get(5, np.nan)
+    wz = wall_z_first_frame(src, (4, 5, 6, 7))
+    R['z_support'] = wz.get(4, np.nan)
+    R['z_feed'], R['z_perm'], R['z_dry'] = wz.get(5, np.nan), wz.get(6, np.nan), wz.get(7, np.nan)
+    # two-piston runs (2026-09-16): types 5/6 are the wet feed/permeate pistons and the
+    # loading plate is the dry piston (type 7); one-piston runs: type 5 is the piston
+    R['two_pist'] = bool(np.isfinite(R['z_feed']) and np.isfinite(R['z_perm']))
+    R['z_piston'] = R['z_dry'] if np.isfinite(R['z_dry']) else R['z_feed']
     print(f'box (fixed): Lx={box["lx"]:.2f} Ly={box["ly"]:.2f} Lz={box["lz"]:.2f}  |  '
           f'A={R["AREA"]:.2f}  V_bin={R["V_BIN"]:.2f}')
-    print(f'support (type 4) z = {R["z_support"]:.2f}  |  reference piston (type 5) z = {R["z_piston"]:.2f}')
+    if R['two_pist']:
+        print(f'TWO-PISTON run: support z = {R["z_support"]:.2f}  |  permeate piston (6) z = {R["z_perm"]:.2f}  |  '
+              f'feed piston (5) z = {R["z_feed"]:.2f}' + (f'  |  dry piston (7) z = {R["z_dry"]:.2f}' if np.isfinite(R['z_dry']) else ''))
+    else:
+        print(f'support (type 4) z = {R["z_support"]:.2f}  |  reference piston (type 5) z = {R["z_piston"]:.2f}')
 
     # ---- reference stress profiles, per component ----------------------
     R['stress'] = {}
@@ -596,12 +676,17 @@ def load_reference(cfg):
     R['z_gel_lo'] = float(z[gel].min()) if gel.any() else z[0]
     R['z_gel_hi'] = float(z[gel].max()) if gel.any() else z[-1]
     R['in_gel'] = (z >= R['z_gel_lo']) & (z <= R['z_gel_hi'])
-    R['interior'] = (R['in_gel'] & (z >= R['z_gel_lo'] + cfg.wall_margin)
-                     & (z <= (R['z_piston'] if np.isfinite(R['z_piston']) else R['z_gel_hi']) - cfg.wall_margin))
+    # upper bound: the loading plate (one-piston / two-piston compression); in permeation
+    # mode the only plate above the gel is the feed piston far up in the reservoir, so the
+    # gel's own top bounds the interior
+    z_top = R['z_piston'] if (np.isfinite(R['z_piston']) and cfg.mode == 'compression') else R['z_gel_hi']
+    R['interior'] = (R['in_gel'] & (z >= R['z_gel_lo'] + cfg.wall_margin) & (z <= z_top - cfg.wall_margin))
     print(f'gel interior (reference): z in [{R["z_gel_lo"]:.1f}, {R["z_gel_hi"]:.1f}]  ({R["in_gel"].sum()} bins)')
 
     # ---- reference totals, Terzaghi split per component ----------------
-    R['bw'] = baseline_mask(z, cfg)
+    R['bw'] = baseline_mask(z, cfg, R)
+    if R['two_pist']:
+        print(f'pore baseline window (feed reservoir): z in [{z[R["bw"]].min():.1f}, {z[R["bw"]].max():.1f}] ({int(R["bw"].sum())} bins)')
     for comp, S in R['stress'].items():
         S['t_m'], S['t_lo'], S['t_hi'] = mean_ci(S['t'], cfg.ci_level)
         S['p_m'] = np.nanmean(S['p'], axis=0)
@@ -624,13 +709,30 @@ def load_reference(cfg):
     # above if the profile method is unbiased at zero strain
     fp = cfg.path('piston_force_avg_ref')
     if fp.exists():
-        pfa = read_print_file(fp, ['step', 'Fz'])
-        P = pfa['Fz'] / R['AREA']
-        m, lo, hi, blk, tau = block_bootstrap_ci(P, cfg.ci_level)
-        R.update(P_ref=float(m), P_ref_lo=float(lo), P_ref_hi=float(hi), P_ref_step=pfa['step'], P_ref_P=P)
-        d = R['stress']['zz']['net_interior'] - m
-        print(f'reference piston preload P_ref = <F_z>/A = {m:.4f} [{lo:.4f}, {hi:.4f}] (n={len(P)}, block={blk});  '
-              f"profile sigma'_zz(ref) - P_ref = {d:+.4f}  (zero-strain bias of the profile method)")
+        pfa = read_print_file(fp, ['step', 'Fz'])          # first value column = the loading piston (dry / one-piston)
+        names, tab = read_piston_table(fp)
+        # two-piston: the wet pistons' zero-flux baselines P = +/- F_fluid/A
+        for lab, sign in (('feed', 1.0), ('perm', -1.0)):
+            col = table_col(names, tab, f'F_fluid_{lab}')
+            if col is not None:
+                m, lo, hi, *_ = block_bootstrap_ci(sign * col / R['AREA'], cfg.ci_level)
+                R[f'P_ref_{lab}'], R[f'P_ref_{lab}_lo'], R[f'P_ref_{lab}_hi'] = float(m), float(lo), float(hi)
+        if cfg.mode == 'permeation':
+            R['P_ref'] = np.nan
+            print('reference (zero-flux) wet-piston pressures: ' + '  '.join(
+                f'{lab}: {R[f"P_ref_{lab}"]:.4f} [{R[f"P_ref_{lab}_lo"]:.4f}, {R[f"P_ref_{lab}_hi"]:.4f}]'
+                for lab in ('feed', 'perm') if f'P_ref_{lab}' in R))
+        else:
+            P = pfa['Fz'] / R['AREA']
+            m, lo, hi, blk, tau = block_bootstrap_ci(P, cfg.ci_level)
+            R.update(P_ref=float(m), P_ref_lo=float(lo), P_ref_hi=float(hi), P_ref_step=pfa['step'], P_ref_P=P)
+            d = R['stress']['zz']['net_interior'] - m
+            print(f'reference piston preload P_ref = <F_z>/A = {m:.4f} [{lo:.4f}, {hi:.4f}] (n={len(P)}, block={blk});  '
+                  f"profile sigma'_zz(ref) - P_ref = {d:+.4f}  (zero-strain bias of the profile method)")
+            if 'P_ref_feed' in R:
+                print('reference wet-piston (bath) pressures: ' + '  '.join(
+                    f'{lab}: {R[f"P_ref_{lab}"]:.4f} [{R[f"P_ref_{lab}_lo"]:.4f}, {R[f"P_ref_{lab}_hi"]:.4f}]'
+                    for lab in ('feed', 'perm') if f'P_ref_{lab}' in R))
     else:
         R['P_ref'] = np.nan
         print('reference piston preload: no piston_force_avg_ref file (runs before 2026-09-05) -> preload unknown')
@@ -1027,6 +1129,16 @@ def load_level(cfg, R, lvl, verbose=True):
             f"sigma'_zz/sigma'_{comp} (plateau) = {ratio_plat:.3f} ± {ratio_plat_err:.3f}"
             + (f"   (ref sigma'_{comp} subtracted: {S['ref_net']:+.4f})" if cfg.G_SUBTRACT_REF else ''))
 
+    # ---- two-piston: wet-piston bath check + solvent expelled (2026-09-16) ----
+    L['wet'] = load_wet_pistons(cfg, R, lvl, plat_from=L['halt_ts'])
+    if L['wet'] is not None:
+        W = L['wet']
+        say('  bath (wet pistons, plateau means): ' + '  '.join(
+            f"{k}: {W['plat'][k]:.4f}" for k in ('P_feed_meas', 'P_perm_meas', 'P_dry_meas') if k in W['plat'])
+            + (f"   applied {W['plat'].get('P_feed_app', np.nan):.3f}" if 'P_feed_app' in W['plat'] else '')
+            + (f"   expelled dV_total = {W['dV_total'][-1]:.1f} sigma^3 (= {W['dV_total'][-1] / R['AREA']:.2f} sigma of feed rise)"
+               if W.get('dV_total') is not None else ''))
+
     # ---- D_c and kappa ---------------------------------------------------
     L['Dc'] = fit_Dc(cfg, R, load_disp(cfg, R, lvl))
     if L['Dc'] is None:
@@ -1161,6 +1273,14 @@ _REF_DAT = ('sigmazz_polymer_ref', 'sigmazz_solvent_ref', 'sigmaxx_polymer_ref',
 _REF_DAT_OPT = ('piston_force_avg_ref',)
 _REQUIRED_PROD = ('sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z', 'strain_zz',
                   'piston_force', 'box_dimensions', 'gel_dimensions_bb', 'disp_z_polymer')
+# two-piston compression extras (per level) and permeation-mode lists (no level tag), 2026-09-16
+_TWO_PIST_DAT = ('piston_pressure', 'permeation', 'pressure_reservoirs')
+_PERM_DAT = ('sigmazz_polymer', 'sigmazz_solvent', 'sigmaxx_polymer', 'sigmaxx_solvent',
+             'sigmayy_polymer', 'sigmayy_solvent', 'solvent_density_z', 'disp_z_polymer', 'strain_zz',
+             'piston_position', 'piston_velocity', 'piston_force', 'piston_force_avg', 'piston_pressure',
+             'permeation', 'permeate_count', 'pressure_feed', 'pressure_permeate',
+             'box_dimensions', 'gel_dimensions_bb', 'gel_dimensions_rg', 'polymer_com', 'stress_aniso')
+_PERM_REQUIRED = ('sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z', 'piston_position', 'permeation')
 
 
 def _present(p):
@@ -1177,8 +1297,13 @@ def sync_files(cfg, levels=None):
     data = [cfg.path(n) for n in _REF_DAT + _REF_DAT_OPT]
     traj = [cfg.traj('traj_ref')]
     req = [cfg.path('sigmazz_polymer_ref'), cfg.path('sigmazz_solvent_ref'), cfg.path('solvent_density_z_ref')]
+    if cfg.mode == 'permeation':            # one continuous run, no level tags
+        data += [cfg.path(n) for n in _PERM_DAT]
+        traj += [cfg.traj('traj_stress')]
+        req += [cfg.path(n) for n in _PERM_REQUIRED]
+        return data, traj, req
     for l in levels:
-        data += [cfg.path(n, l) for n in _PROD_DAT]
+        data += [cfg.path(n, l) for n in _PROD_DAT + (_TWO_PIST_DAT if cfg.two_pist else ())]
         traj += [cfg.traj('traj_stress', l)]
         req += [cfg.path(n, l) for n in _REQUIRED_PROD]
     return data, traj, req
@@ -1203,6 +1328,7 @@ def sync_from_expanse(cfg, levels=None, force=False):
         except Exception:
             absent = set()
     optional = {cfg.path(n).name for n in _REF_DAT_OPT}
+    optional |= {cfg.path(n, l).name for n in _TWO_PIST_DAT for l in ([None] + list(cfg.COMP_LEVELS))}
     missing_dat = [f for f in data_files if not _present(f)]
     missing_new = [f for f in missing_dat if f.name not in absent and f.name not in optional]
     missing_all = missing_dat + [f for f in traj_files if not _present(f)]
@@ -2488,3 +2614,460 @@ def print_summary(cfg, levels):
         print(f"{L['eps']:6.3f} {ci_(L['M_net'], L['M_net_lo'], L['M_net_hi']):>18s} {mp:>18s} {gx:>18s} {gy:>18s} "
               f"{dc:>10s} {kn:>10s} {kp:>10s}")
     print_hold_check(cfg, levels)
+
+
+# ===========================================================================
+#  12. TWO-PISTON (feed / permeate NPT-piston) RUNS  -- 2026-09-16
+# ===========================================================================
+# Files written by triaxial_{compression,permeation}_two_pist.lmp carry ONE column
+# set per piston with a '# ...' header naming them ([dry |] feed | perm).  The
+# compression loaders above keep reading the first value column (= the dry
+# piston, the network load), so every one-piston figure works unchanged; the
+# extras below add the wet-piston bath check and the permeation analysis.
+def load_wet_pistons(cfg, R, lvl=None, plat_from=None):
+    """piston_pressure[_c<lvl>] (+ permeation[_c<lvl>] for compression: solvent expelled)
+    -> dict(step, P_*_meas/app series, plat means, dV_*) or None when the run is one-piston."""
+    names, tab = read_piston_table(cfg.path('piston_pressure', lvl))
+    if tab.size == 0 or names is None:
+        return None
+    W = dict(step=tab[:, 0], names=names)
+    for nm in names[1:]:
+        col = table_col(names, tab, nm)
+        if col is not None:
+            W[nm] = col
+    plat = W['step'] >= (plat_from if plat_from is not None else W['step'][0] + 0.75 * (W['step'][-1] - W['step'][0]))
+    if plat.sum() < 1:
+        plat[-1] = True
+    W['plat_mask'] = plat
+    W['plat'] = {nm: float(np.mean(W[nm][plat])) for nm in names[1:] if nm in W}
+    W['plat_ci'] = {}
+    for nm in names[1:]:
+        if nm in W and nm.endswith('_meas') and plat.sum() >= 4:
+            m, lo, hi, *_ = block_bootstrap_ci(W[nm][plat], cfg.ci_level)
+            W['plat_ci'][nm] = (m, lo, hi)
+    en, et = read_piston_table(cfg.path('permeation', lvl))
+    if et.size and en is not None and any(n.lower() == 'dv_total' for n in en):
+        W['exp_step'] = et[:, 0]
+        for key in ('dV_feed', 'dV_perm', 'dV_total', 'z_feed', 'z_perm'):
+            W[key] = table_col(en, et, key)
+    return W
+
+
+def _wet_panel(ax, cfg, R, L, col=None, label_prefix='', applied=True, shade=True):
+    W = L.get('wet')
+    if W is None:
+        return False
+    st = W['step']
+    pal = {'P_feed_meas': (WONG['vermillion'], '-'), 'P_perm_meas': (WONG['blue'], '-'),
+           'P_dry_meas': (WONG['orange'], '-'), 'P_feed_app': (WONG['vermillion'], '--'), 'P_perm_app': (WONG['blue'], '--')}
+    for nm in W['names'][1:]:
+        if nm not in W or (nm.endswith('_app') and not applied):
+            continue
+        c, ls = pal.get(nm, ('k', '-'))
+        if col is not None:
+            c = col
+        y = W[nm]
+        lab = label_prefix + nm.replace('_meas', ' measured').replace('_app', ' applied')
+        if nm.endswith('_meas'):
+            ax.plot(st, y, ls, color=c, lw=0.9, alpha=0.3)
+            ax.plot(st, rolling_mean(y, cfg.roll_win), ls, color=c, lw=2.2, alpha=0.95,
+                    label=lab + f'  (plateau {sig(W["plat"][nm])})')
+        else:
+            ax.plot(st, y, ls, color=c, lw=1.4, alpha=0.8, label=lab)
+    if shade:
+        ax.axvspan(float(st[W['plat_mask']][0]), float(st[-1]), color=WONG['green'], alpha=0.08)
+    ax.axhline(cfg.P_BARO, color='k', ls=':', lw=1.0, alpha=0.6)
+    return True
+
+
+def fig_wet_pistons(cfg, R, L):
+    """Two-piston compression: bath pressure check over the level -- P_feed and
+    P_perm = F_fluid/(lx ly) on the wet pistons (rolling mean) vs the applied P_target,
+    plus the dry-piston load P_dry.  Shaded = plateau window."""
+    if L.get('wet') is None:
+        print('wet-piston figure skipped (one-piston run: no piston_pressure file)')
+        return None
+    fig, ax = plt.subplots(figsize=(11, 6), constrained_layout=True)
+    _wet_panel(ax, cfg, R, L)
+    ax.set_xlabel('step')
+    ax.set_ylabel(r'$P = F_{\rm fluid}/(l_x l_y)$  (LJ)')
+    ax.set_title(f'Wet pistons hold the bath at $P_{{\\rm target}}={sig(cfg.P_BARO)}$;  '
+                 f'dry piston = network load   ($\\varepsilon={L["lvl"]}$)', fontsize=14)
+    ax.grid(alpha=0.3)
+    smart_legend(ax, fontsize=11)
+    return _save(fig, cfg, 'wet_piston_pressures', L['lvl'])
+
+
+def fig_solvent_expelled(cfg, R, L):
+    """Two-piston compression: solvent expelled from the gel = A * (feed-piston rise
+    + permeate-piston descent) vs step, next to the applied strain * L0 * A guide."""
+    W = L.get('wet')
+    if W is None or W.get('dV_total') is None:
+        print('solvent-expelled figure skipped (no permeation_<level> file)')
+        return None
+    fig, ax = plt.subplots(figsize=(11, 6), constrained_layout=True)
+    st = W['exp_step']
+    ax.plot(st, W['dV_total'], '-', color=WONG['green'], lw=2.4, label=r'total  $A\,(\Delta z_{\rm feed} - \Delta z_{\rm perm})$')
+    ax.plot(st, W['dV_feed'], '--', color=WONG['vermillion'], lw=1.6, label='into the feed reservoir')
+    ax.plot(st, W['dV_perm'], '--', color=WONG['blue'], lw=1.6, label='into the permeate reservoir')
+    if 'L_bb' in L.get('Dc', {}) if L.get('Dc') else False:
+        pass
+    ax.axhline(0, color='k', ls=':', lw=1, alpha=0.5)
+    ax.set_xlabel('step')
+    ax.set_ylabel(r'solvent expelled  ($\sigma^3$)')
+    ax.set_title(f'Solvent expelled since seating (wet-piston displacement), $\\varepsilon={L["lvl"]}$'
+                 f'  |  final {sig(W["dV_total"][-1])} $\\sigma^3$ = {sig(W["dV_total"][-1] / R["AREA"])} $\\sigma$ of feed rise', fontsize=13)
+    ax.grid(alpha=0.3)
+    smart_legend(ax, fontsize=12)
+    return _save(fig, cfg, 'solvent_expelled', L['lvl'])
+
+
+def fig_wet_pistons_sweep(cfg, R, levels):
+    hw = [L for L in levels if L.get('wet') is not None]
+    if not hw:
+        print('wet-piston sweep figure skipped (one-piston run)')
+        return None
+    fig, (axP, axE) = plt.subplots(1, 2, figsize=(18, 6), constrained_layout=True)
+    for i, L in enumerate(hw):
+        W = L['wet']
+        st = W['step']
+        for nm, ls in (('P_feed_meas', '-'), ('P_perm_meas', '--')):
+            if nm in W:
+                axP.plot(st, rolling_mean(W[nm], cfg.roll_win), ls, color=level_color(levels.index(L)), lw=2.0, alpha=0.9)
+        if W.get('dV_total') is not None:
+            axE.plot(W['exp_step'], W['dV_total'], '-', color=level_color(levels.index(L)), lw=2.0)
+    axP.axhline(cfg.P_BARO, color='k', ls=':', lw=1.0, alpha=0.6, label=f'$P_{{\\rm target}}={sig(cfg.P_BARO)}$')
+    axP.set_xlabel('step')
+    axP.set_ylabel(r'$P_{\rm bath}$ on the wet pistons  (LJ)')
+    axP.set_title('(a) bath check per level: feed (solid), permeate (dashed), rolling means', fontsize=13)
+    axP.grid(alpha=0.3)
+    h = level_handles(levels) + [Line2D([0], [0], color='0.3', ls='-', lw=2, label='feed'),
+                                 Line2D([0], [0], color='0.3', ls='--', lw=2, label='permeate')]
+    smart_legend(axP, handles=h, fontsize=11)
+    axE.set_xlabel('step')
+    axE.set_ylabel(r'solvent expelled  ($\sigma^3$)')
+    axE.set_title('(b) solvent expelled since seating (cumulative over the sweep)', fontsize=13)
+    axE.grid(alpha=0.3)
+    smart_legend(axE, handles=level_handles(levels), fontsize=11)
+    return _save(fig, cfg, 'sweep_wet_pistons')
+
+
+# ---------------------------------------------------------------------------
+#  permeation mode: loader
+# ---------------------------------------------------------------------------
+def load_permeation(cfg, R, verbose=True):
+    """Everything for a two-piston PERMEATION run (one continuous drive, no levels):
+    production stress stacks + Terzaghi split (feed-reservoir baseline), density
+    evolution, both wet pistons (z, v, F, P measured vs applied), the permeate flux
+    Q_perm(t) from the permeate-piston displacement with its steady-state
+    (block-bootstrap) plateau and linear fit, the bead-count cross-check, and the
+    permeability k = Q L/(A dP) (applied and measured dP).  Returns a dict P shaped
+    like a level dict so the shared evolution figures (fig_total_stress,
+    fig_network_stress, fig_partial_stress) work on it."""
+    say = print if verbose else (lambda *a, **k: None)
+    z = R['z']
+    P = dict(lvl=None, eps=np.nan, z=z, mode='permeation')
+    P['stress'] = {}
+    for comp in COMPONENTS:
+        S = _component_stacks(cfg, comp, lvl=None)
+        if S is None:
+            if comp == 'zz':
+                raise FileNotFoundError('production sigmazz_{polymer,solvent} files missing -- run the sync cell')
+            say(f'  NOTE: no sigma{comp} production files -> {comp} panels skipped')
+            continue
+        P['stress'][comp] = S
+    zz = P['stress']['zz']
+    ts = zz['ts']
+    P['ts'] = ts
+    t0, t1 = float(ts[0]), float(ts[-1])
+    P['halt_ts'] = int(t1 - cfg.plateau_frac * (t1 - t0))
+    P['evol_from'] = int(t0)
+    P['plat'] = ts >= P['halt_ts']
+    say(f'production: {len(ts)} stress snapshots, steps {int(t0)} -> {int(t1)}; steady window: steps >= {P["halt_ts"]}')
+
+    # ---- membrane bounds from the final polymer stress; interior ----
+    spf = np.abs(zz['p'][-1])
+    mem = spf > cfg.gel_thresh * float(np.nanmax(spf))
+    P['z_mem_lo'] = float(z[mem].min()) if mem.any() else R['z_gel_lo']
+    P['z_mem_hi'] = float(z[mem].max()) if mem.any() else R['z_gel_hi']
+    P['in_mem'] = (z >= P['z_mem_lo']) & (z <= P['z_mem_hi'])
+    P['interior'] = P['in_mem'] & (z >= P['z_mem_lo'] + cfg.wall_margin) & (z <= P['z_mem_hi'] - cfg.wall_margin)
+
+    # ---- pistons: position / velocity / force / pressure ------------------
+    pn, pt = read_piston_table(cfg.path('piston_position'))
+    P['pist'] = {}
+    if pt.size:
+        P['pist']['step'] = pt[:, 0]
+        for lab in ('feed', 'perm'):
+            c = table_col(pn, pt, f'z_{lab}')
+            if c is not None:
+                P['pist'][f'z_{lab}'] = c
+    vn, vt = read_piston_table(cfg.path('piston_velocity'))
+    if vt.size:
+        for lab in ('feed', 'perm'):
+            c = table_col(vn, vt, f'vz_{lab}')
+            if c is not None:
+                P['pist'][f'vz_{lab}'] = c
+        P['pist']['vstep'] = vt[:, 0]
+    zf = P['pist'].get('z_feed')
+    if zf is not None:
+        st = P['pist']['step']
+        P['piston_z_at'] = lambda t, st=st, zf=zf: float(np.interp(t, st, zf))
+        P['z_pist'] = float(zf[-1])
+    else:
+        P['piston_z_at'] = lambda t: R['z_feed']
+        P['z_pist'] = R['z_feed']
+    P['wet'] = load_wet_pistons(cfg, R, None, plat_from=P['halt_ts'])
+
+    # ---- Terzaghi split with the feed-reservoir baseline (+ the permeate side) ----
+    bw = R['bw']
+    bw_perm = None
+    if np.isfinite(R.get('z_perm', np.nan)):
+        m = (z >= R['z_perm'] + 1.5) & (z <= R['z_support'] - 0.5)
+        bw_perm = m if m.sum() >= 1 else None
+    for comp, S in P['stress'].items():
+        Rs = R['stress'].get(comp)
+        sd_bin = Rs['sd_bin'] if (Rs is not None and Rs['t'].shape[0] >= 2 and np.any(Rs['sd_bin'] > 0)) \
+            else np.full(len(z), float(np.nanstd(S['t'][-1][bw])))
+        S['net'], S['pore'], S['pore_half'], S['net_half'] = terzaghi_split(S['t'], bw, sd_bin, cfg.ci_level)
+        S['ref_net'] = Rs['net_interior'] if Rs is not None else 0.0
+        S['net_plat'] = np.nanmean(S['net'][P['plat']], axis=0)
+        S['t_plat'] = np.nanmean(S['t'][P['plat']], axis=0)
+        S['net_mem'] = np.array([np.nanmean(S['net'][i][P['in_mem']]) for i in range(len(ts))])
+        if bw_perm is not None:
+            S['pore_perm'] = np.array([float(np.nanmean(S['t'][i][bw_perm])) for i in range(len(ts))])
+    say(f"reservoir sigma_zz baselines (profiles): feed {zz['pore'][0]:.4f} -> {zz['pore'][-1]:.4f}"
+        + (f";  permeate {zz['pore_perm'][0]:.4f} -> {zz['pore_perm'][-1]:.4f}" if 'pore_perm' in zz else ''))
+
+    # ---- density evolution ----
+    fd = cfg.path('solvent_density_z')
+    if fd.exists():
+        d_ts, d_z, _, d_m = load_density(fd)
+        P.update(dens_ts=d_ts, dens_z=d_z, dens_m=d_m)
+
+    # ---- gel thickness (Rg) over the run ----
+    G = load2c(cfg.path('gel_dimensions_rg'), 4)
+    if G is not None:
+        P['L_step'], P['L_rg'] = G[:, 0], G[:, 3]
+        w = P['L_step'] >= P['halt_ts']
+        P['L_gel'] = float(np.mean(P['L_rg'][w])) if w.any() else float(P['L_rg'][-1])
+    else:
+        P['L_gel'] = float(P['z_mem_hi'] - P['z_mem_lo'])
+
+    # ---- flux: permeation file ----
+    en, et = read_piston_table(cfg.path('permeation'))
+    area = R['AREA']
+    P['area'] = area
+    P['flux'] = None
+    if et.size and en is not None:
+        F = dict(step=et[:, 0])
+        for key, pre in (('z_feed', 'z_feed'), ('z_perm', 'z_perm'), ('P_feed_meas', 'P_feed_meas'),
+                         ('P_perm_meas', 'P_perm_meas'), ('Q', 'Q_perm'), ('N', 'N_permeate')):
+            F[key] = table_col(en, et, pre)
+        st = F['step']
+        prod = st >= P['evol_from']                      # the file also spans the ramp
+        F['prod'] = prod
+        if F['Q'] is not None and prod.sum() >= 4:
+            PW = plateau_window(st[prod], F['Q'][prod], cfg.plateau_frac_auto, cfg.ci_level)
+            F['Q_ss'] = PW
+            win = st >= PW['step0']
+            F['win'] = win
+            # linear fit of z_perm over the window: Q_fit = -A dz/dt
+            if F['z_perm'] is not None and win.sum() >= 3:
+                slope = np.polyfit(st[win] * cfg.dt_lj, F['z_perm'][win], 1)[0]
+                F['Q_fit'] = -area * slope
+            # measured dP over the window
+            if F['P_feed_meas'] is not None and F['P_perm_meas'] is not None:
+                dpm = F['P_feed_meas'][win] - F['P_perm_meas'][win]
+                m, lo, hi, *_ = block_bootstrap_ci(dpm, cfg.ci_level)
+                F['dP_meas'], F['dP_meas_lo'], F['dP_meas_hi'] = float(m), float(lo), float(hi)
+            # applied dP
+            W = P['wet']
+            if cfg.DP_PISTON is not None:
+                F['dP_app'] = float(cfg.DP_PISTON)
+            elif W is not None and 'P_feed_app' in W and 'P_perm_app' in W:
+                F['dP_app'] = float(np.mean((W['P_feed_app'] - W['P_perm_app'])[W['plat_mask']]))
+            else:
+                F['dP_app'] = np.nan
+            # bead-count cross-check: dN/dt over the window / rho_s0
+            cnt = load2c(cfg.path('permeate_count'), 2)
+            rho0 = R.get('rho_s0', np.nan)
+            if cnt is not None and np.isfinite(rho0):
+                cw = cnt[:, 0] >= PW['step0']
+                if cw.sum() >= 3:
+                    sl = np.polyfit(cnt[cw, 0] * cfg.dt_lj, cnt[cw, 1], 1)[0]
+                    F['Q_count'] = float(sl / rho0)
+                    F['count'] = cnt
+            elif F['N'] is not None and win.sum() >= 3 and np.isfinite(rho0):
+                sl = np.polyfit(st[win] * cfg.dt_lj, F['N'][win], 1)[0]
+                F['Q_count'] = float(sl / rho0)
+            # permeability k = Q L / (A dP)   (LJ: sigma^4 ... /(eps tau) -> kappa = k/eta convention of the notebooks)
+            Lg = P['L_gel']
+            def _k(Q, Qlo, Qhi, dP, dPlo=None, dPhi=None):
+                if not (np.isfinite(Q) and np.isfinite(dP)) or dP == 0:
+                    return None
+                k = Q * Lg / (area * dP)
+                rq = 0.5 * (Qhi - Qlo) / abs(Q) if np.isfinite(Qlo) and Q != 0 else 0.0
+                rp = 0.5 * (dPhi - dPlo) / abs(dP) if (dPlo is not None and np.isfinite(dPlo)) else 0.0
+                h = abs(k) * np.sqrt(rq ** 2 + rp ** 2)
+                return dict(k=float(k), lo=float(k - h), hi=float(k + h))
+            F['k'] = {}
+            F['k']['applied'] = _k(PW['mean'], PW['lo'], PW['hi'], F['dP_app'])
+            if 'dP_meas' in F:
+                F['k']['measured'] = _k(PW['mean'], PW['lo'], PW['hi'], F['dP_meas'], F['dP_meas_lo'], F['dP_meas_hi'])
+            if 'Q_count' in F:
+                F['k']['count'] = _k(F['Q_count'], np.nan, np.nan, F['dP_app'])
+            F['k'] = {kk: v for kk, v in F['k'].items() if v is not None}
+            say(f"Q_perm steady (piston displacement): {PW['mean']:.4e} [{PW['lo']:.4e}, {PW['hi']:.4e}] sigma^3/tau "
+                f"(window last {PW['frac']:.0%}, n={PW['n']}, block={PW['block']})" + ('  DRIFT WARNING' if PW.get('warn') else ''))
+            if 'Q_fit' in F:
+                say(f"Q_perm from the z_perm linear fit: {F['Q_fit']:.4e};  bead-count cross-check: "
+                    + (f"{F['Q_count']:.4e}" if 'Q_count' in F else 'n/a'))
+            say(f"dP applied = {F['dP_app']:.4f};  dP measured (wet pistons) = "
+                + (f"{F['dP_meas']:.4f} [{F['dP_meas_lo']:.4f}, {F['dP_meas_hi']:.4f}]" if 'dP_meas' in F else 'n/a')
+                + f";  L_gel (Rg) = {Lg:.2f};  A = {area:.1f}")
+            say('permeability k = Q L/(A dP):  ' + '   '.join(f"{kk}: {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" for kk, v in F['k'].items()))
+        P['flux'] = F
+    else:
+        say('NOTE: permeation_<stem>.dat missing -> flux / permeability skipped')
+    return P
+
+
+# ---------------------------------------------------------------------------
+#  permeation mode: figures
+# ---------------------------------------------------------------------------
+def fig_perm_density(cfg, R, P):
+    """Solvent mass-density evolution (cividis, bold final) with the zero-flux reference."""
+    if 'dens_m' not in P:
+        print('density figure skipped (no solvent_density_z file)')
+        return None
+    fig, ax = plt.subplots(figsize=(11, 6.5), constrained_layout=True)
+    ts, ev = post_halt(cfg, P, P['dens_ts'], P['dens_m'])
+    ref = None
+    if 'dens_m' in R:
+        m, lo, hi = mean_ci(np.array([np.interp(P['dens_z'], R['dens_z'], row) for row in R['dens_m']]), cfg.ci_level)
+        ref = (m, lo, hi)
+    plot_evolution(ax, cfg, R, P, P['dens_z'], ts, ev, r'$\rho_s(z,t)$', 'Solvent mass density: reference -> permeation drive',
+                   ref=ref, annotate=False)
+    if np.isfinite(R.get('rho_s0', np.nan)):
+        ax.axhline(R['rho_s0'], color='k', ls=':', lw=1.2, alpha=0.6)
+    return _save(fig, cfg, 'perm_solvent_density_evolution')
+
+
+def fig_perm_pistons(cfg, R, P):
+    """(a) both wet-piston positions vs step, (b) their measured vs applied pressures
+    (+ the reservoir virial pressures pressure_feed / pressure_permeate, dotted)."""
+    if not P['pist']:
+        print('piston figure skipped (no piston_position file)')
+        return None
+    fig, (axZ, axP) = plt.subplots(1, 2, figsize=(18, 6), constrained_layout=True)
+    st = P['pist']['step']
+    for lab, col in (('feed', WONG['vermillion']), ('perm', WONG['blue'])):
+        zc = P['pist'].get(f'z_{lab}')
+        if zc is not None:
+            axZ.plot(st, zc - zc[0], '-', color=col, lw=2.2, label=f'{lab} piston  ($z_0={sig(zc[0])}$)')
+    axZ.axvspan(P['evol_from'], float(st[-1]), color=WONG['green'], alpha=0.06, label='production')
+    axZ.axhline(0, color='k', ls=':', lw=1, alpha=0.5)
+    axZ.set_xlabel('step')
+    axZ.set_ylabel(r'$z - z_0$  ($\sigma$)')
+    axZ.set_title('(a) wet-piston displacement (feed descends, permeate retreats)', fontsize=13)
+    axZ.grid(alpha=0.3)
+    smart_legend(axZ, fontsize=11)
+    if _wet_panel(axP, cfg, R, P):
+        for name, col in (('pressure_feed', WONG['vermillion']), ('pressure_permeate', WONG['blue'])):
+            f = cfg.path(name)
+            if f.exists():
+                a = load2c(f, 2)
+                if a is not None:
+                    axP.plot(a[:, 0], a[:, 1], ':', color=col, lw=1.8, alpha=0.9,
+                             label=f'{name.split("_")[1]} reservoir virial $P_{{\\rm res}}$')
+    axP.set_xlabel('step')
+    axP.set_ylabel('pressure  (LJ)')
+    axP.set_title('(b) piston pressure: measured $F_{\\rm fluid}/A$ vs applied (dashed); reservoir virial (dotted)', fontsize=12)
+    axP.grid(alpha=0.3)
+    smart_legend(axP, fontsize=10)
+    return _save(fig, cfg, 'perm_pistons')
+
+
+def fig_perm_flux(cfg, R, P):
+    """(a) Q_perm(t) from the permeate-piston displacement with the drift-free steady
+    window (block-bootstrap mean) and the z_perm-fit value; (b) bead-count cross-check."""
+    F = P.get('flux')
+    if F is None or F.get('Q') is None:
+        print('flux figure skipped (no permeation file)')
+        return None
+    fig, (axQ, axN) = plt.subplots(1, 2, figsize=(18, 6), constrained_layout=True)
+    st, Q = F['step'], F['Q']
+    axQ.plot(st, Q, '-', color=WONG['green'], lw=1.0, alpha=0.35, label=r'$Q_{\rm perm}=A\,dz_{\rm perm}/dt$ (block-avg)')
+    axQ.plot(st, rolling_mean(Q, cfg.roll_win), '-', color=WONG['green'], lw=2.4, label=f'rolling mean ({cfg.roll_win})')
+    if 'Q_ss' in F:
+        PW = F['Q_ss']
+        axQ.axvspan(PW['step0'], float(st[-1]), color=WONG['green'], alpha=0.10, label='steady window (auto)')
+        axQ.axhline(PW['mean'], color='k', ls='--', lw=1.5, label=f"steady $Q$ = {fmt_val_unc(PW['mean'], 0.5 * (PW['hi'] - PW['lo']))}")
+        if 'Q_fit' in F:
+            axQ.axhline(F['Q_fit'], color=WONG['reddishpurple'], ls=':', lw=1.5, label=f"from $z_{{\\rm perm}}$ fit: {sig(F['Q_fit'])}")
+        if 'Q_count' in F:
+            axQ.axhline(F['Q_count'], color='0.4', ls='-.', lw=1.3, label=f"bead count: {sig(F['Q_count'])}")
+    axQ.axvline(P['evol_from'], color='k', ls=':', lw=1, alpha=0.5)
+    axQ.set_xlabel('step')
+    axQ.set_ylabel(r'$Q_{\rm perm}$  ($\sigma^3/\tau$)')
+    axQ.set_title('(a) permeate flux from the permeate-piston displacement', fontsize=13)
+    axQ.grid(alpha=0.3)
+    smart_legend(axQ, fontsize=10)
+    cnt = F.get('count')
+    if cnt is not None:
+        axN.plot(cnt[:, 0], cnt[:, 1] - cnt[0, 1], '-', color='0.3', lw=1.8, label=r'$\Delta N_{\rm permeate}$ (crossed below the support)')
+        if 'Q_ss' in F and 'Q_count' in F:
+            cw = cnt[:, 0] >= F['Q_ss']['step0']
+            sl, ic = np.polyfit(cnt[cw, 0], cnt[cw, 1] - cnt[0, 1], 1)
+            axN.plot(cnt[cw, 0], sl * cnt[cw, 0] + ic, '--', color=WONG['vermillion'], lw=2,
+                     label=f'window slope -> $Q$ = {sig(F["Q_count"])} (rho$_0$ = {sig(R.get("rho_s0", np.nan))})')
+    elif F.get('N') is not None:
+        axN.plot(st, F['N'] - F['N'][0], '-', color='0.3', lw=1.8, label=r'$\Delta N_{\rm permeate}$')
+    axN.set_xlabel('step')
+    axN.set_ylabel(r'$\Delta N_{\rm permeate}$  (beads)')
+    axN.set_title('(b) bead-count cross-check', fontsize=13)
+    axN.grid(alpha=0.3)
+    smart_legend(axN, fontsize=10)
+    return _save(fig, cfg, 'perm_flux')
+
+
+def fig_perm_permeability(cfg, R, P):
+    """k = Q L/(A dP): with the applied dP, with the measured (wet-piston) dP, and from
+    the bead count; CI from the block-bootstrap of Q (and of dP_meas) in quadrature."""
+    F = P.get('flux')
+    if F is None or not F.get('k'):
+        print('permeability figure skipped (no flux)')
+        return None
+    fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+    labs = {'applied': r'$Q_{\rm ss}$, applied $\Delta P$', 'measured': r'$Q_{\rm ss}$, measured $\Delta P$', 'count': r'bead count, applied $\Delta P$'}
+    cols = {'applied': WONG['blue'], 'measured': WONG['vermillion'], 'count': '0.4'}
+    for i, (kk, v) in enumerate(F['k'].items()):
+        ax.errorbar([i], [v['k']], yerr=[[v['k'] - v['lo']], [v['hi'] - v['k']]], fmt='o', ms=12, color=cols[kk],
+                    capsize=8, lw=2.5, label=f"{labs[kk]}:  $k = {sig(v['k'])}$")
+    ax.set_xticks(range(len(F['k'])))
+    ax.set_xticklabels([labs[kk] for kk in F['k']], fontsize=11)
+    ax.set_ylabel(r'$k = Q L/(A\,\Delta P)$  (LJ: $\sigma^5/(\epsilon\,\tau)$)')
+    ax.set_title(f"Permeability  ($L={sig(P['L_gel'])}\\,\\sigma$, $A={sig(P['area'])}\\,\\sigma^2$, "
+                 f"$\\Delta P_{{\\rm app}}={sig(F['dP_app'])}$)\n{cfg.sim_name}", fontsize=12)
+    ax.set_xlim(-0.6, len(F['k']) - 0.4)
+    ax.grid(axis='y', alpha=0.3)
+    smart_legend(ax, fontsize=11)
+    return _save(fig, cfg, 'perm_permeability')
+
+
+def print_perm_summary(cfg, R, P):
+    F = P.get('flux') or {}
+    print(f'\nPERMEATION SUMMARY  ({cfg.sim_name})')
+    print(f"  gel L (Rg, steady window) = {P['L_gel']:.2f} sigma;  A = {P['area']:.1f};  membrane bins z in "
+          f"[{P['z_mem_lo']:.1f}, {P['z_mem_hi']:.1f}]")
+    W = P.get('wet')
+    if W is not None:
+        print('  wet pistons (steady means): ' + '  '.join(f"{k}: {v:.4f}" for k, v in W['plat'].items()))
+    if 'Q_ss' in F:
+        PW = F['Q_ss']
+        print(f"  Q_perm = {PW['mean']:.4e} [{PW['lo']:.4e}, {PW['hi']:.4e}] sigma^3/tau  (Darcy velocity Q/A = {PW['mean'] / P['area']:.3e})")
+        for kk, v in F['k'].items():
+            print(f"  k ({kk:8s}) = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]")
+    else:
+        print('  no steady flux (permeation file missing or too short)')

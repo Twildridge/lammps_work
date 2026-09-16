@@ -87,6 +87,25 @@ def read_fix_print(filepath):
     return np.array(rows) if rows else np.empty((0, 0))
 
 
+def read_fix_print_names(filepath):
+    """Column names from a '# name name ...' header line (fix print `title` /
+    fix ave/time `title2`), or None.  Two-piston files (2026-09-16) name one
+    column set per piston, e.g. '# step F_dry F_fluid_feed F_fluid_perm'."""
+    names = None
+    with open(filepath) as f:
+        for line in f:
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith('#'):
+                toks = s.lstrip('#').split()
+                if toks and not toks[0].replace('.', '').replace('-', '').isdigit():
+                    names = toks
+                continue
+            break
+    return names
+
+
 def read_ave_time(filepath):
     """fix ave/time output (2-line # header, then data).
     Returns (timesteps_1d, data_2d) where data_2d has shape (nrows, ncols-1).
@@ -728,31 +747,45 @@ def plot_flow_diagnostics(folder, run_id, output):
 
     force_file      = os.path.join(piston_dir, f'piston_force_{run_id}.dat')
     force_pres_file = os.path.join(piston_dir, f'piston_force_pressure_{run_id}.dat')
+    pres_file       = os.path.join(piston_dir, f'piston_pressure_{run_id}.dat')       # two-piston decks
     pos_file        = os.path.join(piston_dir, f'piston_position_{run_id}.dat')
+    if not os.path.exists(pos_file):
+        pos_file = os.path.join(piston_dir, f'piston_position_run_{run_id}.dat')      # two-piston compression
     strain_file     = os.path.join(stress_dir,  f'strain_zz_{run_id}.dat')
     p_feed_file     = os.path.join(stress_dir,  f'pressure_feed_{run_id}.dat')
     p_perm_file     = os.path.join(stress_dir,  f'pressure_permeate_{run_id}.dat')
     flux_file       = os.path.join(perm_dir,    f'permeate_count_{run_id}.dat')
+    permeation_file = os.path.join(perm_dir,    f'permeation_{run_id}.dat')            # two-piston permeation
 
     has_force      = os.path.exists(force_file)
     has_force_pres = os.path.exists(force_pres_file)
+    has_pres       = os.path.exists(pres_file)
     has_pos        = os.path.exists(pos_file)
     has_strain     = os.path.exists(strain_file)
     has_p_feed     = os.path.exists(p_feed_file)
     has_p_perm     = os.path.exists(p_perm_file)
     has_flux       = os.path.exists(flux_file)
+    has_permeation = os.path.exists(permeation_file)
 
-    if not has_force and not has_force_pres:
+    if not has_force and not has_force_pres and not has_pres:
         return  # nothing to do
 
-    is_permeation = has_force_pres
+    # two-piston decks (2026-09-16): permeation writes permeation_<stem>.dat, both
+    # write piston_pressure_<stem>.dat; one-piston permeation writes piston_force_pressure
+    is_two_pist   = has_pres or has_permeation
+    is_permeation = has_force_pres or has_permeation
 
     # Build panel list
     panels = []
     if has_force:
         panels.append('force')
+    if is_two_pist and has_pres:
+        panels.append('piston_pressure')     # per-piston P measured vs applied (bath check)
+    if is_two_pist and has_permeation:
+        panels.append('q_perm')              # Q_perm from the permeate-piston displacement
     if is_permeation:
-        panels.append('force_vs_pres')       # F/A vs P_feed vs P_perm (instantaneous)
+        if has_force_pres:
+            panels.append('force_vs_pres')   # F/A vs P_feed vs P_perm (instantaneous)
         if has_p_feed or has_p_perm:
             panels.append('pres_timeseries') # time-averaged reservoir pressures
         if has_flux:
@@ -767,7 +800,7 @@ def plot_flow_diagnostics(folder, run_id, output):
     if not panels:
         return
 
-    mode_label = 'permeation' if is_permeation else 'compression'
+    mode_label = ('permeation' if is_permeation else 'compression') + (', two-piston' if is_two_pist else '')
     fig, axes = plt.subplots(len(panels), 1,
                              figsize=(10, 3.5 * len(panels)), sharex=False)
     if len(panels) == 1:
@@ -782,7 +815,18 @@ def plot_flow_diagnostics(folder, run_id, output):
         # ── Piston force time series (both modes) ─────────────────────────
         if panel == 'force':
             arr = read_fix_print(force_file)
-            if arr.size and arr.shape[1] >= 2:
+            if arr.size and arr.shape[1] > 2:
+                # multi-piston file: one line per column set (names from the header)
+                names = read_fix_print_names(force_file)
+                t = arr[:, 0]
+                for j in range(1, arr.shape[1]):
+                    lab = names[j] if names and len(names) > j else f'piston {j}'
+                    ax.plot(t, arr[:, j], lw=1.3, marker='o', markersize=2, alpha=0.85, label=lab)
+                ax.axhline(0, color='k', ls=':', lw=0.8)
+                ax.set_ylabel('F_z on each sheet  (ε/σ)')
+                ax.set_title('Pair force of the fluid/gel on each piston sheet (positive = upward)', fontsize=9)
+                ax.legend(fontsize=8)
+            elif arr.size and arr.shape[1] >= 2:
                 t, fz = arr[:, 0], arr[:, 1]
                 ax.plot(t, fz, color='steelblue', lw=1.5, marker='o', markersize=2)
                 ax.axhline(0, color='k', ls=':', lw=0.8)
@@ -807,6 +851,43 @@ def plot_flow_diagnostics(folder, run_id, output):
                                 arrowprops=dict(arrowstyle='->', color='steelblue', lw=1),
                                 bbox=dict(boxstyle='round,pad=0.2',
                                           facecolor='white', alpha=0.8))
+
+        # ── Two-piston: per-piston pressure, measured vs applied ──────────
+        elif panel == 'piston_pressure':
+            arr = read_fix_print(pres_file)
+            names = read_fix_print_names(pres_file) or []
+            if arr.size and arr.shape[1] >= 3:
+                t = arr[:, 0]
+                palette = {'dry': 'darkorange', 'feed': 'tomato', 'perm': 'cornflowerblue'}
+                for j in range(1, arr.shape[1]):
+                    nm = names[j] if len(names) > j else f'col{j}'
+                    base = nm[2:].replace('_meas', '').replace('_app', '') if nm.startswith('P_') else nm
+                    if nm.endswith('_app'):
+                        ax.plot(t, arr[:, j], ls='--', lw=1.2, color=palette.get(base, 'k'), alpha=0.8, label=f'{nm} (applied)')
+                    else:
+                        ax.plot(t, arr[:, j], lw=1.4, marker='o', markersize=2, color=palette.get(base, 'k'), label=nm)
+                ax.set_ylabel('Pressure  (ε/σ³)')
+                ax.set_title('NPT-piston bath check: F_fluid/(lx·ly) on each wet piston vs its applied pressure'
+                             + ('; P_dry = network load' if any('dry' in n for n in names) else ''), fontsize=9)
+                ax.legend(fontsize=8, ncol=2)
+
+        # ── Two-piston permeation: Q_perm from the permeate-piston displacement ──
+        elif panel == 'q_perm':
+            arr = read_fix_print(permeation_file)
+            names = [n.lower() for n in (read_fix_print_names(permeation_file) or [])]
+            qi = next((j for j, n in enumerate(names) if n.startswith('q_perm')), None)
+            ni = next((j for j, n in enumerate(names) if n.startswith('n_permeate')), None)
+            if arr.size and qi is not None and qi < arr.shape[1]:
+                t, q = arr[:, 0], arr[:, qi]
+                ax.plot(t, q, color='teal', lw=1.5, marker='o', markersize=2, label='Q_perm = A·dz_perm/dt')
+                _annotate_last30(ax, q, fmt='.3e', color='teal')
+                ax.set_ylabel('Q_perm  (σ³/τ)')
+                ax.set_title('Permeate flux (primary: permeate-piston displacement, block-averaged)', fontsize=9)
+                if ni is not None and ni < arr.shape[1]:
+                    ax2 = ax.twinx()
+                    ax2.plot(t, arr[:, ni] - arr[0, ni], color='0.4', lw=1.0, alpha=0.7, label='ΔN_permeate (bead count)')
+                    ax2.set_ylabel('ΔN_permeate')
+                    ax2.legend(fontsize=8, loc='lower right')
 
         # ── F/A vs P_feed vs P_perm (instantaneous, permeation) ──────────
         elif panel == 'force_vs_pres':
@@ -1142,7 +1223,8 @@ if __name__ == '__main__':
     piston_dir = os.path.join(args.folder, 'output_files', 'piston_data')
     force_files_present = (
         os.path.exists(os.path.join(piston_dir, f'piston_force_{run_id}.dat')) or
-        os.path.exists(os.path.join(piston_dir, f'piston_force_pressure_{run_id}.dat'))
+        os.path.exists(os.path.join(piston_dir, f'piston_force_pressure_{run_id}.dat')) or
+        os.path.exists(os.path.join(piston_dir, f'piston_pressure_{run_id}.dat'))       # two-piston decks
     )
     if force_files_present:
         plot_flow_diagnostics(args.folder, run_id,
