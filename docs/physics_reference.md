@@ -60,3 +60,58 @@ so
     M = σ′_zz / ε,      σ′_zz / σ′_xx = M / (M − 2G),      G = (σ′_zz − σ′_xx) / (2ε)
 
 (Note the ratio is M/(M − 2G), **not** M/(M − 2G/3): λ = K − 2G/3 and M = K + 4G/3, so M − 2G = λ.) `M_network` uses the plateau network profile averaged over the membrane; `M_piston` = ⟨P⟩/ε from the block-bootstrapped piston force is the independent check. G is formed once from xx and once from yy; by symmetry the two must agree, and their spread is a second error estimate. The cooperative diffusivity D_c from the consolidation fit of u_z(z,t) then gives the hydraulic permeability κ = D_c/M (κ = k/η). All of this is implemented in `scripts/lib/triaxial.py` and drawn by `triaxial_compression_{single,sweep}.ipynb` (see `docs/analysis.md` §7b).
+
+
+## NPT-piston reservoirs (two-piston sequence)
+
+*(2026-09-16; `triaxial_permeation_two_pist`, `triaxial_compression_two_pist`, converter `slab_two_pistons.ipynb`.)*
+
+**Piston law.** Marioni et al., *J. Membr. Sci.* 738 (2026) 124837 ("Non-equilibrium simulations of hydraulic
+permeation: role of mechanical boundary conditions in dense membranes") hold each solvent reservoir at a prescribed
+pressure with a mobile, force-loaded, damped sheet — their Eq. 3, for a sheet of N beads and area A = l_x l_y:
+
+    M_p  dv/dt  =  F_fluid  −  P_i A  −  C v          (per sheet; v = sheet velocity along z)
+
+The LAMMPS port applies it per bead so the sheet translates rigidly (no `fix rigid`: the full-width periodic sheet
+is wider than half the box and `rigid` mis-reconstructs it):
+
+    fix <id>_xy  <piston> setforce 0.0 0.0 NULL
+    fix <id>_z   <piston> aveforce NULL NULL v_fz_<piston>
+    fix <id>_nve <piston> nve
+    fz_feed = −P_feed·l_x l_y / N − C_pist · vcm(piston_feed, z)      (top sheet pushes DOWN)
+    fz_perm = +P_perm·l_x l_y / N − C_pist · vcm(piston_perm, z)      (bottom sheet pushes UP)
+
+`aveforce` gives every bead the group-average force plus `fz`, so the applied load is −P A on the whole sheet and
+the damping on the sheet is N·C_pist·v.  The pistons are not thermostatted (as in the paper); the viscous term
+removes their thermal energy.  The bead mass is a deck variable (`mass 5/6/7 ${piston_mass}`, default 1000).
+
+**Why l_x, l_y are fixed and why a converter.** The scheme regulates pressure in z only.  It cannot swell a fresh
+lattice laterally, so the two-piston data file is *converted* from the equilibrated aniso-NPH slab
+(`slab_with_support`, piston transparent to solvent, σ_p,xx/σ_p,zz = 1.0005): l_x, l_y, the gel dimensions and the
+stress-free state are inherited exactly, and the NPT-piston phase in the decks is a z-settle of the reservoirs.
+`boundary p p p` is kept: nothing can cross z (wet pistons are WCA walls to solvent and polymer, every wall–wall
+pair is off, the margins are vacuum), so the full-box z binning still works.  Thermo `press` is meaningless (vacuum
+in V); reservoir pressures come from the pistons and the stress profiles.
+
+**Reservoir pressure readout.** Not `compute reduce sum fz` on a piston — by the time thermo/print evaluates it,
+`setforce`/`aveforce` have already modified `f` and the net is ~0 at steady state.  Use the pair force of the
+mobile atoms on the sheet: `compute fp_feed piston_feed group/group mobile`, P = ±c_fp[3]/(l_x l_y).
+
+**Critical damping.** The paper's C = 500 is for a few-hundred-atom graphene sheet; with ~23,316 beads and m = 1000
+it would be ~50× overdamped (relaxation ~3.6 M steps).  Each deck therefore models the piston on its solvent column
+as an oscillator and defaults to critical damping:
+
+    k = K_solv · l_x l_y / L_res,   ω = √(k / (N m)),   period = 2π/ω,   C_crit (per bead) = 2 √(k m / N),
+    C_pist = c_pist_frac · C_crit
+
+with `K_solv` the solvent bulk modulus at P* = 1.5 (deck default 10; no measured value is recorded in the repo — a
+Carnahan–Starling estimate for the WCA fluid at ρ ≈ 0.43–0.47 gives ≈ 3.5, i.e. C_crit ≈ 1.7× smaller; either way
+the settle is critically-to-mildly overdamped).  For the rho04 slab (A ≈ 2077, L_feed ≈ 18, L_perm ≈ 10) the deck
+prints ω ≈ 7–9 × 10⁻³/τ, periods ≈ 1.4–1.8 × 10⁵ steps and C_crit ≈ 14–18 per bead — so `NPT_PISTON_STEPS = 1 M`
+is ≈ 5–7 periods.
+
+**Modes.** Permeation: P_feed = P_target + dP, P_perm = P_target; flux Q_perm = A·dz_perm/dt from the permeate
+piston (bead count crossing the support kept as a cross-check); k = Q_perm L/(A dP).  Compression: both wet pistons
+at P_target (drained consolidation at constant bath pressure) and a third, solvent-transparent dry piston inside the
+feed reservoir loads the network through the usual strain sweep; solvent expelled by the compression raises the
+feed piston (and lowers the permeate piston), so the converter's `margin_feed` must cover the deepest strain.

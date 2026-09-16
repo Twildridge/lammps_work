@@ -73,7 +73,7 @@ python ~/Documents/lammps_work/scripts/plot_stress_profiles.py \
 
 ---
 
-**`plot_piston_data.py`** — piston position and velocity (`triaxial_compression` single-level runs, `triaxial_permeation`, etc. — compression *sweeps* and `shear_slab` use their own consolidated plotters instead, see [§5b, simulation types](running_simulations.md#5b-simulation-types))
+**`plot_piston_data.py`** — piston position and velocity (`triaxial_compression` single-level runs, `triaxial_permeation`, etc. — compression *sweeps* and `shear_slab` use their own consolidated plotters instead, see [§5b, simulation types](running_simulations.md#5b-simulation-types)). Multi-piston aware since 2026-09-16: the two-piston files (`# step z_feed z_perm` headers) get one line per piston plus a measured-vs-applied pressure panel and a `Q_perm` / solvent-expelled panel; one-piston files plot exactly as before. `plot_stress_profiles.py` overlays every `stress_z_piston_<sheet>` file in the Piston column and `plot_lammps_log.py` adds the bath-check and `Q_perm` panels to the flow diagnostics.
 ```bash
 python ~/Documents/lammps_work/scripts/plot_piston_data.py \
     . \
@@ -101,6 +101,29 @@ The full diagnostic notebook the two above were distilled from (2026-09-02). Sti
 
 **`triaxial_permeation.ipynb`** (current)
 Reads a `triaxial_permeation` run. Six panels — piston, thickness, stress, density, permeate, and partial-vs-ss stress — with Phase 1.5 reference overlays. Supersedes `permeation_analysis.ipynb`.
+
+**`triaxial_compression_single_two_pist.ipynb`** / **`triaxial_compression_sweep_two_pist.ipynb`** (two-piston compression, 2026-09-16)
+Same Config → sync → load → figures pattern and the same eleven (single) / twelve (sweep) figures as the one-piston
+notebooks — the dry piston is "the piston" (its force is the network load; the piston files carry it in the first
+value column, `[dry | feed | perm]`) — plus the **wet-piston bath check** (`fig_wet_pistons[_sweep]`: P_feed, P_perm
+measured on the sheets vs `P_target` over the hold) and the **solvent expelled** (`fig_solvent_expelled`, feed-piston
+rise + permeate-piston descent). `Config(mode="compression", two_pist=True)` points the sync at
+`lammps_runs/triaxial_compression_two_pist` and pulls `piston_pressure`, `permeation`, `pressure_reservoirs` too.
+The pore-pressure baseline is the feed-reservoir interior (the box top is vacuum in this geometry).
+
+**`triaxial_permeation_single_two_pist.ipynb`** (two-piston permeation, 2026-09-16 — no sweep notebook)
+`Config(mode="permeation", two_pist=True)`; `tri.load_permeation` builds one dict `P`: total / partial / network
+stress and density evolutions (cividis, bold final, zero-flux `_ref` baseline dashed), both wet pistons
+(displacement; `F_fluid/(lx ly)` measured vs applied; reservoir virial pressures dotted), `Q_perm(t)` from the
+permeate-piston displacement with the drift-free steady window (block bootstrap) and the `z_perm` linear fit, the
+bead-count cross-check, and the permeability `k = Q_perm L/(A ΔP)` with the applied and the measured ΔP (CIs in
+quadrature). Seven figures (`fig_perm_pistons`, `fig_total_stress`, `fig_partial_stress`, `fig_network_stress`,
+`fig_perm_density`, `fig_perm_flux`, `fig_perm_permeability`).
+
+**Tests** (`scripts/tests/`, 2026-09-16): `run_plot_tests.sh` builds synthetic one-piston and two-piston run
+trees (`make_fixtures.py`) and runs the three plotters on both formats; `run_notebook_tests.sh` executes the
+two-piston notebooks headlessly on the same tree; `lint_lmp.py` statically checks a deck (definitions before use,
+unfix/undump pairing, labels, forwarded `-var`s).
 
 **`bulk_modulus_analysis.ipynb`**
 Drained vs. osmotic bulk modulus K. The osmotic K_osm = Π − dW/dV carries the absolute swelling pressure (large); the *drained* K should be computed like M (network stress response), not from the osmotic branch.

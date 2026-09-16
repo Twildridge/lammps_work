@@ -21,6 +21,8 @@ The `run_lammps` scripts handle all the bookkeeping automatically: creating time
 | `slab_with_support/` | Gel equilibration (free-swelling) or axial compression with piston. NPT uses **`aniso`** so x, y, z each relax independently to P* — the gel reaches its true equilibrium swelling instead of being locked to the data file's aspect ratio (see **Barostat choice** note at the end of this guide). A `pre_swell` knob scales the lattice constant `a` so the gel starts near its swollen equilibrium (faster convergence; pdamp raised 1→5). | Equilibrate gel; measure M (longitudinal modulus) |
 | `triaxial_compression/` | **Current** axial-compression workflow. Periodic (`p p p`) laterally-unconfined slab from `slab_with_support_periodic.ipynb`, no side walls; the box is not barostatted during loading. **Strain-controlled**: the piston is driven at constant velocity and `fix halt` freezes it when the bounding-box gel thickness reaches the target strain, then the gel is **held** while the stress relaxes. A **cumulative strain sweep** (`STRAIN_TARGETS=(...)` in the `.batch`, `_c<level>` output tags) runs the levels back to back; each hold is auto-sized from the level's own consolidation time τ₁ = L²/(π² D_c) (`hold_auto`, `Dc_est`, `n_tau_hold` in the `.lmp`). Output files are tagged with the level's hold length (`..._<hold>_c<strain>.dat`; reference files carry the first level's), which replaces the old flat `NSTEPS` tag. Records, for the ε = 0 reference window and for every level: polymer + solvent partial stress profiles in **zz, xx and yy** (`sigma{zz,xx,yy}_{polymer,solvent}[_ref]_*.dat`), solvent density, piston position/force (raw + block-averaged), strain diagnostics and the polymer displacement profile `disp_z_polymer_*` for D_c. | M, G, D_c, κ vs strain (`triaxial_compression_{single,sweep}.ipynb`) |
 | `triaxial_permeation/` | **Current** permeation workflow. Same periodic slab, force-controlled piston driving solvent through the network at constant piston force. Writes the same zz/xx/yy polymer + solvent partial stress profiles (reference + production) as `triaxial_compression`, plus flux/permeate diagnostics. | Measure flux, Dc, pore-pressure profiles (`triaxial_permeation.ipynb`) |
+| `triaxial_compression_two_pist/` | **Two-piston compression (2026-09-16)** — drained consolidation at **constant bath pressure**: both solvent reservoirs are closed by NPT-pistons (Marioni et al. 2026, Eq. 3: `setforce 0 0 NULL` + `aveforce NULL NULL v_fz` + `nve`, `fz = ∓P·lx·ly/N − C·v_com`, unthermostatted) held at `P_target`, and a solvent-transparent **dry piston** (type 7) loads the network through the **same cumulative strain sweep** as `triaxial_compression` (`STRAIN_TARGETS` → `COMPRESSIONS`, `_c<strain>` tags, auto-sized holds). Phases: minimize + 50k Langevin NVT (pistons frozen) → **NPT-piston settle** (`NPT_PISTON_STEPS`, replaces the 2M aniso NPH Phase 0) → symmetric seating (dry piston down, support up) → ε = 0 reference → sweep. Input = the converter file (`slab_two_pistons.ipynb`). Piston files carry `[dry \| feed \| perm]` columns; `piston_pressure_*` logs the bath check and `permeation_*_c<lvl>` the solvent expelled. Solvent expelled raises the feed piston by ~strain·L₀: the converter's `margin_feed` must cover the deepest level (box-face `fix halt` otherwise). | M, G, D_c, κ vs strain at constant bath pressure (`triaxial_compression_{single,sweep}_two_pist.ipynb`) |
+| `triaxial_permeation_two_pist/` | **Two-piston permeation (2026-09-16)** — the two-reservoir replica of Marioni et al. Fig. 2B (rotated 90°, support below the gel): feed piston (type 5, top) at `P_target + DP_PISTON`, permeate piston (type 6, bottom) at `P_target`, both NPT-pistons; solvent–piston WCA always on, so the one-piston reposition / WCA-switch / overlap-relax stages and the z-only NPH are gone. Phases: minimize + Langevin NVT → NPT-piston settle → zero-flux reference (`_ref`) → `P_feed` ramp in 5 stages → one continuous constant-dP drive for `NSTEPS` (**no sweep**). Primary flux = permeate-piston displacement (`permeation_data/permeation_*`: `Q_perm = A·dz_perm/dt`), bead count kept as a cross-check. Halts when the feed reservoir thins to 2 σ or a piston nears a box face. | Q_perm, permeability k = Q L/(A dP), reservoir pressures (`triaxial_permeation_single_two_pist.ipynb`) |
 | `shear_slab/` | Plate-driven xz shear of an isolated swollen gel with attached plates (input from `add_plates_to_gel.ipynb`). Phase 1a NPT (50k) + Phase 1b NVT (100k) + Phase 2 shear with `fix halt` at γ = 10% + Phase 3 NVT production. | Measure G (shear modulus) from ⟨σ_p,xz⟩ / γ |
 | `compress_slab/` | **In development (undergrad project).** Isotropic bulk-modulus analogue of `shear_slab`: an isolated gel with plates on all six faces (input from `add_more_plates_to_gel.ipynb`) is compressed simultaneously along x, y, and z by driving all six plates inward. Steps through a 3-point cumulative volumetric-strain ladder (ε_vol = 0.015, 0.030, 0.045), holding + measuring the equilibrated network stress at each stage, then fits ΔP'_net vs ε_vol (slope = K) — a 3-point linear fit rather than the single-point `K_single` estimate in `bulk_modulus_analysis.ipynb`, which its own header notes carries a biasing assumption. Writes `bulk_modulus_plot_data_*.dat` for `bulk_modulus_analysis.ipynb` to read. No dedicated analysis notebook yet. | Measure drained bulk modulus K |
 | `solvent_phase/` | Pure solvent pressure sweep across many state points | Build solvent EOS |
@@ -35,6 +37,33 @@ Each folder contains:
 - `<name>.batch` — the SLURM job script (controls cluster resources; **you edit this**)
 - `<name>_bridges.batch` — Bridges-2 version (if applicable)
 - `<name>_pod.batch` — Pod version (if applicable)
+
+### 5b′. The two-piston sequence (2026-09-16)
+
+```
+slab_with_support (aniso NPH, PISTON_TRANSPARENT=1)  →  final_config_…_14000002.data
+    → scripts/slab_two_pistons.ipynb  (converter, on your Mac)  →  …_14000002_two_pist.data
+    → copy to ~/Documents/lammps_data/input_data/ on Expanse
+    → sbatch triaxial_permeation_two_pist.batch   and/or   sbatch triaxial_compression_two_pist.batch
+```
+
+Knobs exported by the `*_two_pist.batch` files and forwarded by `run_lammps.sh` as `-var` (same pattern as
+`PISTON_TRANSPARENT`; other engines ignore them):
+
+| env var | `-var` | default | meaning |
+|---|---|---|---|
+| `PRESS_TARGET` (positional) | `press_target` | 1.5 | bath pressure on the wet pistons |
+| `DP_PISTON` | `dp_piston` | 0.1 | permeation only: `P_feed = P_target + dP` (a single value, never a list) |
+| `PISTON_MASS` | `piston_mass` | 1000 | mass of every piston bead (types 5/6/7), applied with `mass` after `read_data` |
+| `C_PIST_FRAC` | `c_pist_frac` | 1.0 | damping / critical damping; the deck prints `C_crit`, ω and the piston period |
+| `NPT_PISTON_STEPS` | `npt_piston_steps` | 1 000 000 | Phase-1 settle length (aim for ≥ 3–5 printed periods) |
+| `SETTLE_HALT` | `settle_halt` | 0 | 1 = end the settle early once both pistons are at rest |
+| `COMPRESSIONS` | `compressions` | 0.10 | compression only: the cumulative strain sweep (as `triaxial_compression`) |
+
+Deck-only knobs (`-var` override, index-style): `K_solv` (bulk modulus for the damping estimate, 10),
+`min_iter`, `phase0_steps`, `ref_avg_steps`, `ref_nfreq`, `ramp_steps`, `t_seat`, `nsteps_settle`,
+`v_piston_prod`, `volume_freq`, `thermo_freq`, `strain_freq`, `flux_freq` — handy for short smoke tests.
+`cont=1` (`continue_sim.sh`) is **not supported yet** for the two-piston decks: they print an error and quit.
 
 ### 5c. Editing the batch file
 
@@ -90,7 +119,9 @@ tail -f ~/Documents/lammps_runs/triaxial_compression_*/log.lammps
 
 `continue_sim.sh` picks up from where a finished run left off — no restart files, no editing batch scripts. It reads the SLURM output file to find the original working directory and auto-detects all run parameters from there. This is a **real restart** (skip setup, keep going) — contrast with editing `NSTEPS` in a `.batch` file and resubmitting, which is a fresh job that reruns all setup from scratch (see [§5c above](#5c-editing-the-batch-file)).
 
-**When to use it:** you want more steps from a completed run. As of 2026-08-06, supported for `slab_with_support`, `solvent_pure`, `polymer_pure`, `triaxial_compression`, `triaxial_permeation`, and `shear_slab`. Not supported: `solvent_phase`/`polymer_phase` (their internal P-sweeps complete in one invocation — "continuing" isn't a meaningful operation) or the `volmix_sweep` pipeline (its own SLURM-chained orchestration). `compress_slab` is a separate project — not wired up here.
+**When to use it:** you want more steps from a completed run. Not (yet) for the two-piston decks
+(`triaxial_*_two_pist`, 2026-09-16: `cont=1` quits with a message; the labels are in place to wire it later).
+As of 2026-08-06, supported for `slab_with_support`, `solvent_pure`, `polymer_pure`, `triaxial_compression`, `triaxial_permeation`, and `shear_slab`. Not supported: `solvent_phase`/`polymer_phase` (their internal P-sweeps complete in one invocation — "continuing" isn't a meaningful operation) or the `volmix_sweep` pipeline (its own SLURM-chained orchestration). `compress_slab` is a separate project — not wired up here.
 
 #### What it does per folder
 

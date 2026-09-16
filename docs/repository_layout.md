@@ -9,6 +9,8 @@ lammps_work/                    ← This git repository
 │   ├── slab_with_support/      ← Gel equilibration and compression (main workhorse)
 │   ├── triaxial_compression/   ← CURRENT axial-compression workflow (periodic slab, force-piston) — split from slab_with_flow
 │   ├── triaxial_permeation/    ← CURRENT permeation workflow (periodic slab, force-piston) — split from slab_with_flow
+│   ├── triaxial_compression_two_pist/  ← TWO-PISTON compression (2026-09-16): NPT-pistons on both reservoirs + dry loading piston; same strain sweep
+│   ├── triaxial_permeation_two_pist/   ← TWO-PISTON permeation (2026-09-16): feed/permeate NPT-pistons, one constant-dP drive (no sweep)
 │   ├── shear_slab/             ← Shear modulus measurement (plate-driven xz shear; current G workflow)
 │   ├── compress_slab/          ← Bulk modulus K measurement (plate-driven isotropic six-face compression; undergrad project, in development)
 │   ├── solvent_phase/          ← Pure solvent equation of state sweep
@@ -30,6 +32,7 @@ lammps_work/                    ← This git repository
 │   ├── slab_with_support.ipynb         ← Build basic slab geometry
 │   ├── slab_with_support_periodic.ipynb ← CURRENT: xy-periodic crosslinked slab (bonds wrap x,y only; finite-z; p p p; one support+piston per z-period; no side padding). Input for triaxial_* runs
 │   ├── slab_with_support_angled.ipynb  ← Build angled-chain slab geometry
+│   ├── slab_two_pistons.ipynb / .py    ← CONVERTER: equilibrated periodic slab → two-piston (feed/permeate) data file (input for triaxial_*_two_pist)
 │   ├── isolate_gel.ipynb               ← Extract just the swollen gel from a run
 │   ├── split_gel_slab.ipynb            ← Split a gel slab into pieces
 │   ├── add_plates_to_gel.ipynb         ← Attach shear plates to isolated gel (input for shear_slab)
@@ -43,6 +46,10 @@ lammps_work/                    ← This git repository
 │   │   ├── triaxial.py                      ← all analysis code behind triaxial_compression_{single,sweep}.ipynb (Config, readers, Terzaghi, plateau bootstrap, G, D_c, figures)
 │   │   └── volfrac.py                       ← Voronoi volume fraction + λ calibration (shared with calibration_analysis.ipynb)
 │   ├── triaxial_permeation.ipynb            ← CURRENT: piston/thickness/stress/density/permeate + partial-vs-ss, with Phase 1.5 reference overlays (triaxial_permeation runs)
+│   ├── triaxial_compression_single_two_pist.ipynb ← two-piston compression, one level: the eleven figures + wet-piston bath check + solvent expelled
+│   ├── triaxial_compression_sweep_two_pist.ipynb  ← two-piston compression, all levels (M, G, D_c, κ vs strain) + per-level bath check
+│   ├── triaxial_permeation_single_two_pist.ipynb  ← two-piston permeation: profile evolutions, P_feed/P_perm measured vs applied, Q_perm(t), permeability k (no sweep)
+│   ├── tests/                           ← lint_lmp.py (deck linter), make_fixtures.py + run_plot_tests.sh + run_notebook_tests.sh + lib_headless_test.py
 │   ├── bulk_modulus_analysis.ipynb          ← Drained vs osmotic bulk modulus K
 │   ├── shear_analysis.ipynb                 ← G, N1/N2, stress profiles (shear_slab output)
 │   ├── (volume_of_mixing.ipynb, cavity_widom.py, clearance_sensitivity_cell.py → moved to archive/, 2026-08)
@@ -51,7 +58,7 @@ lammps_work/                    ← This git repository
 │   ├── plot_shear_strain_sweep.py ← Plot stress-strain / G across a shear_slab sweep
 │   ├── split_gel.py            ← CLI: split isolated gel into polymer-only / solvent-only (used by volmix_sweep)
 │   ├── plot_stress_profiles.py ← Plot stress and volume fraction profiles
-│   ├── plot_piston_data.py     ← Plot piston position and velocity
+│   ├── plot_piston_data.py     ← Plot piston position and velocity (multi-piston aware: one line per piston + pressure / flux panels)
 │   └── plot_eos.py             ← Plot P* vs ρ* for EOS sweeps (solvent_phase / polymer_phase)
 │
 ├── lammps_data/                ← Reserved for small committed .data files (currently empty;

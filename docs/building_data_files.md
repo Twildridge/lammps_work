@@ -20,6 +20,26 @@ Before running a gel simulation you need a `.data` file — a text file describi
 | `split_gel_slab.ipynb` | Splits a slab into polymer-only and solvent-only files | Isolated component analysis |
 | `pure_polymer.ipynb` | Pure polymer box (no solvent) | EOS and baseline runs |
 | `pure_solvent_1.ipynb` | Pure solvent box | EOS and solvent calibration |
+| `slab_two_pistons.ipynb` (+ `slab_two_pistons.py`) | **CONVERTER**: an *equilibrated* `slab_with_support` periodic snapshot → the two-piston (feed / permeate) geometry: old piston deleted, permeate reservoir padded to ~10 σ, three new sheets (feed piston type 5, permeate piston type 6, dry piston type 7), vacuum margins, 7 atom types | **Required input for `triaxial_permeation_two_pist` / `triaxial_compression_two_pist`** (2026-09-16) |
+
+### The two-piston converter (2026-09-16)
+
+`slab_two_pistons.ipynb` is not a lattice generator: it **starts from the equilibrated**
+`final_config_slab_support_periodic_…_14000002.data` (the 2026-09-07 piston-transparent rerun) and only
+re-arranges the box.  The reason is physical: the two-piston decks hold each reservoir at its pressure with
+the NPT-piston scheme of Marioni et al. (J. Membr. Sci. 738 (2026) 124837, Eq. 3), which acts in *z only* —
+`lx`, `ly` are fixed for the whole run — so it could never swell a fresh `pre_swell = 0.93` lattice laterally.
+Starting from the aniso-NPH slab (σ_p,xx/σ_p,zz = 1.0005) the gel arrives with zero transverse network stress
+and its equilibrium `lx`, `ly` and thickness *by construction*; the NPT-piston phase in the decks is then a
+z-settle of the reservoirs, not a swelling equilibration.  Gel and solvent coordinates are copied verbatim
+(one uniform z shift; the converter checks this).  Output: `<input stem>_two_pist.data` next to the input,
+a `.info.json` sidecar with every geometry number, a z-density histogram PNG, and an entry appended to
+`slab_data_file_info.md`.  Knobs (Config cell / CLI): `permeate_thickness` (10 σ), `feed_thickness` (None =
+keep), `margin_perm` (feed + 5 σ), `margin_feed` (15 σ — the feed piston rises by ~strain·L₀ under
+compression, so raise it for sweeps beyond ε ≈ 0.10; the converter prints the limit), `piston_clearance`,
+`dry_piston_frac`, `sheet_source` (`support` copies the input sheet's pattern, 23,316 beads; `hex` rebuilds
+at `sheet_spacing`).  If the 14000002 file is not on your Mac the notebook falls back to the 14000000 snapshot
+as a **smoke-test input only** and says so.
 
 Typical shear-modulus pipeline: run `slab_with_support` to equilibrate → `isolate_gel.ipynb` to strip the support/piston → `add_plates_to_gel.ipynb` to attach plates → submit `shear_slab.lmp` with the `*_with_plates.data` file.
 
