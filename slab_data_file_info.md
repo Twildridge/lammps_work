@@ -533,3 +533,11 @@ Generated PERIODIC tetrahedral gel slab (boundary p p p):
   
   
   
+Converted two-piston (feed/permeate) data file  [2026-09-16 14:31, slab_two_pistons.py]:
+  Input: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000.data   (SMOKE-TEST input: 14000000 snapshot, not the production 14000002)
+  Box: 45.4117 x 45.7262 x 216.510   (lx, ly unchanged from the input; zlo = 0)
+  z: perm piston 22.27 | support 33.27 | gel BB [48.51, 184.24] (L_bb 135.73, L_rg 131.99) | dry piston 192.87 | feed piston 201.51
+  Reservoirs: permeate 10.0 sigma (padded +3221 beads at rho=0.4306), feed 17.27 sigma; margins perm 22.3 / feed 15.0 sigma (vacuum)
+  Sheets: 23316 beads each (support pattern, spacing 0.2259); piston_clearance 1.0, dry_piston_frac 0.5, seed 42
+  Crosslinks: 15066   Chain beads: 89424   Solvent: 90816   Support: 23316   Feed piston: 23316   Permeate piston: 23316   Dry piston: 23316
+  Total atoms: 288570   Total bonds: 119232   Output: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000_two_pist.data
