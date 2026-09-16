@@ -9,6 +9,8 @@ if [ $# -lt 4 ]; then
     echo "  to continue a finished run, use continue_sim.sh instead of resubmitting this script"
     echo "  press_target: optional, overrides press_target in .lmp file (default: 1.5)"
     echo "  vel_seed: optional, RNG seed for create_velocity and fix langevin (default: 12345)"
+    echo "  env knobs: PISTON_TRANSPARENT (slab_with_support); STRAINS / COMPRESSIONS / COMPRESS_STAGES (sweeps);"
+    echo "             DP_PISTON PISTON_MASS C_PIST_FRAC NPT_PISTON_STEPS SETTLE_HALT (triaxial_*_two_pist)"
     exit 1
 fi
 
@@ -26,6 +28,15 @@ SKIP_WIDOM=${SKIP_WIDOM:-1}  # Cavity-Widom output is OFF by default (feature ar
 # trial to test whether the piston sheet's wall tension is what makes the polymer
 # partial stress anisotropic under the aniso barostat (2026-09-07). Default 0.
 PISTON_TRANSPARENT=${PISTON_TRANSPARENT:-0}
+# Two-piston (feed/permeate, NPT-piston) knobs (2026-09-16), read only by
+# triaxial_permeation_two_pist / triaxial_compression_two_pist (other engines
+# ignore them).  Set in the *_two_pist.batch files; same env-var pattern as
+# PISTON_TRANSPARENT.  DP_PISTON is the ONE permeation pressure step (no sweep).
+DP_PISTON=${DP_PISTON:-0.1}                 # P_feed = P_target + DP_PISTON (permeation only)
+PISTON_MASS=${PISTON_MASS:-1000}            # mass of every piston bead (types 5/6/7)
+C_PIST_FRAC=${C_PIST_FRAC:-1.0}             # piston damping as a fraction of the critical value
+NPT_PISTON_STEPS=${NPT_PISTON_STEPS:-1000000}  # Phase-1 NPT-piston settle length
+SETTLE_HALT=${SETTLE_HALT:-0}               # 1 = halt the settle early once both pistons are at rest
 CALIB_FRAMES=${CALIB_FRAMES:-5}          # calibration-dump frames near run end (polymer_pure /
 CALIB_DUMP_EVERY=${CALIB_DUMP_EVERY:-2000}  # solvent_pure only; other engines ignore these vars)
 # PRERELAXED=1 tells polymer_pure to skip its Stage 0 harmonic pre-relaxation:
@@ -232,6 +243,11 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var stage_targets $COMPRESS_STAGES \
     -var stage_targets_list "$COMPRESS_STAGES" \
     -var piston_transparent "${PISTON_TRANSPARENT:-0}" \
+    -var dp_piston "$DP_PISTON" \
+    -var piston_mass "$PISTON_MASS" \
+    -var c_pist_frac "$C_PIST_FRAC" \
+    -var npt_piston_steps "$NPT_PISTON_STEPS" \
+    -var settle_halt "$SETTLE_HALT" \
     \
     -in $LAMMPS_FILE &
 MPIRUN_PID=$!

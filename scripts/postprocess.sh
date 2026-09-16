@@ -141,7 +141,7 @@ fi
 if [ "$FOLDER" = "shear_slab" ]; then
     echo "Generating shear stress-strain sweep plots (per strain: $STRAINS)..."
     python "$SCRIPT_DIR/plot_shear_strain_sweep.py" "." "$STEM" "$STRAINS"
-elif [ "$FOLDER" = "triaxial_compression" ] && [ -n "$COMPRESSIONS" ]; then
+elif { [ "$FOLDER" = "triaxial_compression" ] || [ "$FOLDER" = "triaxial_compression_two_pist" ]; } && [ -n "$COMPRESSIONS" ]; then
     # Compression sweep: every level's output files are tagged _c<level>. Rather
     # than emit one plot PER LEVEL, the consolidated plotter overlays every
     # level's curves onto a single figure per quantity (one color per level) --
@@ -151,6 +151,24 @@ elif [ "$FOLDER" = "triaxial_compression" ] && [ -n "$COMPRESSIONS" ]; then
     echo "Generating consolidated compression sweep plots (levels: $COMPRESSIONS)..."
     python "$SCRIPT_DIR/plot_compression_strain_sweep.py" "." "$STEM" "$COMPRESSIONS" "$OLDSTEPS" \
         || echo "  WARNING: plot_compression_strain_sweep.py failed (skipping)"
+    if [ "$FOLDER" = "triaxial_compression_two_pist" ]; then
+        # Two-piston (2026-09-16): the wet-piston bath-pressure check spans the whole
+        # run in the stem-tagged piston_pressure file; plot_piston_data.py draws it
+        # (multi-piston aware) alongside the per-level files.
+        echo "Generating two-piston bath-pressure plots..."
+        python "$SCRIPT_DIR/plot_piston_data.py" "." "$STEM" "$OLDSTEPS" \
+            || echo "  WARNING: plot_piston_data.py failed (skipping)"
+    fi
+elif [ "$FOLDER" = "triaxial_permeation_two_pist" ]; then
+    # Two-piston permeation (2026-09-16): a single run (no sweep), same plot set as
+    # triaxial_permeation; plot_piston_data.py / plot_stress_profiles.py /
+    # plot_lammps_log.py detect the multi-piston column headers and add the
+    # per-piston panels (P_feed / P_perm measured vs applied, Q_perm vs time).
+    echo "Generating stress profiles (two-piston)..."
+    python "$SCRIPT_DIR/plot_stress_profiles.py" "." "$STEM" "$OLDSTEPS"
+
+    echo "Generating piston / permeation plots (two-piston)..."
+    python "$SCRIPT_DIR/plot_piston_data.py" "." "$STEM" "$OLDSTEPS"
 else
     echo "Generating stress profiles..."
     python "$SCRIPT_DIR/plot_stress_profiles.py" "." "$STEM" "$OLDSTEPS"

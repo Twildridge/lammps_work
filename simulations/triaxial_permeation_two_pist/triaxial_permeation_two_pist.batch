@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=triax_perm2p
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=0
+#SBATCH --time=14:00:00
+#SBATCH --output=%x.o%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (mirrors triaxial_compression.batch): pull the repo FIRST,
+# then re-exec the freshly pulled batch so every exported knob below is read
+# from the current file, not a stale local copy.  The guard var prevents a loop.
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${TRIAX_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining the run knobs..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export TRIAX_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/triaxial_permeation_two_pist/triaxial_permeation_two_pist.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (TRIAX_BATCH_SYNCED=1)"
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# TWO-PISTON PERMEATION (2026-09-16): feed and permeate reservoirs each closed by
+# an NPT-piston (Marioni et al. 2026, Eq. 3).  NO SWEEP of any kind: one continuous
+# constant-pressure drive at ONE dP (P_feed = P_target + DP_PISTON, P_perm =
+# P_target) for NSTEPS, exactly like triaxial_permeation.batch.
+#
+# DATANAME is the CONVERTER output (scripts/slab_two_pistons.ipynb) of the
+# 2026-09-07 piston-transparent slab; copy it to ~/Documents/lammps_data/input_data/.
+# =======================================================================
+FOLDER="triaxial_permeation_two_pist"
+DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist"
+INTERACTION="1.0_1.0"   # epsSS_epsSP
+NSTEPS=800000           # production steps (constant-dP drive); also the output-file tag
+TYPE=""                 # stress, volume, stressvol, or leave empty
+PRESS_TARGET=1.5        # bath pressure P* (both pistons in the settle; permeate piston in production)
+
+# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var; see the .lmp for the rationale) -----
+export DP_PISTON=0.1          # SINGLE pressure step dP (= the current one-piston P_piston). Not a list.
+export PISTON_MASS=1000       # mass per piston bead (paper's value)
+export C_PIST_FRAC=1.0        # damping / critical damping (the .lmp prints C_crit and the piston period)
+export NPT_PISTON_STEPS=1000000   # Phase-1 settle; check the printed piston period (aim >= 3-5 periods)
+export SETTLE_HALT=0          # 1 = end the settle early once both pistons are at rest
+
+# >>> WALL TIME <<<  setup ~ 50k + NPT_PISTON_STEPS + 150k (reference) + 5k (ramp)
+# before the NSTEPS production; ~290k atoms (the converter adds ~55k sheet/pad
+# beads to the 239k slab).  Size --time as for triaxial_permeation plus the settle.
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"

@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=triax_comp2p
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=0
+#SBATCH --time=24:00:00
+#SBATCH --output=%x.o%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (must run BEFORE COMPRESSIONS is defined below).  sbatch
+# submits whatever copy of this file is on disk; if it is stale the sweep list
+# is wrong and run_lammps.sh's own git pull is too late (COMPRESSIONS is already
+# exported).  Pull first, then re-exec the fresh batch.  (Mirrors
+# triaxial_compression.batch / shear_slab.batch.)
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${TRIAX_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining COMPRESSIONS..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export TRIAX_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/triaxial_compression_two_pist/triaxial_compression_two_pist.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (TRIAX_BATCH_SYNCED=1)"
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# TWO-PISTON COMPRESSION (2026-09-16): drained consolidation at constant bath
+# pressure.  Both reservoirs are held at PRESS_TARGET by NPT-pistons and a
+# solvent-transparent dry piston loads the network through the SAME cumulative
+# strain sweep as triaxial_compression.batch (STRAIN_TARGETS -> COMPRESSIONS,
+# _c<strain> tags, auto-sized holds, sweep notebook).  This is the ONLY sweep in
+# the two-piston sequence (it generates the stress-strain curve).
+#
+# DATANAME is the CONVERTER output (scripts/slab_two_pistons.ipynb) of the
+# 2026-09-07 piston-transparent slab; copy it to ~/Documents/lammps_data/input_data/.
+# =======================================================================
+FOLDER="triaxial_compression_two_pist"
+DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist"
+INTERACTION="1.0_1.0"   # epsSS_epsSP
+# NSTEPS: (a) FALLBACK hold length with -var hold_auto 0 and (b) the tag of the
+# setup-phase files only.  Every reference/production file is tagged with its
+# level's AUTO-SIZED HOLD LENGTH (..._<hold>_c<strain>.dat) -- see the NSTEPS
+# block of triaxial_compression.batch; the notebooks resolve the tags (NSTEPS=None).
+NSTEPS=5000000
+TYPE=""
+PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run
+
+# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var) -----
+export PISTON_MASS=1000       # mass per piston bead (types 5/6/7)
+export C_PIST_FRAC=1.0        # damping / critical damping (the .lmp prints C_crit and the period)
+export NPT_PISTON_STEPS=1000000   # Phase-1 settle of the wet pistons (replaces the 2M aniso NPH Phase 0)
+export SETTLE_HALT=0          # 1 = end the settle early once both pistons are at rest
+
+# -----------------------------------------------------------------------
+# Compression stress-strain SWEEP: cumulative strain targets (fraction of the BB
+# reference thickness L0_bb).  Each level: drive the dry piston to the target
+# (fix halt), freeze it, auto-sized hold, files tagged _c<strain>.  Solvent expelled
+# by the compression raises the FEED PISTON by ~strain*L0: the converter's
+# margin_feed (default 15 sigma ~ strain 0.10 on the rho04 slab) must cover the
+# deepest level or the box-face halt ends the run -- rebuild the data file with
+# a larger margin_feed for deeper sweeps (slab_two_pistons.ipynb prints the limit).
+#
+# WALL TIME: as triaxial_compression.batch (~7-10M steps per level with auto
+# holds) plus the settle; ~290k atoms.  Do a SHORT trial first
+# (STRAIN_TARGETS=(0.05) with -var hold_auto 0 and a small NSTEPS).
+# -----------------------------------------------------------------------
+# NOTE: the list must be exported as a SCALAR string (bash does not export
+# arrays); STRAIN_TARGETS is the array, COMPRESSIONS the scalar run_lammps.sh reads.
+STRAIN_TARGETS=(0.10)
+export COMPRESSIONS="${STRAIN_TARGETS[*]}"
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"
