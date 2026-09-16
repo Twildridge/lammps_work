@@ -1,0 +1,1128 @@
+# ===== Triaxial Compression, TWO-PISTON (feed / permeate) sequence  (2026-09-16) =====
+# COMPRESSION MODE ONLY -- drained consolidation at CONSTANT BATH PRESSURE.  Both
+# solvent reservoirs are closed by NPT-pistons (the scheme of Marioni et al.,
+# J. Membr. Sci. 738 (2026) 124837, Eq. 3) held at P_target, and a third,
+# solvent-TRANSPARENT "dry" piston inside the feed reservoir loads the network.
+# Only the piston force law and the two-reservoir geometry are borrowed from the
+# paper; the strain sweep, hold sizing, observables and file conventions are those
+# of triaxial_compression.lmp.  The permeation counterpart lives in
+# ../triaxial_permeation_two_pist/.
+#
+# Input: a data file from scripts/slab_two_pistons.ipynb (CONVERTER of an
+# equilibrated slab_with_support periodic snapshot).  WHY a converter (2026-09-16):
+# the NPT-piston scheme controls pressure in z only (lx, ly fixed), so it cannot
+# swell a fresh lattice laterally; the converter inherits lx, ly, gel dimensions
+# and the stress-free state of the aniso-NPH slab exactly.  The NPT-piston settle
+# below is therefore a z-settle of the reservoirs, NOT a swelling equilibration --
+# it REPLACES the 2M-step aniso NPH Phase 0 of triaxial_compression.lmp.
+# Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,
+#   compressions (+ compressions_list), hold_auto, press_target, piston_mass,
+#   c_pist_frac, npt_piston_steps, settle_halt
+#
+# Atom types: 1=crosslink, 2=chain bead, 3=solvent, 4=support (frozen),
+#             5=feed piston (P_target), 6=permeate piston (P_target),
+#             7=dry piston (loads the network; transparent to solvent).
+#
+# GEOMETRY (z from bottom to top; support BELOW the gel as always):
+#       vacuum margin (permeate side)
+#     | permeate piston (type 6)  <- pushes UP, holds P_target
+#     | permeate reservoir (~10 sigma solvent)
+#     | support sheet (type 4, frozen -> seated onto the gel in Phase 1.25)
+#     | gap | gel slab | feed reservoir
+#     |   [dry piston, type 7: parked mid-feed, seated onto the gel in Phase 1.25,
+#     |    driven DOWN through the solvent to each strain level]
+#     | feed piston (type 5)      <- pushes DOWN, holds P_target
+#     | vacuum margin (feed side)
+#   boundary p p p is KEPT (nothing crosses z: wet pistons are WCA walls, wall-wall
+#   pairs off, margins vacuum).  thermo `press` is meaningless (vacuum in V); the
+#   bath pressure is read from the wet pistons (P = F_fluid/(lx*ly)).
+#   Solvent expelled from the gel during compression goes into BOTH reservoirs
+#   (support and dry piston are transparent to solvent), so the FEED PISTON RISES
+#   by ~ strain*L0 -- the converter's margin_feed must cover the deepest level (the
+#   converter prints the limit; a box-face halt guards the run).
+#
+# PISTON LAW (paper's Eq. 3, per wet piston; see PHASE 1):
+#   setforce 0 0 NULL + aveforce NULL NULL v_fz + nve;   fz = -/+ P*lx*ly/N - C_pist*vcm(z)
+#   Unthermostatted; no fix rigid (full-width periodic sheets).
+#
+# Behaviour:
+#   - Phase 0:    read + brief minimize + short Langevin NVT (mobile), all pistons frozen.
+#   - Phase 1:    NPT-PISTON SETTLE of both wet pistons at P_target (Langevin on mobile).
+#   - Phase 1.25: SYMMETRIC SEATING: dry piston DOWN + support UP over t_seat to
+#                 contact_gap from the outermost gel beads; settle; record L0_bb,
+#                 piston_seat_z and the dry-piston reference preload.
+#   - Phase 1.5:  epsilon = 0 REFERENCE window (_ref files; wet pistons live).
+#   - Phase 2:    the strain SWEEP of triaxial_compression.lmp, unchanged in logic:
+#                 drive the dry piston at v_piston_prod to piston_seat_z - strain*L0_bb
+#                 (fix halt), freeze it, auto-sized hold, files _<hold>_c<strain>.
+#                 The dry-piston force is the network stress; the two wet pistons are
+#                 logged alongside (bath pressure check) and the feed-piston
+#                 displacement (solvent expelled) goes to permeation_data.
+
+
+# ==========================================================================
+#                              PARAMETERS
+# ==========================================================================
+
+# ----- Continuation flag (cont=1 UNSUPPORTED yet for the two-piston decks, 2026-09) -----
+variable cont index 0
+if "${cont} == 1" then &
+    "print 'ERROR: cont=1 (continue_sim.sh) is unsupported by triaxial_compression_two_pist.lmp yet (2026-09)'" &
+    "quit 1"
+
+# ----- Physical Parameters -----
+variable sigma         equal 1.0
+variable temp_target   equal 1.0
+variable press_target  index 1.5          # bath pressure P*; run_lammps.sh passes -var press_target
+variable P_target      equal ${press_target}
+variable timestep_prod equal 0.005
+variable min_iter      index 1000         # minimize iterations (index: -var override for smoke tests)
+variable timestep_gentle equal 0.001      # unused (no gentle NVT stage)
+
+# ----- NPT-piston knobs (2026-09-16; see triaxial_permeation_two_pist.lmp for the rationale) -----
+variable piston_mass      index 1000.0    # per bead, applied with `mass 5/6/7` after read_data
+variable K_solv           index 10.0      # solvent bulk modulus for the damping estimate (no measured value in the repo; CS ~3.5)
+variable c_pist_frac      index 1.0       # C_pist = c_pist_frac * C_crit
+variable npt_piston_steps index 1000000   # Phase-1 settle length
+variable two_pi           equal 6.283185307179586
+variable settle_halt      index 0
+variable settle_tol_v     equal 1.0e-4
+variable settle_tol_z     equal 0.05
+variable settle_min_steps equal 200000
+variable phase0_steps index 50000   # index: -var override for smoke tests
+variable box_guard_gap    equal 2.0       # halt if a wet piston face comes this close to a box face
+
+# ----- Compression Phase 2 (STRAIN-CONTROLLED, as triaxial_compression.lmp) -----
+variable v_piston_prod   index 0.04       # sigma/tau, drive velocity of the DRY piston
+
+# ---- STRAIN SWEEP: cumulative strain targets (index var from run_lammps.sh) ----
+variable compressions      index 0.10
+variable compressions_list index "STALE-run_lammps.sh--no-list-passed--running-single-default-only"
+variable nsteps_comp equal 500000         # drive safety cap
+
+# ---- AUTO-SIZED measurement HOLD (copied from triaxial_compression.lmp) ----
+variable Dc_est      equal 0.17
+variable n_tau_hold  equal 5.5
+variable hold_min    equal 500000
+variable hold_round  equal 100000
+variable pi_sq       equal 9.86960440108936
+variable hold_auto   index 1
+
+# ----- Phase 1.25: seating -----
+variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) short of the outermost gel bead
+variable t_seat       index 143000        # common approach time (steps)
+variable nsteps_settle index 1000000      # both plates fixed before the epsilon=0 reference (2026-09-05 value)
+
+# ----- Phase 1.5: reference window -----
+variable ref_avg_steps index 150000
+variable ref_nevery    equal 100
+variable ref_nfreq     index 10000
+variable ref_nrepeat   equal v_ref_nfreq/v_ref_nevery
+
+variable solvent_mass  equal 1.0
+
+# ----- Output Frequencies -----
+variable thermo_freq     index 250000
+variable num_dump_frames equal 30
+variable dump_freq_prod  equal floor(${nsteps}/v_num_dump_frames)
+variable num_drive_frames equal 5
+variable volume_freq     index 5000
+variable strain_freq     index 1000
+
+variable skip_widom index 1
+variable num_widom_frames equal 50
+variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
+
+# ----- Time Averaging (stress) — baseline sized on nsteps; re-derived per level -----
+variable num_stress_curves equal 20
+variable nevery_target     equal 100
+variable nrepeat_max       equal 2000
+variable nrepeat_min       equal 50
+variable nfreq_raw    equal floor(${nsteps}/v_num_stress_curves)
+variable nrepeat_raw  equal floor(v_nfreq_raw/v_nevery_target)
+variable nr_lo equal (v_nrepeat_raw>v_nrepeat_min)*v_nrepeat_raw+(v_nrepeat_raw<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepeat_max)*v_nrepeat_max
+variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
+variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
+print ">>> Stress (baseline from nsteps): nevery=${nevery_stress} nrepeat=${nrepeat_stress} nfreq=${nfreq_stress}"
+print ">>> Mode: COMPRESSION, TWO-PISTON (dry piston loads the gel; wet pistons hold the bath at P_target)"
+
+# ----- Block-averaged piston forces -----
+variable pf_nevery  equal 50
+variable pf_nrepeat equal floor(${volume_freq}/v_pf_nevery)
+variable pf_nfreq   equal v_pf_nevery*v_pf_nrepeat
+
+# ----- Spatial Binning -----
+variable binWidth      equal 2.0
+variable binWidth_fine equal 0.5
+variable fine_halfwin  equal 6.0
+variable rg_scale      equal 1.8
+variable region_frac   equal 1
+
+# ----- Sparse stress-anisotropy check -----
+variable aniso_nevery  equal 5000
+variable aniso_nrepeat equal 20
+variable aniso_nfreq   equal 100000
+
+
+# ==========================================================================
+#                           INITIALIZATION
+# ==========================================================================
+
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+pair_style lj/cut 1.122
+bond_style fene
+
+read_data data_files/${dataname}.data nocoeff
+
+mass 5 ${piston_mass}
+mass 6 ${piston_mass}
+mass 7 ${piston_mass}
+
+comm_modify cutoff 5.0
+
+print "========================================"
+print "Triaxial compression, TWO-PISTON: ${dataname}"
+print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
+print "P_target=${P_target}  piston_mass=${piston_mass}  c_pist_frac=${c_pist_frac}  settle=${npt_piston_steps}"
+print "Drive velocity (dry piston): ${v_piston_prod} sigma/tau;  flat-hold fallback nsteps=${nsteps}"
+print "========================================"
+
+
+# ==========================================================================
+#                          GROUP DEFINITIONS
+# ==========================================================================
+
+group polymer     type 1 2
+group solvent     type 3
+group support     type 4
+group piston_feed type 5
+group piston_perm type 6
+group piston_dry  type 7
+group mobile      type 1 2 3
+group gel_system  type 1 2 3 4 5 6 7
+
+variable N_feed equal count(piston_feed)
+variable N_perm equal count(piston_perm)
+variable N_dry  equal count(piston_dry)
+print ">>> sheets: support $(count(support))  feed ${N_feed}  permeate ${N_perm}  dry ${N_dry}"
+
+
+# ==========================================================================
+#                       INTERATOMIC POTENTIALS  (2.4 of the brief)
+# ==========================================================================
+pair_coeff * * 1.0 ${sigma} 1.122
+pair_coeff 1 3 ${epsSP} ${sigma} 1.122
+pair_coeff 2 3 ${epsSP} ${sigma} 1.122
+pair_coeff 3 3 ${epsSS} ${sigma} 1.122
+pair_coeff 1 4 1.0 ${sigma} 1.122
+pair_coeff 2 4 1.0 ${sigma} 1.122
+pair_coeff 1 5 1.0 ${sigma} 1.122
+pair_coeff 2 5 1.0 ${sigma} 1.122
+pair_coeff 1 6 1.0 ${sigma} 1.122
+pair_coeff 2 6 1.0 ${sigma} 1.122
+pair_coeff 1 7 1.0 ${sigma} 1.122         # polymer-dry piston: the LOAD path
+pair_coeff 2 7 1.0 ${sigma} 1.122
+pair_coeff 3 5 1.0 ${sigma} 1.122         # solvent-wet pistons: ALWAYS ON
+pair_coeff 3 6 1.0 ${sigma} 1.122
+pair_coeff 3 4 0.0 ${sigma} 0.0           # solvent-support: off
+pair_coeff 3 7 0.0 ${sigma} 0.0           # solvent-dry piston: off (drained loading)
+pair_coeff 4 4 0.0 ${sigma} 0.0
+pair_coeff 4 5 0.0 ${sigma} 0.0
+pair_coeff 4 6 0.0 ${sigma} 0.0
+pair_coeff 4 7 0.0 ${sigma} 0.0
+pair_coeff 5 5 0.0 ${sigma} 0.0
+pair_coeff 5 6 0.0 ${sigma} 0.0
+pair_coeff 5 7 0.0 ${sigma} 0.0
+pair_coeff 6 6 0.0 ${sigma} 0.0
+pair_coeff 6 7 0.0 ${sigma} 0.0
+pair_coeff 7 7 0.0 ${sigma} 0.0
+
+bond_coeff * 30.0 1.5 1.0 1.0
+special_bonds fene
+
+neigh_modify exclude type 4 4
+neigh_modify exclude type 4 5
+neigh_modify exclude type 4 6
+neigh_modify exclude type 4 7
+neigh_modify exclude type 5 5
+neigh_modify exclude type 5 6
+neigh_modify exclude type 5 7
+neigh_modify exclude type 6 6
+neigh_modify exclude type 6 7
+neigh_modify exclude type 7 7
+neigh_modify exclude type 3 4
+neigh_modify exclude type 3 7
+
+# MPI load balance across the vacuum margins (see the permeation deck)
+balance 1.05 shift z 20 1.05
+fix lb all balance 1000 1.05 shift z 20 1.05
+
+
+# ==========================================================================
+#                     WALLS: support frozen, pistons parked
+# ==========================================================================
+# setforce 0 0 0 and NOT integrated (no fix nve): immobile.  No fix rigid on the
+# full-width periodic sheets.  Seating and driving are done by adding fix nve
+# and a set velocity (ballistic translation at zero force), then removing it.
+velocity support set 0.0 0.0 0.0
+fix freeze_support support setforce 0.0 0.0 0.0
+velocity piston_feed set 0.0 0.0 0.0
+velocity piston_perm set 0.0 0.0 0.0
+velocity piston_dry  set 0.0 0.0 0.0
+fix freeze_feed piston_feed setforce 0.0 0.0 0.0
+fix freeze_perm piston_perm setforce 0.0 0.0 0.0
+fix freeze_dry  piston_dry  setforce 0.0 0.0 0.0
+
+
+# ==========================================================================
+#                           THERMO OUTPUT
+# ==========================================================================
+# c_mobile_temp = physical temperature of the thermostatted group (see the
+# one-piston decks).  press / c_mobile_press include the vacuum margins -> meaningless.
+compute mobile_temp mobile temp
+compute mobile_press all pressure thermo_temp pair bond
+thermo_style custom step c_mobile_temp pe ke etotal press c_mobile_press vol lx ly lz
+thermo_modify lost warn
+thermo ${thermo_freq}
+
+
+# ==========================================================================
+#                 PISTON FORCE / PRESSURE READOUT (compute group/group)
+# ==========================================================================
+# NOT `compute reduce sum fz` (setforce/aveforce have already zeroed the net force
+# by the time it is read).  Pair force of the partner group on each sheet:
+#   dry piston:      F from the POLYMER (it is transparent to solvent) -> the network
+#                    load; P_dry = +F_z/(lx*ly) (gel pushes it UP = compressive)
+#   feed piston:     F from mobile atoms, pushes it UP   -> P_feed = +F_z/A
+#   permeate piston: F from mobile atoms, pushes it DOWN -> P_perm = -F_z/A
+compute fp_dry  piston_dry  group/group polymer
+compute fp_feed piston_feed group/group mobile
+compute fp_perm piston_perm group/group mobile
+variable area        equal lx*ly
+variable P_dry_meas  equal  c_fp_dry[3]/v_area
+variable P_feed_meas equal  c_fp_feed[3]/v_area
+variable P_perm_meas equal -c_fp_perm[3]/v_area
+# one-piston names for the dry piston (the notebooks' M_piston reads these)
+variable piston_area       equal lx*ly
+variable piston_pressure_z equal c_fp_dry[3]/v_piston_area
+
+compute dry_com  piston_dry  com
+compute feed_com piston_feed com
+compute perm_com piston_perm com
+compute dry_vz   piston_dry  reduce ave vz
+compute feed_vz  piston_feed reduce ave vz
+compute perm_vz  piston_perm reduce ave vz
+compute support_com support com
+variable z_dry   equal c_dry_com[3]
+variable z_feed  equal c_feed_com[3]
+variable z_perm  equal c_perm_com[3]
+variable vz_dry  equal c_dry_vz
+variable vz_feed equal c_feed_vz
+variable vz_perm equal c_perm_vz
+variable feed_z_bot equal c_feed_com[3]-0.5*${sigma}
+variable feed_z_top equal c_feed_com[3]+0.5*${sigma}
+variable perm_z_top equal c_perm_com[3]+0.5*${sigma}
+variable perm_z_bot equal c_perm_com[3]-0.5*${sigma}
+variable support_z_live equal c_support_com[3]
+
+
+# ==========================================================================
+#   GEL / BOX TRACKING COMPUTES + WHOLE-RUN CONVERGENCE LOGGERS (from step 0)
+# ==========================================================================
+compute polymer_com polymer com
+compute minx polymer reduce min x
+compute maxx polymer reduce max x
+compute miny polymer reduce min y
+compute maxy polymer reduce max y
+compute minz polymer reduce min z
+compute maxz polymer reduce max z
+variable gel_lx_bb equal c_maxx-c_minx
+variable gel_ly_bb equal c_maxy-c_miny
+variable gel_lz_bb equal c_maxz-c_minz
+variable gel_vol_bb equal v_gel_lx_bb*v_gel_ly_bb*v_gel_lz_bb
+compute rg_tensor polymer gyration
+variable gel_lx_rg equal 2.0*sqrt(3.0*c_rg_tensor[1])
+variable gel_ly_rg equal 2.0*sqrt(3.0*c_rg_tensor[2])
+variable gel_lz_rg equal 2.0*sqrt(3.0*c_rg_tensor[3])
+variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
+variable gel_top_rg equal c_polymer_com[3]+0.5*v_gel_lz_rg
+variable gel_bot_rg equal c_polymer_com[3]-0.5*v_gel_lz_rg
+variable box_lx equal lx
+variable box_ly equal ly
+variable box_lz equal lz
+
+# STEM-suffixed whole-run trackers (plot_lammps_log.py convergence figure)
+fix trk_box all print ${strain_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_dims_rg all print ${strain_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_vol_rg all print ${strain_freq} "$(step) $(v_gel_vol_rg)" &
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_vol_bb all print ${strain_freq} "$(v_gel_vol_bb)" &
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
+
+# gaps for seating diagnostics
+variable gel_bot_gap        equal v_gel_bot_rg-c_support_com[3]
+variable piston_gel_gap     equal c_dry_com[3]-v_gel_top_rg
+variable piston_support_gap equal c_dry_com[3]-c_support_com[3]
+
+compute displace_poly polymer displace/atom
+
+
+# ==========================================================================
+#                    PHASE 0: MINIMIZE + LANGEVIN NVT (pistons frozen)
+# ==========================================================================
+print "========================================"
+print "Phase 0: minimize + Langevin NVT (${phase0_steps} steps), all pistons frozen"
+print "========================================"
+reset_timestep 0
+timestep ${timestep_prod}
+
+if "${cont} == 1" then "jump SELF label_after_phase05"
+
+# setup movie: spans Phase 0 + settle + seating + settle + reference (+ first drive)
+variable setup_span      equal v_phase0_steps+v_npt_piston_steps+v_t_seat+v_nsteps_settle+v_ref_avg_steps
+variable dump_freq_setup equal floor(v_setup_span/v_num_dump_frames)
+print ">>> gel_setup dump: ~${num_dump_frames} frames over setup span $(v_setup_span:%.0f) steps -> every ${dump_freq_setup} steps"
+dump traj_setup gel_system custom ${dump_freq_setup} &
+   traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
+   id type mol x y z
+
+minimize 1.0e-4 1.0e-6 ${min_iter} 10000
+
+fix nve_mob mobile nve
+fix lang_p0 mobile langevin ${temp_target} ${temp_target} 1.0 48279
+run ${phase0_steps}
+unfix lang_p0
+print ">>> Post-Phase-0: T=$(c_mobile_temp)"
+run 0
+
+variable Rg_xx equal c_rg_tensor[1]
+variable Rg_yy equal c_rg_tensor[2]
+variable Rg_zz equal c_rg_tensor[3]
+print "Rg_xx = ${Rg_xx}  ->  Lx_rg = $(v_gel_lx_rg)"
+print "Rg_yy = ${Rg_yy}  ->  Ly_rg = $(v_gel_ly_rg)"
+print "Rg_zz = ${Rg_zz}  ->  Lz_rg = $(v_gel_lz_rg)"
+print "BB:  Lx=$(v_gel_lx_bb) Ly=$(v_gel_ly_bb) Lz=$(v_gel_lz_bb)"
+variable eps equal 1.0e-12
+variable hw_x equal v_region_frac*v_rg_scale*sqrt(v_Rg_xx + v_eps)
+variable hw_y equal v_region_frac*v_rg_scale*sqrt(v_Rg_yy + v_eps)
+variable hw_z equal v_region_frac*v_rg_scale*sqrt(v_Rg_zz + v_eps)
+print ">>> support z = $(c_support_com[3])  dry piston z = $(v_z_dry)  feed piston z = $(v_z_feed)  permeate piston z = $(v_z_perm)"
+print ">>> gel top (Rg) = $(v_gel_top_rg)  gel bottom (Rg) = $(v_gel_bot_rg)  c_maxz = $(c_maxz)  c_minz = $(c_minz)"
+
+variable L_feed equal v_feed_z_bot-v_gel_top_rg
+variable L_perm equal v_support_z_live-v_perm_z_top
+print ">>> Reservoirs: feed L=$(v_L_feed:%.2f) sigma   permeate L=$(v_L_perm:%.2f) sigma   A=$(v_area:%.2f)"
+
+# ----- Critical-damping estimate (see triaxial_permeation_two_pist.lmp) -----
+variable k_feed      equal $(v_K_solv*v_area/v_L_feed)
+variable k_perm      equal $(v_K_solv*v_area/v_L_perm)
+variable omega_feed  equal $(sqrt(v_k_feed/(v_N_feed*v_piston_mass)))
+variable omega_perm  equal $(sqrt(v_k_perm/(v_N_perm*v_piston_mass)))
+variable period_feed equal $(v_two_pi/v_omega_feed/v_timestep_prod)
+variable period_perm equal $(v_two_pi/v_omega_perm/v_timestep_prod)
+variable C_crit_feed equal $(2.0*sqrt(v_k_feed*v_piston_mass/v_N_feed))
+variable C_crit_perm equal $(2.0*sqrt(v_k_perm*v_piston_mass/v_N_perm))
+variable C_pist_feed equal $(v_c_pist_frac*v_C_crit_feed)
+variable C_pist_perm equal $(v_c_pist_frac*v_C_crit_perm)
+print "############################################################"
+print ">>> NPT-PISTON damping estimate (K_solv=${K_solv}, piston_mass=${piston_mass}, c_pist_frac=${c_pist_frac})"
+print ">>>   feed:     k=$(v_k_feed:%.3f)  omega=$(v_omega_feed:%.3e)/tau  period=$(v_period_feed:%.0f) steps  C_crit/bead=$(v_C_crit_feed:%.3f)  C_pist=$(v_C_pist_feed:%.3f)"
+print ">>>   permeate: k=$(v_k_perm:%.3f)  omega=$(v_omega_perm:%.3e)/tau  period=$(v_period_perm:%.0f) steps  C_crit/bead=$(v_C_crit_perm:%.3f)  C_pist=$(v_C_pist_perm:%.3f)"
+print ">>>   settle npt_piston_steps=${npt_piston_steps} = $(v_npt_piston_steps/v_period_feed:%.1f) feed periods, $(v_npt_piston_steps/v_period_perm:%.1f) permeate periods"
+if "$(v_npt_piston_steps) < $(3.0*v_period_feed)" then &
+    "print '>>>   WARNING: settle shorter than 3 feed-piston periods -- raise npt_piston_steps'"
+print "############################################################"
+
+
+# ==========================================================================
+#            PHASE 1: NPT-PISTON SETTLE  (wet pistons at P_target; dry piston parked)
+# ==========================================================================
+print "========================================"
+print "Phase 1: NPT-piston settle, ${npt_piston_steps} steps, P_feed = P_perm = ${P_target}"
+print "========================================"
+variable P_feed_app equal v_P_target
+variable P_perm_app equal v_P_target
+variable fz_feed equal -v_P_feed_app*v_area/v_N_feed-v_C_pist_feed*vcm(piston_feed,z)
+variable fz_perm equal  v_P_perm_app*v_area/v_N_perm-v_C_pist_perm*vcm(piston_perm,z)
+
+unfix freeze_feed
+unfix freeze_perm
+velocity piston_feed set 0.0 0.0 0.0
+velocity piston_perm set 0.0 0.0 0.0
+fix feed_xy  piston_feed setforce 0.0 0.0 NULL
+fix feed_z   piston_feed aveforce NULL NULL v_fz_feed
+fix feed_nve piston_feed nve
+fix perm_xy  piston_perm setforce 0.0 0.0 NULL
+fix perm_z   piston_perm aveforce NULL NULL v_fz_perm
+fix perm_nve piston_perm nve
+
+fix lang_settle mobile langevin ${temp_target} ${temp_target} 1.0 58291
+
+# whole-run wet-piston log (stem-tagged; per-level piston files come in the sweep)
+fix out_piston_pressure all print ${volume_freq} &
+    "$(step) $(v_P_dry_meas) $(v_P_feed_meas) $(v_P_feed_app) $(v_P_perm_meas) $(v_P_perm_app)" &
+    title "# step P_dry_meas P_feed_meas P_feed_app P_perm_meas P_perm_app" &
+    file output_files/piston_data/piston_pressure_${dataname}_${interaction}_${nsteps}.dat screen no
+fix out_piston_pos_run all print ${volume_freq} "$(step) $(v_z_dry) $(v_z_feed) $(v_z_perm)" &
+    title "# step z_dry z_feed z_perm" &
+    file output_files/piston_data/piston_position_run_${dataname}_${interaction}_${nsteps}.dat screen no
+
+shell mkdir output_files/stress_data
+compute stress_poly_aniso polymer stress/atom NULL
+compute sp_xx polymer reduce sum c_stress_poly_aniso[1]
+compute sp_yy polymer reduce sum c_stress_poly_aniso[2]
+compute sp_zz polymer reduce sum c_stress_poly_aniso[3]
+variable sig_p_xx equal -c_sp_xx/v_gel_vol_rg
+variable sig_p_yy equal -c_sp_yy/v_gel_vol_rg
+variable sig_p_zz equal -c_sp_zz/v_gel_vol_rg
+compute press_tensor all pressure thermo_temp
+fix stress_aniso_output all ave/time ${aniso_nevery} ${aniso_nrepeat} ${aniso_nfreq} &
+    v_sig_p_xx v_sig_p_yy v_sig_p_zz c_press_tensor[1] c_press_tensor[2] c_press_tensor[3] &
+    file output_files/stress_data/stress_aniso_${dataname}_${interaction}_${nsteps}.dat &
+    title2 "# TimeStep sig_p_xx sig_p_yy sig_p_zz P_xx P_yy P_zz   (polymer partial stress = -sum S_ii/V_gel(Rg); P tensor includes vacuum -> meaningless)"
+
+fix settle_win all ave/time 100 100 10000 v_vz_feed v_vz_perm v_z_feed v_z_perm ave one
+variable settle_start equal $(step)
+variable settle_ok equal (step>=v_settle_start+v_settle_min_steps)*(abs(f_settle_win[1])<v_settle_tol_v)*(abs(f_settle_win[2])<v_settle_tol_v)*(abs(v_z_feed-f_settle_win[3])<v_settle_tol_z)*(abs(v_z_perm-f_settle_win[4])<v_settle_tol_z)
+if "${settle_halt} == 1" then "fix halt_settle all halt 10000 v_settle_ok > 0.5 error continue"
+
+print ">>> settle start: z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
+thermo 10000
+run ${npt_piston_steps}
+thermo ${thermo_freq}
+if "${settle_halt} == 1" then "unfix halt_settle"
+unfix settle_win
+print ">>> settle end (step $(step)): z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  vz_feed=$(v_vz_feed:%.2e) vz_perm=$(v_vz_perm:%.2e)"
+print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f) (applied ${P_target});  L_feed=$(v_L_feed:%.2f) L_perm=$(v_L_perm:%.2f)  T=$(c_mobile_temp:%.4f)"
+
+label label_after_phase05
+run 0
+
+variable gel_lz_initial equal $(v_gel_lz_rg)
+print ">>> Initial gel thickness (Rg, post-settle): L0 = ${gel_lz_initial}   (BB: $(v_gel_lz_bb))"
+variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
+
+
+# ==========================================================================
+#              PHASE 2 PREP: production thermostat + analysis definitions
+# ==========================================================================
+# Thermostat: FULL 3-D Nose-Hoover on mobile from the seating onward (2026-09-05
+# choice of triaxial_compression.lmp; nothing streams in compression).
+unfix lang_settle
+unfix nve_mob
+fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
+
+# ----- dynamic regions + chunks (one chunk/atom per reduce/chunk user) -----
+variable reg_x_ylo equal c_polymer_com[2]-v_hw_y
+variable reg_x_yhi equal c_polymer_com[2]+v_hw_y
+variable reg_x_zlo equal c_polymer_com[3]-v_hw_z
+variable reg_x_zhi equal c_polymer_com[3]+v_hw_z
+region reg_x block EDGE EDGE v_reg_x_ylo v_reg_x_yhi v_reg_x_zlo v_reg_x_zhi side in
+variable reg_y_xlo equal c_polymer_com[1]-v_hw_x
+variable reg_y_xhi equal c_polymer_com[1]+v_hw_x
+variable reg_y_zlo equal c_polymer_com[3]-v_hw_z
+variable reg_y_zhi equal c_polymer_com[3]+v_hw_z
+region reg_y block v_reg_y_xlo v_reg_y_xhi EDGE EDGE v_reg_y_zlo v_reg_y_zhi side in
+
+compute chunk_x_polymer polymer chunk/atom bin/1d x lower ${binWidth} region reg_x
+compute chunk_y_polymer polymer chunk/atom bin/1d y lower ${binWidth} region reg_y
+compute chunk_x_solvent solvent chunk/atom bin/1d x lower ${binWidth} region reg_x
+compute chunk_y_solvent solvent chunk/atom bin/1d y lower ${binWidth} region reg_y
+compute chunk_z_poly_p   polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_poly_zz  polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_poly_xx  polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_poly_yy  polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_polymer  polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_p   solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_zz  solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_xx  solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_yy  solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_vzz solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_solv_density solvent chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_pdry    piston_dry  chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_pfeed   piston_feed chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_pperm   piston_perm chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_support support     chunk/atom bin/1d z lower ${binWidth}
+
+# ----- partial stresses (stress/atom NULL INCLUDES the kinetic term; see triaxial_compression.lmp) -----
+compute stress_polymer polymer stress/atom NULL
+compute stress_solvent solvent stress/atom NULL
+variable press_polymer_x atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*${binWidth}*ly*lz)
+variable press_polymer_y atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*lx*${binWidth}*lz)
+variable press_polymer_z atom -(c_stress_polymer[1]+c_stress_polymer[2]+c_stress_polymer[3])/(3.0*lx*ly*${binWidth})
+variable press_solvent_x atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*${binWidth}*ly*lz)
+variable press_solvent_y atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*lx*${binWidth}*lz)
+variable press_solvent_z atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/(3.0*lx*ly*${binWidth})
+compute press_x_polymer polymer reduce/chunk chunk_x_polymer sum v_press_polymer_x
+compute press_y_polymer polymer reduce/chunk chunk_y_polymer sum v_press_polymer_y
+compute press_z_polymer polymer reduce/chunk chunk_z_poly_p  sum v_press_polymer_z
+compute press_x_solvent solvent reduce/chunk chunk_x_solvent  sum v_press_solvent_x
+compute press_y_solvent solvent reduce/chunk chunk_y_solvent  sum v_press_solvent_y
+compute press_z_solvent solvent reduce/chunk chunk_z_solv_p   sum v_press_solvent_z
+
+compute stress_pdry    piston_dry  stress/atom NULL
+compute stress_pfeed   piston_feed stress/atom NULL
+compute stress_pperm   piston_perm stress/atom NULL
+compute stress_support support     stress/atom NULL
+variable press_pdry_z    atom -(c_stress_pdry[1]+c_stress_pdry[2]+c_stress_pdry[3])/(3.0*lx*ly*${binWidth})
+variable press_pfeed_z   atom -(c_stress_pfeed[1]+c_stress_pfeed[2]+c_stress_pfeed[3])/(3.0*lx*ly*${binWidth})
+variable press_pperm_z   atom -(c_stress_pperm[1]+c_stress_pperm[2]+c_stress_pperm[3])/(3.0*lx*ly*${binWidth})
+variable press_support_z atom -(c_stress_support[1]+c_stress_support[2]+c_stress_support[3])/(3.0*lx*ly*${binWidth})
+compute press_z_pdry    piston_dry  reduce/chunk chunk_z_pdry    sum v_press_pdry_z
+compute press_z_pfeed   piston_feed reduce/chunk chunk_z_pfeed   sum v_press_pfeed_z
+compute press_z_pperm   piston_perm reduce/chunk chunk_z_pperm   sum v_press_pperm_z
+compute press_z_support support     reduce/chunk chunk_z_support sum v_press_support_z
+
+variable sigma_p_zz atom -c_stress_polymer[3]/(lx*ly*${binWidth})
+variable sigma_s_zz atom -c_stress_solvent[3]/(lx*ly*${binWidth})
+variable sigma_p_xx atom -c_stress_polymer[1]/(lx*ly*${binWidth})
+variable sigma_s_xx atom -c_stress_solvent[1]/(lx*ly*${binWidth})
+variable sigma_p_yy atom -c_stress_polymer[2]/(lx*ly*${binWidth})
+variable sigma_s_yy atom -c_stress_solvent[2]/(lx*ly*${binWidth})
+variable virial_s_zz atom -c_stress_solvent[3]
+compute sigmazz_poly polymer reduce/chunk chunk_z_poly_zz sum v_sigma_p_zz
+compute sigmazz_solv solvent reduce/chunk chunk_z_solv_zz sum v_sigma_s_zz
+compute virialzz_solv solvent reduce/chunk chunk_z_solv_vzz sum v_virial_s_zz
+compute sigmaxx_poly polymer reduce/chunk chunk_z_poly_xx sum v_sigma_p_xx
+compute sigmaxx_solv solvent reduce/chunk chunk_z_solv_xx sum v_sigma_s_xx
+compute sigmayy_poly polymer reduce/chunk chunk_z_poly_yy sum v_sigma_p_yy
+compute sigmayy_solv solvent reduce/chunk chunk_z_solv_yy sum v_sigma_s_yy
+
+compute pl_local  solvent pair/local  fx fy fz
+compute ids_local solvent property/local patom1 patom2 ptype1 ptype2
+compute pl_local_poly  polymer pair/local  fx fy fz
+compute ids_local_poly polymer property/local patom1 patom2 ptype1 ptype2
+compute bnd_local      all     bond/local   force dist
+compute bnd_ids        all     property/local batom1 batom2 btype
+
+# ----- fine z-bins near the support and the DRY piston (the loading plates), plus the wet pistons -----
+variable fine_sup_zlo equal c_support_com[3]-v_fine_halfwin
+variable fine_sup_zhi equal c_support_com[3]+v_fine_halfwin
+variable fine_pis_zlo equal c_dry_com[3]-v_fine_halfwin
+variable fine_pis_zhi equal c_dry_com[3]+v_fine_halfwin
+variable fine_fp_zlo  equal c_feed_com[3]-v_fine_halfwin
+variable fine_fp_zhi  equal c_feed_com[3]+v_fine_halfwin
+variable fine_pp_zlo  equal c_perm_com[3]-v_fine_halfwin
+variable fine_pp_zhi  equal c_perm_com[3]+v_fine_halfwin
+region reg_fine_support block EDGE EDGE EDGE EDGE v_fine_sup_zlo v_fine_sup_zhi side in
+region reg_fine_piston  block EDGE EDGE EDGE EDGE v_fine_pis_zlo v_fine_pis_zhi side in
+region reg_fine_feed    block EDGE EDGE EDGE EDGE v_fine_fp_zlo  v_fine_fp_zhi  side in
+region reg_fine_perm    block EDGE EDGE EDGE EDGE v_fine_pp_zlo  v_fine_pp_zhi  side in
+variable sigma_p_zz_f atom -c_stress_polymer[3]/(lx*ly*${binWidth_fine})
+variable sigma_s_zz_f atom -c_stress_solvent[3]/(lx*ly*${binWidth_fine})
+compute chunk_zf_poly_sup polymer chunk/atom bin/1d z lower ${binWidth_fine} region reg_fine_support
+compute chunk_zf_poly_pis polymer chunk/atom bin/1d z lower ${binWidth_fine} region reg_fine_piston
+compute chunk_zf_solv_sup solvent chunk/atom bin/1d z lower ${binWidth_fine} region reg_fine_support
+compute chunk_zf_solv_pis solvent chunk/atom bin/1d z lower ${binWidth_fine} region reg_fine_piston
+compute chunk_zf_dens_sup solvent chunk/atom bin/1d z lower ${binWidth_fine} region reg_fine_support
+compute chunk_zf_dens_pis solvent chunk/atom bin/1d z lower ${binWidth_fine} region reg_fine_piston
+compute chunk_zf_dens_fp  solvent chunk/atom bin/1d z lower ${binWidth_fine} region reg_fine_feed
+compute chunk_zf_dens_pp  solvent chunk/atom bin/1d z lower ${binWidth_fine} region reg_fine_perm
+compute sigmazz_poly_fs polymer reduce/chunk chunk_zf_poly_sup sum v_sigma_p_zz_f
+compute sigmazz_poly_fp polymer reduce/chunk chunk_zf_poly_pis sum v_sigma_p_zz_f
+compute sigmazz_solv_fs solvent reduce/chunk chunk_zf_solv_sup sum v_sigma_s_zz_f
+compute sigmazz_solv_fp solvent reduce/chunk chunk_zf_solv_pis sum v_sigma_s_zz_f
+
+variable uz_poly atom c_displace_poly[3]
+
+# ----- reservoir pressures / densities (feed = [gel top, feed piston]; permeate = [perm piston, support]) -----
+variable res_feed_zlo equal (c_maxz<(c_feed_com[3]-1.5*${sigma}))*c_maxz+(c_maxz>=(c_feed_com[3]-1.5*${sigma}))*(c_feed_com[3]-1.5*${sigma})
+region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo v_feed_z_bot side in
+region reg_perm_res block EDGE EDGE EDGE EDGE v_perm_z_top v_support_z_live side in
+group g_solvent_feed dynamic solvent region reg_feed_res every ${strain_freq}
+group g_solvent_perm dynamic solvent region reg_perm_res every ${strain_freq}
+variable pv_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
+compute pv_feed g_solvent_feed reduce sum v_pv_solvent
+compute pv_perm g_solvent_perm reduce sum v_pv_solvent
+variable vol_feed equal lx*ly*(v_feed_z_bot-v_res_feed_zlo)
+variable vol_perm equal lx*ly*(v_support_z_live-v_perm_z_top)
+variable P_res_feed equal c_pv_feed/v_vol_feed
+variable P_res_perm equal c_pv_perm/v_vol_perm
+variable rho_feed   equal count(g_solvent_feed)/v_vol_feed
+variable rho_perm   equal count(g_solvent_perm)/v_vol_perm
+
+# box-face guard for the wet pistons (feed rises as solvent is expelled)
+variable box_guard equal (v_feed_z_top>=zhi-v_box_guard_gap)+(v_perm_z_bot<=zlo+v_box_guard_gap)
+
+print ">>> Phase 2 prep done: dry_z=$(v_z_dry:%.2f)  gel_top_rg=$(v_gel_top_rg:%.2f)  gel_top_raw=$(c_maxz:%.2f)  support_z=$(c_support_com[3]:%.2f)"
+
+if "${cont} == 1" then "jump SELF label_after_ref_rec"
+
+
+# ==========================================================================
+#   PHASE 1.25: SYMMETRIC SEATING -- DRY PISTON DOWN + SUPPORT UP, RECORD L0 (BB)
+# ==========================================================================
+# Copied from triaxial_compression.lmp: both plates travel v = d/t over the COMMON
+# time t_seat to contact_gap short of the BB gel faces, so neither arrives early
+# and shoves the gel off-centre; they translate ballistically (nve + setforce 0 +
+# set velocity) and are stopped by zeroing the velocity.  The dry piston is
+# transparent to solvent, so it slides freely through the feed reservoir; the
+# support is transparent too, so moving it does not push the permeate solvent
+# (the permeate piston holds P_target regardless).  After nsteps_settle with both
+# plates fixed, L0_bb = the BB gel thickness is the strain DENOMINATOR.
+print '========================================'
+print 'Phase 1.25: symmetric seating (dry piston down + support up, common time)'
+print '========================================'
+print ">>> approach start: piston_gel_gap=$(v_piston_gel_gap:%.2f)  gel_bot_gap=$(v_gel_bot_gap:%.2f)  piston_support_gap=$(v_piston_support_gap:%.2f)"
+
+variable gel_top_bb0 equal $(c_maxz)
+variable gel_bot_bb0 equal $(c_minz)
+variable piston_z0   equal $(c_dry_com[3])
+variable support_z0  equal $(c_support_com[3])
+variable d_piston    equal $(v_piston_z0 - v_gel_top_bb0 - v_contact_gap)
+variable d_support   equal $(v_gel_bot_bb0 - v_support_z0 - v_contact_gap)
+variable vseat_piston  equal $(-1.0*v_d_piston/(v_t_seat*v_timestep_prod))
+variable vseat_support equal $(v_d_support/(v_t_seat*v_timestep_prod))
+print ">>> seating: d_piston=${d_piston}  d_support=${d_support}  v_piston=${vseat_piston}  v_support=${vseat_support}  (t_seat=${t_seat} steps)"
+
+fix nve_dry     piston_dry nve
+fix nve_support support    nve
+velocity piston_dry set 0.0 0.0 ${vseat_piston}
+velocity support    set 0.0 0.0 ${vseat_support}
+run ${t_seat}
+velocity piston_dry set 0.0 0.0 0.0
+velocity support    set 0.0 0.0 0.0
+unfix nve_dry
+unfix nve_support
+print ">>> seated: dry_z=$(c_dry_com[3]:%.2f)  support_z=$(c_support_com[3]:%.2f)  gel_top_bb=$(c_maxz:%.2f)  gel_bot_bb=$(c_minz:%.2f)"
+
+print ">>> settling ${nsteps_settle} steps before recording the reference..."
+run ${nsteps_settle}
+
+variable L0_bb         equal $(v_gel_lz_bb)
+variable gel_strain_bb equal (v_L0_bb - v_gel_lz_bb)/v_L0_bb
+variable piston_seat_z equal $(c_dry_com[3])
+variable L0_gap        equal $(v_piston_support_gap)
+variable piston_strain equal (v_L0_gap-v_piston_support_gap)/v_L0_gap
+variable gel_lz_initial delete
+variable gel_lz_initial equal $(v_gel_lz_rg)
+print ">>> Reference thicknesses:  L0_bb=${L0_bb} (authoritative)  L0_rg=${gel_lz_initial}  L0_gap=${L0_gap}  piston_seat_z=${piston_seat_z}"
+# solvent-expelled reference: wet-piston positions at the seated state
+variable z_feed0 equal $(v_z_feed)
+variable z_perm0 equal $(v_z_perm)
+variable dV_feed  equal v_area*(v_z_feed-v_z_feed0)     # + = feed reservoir grew
+variable dV_perm  equal -v_area*(v_z_perm-v_z_perm0)    # + = permeate reservoir grew
+variable dV_total equal v_dV_feed+v_dV_perm
+
+# ----- OUTPUT-FILE TAG = the hold length of the first level (as triaxial_compression.lmp) -----
+variable hold_L    delete
+variable tau_cons  delete
+variable hold_raw  delete
+variable hold_want delete
+variable hold_rnd  delete
+variable hold_len  delete
+variable hold_tag  delete
+variable hold_L    equal ${L0_bb}*(1.0-${compressions})
+variable tau_cons  equal $(v_hold_L*v_hold_L/(v_pi_sq*v_Dc_est))
+variable hold_raw  equal $(ceil(v_n_tau_hold*v_tau_cons/v_timestep_prod))
+variable hold_rnd  equal $(ceil(v_hold_raw/v_hold_round)*v_hold_round)
+variable hold_want equal (v_hold_rnd>v_hold_min)*v_hold_rnd+(v_hold_rnd<=v_hold_min)*v_hold_min
+variable hold_len  equal ${hold_auto}*${hold_want}+(1-${hold_auto})*${nsteps}
+variable hold_tag  string $(v_hold_len:%.0f)
+print ">>> reference files tagged _${hold_tag} (= hold length of the first level, strain ${compressions})"
+
+
+# ==========================================================================
+#  PHASE 1.5: PRE-COMPRESSION REFERENCE-STATE (epsilon=0) RECORDING
+# ==========================================================================
+# Shares the chunk/atom computes with the production fixes, so the window is
+# padded to a ref_nfreq epoch boundary before the unfix (lock release), exactly
+# as in triaxial_compression.lmp.  Wet pistons live at P_target throughout.
+print '========================================'
+print 'Phase 1.5: epsilon=0 reference recording (${ref_avg_steps} steps, ref_nfreq=${ref_nfreq})'
+print '========================================'
+velocity piston_dry set 0.0 0.0 0.0
+
+# reference piston loads [dry | feed | perm], block-averaged (the dry preload is P_ref)
+fix ref_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_fp_dry[3] c_fp_feed[3] c_fp_perm[3] ave one &
+    title2 "# TimeStep F_dry F_fluid_feed F_fluid_perm   (reference preload; block-averaged)" &
+    file output_files/piston_data/piston_force_avg_ref_${dataname}_${interaction}_${hold_tag}.dat
+
+fix ref_sigmazz_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmazz_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_virialzz_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_virialzz_solv mode vector file output_files/stress_data/virialzz_solvent_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmaxx_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmaxx_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmayy_poly all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmayy_solv all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmazz_poly_fs all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly_fs mode vector file output_files/stress_data/sigmazz_polymer_fine_support_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmazz_poly_fp all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_poly_fp mode vector file output_files/stress_data/sigmazz_polymer_fine_piston_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmazz_solv_fs all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv_fs mode vector file output_files/stress_data/sigmazz_solvent_fine_support_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_sigmazz_solv_fp all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} c_sigmazz_solv_fp mode vector file output_files/stress_data/sigmazz_solvent_fine_piston_ref_${dataname}_${interaction}_${hold_tag}.dat
+shell mkdir output_files/chemical_potential
+fix ref_dens     all ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_solv_density density/number density/mass file output_files/chemical_potential/solvent_density_z_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_dens_fs  all ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_zf_dens_sup    density/number density/mass file output_files/chemical_potential/solvent_density_z_fine_support_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_dens_fp  all ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_zf_dens_pis    density/number density/mass file output_files/chemical_potential/solvent_density_z_fine_piston_ref_${dataname}_${interaction}_${hold_tag}.dat
+fix ref_P_res all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} v_P_res_feed v_rho_feed v_P_res_perm v_rho_perm &
+    title2 "# TimeStep P_res_feed rho_feed P_res_perm rho_perm" &
+    file output_files/stress_data/pressure_reservoirs_ref_${dataname}_${interaction}_${hold_tag}.dat
+
+dump pairlocal_ref      solvent local  ${ref_nfreq} output_files/pair_data/pairs_ref_${dataname}_${interaction}_${hold_tag}.dump c_ids_local[1] c_ids_local[2] c_ids_local[3] c_ids_local[4] c_pl_local[1] c_pl_local[2] c_pl_local[3]
+dump pairlocal_poly_ref polymer local  ${ref_nfreq} output_files/pair_data/polymer_pairs_ref_${dataname}_${interaction}_${hold_tag}.dump c_ids_local_poly[1] c_ids_local_poly[2] c_ids_local_poly[3] c_ids_local_poly[4] c_pl_local_poly[1] c_pl_local_poly[2] c_pl_local_poly[3]
+dump bondlocal_ref      all     local  ${ref_nfreq} output_files/pair_data/bonds_ref_${dataname}_${interaction}_${hold_tag}.dump c_bnd_ids[1] c_bnd_ids[2] c_bnd_ids[3] c_bnd_local[1] c_bnd_local[2]
+dump traj_ref           gel_system custom ${ref_nfreq} traj_files/traj_ref_${dataname}_${interaction}_${hold_tag}.lammpstrj id type mol x y z
+
+variable ref_run_steps equal (floor(($(step)+${ref_avg_steps}-1)/${ref_nfreq})+1)*${ref_nfreq}-$(step)
+print '>>> Reference window: running ${ref_run_steps} steps (>= ${ref_avg_steps}, aligned to ref_nfreq=${ref_nfreq})'
+run ${ref_run_steps}
+
+unfix ref_piston_force_avg
+undump pairlocal_ref
+undump pairlocal_poly_ref
+undump bondlocal_ref
+undump traj_ref
+unfix ref_sigmazz_poly
+unfix ref_sigmazz_solv
+unfix ref_virialzz_solv
+unfix ref_sigmaxx_poly
+unfix ref_sigmaxx_solv
+unfix ref_sigmayy_poly
+unfix ref_sigmayy_solv
+unfix ref_sigmazz_poly_fs
+unfix ref_sigmazz_poly_fp
+unfix ref_sigmazz_solv_fs
+unfix ref_sigmazz_solv_fp
+unfix ref_dens
+unfix ref_dens_fs
+unfix ref_dens_fp
+unfix ref_P_res
+
+print '>>> Reference recording done.  step=$(step)  gel_strain_bb=$(v_gel_strain_bb:%.4f)  gel_strain_rg=$(v_gel_strain:%.4f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)'
+
+label label_after_ref_rec
+
+
+# ==========================================================================
+#            ONE-TIME SETUP FOR THE STRAIN SWEEP (post-reference)
+# ==========================================================================
+variable gel_strain_pct    equal v_gel_strain*100.0
+variable gel_strain_bb_pct equal v_gel_strain_bb*100.0
+shell mkdir output_files/chemical_potential
+
+velocity piston_dry set 0.0 0.0 0.0
+variable piston_z_now equal c_dry_com[3]
+variable movie_open equal 1
+fix halt_box all halt 1000 v_box_guard > 0.5 error continue
+
+print "############################################################"
+print ">>> STRAIN SWEEP LIST (raw from run_lammps.sh): ${compressions_list}"
+print ">>>   first strain=${compressions}   drive cap=${nsteps_comp}"
+print ">>>   HOLD: auto=${hold_auto} (1=sized per level from tau_1=L^2/(pi^2 D_c))"
+print ">>>         Dc_est=${Dc_est}  n_tau_hold=${n_tau_hold}  hold_min=${hold_min}  flat fallback nsteps=${nsteps}"
+print ">>>   BB reference thickness L0_bb = ${L0_bb}  (strain denominator)"
+print ">>>   feed piston z=$(v_z_feed:%.2f) vs box top $(zhi:%.2f): headroom $(zhi-v_feed_z_top-v_box_guard_gap:%.2f) sigma = strain ~$((zhi-v_feed_z_top-v_box_guard_gap)/v_L0_bb:%.3f) of expelled solvent"
+print ">>>   If the list above reads 'STALE-run_lammps.sh...', only ONE level will run."
+print "############################################################"
+
+
+# ==========================================================================
+#                    COMPRESSION SWEEP LOOP (cumulative)
+# ==========================================================================
+label comp_loop
+
+print "########################################################"
+print "  STRAIN TARGET (cumulative) = ${compressions}"
+print "########################################################"
+
+variable hold_L    delete
+variable tau_cons  delete
+variable hold_raw  delete
+variable hold_want delete
+variable hold_rnd  delete
+variable hold_len  delete
+variable hold_tag  delete
+variable hold_L    equal ${L0_bb}*(1.0-${compressions})
+variable tau_cons  equal $(v_hold_L*v_hold_L/(v_pi_sq*v_Dc_est))
+variable hold_raw  equal $(ceil(v_n_tau_hold*v_tau_cons/v_timestep_prod))
+variable hold_rnd  equal $(ceil(v_hold_raw/v_hold_round)*v_hold_round)
+variable hold_want equal (v_hold_rnd>v_hold_min)*v_hold_rnd+(v_hold_rnd<=v_hold_min)*v_hold_min
+variable hold_len  equal ${hold_auto}*${hold_want}+(1-${hold_auto})*${nsteps}
+variable hold_tag  string $(v_hold_len:%.0f)
+print ">>> [strain=${compressions}] hold sizing: target L_bb=$(v_hold_L:%.2f) sigma  D_c=${Dc_est}  tau_1=$(v_tau_cons:%.1f) tau = $(v_tau_cons/v_timestep_prod:%.0f) steps"
+print ">>> [strain=${compressions}] hold_len=${hold_len} steps (= ${n_tau_hold} tau_1; auto=${hold_auto}, floor=${hold_min}, flat fallback=${nsteps})  ->  files tagged _${hold_tag}_c${compressions}"
+
+# ----- Per-level loggers (span drive + hold).  piston_data columns: [dry | feed | perm] -----
+fix out_piston_pos all print ${strain_freq} "$(step) $(v_z_dry) $(v_z_feed) $(v_z_perm)" &
+    title "# step z_dry z_feed z_perm" &
+    file output_files/piston_data/piston_position_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_piston_vel all print ${strain_freq} "$(step) $(v_vz_dry) $(v_vz_feed) $(v_vz_perm)" &
+    title "# step vz_dry vz_feed vz_perm" &
+    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_piston_force all print ${volume_freq} "$(step) $(c_fp_dry[3]) $(c_fp_feed[3]) $(c_fp_perm[3])" &
+    title "# step F_dry F_fluid_feed F_fluid_perm   (pair force on each sheet, z)" &
+    file output_files/piston_data/piston_force_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_fp_dry[3] c_fp_feed[3] c_fp_perm[3] ave one &
+    title2 "# TimeStep F_dry F_fluid_feed F_fluid_perm   (block-averaged)" &
+    file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix out_piston_pressure_lvl all print ${volume_freq} &
+    "$(step) $(v_P_dry_meas) $(v_P_feed_meas) $(v_P_feed_app) $(v_P_perm_meas) $(v_P_perm_app)" &
+    title "# step P_dry_meas P_feed_meas P_feed_app P_perm_meas P_perm_app" &
+    file output_files/piston_data/piston_pressure_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+# solvent expelled (wet-piston displacement) -> permeation_data
+fix out_expelled all print ${strain_freq} &
+    "$(step) $(v_z_feed) $(v_z_perm) $(v_dV_feed) $(v_dV_perm) $(v_dV_total)" &
+    title "# step z_feed z_perm dV_feed dV_perm dV_total   (solvent expelled since seating, sigma^3; A*dz)" &
+    file output_files/permeation_data/permeation_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_strain_zz all print ${strain_freq} &
+    "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
+    file output_files/stress_data/strain_zz_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_strain_piston all print ${strain_freq} &
+    "$(step) ${L0_gap} $(v_piston_support_gap) $(v_piston_strain)" &
+    file output_files/stress_data/strain_piston_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_gel_strain_thermo all print ${thermo_freq} &
+    ">>> gel_strain = $(v_gel_strain_bb_pct:%.2f) %" screen yes &
+    file output_files/stress_data/gel_strain_log_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix out_gel_vol_bb all print ${strain_freq} "$(step) $(v_gel_vol_bb)" &
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_gel_dims_bb all print ${strain_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
+    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_gel_vol_rg all print ${strain_freq} "$(step) $(v_gel_vol_rg)" &
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_gel_dims_rg all print ${strain_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_box_dims all print ${strain_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_polymer_com all print ${strain_freq} &
+    "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+fix out_gel_edges all print ${strain_freq} &
+    "$(step) $(c_minz) $(c_maxz) $(c_dry_com[3]) $(c_support_com[3])" &
+    file output_files/volume_data/gel_edges_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+
+if "${cont} == 1" then "jump SELF label_skip_drive"
+
+# ----- PHASE 2a: drive the DRY piston to the prescribed cumulative STRAIN target -----
+variable piston_target_z equal ${piston_seat_z}-${compressions}*${L0_bb}
+fix nve_dry piston_dry nve
+velocity piston_dry set 0.0 0.0 -${v_piston_prod}
+fix halt_compress all halt ${strain_freq} v_piston_z_now <= ${piston_target_z} error continue
+variable drive_dump_freq equal floor((${compressions}*${L0_bb}/(${v_piston_prod}*${timestep_prod}))/${num_drive_frames})
+if "${cont} == 0 && ${movie_open} == 1" then "dump_modify traj_setup every ${drive_dump_freq}"
+print ">>> [strain=${compressions}] driving dry piston to z=${piston_target_z} (cap ${nsteps_comp} steps; drive frames every ${drive_dump_freq})..."
+run ${nsteps_comp}
+unfix halt_compress
+if "${cont} == 0 && ${movie_open} == 1" then &
+    "undump traj_setup" &
+    "variable movie_open delete" &
+    "variable movie_open equal 0"
+
+label label_skip_drive
+
+# ----- Freeze the dry piston at this strain for the measurement hold -----
+velocity piston_dry set 0.0 0.0 0.0
+unfix nve_dry
+print ">>> [strain=${compressions}] drive done: gel_strain_bb = $(v_gel_strain_bb:%.4f)  gel_strain_rg = $(v_gel_strain:%.4f)  dry_z = $(c_dry_com[3]:%.2f)  step=$(step)"
+print ">>> [strain=${compressions}] live L_bb=$(v_gel_lz_bb:%.2f) vs target $(v_hold_L:%.2f) sigma (hold_len=${hold_len} steps was sized on the target)"
+print ">>> [strain=${compressions}] bath check: P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f) (applied ${P_target});  expelled so far dV_total=$(v_dV_total:%.1f) sigma^3 = $(v_dV_total/v_area:%.2f) sigma of feed rise"
+
+# ----- per-level output cadences from THIS level's hold -----
+variable nfreq_raw        delete
+variable nrepeat_raw      delete
+variable nr_lo            delete
+variable nrepeat_stress   delete
+variable nevery_stress    delete
+variable nfreq_stress     delete
+variable dump_freq_prod   delete
+variable nfreq_widom_dump delete
+variable nfreq_raw        equal floor(${hold_len}/v_num_stress_curves)
+variable nrepeat_raw      equal floor(v_nfreq_raw/v_nevery_target)
+variable nr_lo            equal (v_nrepeat_raw>v_nrepeat_min)*v_nrepeat_raw+(v_nrepeat_raw<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress   equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepeat_max)*v_nrepeat_max
+variable nevery_stress    equal floor(v_nfreq_raw/v_nrepeat_stress)
+variable nfreq_stress     equal v_nevery_stress*v_nrepeat_stress
+variable dump_freq_prod   equal floor(${hold_len}/v_num_dump_frames)
+variable nfreq_widom_dump equal floor(${hold_len}/v_num_widom_frames)
+print ">>> [strain=${compressions}] stress cadence: nevery=${nevery_stress} nrepeat=${nrepeat_stress} nfreq=${nfreq_stress}  |  movie every ${dump_freq_prod}"
+
+variable uz_poly delete
+uncompute displace_poly
+compute displace_poly polymer displace/atom
+variable uz_poly atom c_displace_poly[3]
+
+# ----- PHASE 2b: production HOLD -- chunk-locked averaging fixes created HERE -----
+dump traj_flow gel_system custom ${dump_freq_prod} &
+    traj_files/gel_flow_${dataname}_${interaction}_${hold_tag}_c${compressions}.lammpstrj &
+    id type mol x y z
+dump pairlocal_dump solvent local ${nfreq_stress} &
+    output_files/pair_data/pairs_${dataname}_${interaction}_${hold_tag}_c${compressions}.dump &
+    c_ids_local[1] c_ids_local[2] c_ids_local[3] c_ids_local[4] &
+    c_pl_local[1] c_pl_local[2] c_pl_local[3]
+dump traj_stress_sync gel_system custom ${nfreq_stress} &
+    traj_files/traj_stress_${dataname}_${interaction}_${hold_tag}_c${compressions}.lammpstrj &
+    id type mol x y z
+dump pairlocal_poly polymer local ${nfreq_stress} &
+    output_files/pair_data/polymer_pairs_${dataname}_${interaction}_${hold_tag}_c${compressions}.dump &
+    c_ids_local_poly[1] c_ids_local_poly[2] c_ids_local_poly[3] c_ids_local_poly[4] &
+    c_pl_local_poly[1] c_pl_local_poly[2] c_pl_local_poly[3]
+dump bondlocal_dump all local ${nfreq_stress} &
+    output_files/pair_data/bonds_${dataname}_${interaction}_${hold_tag}_c${compressions}.dump &
+    c_bnd_ids[1] c_bnd_ids[2] c_bnd_ids[3] c_bnd_local[1] c_bnd_local[2]
+if "${skip_widom} == 0" then &
+    "dump widom_traj all custom ${nfreq_widom_dump} traj_files/widom_${dataname}_${interaction}_${hold_tag}_c${compressions}.lammpstrj id type x y z"
+
+fix avg_stress_x_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_x_polymer mode vector file output_files/stress_data/stress_x_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_stress_y_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_y_polymer mode vector file output_files/stress_data/stress_y_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_stress_z_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_polymer mode vector file output_files/stress_data/stress_z_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_stress_x_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_x_solvent mode vector file output_files/stress_data/stress_x_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_stress_y_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_y_solvent mode vector file output_files/stress_data/stress_y_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_stress_z_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_solvent mode vector file output_files/stress_data/stress_z_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_stress_z_pist all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_pdry mode vector file output_files/stress_data/stress_z_piston_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_stress_z_pfeed all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_pfeed mode vector file output_files/stress_data/stress_z_piston_feed_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_stress_z_pperm all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_pperm mode vector file output_files/stress_data/stress_z_piston_perm_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_stress_z_supp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_press_z_support mode vector file output_files/stress_data/stress_z_support_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+
+fix avg_sigmazz_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_sigmazz_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_virialzz_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_virialzz_solv mode vector file output_files/stress_data/virialzz_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_sigmaxx_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_sigmaxx_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_sigmayy_poly all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_sigmayy_solv all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_sigmazz_poly_fs all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_poly_fs mode vector file output_files/stress_data/sigmazz_polymer_fine_support_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_sigmazz_poly_fp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_poly_fp mode vector file output_files/stress_data/sigmazz_polymer_fine_piston_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_sigmazz_solv_fs all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_solv_fs mode vector file output_files/stress_data/sigmazz_solvent_fine_support_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_sigmazz_solv_fp all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    c_sigmazz_solv_fp mode vector file output_files/stress_data/sigmazz_solvent_fine_piston_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+
+fix avg_solv_density all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_solv_density density/number density/mass &
+    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_solv_density_fs all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_zf_dens_sup density/number density/mass &
+    file output_files/chemical_potential/solvent_density_z_fine_support_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_solv_density_fp all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_zf_dens_pis density/number density/mass &
+    file output_files/chemical_potential/solvent_density_z_fine_piston_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_solv_density_ffp all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_zf_dens_fp density/number density/mass &
+    file output_files/chemical_potential/solvent_density_z_fine_piston_feed_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_solv_density_fpp all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_zf_dens_pp density/number density/mass &
+    file output_files/chemical_potential/solvent_density_z_fine_piston_perm_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_P_res all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} v_P_res_feed v_rho_feed v_P_res_perm v_rho_perm &
+    title2 "# TimeStep P_res_feed rho_feed P_res_perm rho_perm" &
+    file output_files/stress_data/pressure_reservoirs_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+
+fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_polymer v_uz_poly &
+    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+
+variable hold_steps equal (floor(($(step)+${hold_len}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print ">>> [strain=${compressions}] measurement HOLD (dry piston frozen, stress relaxes) for ${hold_steps} steps (>= hold_len=${hold_len}, aligned to nfreq_stress=${nfreq_stress})"
+run ${hold_steps}
+
+# ----- Teardown this level's hold fixes/dumps -----
+unfix avg_disp_z_poly
+unfix avg_P_res
+unfix avg_solv_density_fpp
+unfix avg_solv_density_ffp
+unfix avg_solv_density_fp
+unfix avg_solv_density_fs
+unfix avg_solv_density
+unfix avg_sigmazz_solv_fp
+unfix avg_sigmazz_solv_fs
+unfix avg_sigmazz_poly_fp
+unfix avg_sigmazz_poly_fs
+unfix avg_sigmayy_solv
+unfix avg_sigmayy_poly
+unfix avg_sigmaxx_solv
+unfix avg_sigmaxx_poly
+unfix avg_virialzz_solv
+unfix avg_sigmazz_solv
+unfix avg_sigmazz_poly
+unfix avg_stress_z_supp
+unfix avg_stress_z_pperm
+unfix avg_stress_z_pfeed
+unfix avg_stress_z_pist
+unfix avg_stress_z_solv
+unfix avg_stress_y_solv
+unfix avg_stress_x_solv
+unfix avg_stress_z_poly
+unfix avg_stress_y_poly
+unfix avg_stress_x_poly
+if "${skip_widom} == 0" then "undump widom_traj"
+undump bondlocal_dump
+undump pairlocal_poly
+undump traj_stress_sync
+undump pairlocal_dump
+undump traj_flow
+
+# ----- Teardown the loading+hold loggers -----
+unfix out_gel_edges
+unfix out_polymer_com
+unfix out_box_dims
+unfix out_gel_dims_rg
+unfix out_gel_vol_rg
+unfix out_gel_dims_bb
+unfix out_gel_vol_bb
+unfix out_gel_strain_thermo
+unfix out_strain_piston
+unfix out_strain_zz
+unfix out_expelled
+unfix out_piston_pressure_lvl
+unfix out_piston_force_avg
+unfix out_piston_force
+unfix out_piston_vel
+unfix out_piston_pos
+
+print ">>> Completed strain=${compressions}:  gel_strain_bb = $(v_gel_strain_bb:%.4f)  gel_strain_rg = $(v_gel_strain:%.4f)  step=$(step)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
+
+variable hold_steps delete
+variable piston_target_z delete
+variable drive_dump_freq delete
+
+next compressions
+jump SELF comp_loop
+
+
+# ==========================================================================
+#                            FINAL STATE
+# ==========================================================================
+print "========================================"
+print "Triaxial compression (two-piston) stress-strain sweep complete"
+print "  Final gel_strain: $(v_gel_strain:%.4f)   expelled solvent dV_total=$(v_dV_total:%.1f) sigma^3"
+print "  Final box: $(lx:%.3f) x $(ly:%.3f) x $(lz:%.3f)"
+print "========================================"
+
+unfix halt_box
+unfix out_piston_pressure
+unfix out_piston_pos_run
+unfix stress_aniso_output
+unfix trk_vol_bb
+unfix trk_vol_rg
+unfix trk_dims_rg
+unfix trk_box
+
+variable outfile string "final_tricomp_${dataname}_${interaction}_${hold_tag}"
+write_restart ${outfile}.restart
+write_data ${outfile}.data
