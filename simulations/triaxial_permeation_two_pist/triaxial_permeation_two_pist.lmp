@@ -17,6 +17,7 @@
 # z-settle of the two reservoirs, NOT a swelling equilibration.
 # Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,
 #   press_target, dp_piston, piston_mass, c_pist_frac, npt_piston_steps, settle_halt
+#   (no cont / continue_sim.sh support: every run is a fresh start)
 #
 # Atom types: 1=crosslink, 2=chain bead, 3=solvent, 4=support (frozen),
 #             5=feed piston (P_feed), 6=permeate piston (P_perm), 7=dry piston
@@ -72,14 +73,8 @@
 #                              PARAMETERS
 # ==========================================================================
 
-# ----- Continuation flag -----
-# 0 = fresh start (default).  1 = continuation via continue_sim.sh -- NOT
-# SUPPORTED YET for the two-piston decks (2026-09): the labels/jumps below are
-# kept so it can be wired later, but a cont=1 run stops here.
-variable cont index 0
-if "${cont} == 1" then &
-    "print 'ERROR: cont=1 (continue_sim.sh) is unsupported by triaxial_permeation_two_pist.lmp yet (2026-09)'" &
-    "quit 1"
+# No continuation (cont=1 / continue_sim.sh) support in the two-piston decks --
+# every run is a fresh start from the converter's data file (2026-09-17).
 
 # ----- Physical Parameters -----
 variable sigma         equal 1.0
@@ -406,9 +401,6 @@ print "========================================"
 reset_timestep 0
 timestep ${timestep_prod}
 
-# cont=1 plumbing (unreachable today: cont=1 quits at the top)
-if "${cont} == 1" then "jump SELF label_after_phase0"
-
 # Brief minimize: the converter placed the new pistons 1 sigma outside the solvent
 # and the padded solvent at >= 0.8 sigma from everything; this relaxes those.
 minimize 1.0e-4 1.0e-6 ${min_iter} 10000
@@ -426,7 +418,6 @@ run ${phase0_steps}
 unfix lang_p0
 print ">>> Post-Phase-0: T=$(c_mobile_temp)  (press is meaningless with vacuum in the box)"
 
-label label_after_phase0
 run 0    # initialise every compute for the prints below
 
 # ----- Diagnostics: gel extent, reservoirs -----
@@ -590,8 +581,6 @@ fix out_strain_zz all print ${volume_freq} &
     "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
     file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}.dat screen no
 
-label label_after_phase05
-
 
 # ==========================================================================
 #  PHASE 1.5: ZERO-FLUX REFERENCE-STATE RECORDING (both wet pistons live)
@@ -600,7 +589,6 @@ label label_after_phase05
 # thermostat, padded to a ref_nfreq epoch so the chunk/atom locks release before
 # the unfix.  Both wet pistons stay live at P_target (P_feed = P_perm), so this is
 # the equilibrium two-reservoir state the production drive starts from.
-if "${cont} == 1" then "jump SELF label_after_ref_rec"
 
 unfix lang_settle
 unfix nve_mob
@@ -689,8 +677,6 @@ uncompute chunk_zr_dens
 
 print '>>> Reference recording done.  step=$(step)  gel_strain=$(v_gel_strain)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)'
 
-label label_after_ref_rec
-
 
 # ==========================================================================
 #              PHASE 2: PRODUCTION -- P_feed ramp, then constant dP drive
@@ -723,7 +709,7 @@ compute displace_poly polymer displace/atom
 variable uz_poly atom c_displace_poly[3]
 
 # ----- Hand off the setup trajectory to the production trajectory -----
-if "${cont} == 0" then "undump traj_setup"
+undump traj_setup
 dump traj_flow gel_system custom ${dump_freq_prod} &
     traj_files/gel_flow_${dataname}_${interaction}_${nsteps}.lammpstrj &
     id type mol x y z

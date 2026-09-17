@@ -18,6 +18,7 @@
 # Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,
 #   compressions (+ compressions_list), hold_auto, press_target, piston_mass,
 #   c_pist_frac, npt_piston_steps, settle_halt
+#   (no cont / continue_sim.sh support: every run is a fresh start)
 #
 # Atom types: 1=crosslink, 2=chain bead, 3=solvent, 4=support (frozen),
 #             5=feed piston (P_target), 6=permeate piston (P_target),
@@ -64,11 +65,8 @@
 #                              PARAMETERS
 # ==========================================================================
 
-# ----- Continuation flag (cont=1 UNSUPPORTED yet for the two-piston decks, 2026-09) -----
-variable cont index 0
-if "${cont} == 1" then &
-    "print 'ERROR: cont=1 (continue_sim.sh) is unsupported by triaxial_compression_two_pist.lmp yet (2026-09)'" &
-    "quit 1"
+# No continuation (cont=1 / continue_sim.sh) support in the two-piston decks --
+# every run is a fresh start from the converter's data file (2026-09-17).
 
 # ----- Physical Parameters -----
 variable sigma         equal 1.0
@@ -384,8 +382,6 @@ print "========================================"
 reset_timestep 0
 timestep ${timestep_prod}
 
-if "${cont} == 1" then "jump SELF label_after_phase05"
-
 # setup movie: spans Phase 0 + settle + seating + settle + reference (+ first drive)
 variable setup_span      equal v_phase0_steps+v_npt_piston_steps+v_t_seat+v_nsteps_settle+v_ref_avg_steps
 variable dump_freq_setup equal floor(v_setup_span/v_num_dump_frames)
@@ -503,7 +499,6 @@ unfix settle_win
 print ">>> settle end (step $(step)): z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  vz_feed=$(v_vz_feed:%.2e) vz_perm=$(v_vz_perm:%.2e)"
 print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f) (applied ${P_target});  L_feed=$(v_L_feed:%.2f) L_perm=$(v_L_perm:%.2f)  T=$(c_mobile_temp:%.4f)"
 
-label label_after_phase05
 run 0
 
 variable gel_lz_initial equal $(v_gel_lz_rg)
@@ -654,8 +649,6 @@ variable box_guard equal (v_feed_z_top>=zhi-v_box_guard_gap)+(v_perm_z_bot<=zlo+
 
 print ">>> Phase 2 prep done: dry_z=$(v_z_dry:%.2f)  gel_top_rg=$(v_gel_top_rg:%.2f)  gel_top_raw=$(c_maxz:%.2f)  support_z=$(c_support_com[3]:%.2f)"
 
-if "${cont} == 1" then "jump SELF label_after_ref_rec"
-
 
 # ==========================================================================
 #   PHASE 1.25: SYMMETRIC SEATING -- DRY PISTON DOWN + SUPPORT UP, RECORD L0 (BB)
@@ -798,8 +791,6 @@ unfix ref_P_res
 
 print '>>> Reference recording done.  step=$(step)  gel_strain_bb=$(v_gel_strain_bb:%.4f)  gel_strain_rg=$(v_gel_strain:%.4f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)'
 
-label label_after_ref_rec
-
 
 # ==========================================================================
 #            ONE-TIME SETUP FOR THE STRAIN SWEEP (post-reference)
@@ -899,24 +890,20 @@ fix out_gel_edges all print ${strain_freq} &
     "$(step) $(c_minz) $(c_maxz) $(c_dry_com[3]) $(c_support_com[3])" &
     file output_files/volume_data/gel_edges_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 
-if "${cont} == 1" then "jump SELF label_skip_drive"
-
 # ----- PHASE 2a: drive the DRY piston to the prescribed cumulative STRAIN target -----
 variable piston_target_z equal ${piston_seat_z}-${compressions}*${L0_bb}
 fix nve_dry piston_dry nve
 velocity piston_dry set 0.0 0.0 -${v_piston_prod}
 fix halt_compress all halt ${strain_freq} v_piston_z_now <= ${piston_target_z} error continue
 variable drive_dump_freq equal floor((${compressions}*${L0_bb}/(${v_piston_prod}*${timestep_prod}))/${num_drive_frames})
-if "${cont} == 0 && ${movie_open} == 1" then "dump_modify traj_setup every ${drive_dump_freq}"
+if "${movie_open} == 1" then "dump_modify traj_setup every ${drive_dump_freq}"
 print ">>> [strain=${compressions}] driving dry piston to z=${piston_target_z} (cap ${nsteps_comp} steps; drive frames every ${drive_dump_freq})..."
 run ${nsteps_comp}
 unfix halt_compress
-if "${cont} == 0 && ${movie_open} == 1" then &
+if "${movie_open} == 1" then &
     "undump traj_setup" &
     "variable movie_open delete" &
     "variable movie_open equal 0"
-
-label label_skip_drive
 
 # ----- Freeze the dry piston at this strain for the measurement hold -----
 velocity piston_dry set 0.0 0.0 0.0

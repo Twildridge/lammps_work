@@ -541,3 +541,12 @@ Converted two-piston (feed/permeate) data file  [2026-09-16 14:31, slab_two_pist
   Sheets: 23316 beads each (support pattern, spacing 0.2259); piston_clearance 1.0, dry_piston_frac 0.5, seed 42
   Crosslinks: 15066   Chain beads: 89424   Solvent: 90816   Support: 23316   Feed piston: 23316   Permeate piston: 23316   Dry piston: 23316
   Total atoms: 288570   Total bonds: 119232   Output: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000_two_pist.data
+
+Converted two-piston (feed/permeate) data file  [2026-09-17 11:54, slab_two_pistons.py]:
+  Input: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002.data
+  Box: 47.9701 x 47.8741 x 186.576   (lx, ly unchanged from the input; zlo = 0)
+  z: perm piston 18.73 | support 29.73 | gel BB [31.43, 157.84] (L_bb 126.41, L_rg 121.81) | dry piston 164.71 | feed piston 171.58
+  Reservoirs: permeate 10.0 sigma (padded +4972 beads at rho=0.4696), feed 13.73 sigma; margins perm 18.7 / feed 15.0 sigma (vacuum)
+  Sheets: 23316 beads each (support pattern, spacing 0.2387); piston_clearance 1.0, dry_piston_frac 0.5, seed 42
+  Crosslinks: 15066   Chain beads: 89424   Solvent: 92567   Support: 23316   Feed piston: 23316   Permeate piston: 23316   Dry piston: 23316
+  Total atoms: 290321   Total bonds: 119232   Output: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist.data

@@ -63,7 +63,8 @@ Knobs exported by the `*_two_pist.batch` files and forwarded by `run_lammps.sh` 
 Deck-only knobs (`-var` override, index-style): `K_solv` (bulk modulus for the damping estimate, 10),
 `min_iter`, `phase0_steps`, `ref_avg_steps`, `ref_nfreq`, `ramp_steps`, `t_seat`, `nsteps_settle`,
 `v_piston_prod`, `volume_freq`, `thermo_freq`, `strain_freq`, `flux_freq` — handy for short smoke tests.
-`cont=1` (`continue_sim.sh`) is **not supported yet** for the two-piston decks: they print an error and quit.
+The two-piston decks have no continuation path (`continue_sim.sh` does not apply): every run is a fresh start
+from the converter's data file.
 
 ### 5c. Editing the batch file
 
@@ -119,9 +120,8 @@ tail -f ~/Documents/lammps_runs/triaxial_compression_*/log.lammps
 
 `continue_sim.sh` picks up from where a finished run left off — no restart files, no editing batch scripts. It reads the SLURM output file to find the original working directory and auto-detects all run parameters from there. This is a **real restart** (skip setup, keep going) — contrast with editing `NSTEPS` in a `.batch` file and resubmitting, which is a fresh job that reruns all setup from scratch (see [§5c above](#5c-editing-the-batch-file)).
 
-**When to use it:** you want more steps from a completed run. Not (yet) for the two-piston decks
-(`triaxial_*_two_pist`, 2026-09-16: `cont=1` quits with a message; the labels are in place to wire it later).
-As of 2026-08-06, supported for `slab_with_support`, `solvent_pure`, `polymer_pure`, `triaxial_compression`, `triaxial_permeation`, and `shear_slab`. Not supported: `solvent_phase`/`polymer_phase` (their internal P-sweeps complete in one invocation — "continuing" isn't a meaningful operation) or the `volmix_sweep` pipeline (its own SLURM-chained orchestration). `compress_slab` is a separate project — not wired up here.
+**When to use it:** you want more steps from a completed run. Not for the two-piston decks
+(`triaxial_*_two_pist`, which are always fresh starts). As of 2026-08-06, supported for `slab_with_support`, `solvent_pure`, `polymer_pure`, `triaxial_compression`, `triaxial_permeation`, and `shear_slab`. Not supported: `solvent_phase`/`polymer_phase` (their internal P-sweeps complete in one invocation — "continuing" isn't a meaningful operation) or the `volmix_sweep` pipeline (its own SLURM-chained orchestration). `compress_slab` is a separate project — not wired up here.
 
 #### What it does per folder
 
