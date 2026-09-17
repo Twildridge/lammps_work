@@ -6,9 +6,9 @@ Reads piston position and velocity from piston_data folder.
 Multi-piston aware (2026-09-16): the two-piston decks (triaxial_*_two_pist)
 write ONE COLUMN SET PER PISTON, e.g.
     # step z_feed z_perm            (permeation)
-    # step z_dry z_feed z_perm      (compression)
+    # step z_load z_feed z_perm      (compression)
 and a per-piston pressure log piston_pressure_<stem>.dat
-    # step P_dry_meas P_feed_meas P_feed_app P_perm_meas P_perm_app
+    # step P_load_meas P_feed_meas P_feed_app P_perm_meas P_perm_app
 plus permeation_data/permeation_<stem>.dat (permeation: Q_perm vs time;
 compression: solvent expelled dV_total).  When more than one piston column is
 present, one panel row is drawn per quantity with one line per piston, and the
@@ -77,7 +77,7 @@ def read_table(filepath):
 
 
 def piston_labels(names, ncol, prefix):
-    """Piston labels from header names like z_feed / vz_perm / z_dry."""
+    """Piston labels from header names like z_feed / vz_perm / z_load."""
     n = ncol - 1
     if names is not None and len(names) == ncol:
         return [nm[len(prefix):] if nm.startswith(prefix) else nm for nm in names[1:]]

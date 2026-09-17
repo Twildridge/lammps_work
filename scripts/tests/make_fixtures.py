@@ -8,7 +8,7 @@ output trees:
   <root>/two_piston_perm/   a triaxial_permeation_two_pist run (feed | perm columns,
                             piston_pressure, permeation_data/permeation)
   <root>/two_piston_comp/   a triaxial_compression_two_pist run, levels c0.05 c0.10
-                            (dry | feed | perm columns, _ref files, disp_z_polymer, ...)
+                            (load | feed | perm columns, _ref files, disp_z_polymer, ...)
   <root>/flow_data_local/{compression,permeation}/<RUN_ID>/  +  traj_files.nosync/
                             the same two-piston files laid out as the notebooks expect
                             (flat, plus a 2-frame traj_ref / traj_stress for the box header)
@@ -25,7 +25,7 @@ rng = np.random.default_rng(7)
 DATANAME = 'fixture_slab'
 INTER = '1.0_1.0'
 LX, LY, LZ = 40.0, 40.0, 200.0
-Z_SUP, Z_GEL_LO, Z_GEL_HI, Z_DRY, Z_FEED, Z_PERM = 30.0, 45.0, 165.0, 168.0, 185.0, 20.0
+Z_SUP, Z_GEL_LO, Z_GEL_HI, Z_LOAD, Z_FEED, Z_PERM = 30.0, 45.0, 165.0, 168.0, 185.0, 20.0
 BW = 2.0
 NB = int(LZ / BW)
 ZC = np.arange(NB) * BW + BW / 2
@@ -253,13 +253,13 @@ def two_piston_comp(root, levels=('0.05', '0.10')):
         write_ave_time_vector(sd / f'sigma{comp}_solvent_ref_{rst}.dat', 'ref', f'c_sigma{comp}_solv', rsteps, ref[comp][1])
     write_ave_chunk(cp / f'solvent_density_z_ref_{rst}.dat', 'ref_dens', rsteps, density_cols(rsteps), ['density/number', 'density/mass'])
     Fd0 = 0.002 * LX * LY + rng.normal(0, 20, 4)
-    write_print(pd_ / f'piston_force_avg_ref_{rst}.dat', '# Time-averaged data for fix ref_piston_force_avg\n# TimeStep F_dry F_fluid_feed F_fluid_perm   (reference preload; block-averaged)',
+    write_print(pd_ / f'piston_force_avg_ref_{rst}.dat', '# Time-averaged data for fix ref_piston_force_avg\n# TimeStep F_load F_fluid_feed F_fluid_perm   (reference preload; block-averaged)',
                 np.column_stack([rsteps, Fd0, 1.5 * LX * LY + rng.normal(0, 30, 4), -1.5 * LX * LY + rng.normal(0, 30, 4)]))
-    write_traj(r / 'traj_files' / f'traj_ref_{rst}.lammpstrj', rsteps[:2], {4: Z_SUP, 5: Z_FEED, 6: Z_PERM, 7: Z_DRY})
+    write_traj(r / 'traj_files' / f'traj_ref_{rst}.lammpstrj', rsteps[:2], {4: Z_SUP, 5: Z_FEED, 6: Z_PERM, 7: Z_LOAD})
     write_print(vd / f'box_dimensions_{rst}.dat', None, np.column_stack([rsteps, LX + 0 * rsteps, LY + 0 * rsteps, LZ + 0 * rsteps]))
-    write_print(pd_ / f'piston_pressure_{rst}.dat', '# step P_dry_meas P_feed_meas P_feed_app P_perm_meas P_perm_app',
+    write_print(pd_ / f'piston_pressure_{rst}.dat', '# step P_load_meas P_feed_meas P_feed_app P_perm_meas P_perm_app',
                 np.column_stack([rsteps, 0.002 + 0 * rsteps, 1.5 + rng.normal(0, 0.01, 4), 1.5 + 0 * rsteps, 1.5 + rng.normal(0, 0.01, 4), 1.5 + 0 * rsteps]))
-    write_print(pd_ / f'piston_position_run_{rst}.dat', '# step z_dry z_feed z_perm', np.column_stack([rsteps, Z_DRY + 0 * rsteps, Z_FEED + 0 * rsteps, Z_PERM + 0 * rsteps]))
+    write_print(pd_ / f'piston_position_run_{rst}.dat', '# step z_load z_feed z_perm', np.column_stack([rsteps, Z_LOAD + 0 * rsteps, Z_FEED + 0 * rsteps, Z_PERM + 0 * rsteps]))
     t_start = 2000
     L0 = 120.0
     for li, lvl in enumerate(levels):
@@ -268,17 +268,17 @@ def two_piston_comp(root, levels=('0.05', '0.10')):
         steps = np.arange(t_start, t_start + hold + 1, 300)
         n = len(steps)
         drive = np.minimum(1.0, (steps - t_start) / 800.0)
-        zd = Z_DRY - eps * L0 * drive
+        zd = Z_LOAD - eps * L0 * drive
         zfeed = Z_FEED + eps * L0 * 0.6 * drive
         zperm = Z_PERM - eps * L0 * 0.4 * drive
-        write_print(pd_ / f'piston_position_{st}.dat', '# step z_dry z_feed z_perm', np.column_stack([steps, zd, zfeed, zperm]))
-        write_print(pd_ / f'piston_velocity_{st}.dat', '# step vz_dry vz_feed vz_perm', np.column_stack([steps, -0.04 * (drive < 1), 0 * steps, 0 * steps]))
+        write_print(pd_ / f'piston_position_{st}.dat', '# step z_load z_feed z_perm', np.column_stack([steps, zd, zfeed, zperm]))
+        write_print(pd_ / f'piston_velocity_{st}.dat', '# step vz_load vz_feed vz_perm', np.column_stack([steps, -0.04 * (drive < 1), 0 * steps, 0 * steps]))
         Fd = (0.3 * eps * (1 - 0.5 * np.exp(-(steps - t_start) / 1500)) * LX * LY) * (drive >= 1) + rng.normal(0, 15, n)
         Ff = 1.5 * LX * LY + rng.normal(0, 30, n)
         Fp = -1.5 * LX * LY + rng.normal(0, 30, n)
-        write_print(pd_ / f'piston_force_{st}.dat', '# step F_dry F_fluid_feed F_fluid_perm   (pair force on each sheet, z)', np.column_stack([steps, Fd, Ff, Fp]))
-        write_print(pd_ / f'piston_force_avg_{st}.dat', '# Time-averaged data for fix out_piston_force_avg\n# TimeStep F_dry F_fluid_feed F_fluid_perm   (block-averaged)', np.column_stack([steps, Fd, Ff, Fp]))
-        write_print(pd_ / f'piston_pressure_{st}.dat', '# step P_dry_meas P_feed_meas P_feed_app P_perm_meas P_perm_app',
+        write_print(pd_ / f'piston_force_{st}.dat', '# step F_load F_fluid_feed F_fluid_perm   (pair force on each sheet, z)', np.column_stack([steps, Fd, Ff, Fp]))
+        write_print(pd_ / f'piston_force_avg_{st}.dat', '# Time-averaged data for fix out_piston_force_avg\n# TimeStep F_load F_fluid_feed F_fluid_perm   (block-averaged)', np.column_stack([steps, Fd, Ff, Fp]))
+        write_print(pd_ / f'piston_pressure_{st}.dat', '# step P_load_meas P_feed_meas P_feed_app P_perm_meas P_perm_app',
                     np.column_stack([steps, Fd / (LX * LY), Ff / (LX * LY), 1.5 + 0 * steps, -Fp / (LX * LY), 1.5 + 0 * steps]))
         write_print(pm / f'permeation_{st}.dat', '# step z_feed z_perm dV_feed dV_perm dV_total   (solvent expelled since seating, sigma^3; A*dz)',
                     np.column_stack([steps, zfeed, zperm, LX * LY * (zfeed - Z_FEED), -LX * LY * (zperm - Z_PERM), LX * LY * ((zfeed - Z_FEED) - (zperm - Z_PERM))]))
@@ -302,7 +302,7 @@ def two_piston_comp(root, levels=('0.05', '0.10')):
             u = np.where(gel_mask(), -eps * L0 * (ZC - Z_GEL_LO) / L0 * (1 - np.exp(-(k + 1) / 4.0)), 0.0)
             disp.append(np.column_stack([np.where(gel_mask(), 300, 0), u]))
         write_ave_chunk(dd / f'disp_z_polymer_{st}.dat', 'avg_disp_z_poly', steps, disp, ['v_uz_poly'])
-        write_traj(r / 'traj_files' / f'traj_stress_{st}.lammpstrj', steps[:2], {4: Z_SUP, 5: Z_FEED, 6: Z_PERM, 7: Z_DRY - eps * L0})
+        write_traj(r / 'traj_files' / f'traj_stress_{st}.lammpstrj', steps[:2], {4: Z_SUP, 5: Z_FEED, 6: Z_PERM, 7: Z_LOAD - eps * L0})
         for dim in ('x', 'y', 'z'):
             comps = ['polymer', 'solvent'] + (['piston', 'piston_feed', 'piston_perm', 'support'] if dim == 'z' else [])
             nb = int((LX if dim == 'x' else LY if dim == 'y' else LZ) / BW)

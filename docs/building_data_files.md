@@ -20,7 +20,7 @@ Before running a gel simulation you need a `.data` file — a text file describi
 | `split_gel_slab.ipynb` | Splits a slab into polymer-only and solvent-only files | Isolated component analysis |
 | `pure_polymer.ipynb` | Pure polymer box (no solvent) | EOS and baseline runs |
 | `pure_solvent_1.ipynb` | Pure solvent box | EOS and solvent calibration |
-| `slab_two_pistons.ipynb` (+ `slab_two_pistons.py`) | **CONVERTER**: an *equilibrated* `slab_with_support` periodic snapshot → the two-piston (feed / permeate) geometry: old piston deleted, permeate reservoir padded to ~10 σ, three new sheets (feed piston type 5, permeate piston type 6, dry piston type 7), vacuum margins, 7 atom types | **Required input for `triaxial_permeation_two_pist` / `triaxial_compression_two_pist`** (2026-09-16) |
+| `slab_two_pistons.ipynb` (+ `slab_two_pistons.py`) | **CONVERTER**: an *equilibrated* `slab_with_support` periodic snapshot → the two-piston (feed / permeate) geometry: old piston deleted, permeate reservoir padded to ~10 σ, three new sheets (feed piston type 5, permeate piston type 6, load piston type 7), vacuum margins, 7 atom types | **Required input for `triaxial_permeation_two_pist` / `triaxial_compression_two_pist`** (2026-09-16) |
 
 ### The two-piston converter (2026-09-16)
 
@@ -37,7 +37,7 @@ a `.info.json` sidecar with every geometry number, a z-density histogram PNG, an
 `slab_data_file_info.md`.  Knobs (Config cell / CLI): `permeate_thickness` (10 σ), `feed_thickness` (None =
 keep), `margin_perm` (feed + 5 σ), `margin_feed` (15 σ — the feed piston rises by ~strain·L₀ under
 compression, so raise it for sweeps beyond ε ≈ 0.10; the converter prints the limit), `piston_clearance`,
-`dry_piston_frac`, `sheet_source` (`support` copies the input sheet's pattern, 23,316 beads; `hex` rebuilds
+`load_piston_frac`, `sheet_source` (`support` copies the input sheet's pattern, 23,316 beads; `hex` rebuilds
 at `sheet_spacing`).  If the 14000002 file is not on your Mac the notebook falls back to the 14000000 snapshot
 as a **smoke-test input only** and says so.
 

@@ -99,7 +99,7 @@ def get_box_dims(folder, dataname):
 def piston_sheet_files(data_dir, dim, dataname):
     """[(label, path)] of every piston partial-stress file for this dim: the
     one-piston stress_<dim>_piston_<stem>.dat plus the two-piston sheets
-    stress_<dim>_piston_<sheet>_<stem>.dat (sheet = feed / perm / dry), 2026-09-16."""
+    stress_<dim>_piston_<sheet>_<stem>.dat (sheet = feed / perm / load), 2026-09-16."""
     out = []
     one = os.path.join(data_dir, f'stress_{dim}_piston_{dataname}.dat')
     if os.path.exists(one):

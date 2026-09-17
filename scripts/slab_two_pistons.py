@@ -29,7 +29,7 @@ figure rotated by 90 degrees):
     | permeate reservoir  = existing below-support solvent, PADDED to permeate_thickness
     | support sheet     (type 4, frozen, WCA to polymer only -- unchanged)
     | gap | gel slab (types 1,2 + internal solvent) | feed reservoir (existing top solvent)
-    |     [dry piston, type 7, parked at dry_piston_frac of the feed reservoir height]
+    |     [load piston, type 7, parked at load_piston_frac of the feed reservoir height]
     | feed piston       (type 5, P_feed)                 <- NEW sheet
     | vacuum margin (feed side, margin_feed)
     zhi
@@ -40,7 +40,7 @@ input up to one uniform z shift (and the z "roll", see unwrap_z, which is a no-o
 for the standard input).
 
 Atom types written (7): 1 crosslink, 2 chain bead, 3 solvent, 4 support,
-5 feed piston, 6 permeate piston, 7 dry piston.  Masses are 1.0 for all seven;
+5 feed piston, 6 permeate piston, 7 load piston.  Masses are 1.0 for all seven;
 the decks override 5/6/7 with `mass 5 ${piston_mass}` etc. after read_data so one
 data file serves any piston mass.
 
@@ -52,7 +52,7 @@ Usage (CLI)
 -----------
   python3 slab_two_pistons.py --input <final_config_...data> [--output <...>]
         [--permeate-thickness 10] [--feed-thickness None] [--margin-perm auto]
-        [--margin-feed 15] [--piston-clearance 1.0] [--dry-piston-frac 0.5]
+        [--margin-feed 15] [--piston-clearance 1.0] [--load-piston-frac 0.5]
         [--sheet-source support|hex] [--sheet-spacing 0.2] [--seed 42] [--no-log]
   The validation (self-check) always runs; --self-check-only validates an
   existing output file without rewriting it.
@@ -83,12 +83,12 @@ except ImportError:  # pragma: no cover
 # Constants (mirror the decks)
 # ---------------------------------------------------------------------------
 T_CROSSLINK, T_CHAIN, T_SOLVENT, T_SUPPORT = 1, 2, 3, 4
-T_FEED, T_PERM, T_DRY = 5, 6, 7
+T_FEED, T_PERM, T_LOAD = 5, 6, 7
 POLYMER_TYPES = (T_CROSSLINK, T_CHAIN)
 OVERLAP_MIN = 0.8            # sigma; same rejection radius as slab_with_support_periodic.ipynb
 FENE_R0_MAX = isolate_gel.FENE_R0_MAX
 TYPE_NAMES = {1: 'crosslink', 2: 'chain bead', 3: 'solvent', 4: 'support',
-              5: 'feed piston', 6: 'permeate piston', 7: 'dry piston'}
+              5: 'feed piston', 6: 'permeate piston', 7: 'load piston'}
 DEFAULT_INPUT = ('../../lammps_data_files_local/'
                  'final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002.data')
 SMOKE_INPUT = ('../../lammps_data_files_local/'
@@ -108,7 +108,7 @@ class Config:
     margin_perm: object = None         # vacuum below the permeate piston; None -> feed_thickness + 5
     margin_feed: float = 15.0          # vacuum above the feed piston
     piston_clearance: float = 1.0      # wet piston plane this far outside the outermost solvent bead
-    dry_piston_frac: float = 0.5       # dry piston z as a fraction of the feed reservoir height (from gel top)
+    load_piston_frac: float = 0.5       # load piston z as a fraction of the feed reservoir height (from gel top)
     sheet_source: str = 'support'      # 'support': copy the input support's (x,y) pattern (identical count);
                                        # 'hex': fresh hex sheet at sheet_spacing (make_sheet logic)
     sheet_spacing: float = 0.2         # hex sheet spacing (only for sheet_source='hex'); snapped to tile lx, ly
@@ -537,20 +537,20 @@ def convert(cfg: Config):
     z_min_solv, z_max_solv = float(solv_z_all.min()), float(solv_z_all.max())
     z_perm_piston = z_min_solv - cfg.piston_clearance
     z_feed_piston = z_max_solv + cfg.piston_clearance
-    z_dry = gel_top + cfg.dry_piston_frac * (z_feed_piston - gel_top)
-    # the dry piston must not overlap POLYMER (solvent passes through it): nudge up if needed
+    z_load = gel_top + cfg.load_piston_frac * (z_feed_piston - gel_top)
+    # the load piston must not overlap POLYMER (solvent passes through it): nudge up if needed
     zp = xyz[is_poly, 2]
     nudge = 0
-    while np.any(np.abs(zp - z_dry) < OVERLAP_MIN) and nudge < 40:
-        z_dry += 0.25
+    while np.any(np.abs(zp - z_load) < OVERLAP_MIN) and nudge < 40:
+        z_load += 0.25
         nudge += 1
     if nudge:
-        print(f'  dry piston plane nudged up {0.25 * nudge:.2f} sigma to clear stray polymer beads')
+        print(f'  load piston plane nudged up {0.25 * nudge:.2f} sigma to clear stray polymer beads')
     sheet, sheet_info = sheet_xy(cfg, box, support_xy)
     n_sheet = len(sheet)
     feed_thick_actual = z_feed_piston - gel_top
     margin_perm = cfg.margin_perm if cfg.margin_perm is not None else feed_thick_actual + 5.0
-    print(f'  pistons: permeate z={z_perm_piston:.3f}  feed z={z_feed_piston:.3f}  dry z={z_dry:.3f}   '
+    print(f'  pistons: permeate z={z_perm_piston:.3f}  feed z={z_feed_piston:.3f}  load z={z_load:.3f}   '
           f'(feed reservoir {feed_thick_actual:.2f} sigma from gel BB top to the feed piston)')
     print(f'  margins: permeate side {margin_perm:.2f} sigma (auto = feed + 5 unless given), feed side {cfg.margin_feed:.2f} sigma')
 
@@ -560,7 +560,7 @@ def convert(cfg: Config):
         if len(p):
             new_pos.append(p)
             new_typ.append(np.full(len(p), T_SOLVENT))
-    for zpl, t in ((z_feed_piston, T_FEED), (z_perm_piston, T_PERM), (z_dry, T_DRY)):
+    for zpl, t in ((z_feed_piston, T_FEED), (z_perm_piston, T_PERM), (z_load, T_LOAD)):
         new_pos.append(np.column_stack([sheet[:, 0] + box['xlo'] * 0.0, sheet[:, 1], np.full(n_sheet, zpl)]))
         new_typ.append(np.full(n_sheet, t))
     new_pos = np.vstack(new_pos)
@@ -616,7 +616,7 @@ def convert(cfg: Config):
         ('zhi (box top)', new_box['zhi']),
         ('feed piston (type 5)', zs(z_feed_piston)),
         ('top of feed solvent', zs(z_max_solv)),
-        ('dry piston (type 7)', zs(z_dry)),
+        ('load piston (type 7)', zs(z_load)),
         ('gel top (BB / Rg)', f'{zs(G["bb_hi"]):.3f} / {zs(G["rg_hi"]):.3f}'),
         ('gel bottom (BB / Rg)', f'{zs(G["bb_lo"]):.3f} / {zs(G["rg_lo"]):.3f}'),
         ('support (type 4)', zs(support_z)),
@@ -631,7 +631,7 @@ def convert(cfg: Config):
         old_piston_z_in=old_piston_z, n_old_piston=n_old_piston,
         support_z=zs(support_z), gel_bb=(zs(G['bb_lo']), zs(G['bb_hi'])), gel_rg=(zs(G['rg_lo']), zs(G['rg_hi'])),
         L_bb=G['L_bb'], L_rg=G['L_rg'],
-        z_feed_piston=zs(z_feed_piston), z_perm_piston=zs(z_perm_piston), z_dry_piston=zs(z_dry),
+        z_feed_piston=zs(z_feed_piston), z_perm_piston=zs(z_perm_piston), z_load_piston=zs(z_load),
         feed_thickness_actual=feed_thick_actual, permeate_thickness=cfg.permeate_thickness,
         margin_perm=margin_perm, margin_feed=cfg.margin_feed,
         rho_bulk=rho_bulk, density_window=(zs(w_lo), zs(w_hi)),
@@ -653,10 +653,10 @@ def convert(cfg: Config):
     # ---- write -----------------------------------------------------------------
     cfgs = ' '.join(f'{k}={v}' for k, v in asdict(cfg).items())
     header = (f'two-piston (feed/permeate) data file from {inp.name} via slab_two_pistons.py on {info["date"]}; '
-              f'types 1 xl 2 chain 3 solv 4 support 5 feed_piston 6 perm_piston 7 dry_piston; '
+              f'types 1 xl 2 chain 3 solv 4 support 5 feed_piston 6 perm_piston 7 load_piston; '
               f'{cfgs}; z: support={info["support_z"]:.3f} gel_bb=[{info["gel_bb"][0]:.3f},{info["gel_bb"][1]:.3f}] '
               f'gel_rg=[{info["gel_rg"][0]:.3f},{info["gel_rg"][1]:.3f}] perm_piston={info["z_perm_piston"]:.3f} '
-              f'dry_piston={info["z_dry_piston"]:.3f} feed_piston={info["z_feed_piston"]:.3f}; '
+              f'load_piston={info["z_load_piston"]:.3f} feed_piston={info["z_feed_piston"]:.3f}; '
               f'rho_bulk={rho_bulk:.4f} n_added_perm={len(pad_perm)}' + (' SMOKE-TEST-INPUT(14000000)' if is_smoke else ''))
     write_two_pist_data(cfg.output_file, header, new_ids, all_mol, all_typ, all_xyz, vel, bonds, new_box,
                         img=(img if img_in else None))
@@ -700,7 +700,7 @@ def _jsonable(o):
 # ---------------------------------------------------------------------------
 def validate(typ, xyz, bonds, box, n_old, info=None, verbose=True):
     """Checks: (1) no pair closer than 0.8 sigma between NEW beads and anything they
-    interact with (solvent-dry piston and wall-wall pairs are OFF in the decks and are
+    interact with (solvent-load piston and wall-wall pairs are OFF in the decks and are
     exempt); (2) every FENE bond < 1.5 under x,y minimum image (isolate_gel.validate_bonds);
     (3) atom-type counts; (4) no solvent outside [permeate piston, feed piston];
     (5) no atom outside the box.  Returns dict(ok, problems, ...)."""
@@ -720,9 +720,9 @@ def validate(typ, xyz, bonds, box, n_old, info=None, verbose=True):
             ta, tb = typ[a], typ[b]
             is_new = (a >= n_old) | (b >= n_old)
             wall = np.isin(ta, (4, 5, 6, 7)) & np.isin(tb, (4, 5, 6, 7))          # wall-wall: off
-            dry_solv = ((ta == T_DRY) & (tb == T_SOLVENT)) | ((tb == T_DRY) & (ta == T_SOLVENT))  # dry-solvent: off
+            load_solv = ((ta == T_LOAD) & (tb == T_SOLVENT)) | ((tb == T_LOAD) & (ta == T_SOLVENT))  # load-solvent: off
             sup_solv = ((ta == T_SUPPORT) & (tb == T_SOLVENT)) | ((tb == T_SUPPORT) & (ta == T_SOLVENT))  # off
-            rel = is_new & ~wall & ~dry_solv & ~sup_solv
+            rel = is_new & ~wall & ~load_solv & ~sup_solv
             n_close = int(rel.sum())
             if n_close:
                 d = np.linalg.norm(p[a[rel]] - p[b[rel]], axis=1)
@@ -730,7 +730,7 @@ def validate(typ, xyz, bonds, box, n_old, info=None, verbose=True):
                 bad = pairs[rel][:5]
                 problems.append(f'{n_close} interacting pair(s) closer than {OVERLAP_MIN} sigma involving new beads '
                                 f'(closest {worst:.3f}); e.g. types ' + ', '.join(f'{typ[i]}-{typ[j]}' for i, j in bad))
-            n_pre = int((~is_new & ~wall & ~dry_solv & ~sup_solv).sum())
+            n_pre = int((~is_new & ~wall & ~load_solv & ~sup_solv).sum())
             say(f'  overlaps < {OVERLAP_MIN}: {n_close} involving new beads (interacting pairs)'
                 + (f'; {n_pre} pre-existing close pairs in the input (untouched)' if n_pre else ''))
     else:
@@ -839,12 +839,12 @@ def info_log_entry(info):
         f'  Input: {Path(info["input_file"]).name}' + ('   (SMOKE-TEST input: 14000000 snapshot, not the production 14000002)' if info['smoke_test_input'] else ''),
         f'  Box: {info["lx"]:.4f} x {info["ly"]:.4f} x {info["box_out"]["zhi"]:.3f}   (lx, ly unchanged from the input; zlo = 0)',
         f'  z: perm piston {info["z_perm_piston"]:.2f} | support {info["support_z"]:.2f} | gel BB [{info["gel_bb"][0]:.2f}, {info["gel_bb"][1]:.2f}] '
-        f'(L_bb {info["L_bb"]:.2f}, L_rg {info["L_rg"]:.2f}) | dry piston {info["z_dry_piston"]:.2f} | feed piston {info["z_feed_piston"]:.2f}',
+        f'(L_bb {info["L_bb"]:.2f}, L_rg {info["L_rg"]:.2f}) | load piston {info["z_load_piston"]:.2f} | feed piston {info["z_feed_piston"]:.2f}',
         f'  Reservoirs: permeate {info["permeate_thickness"]:.1f} sigma (padded +{info["n_added_permeate"]} beads at rho={info["rho_bulk"]:.4f}), '
         f'feed {info["feed_thickness_actual"]:.2f} sigma; margins perm {info["margin_perm"]:.1f} / feed {info["margin_feed"]:.1f} sigma (vacuum)',
         f'  Sheets: {info["n_sheet"]} beads each ({info["sheet"]["source"]} pattern, spacing {info["sheet"]["spacing"]:.4f}); '
-        f'piston_clearance {cfg["piston_clearance"]}, dry_piston_frac {cfg["dry_piston_frac"]}, seed {cfg["seed"]}',
-        f'  Crosslinks: {c[1]}   Chain beads: {c[2]}   Solvent: {c[3]}   Support: {c[4]}   Feed piston: {c[5]}   Permeate piston: {c[6]}   Dry piston: {c[7]}',
+        f'piston_clearance {cfg["piston_clearance"]}, load_piston_frac {cfg["load_piston_frac"]}, seed {cfg["seed"]}',
+        f'  Crosslinks: {c[1]}   Chain beads: {c[2]}   Solvent: {c[3]}   Support: {c[4]}   Feed piston: {c[5]}   Permeate piston: {c[6]}   Load piston: {c[7]}',
         f'  Total atoms: {info["n_atoms"]}   Total bonds: {info["n_bonds"]}   Output: {Path(info["output_file"]).name}',
         '',
     ]
@@ -916,7 +916,7 @@ if __name__ == '__main__':
     ap.add_argument('--margin-perm', type=_none_or_float, default=None)
     ap.add_argument('--margin-feed', type=float, default=15.0)
     ap.add_argument('--piston-clearance', type=float, default=1.0)
-    ap.add_argument('--dry-piston-frac', type=float, default=0.5)
+    ap.add_argument('--load-piston-frac', type=float, default=0.5)
     ap.add_argument('--sheet-source', choices=('support', 'hex'), default='support')
     ap.add_argument('--sheet-spacing', type=float, default=0.2)
     ap.add_argument('--seed', type=int, default=42)
@@ -929,7 +929,7 @@ if __name__ == '__main__':
         sys.exit(0 if r['ok'] else 1)
     cfg = Config(input_file=args.input, output_file=args.output, permeate_thickness=args.permeate_thickness,
                  feed_thickness=args.feed_thickness, margin_perm=args.margin_perm, margin_feed=args.margin_feed,
-                 piston_clearance=args.piston_clearance, dry_piston_frac=args.dry_piston_frac,
+                 piston_clearance=args.piston_clearance, load_piston_frac=args.load_piston_frac,
                  sheet_source=args.sheet_source, sheet_spacing=args.sheet_spacing, seed=args.seed,
                  log_info=not args.no_log, make_png=not args.no_png)
     info = convert(cfg)

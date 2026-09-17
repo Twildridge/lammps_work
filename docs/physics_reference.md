@@ -112,6 +112,6 @@ is ≈ 5–7 periods.
 
 **Modes.** Permeation: P_feed = P_target + dP, P_perm = P_target; flux Q_perm = A·dz_perm/dt from the permeate
 piston (bead count crossing the support kept as a cross-check); k = Q_perm L/(A dP).  Compression: both wet pistons
-at P_target (drained consolidation at constant bath pressure) and a third, solvent-transparent dry piston inside the
+at P_target (drained consolidation at constant bath pressure) and a third, solvent-transparent load piston inside the
 feed reservoir loads the network through the usual strain sweep; solvent expelled by the compression raises the
 feed piston (and lowers the permeate piston), so the converter's `margin_feed` must cover the deepest strain.

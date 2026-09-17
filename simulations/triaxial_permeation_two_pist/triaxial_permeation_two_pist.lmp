@@ -20,8 +20,8 @@
 #   (no cont / continue_sim.sh support: every run is a fresh start)
 #
 # Atom types: 1=crosslink, 2=chain bead, 3=solvent, 4=support (frozen),
-#             5=feed piston (P_feed), 6=permeate piston (P_perm), 7=dry piston
-#             (present in the data file; DELETED here -- permeation has no dry piston).
+#             5=feed piston (P_feed), 6=permeate piston (P_perm), 7=load piston
+#             (present in the data file; DELETED here -- permeation has no load piston).
 #
 # GEOMETRY (z from bottom to top; support BELOW the gel, i.e. the paper's figure
 # rotated by 90 degrees so every existing z-binning/analysis convention carries over):
@@ -212,13 +212,13 @@ group solvent     type 3
 group support     type 4
 group piston_feed type 5
 group piston_perm type 6
-group piston_dry  type 7
+group piston_load  type 7
 group mobile      type 1 2 3
 
-# PERMEATION has no dry piston: delete it right away.  (Type 7 pair_coeffs below
+# PERMEATION has no load piston: delete it right away.  (Type 7 pair_coeffs below
 # are still defined because the data file declares 7 atom types.)
-delete_atoms group piston_dry compress no
-print ">>> deleted the dry piston (type 7): $(count(piston_dry)) atoms remain of that type"
+delete_atoms group piston_load compress no
+print ">>> deleted the load piston (type 7): $(count(piston_load)) atoms remain of that type"
 group gel_system  type 1 2 3 4 5 6
 
 variable N_feed equal count(piston_feed)
@@ -245,13 +245,13 @@ pair_coeff 1 5 1.0 ${sigma} 1.122         # polymer-feed piston
 pair_coeff 2 5 1.0 ${sigma} 1.122
 pair_coeff 1 6 1.0 ${sigma} 1.122         # polymer-permeate piston
 pair_coeff 2 6 1.0 ${sigma} 1.122
-pair_coeff 1 7 1.0 ${sigma} 1.122         # polymer-dry piston (no atoms here; kept for the 7-type file)
+pair_coeff 1 7 1.0 ${sigma} 1.122         # polymer-load piston (no atoms here; kept for the 7-type file)
 pair_coeff 2 7 1.0 ${sigma} 1.122
 
 pair_coeff 3 5 1.0 ${sigma} 1.122         # solvent-feed piston: ALWAYS ON (the piston IS the reservoir wall)
 pair_coeff 3 6 1.0 ${sigma} 1.122         # solvent-permeate piston: ALWAYS ON
 pair_coeff 3 4 0.0 ${sigma} 0.0           # solvent-support: off (support is transparent to solvent)
-pair_coeff 3 7 0.0 ${sigma} 0.0           # solvent-dry piston: off
+pair_coeff 3 7 0.0 ${sigma} 0.0           # solvent-load piston: off
 
 # wall-wall: all off (the sheets never interact; nothing crosses z, see header)
 pair_coeff 4 4 0.0 ${sigma} 0.0

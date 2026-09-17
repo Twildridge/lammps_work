@@ -9,7 +9,7 @@ lammps_work/                    ← This git repository
 │   ├── slab_with_support/      ← Gel equilibration and compression (main workhorse)
 │   ├── triaxial_compression/   ← CURRENT axial-compression workflow (periodic slab, force-piston) — split from slab_with_flow
 │   ├── triaxial_permeation/    ← CURRENT permeation workflow (periodic slab, force-piston) — split from slab_with_flow
-│   ├── triaxial_compression_two_pist/  ← TWO-PISTON compression (2026-09-16): NPT-pistons on both reservoirs + dry loading piston; same strain sweep
+│   ├── triaxial_compression_two_pist/  ← TWO-PISTON compression (2026-09-16): NPT-pistons on both reservoirs + load loading piston; same strain sweep
 │   ├── triaxial_permeation_two_pist/   ← TWO-PISTON permeation (2026-09-16): feed/permeate NPT-pistons, one constant-dP drive (no sweep)
 │   ├── shear_slab/             ← Shear modulus measurement (plate-driven xz shear; current G workflow)
 │   ├── compress_slab/          ← Bulk modulus K measurement (plate-driven isotropic six-face compression; undergrad project, in development)

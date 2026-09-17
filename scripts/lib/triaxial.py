@@ -639,16 +639,16 @@ def load_reference(cfg):
     R['V_BIN'] = R['AREA'] * cfg.binWidth
     wz = wall_z_first_frame(src, (4, 5, 6, 7))
     R['z_support'] = wz.get(4, np.nan)
-    R['z_feed'], R['z_perm'], R['z_dry'] = wz.get(5, np.nan), wz.get(6, np.nan), wz.get(7, np.nan)
+    R['z_feed'], R['z_perm'], R['z_load'] = wz.get(5, np.nan), wz.get(6, np.nan), wz.get(7, np.nan)
     # two-piston runs (2026-09-16): types 5/6 are the wet feed/permeate pistons and the
-    # loading plate is the dry piston (type 7); one-piston runs: type 5 is the piston
+    # loading plate is the load piston (type 7); one-piston runs: type 5 is the piston
     R['two_pist'] = bool(np.isfinite(R['z_feed']) and np.isfinite(R['z_perm']))
-    R['z_piston'] = R['z_dry'] if np.isfinite(R['z_dry']) else R['z_feed']
+    R['z_piston'] = R['z_load'] if np.isfinite(R['z_load']) else R['z_feed']
     print(f'box (fixed): Lx={box["lx"]:.2f} Ly={box["ly"]:.2f} Lz={box["lz"]:.2f}  |  '
           f'A={R["AREA"]:.2f}  V_bin={R["V_BIN"]:.2f}')
     if R['two_pist']:
         print(f'TWO-PISTON run: support z = {R["z_support"]:.2f}  |  permeate piston (6) z = {R["z_perm"]:.2f}  |  '
-              f'feed piston (5) z = {R["z_feed"]:.2f}' + (f'  |  dry piston (7) z = {R["z_dry"]:.2f}' if np.isfinite(R['z_dry']) else ''))
+              f'feed piston (5) z = {R["z_feed"]:.2f}' + (f'  |  load piston (7) z = {R["z_load"]:.2f}' if np.isfinite(R['z_load']) else ''))
     else:
         print(f'support (type 4) z = {R["z_support"]:.2f}  |  reference piston (type 5) z = {R["z_piston"]:.2f}')
 
@@ -709,7 +709,7 @@ def load_reference(cfg):
     # above if the profile method is unbiased at zero strain
     fp = cfg.path('piston_force_avg_ref')
     if fp.exists():
-        pfa = read_print_file(fp, ['step', 'Fz'])          # first value column = the loading piston (dry / one-piston)
+        pfa = read_print_file(fp, ['step', 'Fz'])          # first value column = the loading piston (load / one-piston)
         names, tab = read_piston_table(fp)
         # two-piston: the wet pistons' zero-flux baselines P = +/- F_fluid/A
         for lab, sign in (('feed', 1.0), ('perm', -1.0)):
@@ -1134,7 +1134,7 @@ def load_level(cfg, R, lvl, verbose=True):
     if L['wet'] is not None:
         W = L['wet']
         say('  bath (wet pistons, plateau means): ' + '  '.join(
-            f"{k}: {W['plat'][k]:.4f}" for k in ('P_feed_meas', 'P_perm_meas', 'P_dry_meas') if k in W['plat'])
+            f"{k}: {W['plat'][k]:.4f}" for k in ('P_feed_meas', 'P_perm_meas', 'P_load_meas') if k in W['plat'])
             + (f"   applied {W['plat'].get('P_feed_app', np.nan):.3f}" if 'P_feed_app' in W['plat'] else '')
             + (f"   expelled dV_total = {W['dV_total'][-1]:.1f} sigma^3 (= {W['dV_total'][-1] / R['AREA']:.2f} sigma of feed rise)"
                if W.get('dV_total') is not None else ''))
@@ -2620,8 +2620,8 @@ def print_summary(cfg, levels):
 #  12. TWO-PISTON (feed / permeate NPT-piston) RUNS  -- 2026-09-16
 # ===========================================================================
 # Files written by triaxial_{compression,permeation}_two_pist.lmp carry ONE column
-# set per piston with a '# ...' header naming them ([dry |] feed | perm).  The
-# compression loaders above keep reading the first value column (= the dry
+# set per piston with a '# ...' header naming them ([load |] feed | perm).  The
+# compression loaders above keep reading the first value column (= the load
 # piston, the network load), so every one-piston figure works unchanged; the
 # extras below add the wet-piston bath check and the permeation analysis.
 def load_wet_pistons(cfg, R, lvl=None, plat_from=None):
@@ -2659,7 +2659,7 @@ def _wet_panel(ax, cfg, R, L, col=None, label_prefix='', applied=True, shade=Tru
         return False
     st = W['step']
     pal = {'P_feed_meas': (WONG['vermillion'], '-'), 'P_perm_meas': (WONG['blue'], '-'),
-           'P_dry_meas': (WONG['orange'], '-'), 'P_feed_app': (WONG['vermillion'], '--'), 'P_perm_app': (WONG['blue'], '--')}
+           'P_load_meas': (WONG['orange'], '-'), 'P_feed_app': (WONG['vermillion'], '--'), 'P_perm_app': (WONG['blue'], '--')}
     for nm in W['names'][1:]:
         if nm not in W or (nm.endswith('_app') and not applied):
             continue
@@ -2683,7 +2683,7 @@ def _wet_panel(ax, cfg, R, L, col=None, label_prefix='', applied=True, shade=Tru
 def fig_wet_pistons(cfg, R, L):
     """Two-piston compression: bath pressure check over the level -- P_feed and
     P_perm = F_fluid/(lx ly) on the wet pistons (rolling mean) vs the applied P_target,
-    plus the dry-piston load P_dry.  Shaded = plateau window."""
+    plus the load-piston load P_load.  Shaded = plateau window."""
     if L.get('wet') is None:
         print('wet-piston figure skipped (one-piston run: no piston_pressure file)')
         return None
@@ -2692,7 +2692,7 @@ def fig_wet_pistons(cfg, R, L):
     ax.set_xlabel('step')
     ax.set_ylabel(r'$P = F_{\rm fluid}/(l_x l_y)$  (LJ)')
     ax.set_title(f'Wet pistons hold the bath at $P_{{\\rm target}}={sig(cfg.P_BARO)}$;  '
-                 f'dry piston = network load   ($\\varepsilon={L["lvl"]}$)', fontsize=14)
+                 f'load piston = network load   ($\\varepsilon={L["lvl"]}$)', fontsize=14)
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'wet_piston_pressures', L['lvl'])

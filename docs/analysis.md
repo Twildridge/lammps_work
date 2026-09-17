@@ -104,8 +104,8 @@ Reads a `triaxial_permeation` run. Six panels — piston, thickness, stress, den
 
 **`triaxial_compression_single_two_pist.ipynb`** / **`triaxial_compression_sweep_two_pist.ipynb`** (two-piston compression, 2026-09-16)
 Same Config → sync → load → figures pattern and the same eleven (single) / twelve (sweep) figures as the one-piston
-notebooks — the dry piston is "the piston" (its force is the network load; the piston files carry it in the first
-value column, `[dry | feed | perm]`) — plus the **wet-piston bath check** (`fig_wet_pistons[_sweep]`: P_feed, P_perm
+notebooks — the load piston is "the piston" (its force is the network load; the piston files carry it in the first
+value column, `[load | feed | perm]`) — plus the **wet-piston bath check** (`fig_wet_pistons[_sweep]`: P_feed, P_perm
 measured on the sheets vs `P_target` over the hold) and the **solvent expelled** (`fig_solvent_expelled`, feed-piston
 rise + permeate-piston descent). `Config(mode="compression", two_pist=True)` points the sync at
 `lammps_runs/triaxial_compression_two_pist` and pulls `piston_pressure`, `permeation`, `pressure_reservoirs` too.

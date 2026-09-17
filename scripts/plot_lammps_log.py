@@ -90,7 +90,7 @@ def read_fix_print(filepath):
 def read_fix_print_names(filepath):
     """Column names from a '# name name ...' header line (fix print `title` /
     fix ave/time `title2`), or None.  Two-piston files (2026-09-16) name one
-    column set per piston, e.g. '# step F_dry F_fluid_feed F_fluid_perm'."""
+    column set per piston, e.g. '# step F_load F_fluid_feed F_fluid_perm'."""
     names = None
     with open(filepath) as f:
         for line in f:
@@ -858,7 +858,7 @@ def plot_flow_diagnostics(folder, run_id, output):
             names = read_fix_print_names(pres_file) or []
             if arr.size and arr.shape[1] >= 3:
                 t = arr[:, 0]
-                palette = {'dry': 'darkorange', 'feed': 'tomato', 'perm': 'cornflowerblue'}
+                palette = {'load': 'darkorange', 'feed': 'tomato', 'perm': 'cornflowerblue'}
                 for j in range(1, arr.shape[1]):
                     nm = names[j] if len(names) > j else f'col{j}'
                     base = nm[2:].replace('_meas', '').replace('_app', '') if nm.startswith('P_') else nm
@@ -868,7 +868,7 @@ def plot_flow_diagnostics(folder, run_id, output):
                         ax.plot(t, arr[:, j], lw=1.4, marker='o', markersize=2, color=palette.get(base, 'k'), label=nm)
                 ax.set_ylabel('Pressure  (ε/σ³)')
                 ax.set_title('NPT-piston bath check: F_fluid/(lx·ly) on each wet piston vs its applied pressure'
-                             + ('; P_dry = network load' if any('dry' in n for n in names) else ''), fontsize=9)
+                             + ('; P_load = network load' if any('load' in n for n in names) else ''), fontsize=9)
                 ax.legend(fontsize=8, ncol=2)
 
         # ── Two-piston permeation: Q_perm from the permeate-piston displacement ──
