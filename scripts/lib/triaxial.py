@@ -637,13 +637,17 @@ def load_reference(cfg):
     R.update(BOX=box, Z_LO=box['z'][0], Z_HI=box['z'][1], LX=box['lx'], LY=box['ly'], LZ=box['lz'])
     R['AREA'] = box['lx'] * box['ly']
     R['V_BIN'] = R['AREA'] * cfg.binWidth
-    wz = wall_z_first_frame(src, (4, 5, 6, 7))
+    wz = wall_z_first_frame(cfg.traj('traj_ref'), (4, 5, 6, 7))
     R['z_support'] = wz.get(4, np.nan)
-    R['z_feed'], R['z_perm'], R['z_load'] = wz.get(5, np.nan), wz.get(6, np.nan), wz.get(7, np.nan)
+    z5, z6, z7 = wz.get(5, np.nan), wz.get(6, np.nan), wz.get(7, np.nan)
     # two-piston runs (2026-09-16): types 5/6 are the wet feed/permeate pistons and the
-    # loading plate is the load piston (type 7); one-piston runs: type 5 is the piston
-    R['two_pist'] = bool(np.isfinite(R['z_feed']) and np.isfinite(R['z_perm']))
-    R['z_piston'] = R['z_load'] if np.isfinite(R['z_load']) else R['z_feed']
+    # loading plate is the load piston (type 7).  One-piston runs: type 5 IS the piston,
+    # and z_feed/z_perm stay NaN so every one-piston code path (pore baseline at
+    # z/Lz ~ baseline_zf, interior mask, autoscaling) is exactly the pre-2026-09-16 one.
+    R['two_pist'] = bool(np.isfinite(z5) and np.isfinite(z6))
+    R['z_feed'], R['z_perm'] = (z5, z6) if R['two_pist'] else (np.nan, np.nan)
+    R['z_load'] = z7
+    R['z_piston'] = z7 if np.isfinite(z7) else z5
     print(f'box (fixed): Lx={box["lx"]:.2f} Ly={box["ly"]:.2f} Lz={box["lz"]:.2f}  |  '
           f'A={R["AREA"]:.2f}  V_bin={R["V_BIN"]:.2f}')
     if R['two_pist']:
