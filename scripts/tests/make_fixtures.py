@@ -268,10 +268,13 @@ def two_piston_comp(root, levels=('0.05', '0.10')):
         steps = np.arange(t_start, t_start + hold + 1, 300)
         n = len(steps)
         drive = np.minimum(1.0, (steps - t_start) / 800.0)
-        zd = Z_LOAD - eps * L0 * drive
+        # symmetric drive (2026-09-18): load piston down + support up, half the closure each
+        zd = Z_LOAD - 0.5 * eps * L0 * drive
+        zs = Z_SUP + 0.5 * eps * L0 * drive
         zfeed = Z_FEED + eps * L0 * 0.6 * drive
         zperm = Z_PERM - eps * L0 * 0.4 * drive
         write_print(pd_ / f'piston_position_{st}.dat', '# step z_load z_feed z_perm', np.column_stack([steps, zd, zfeed, zperm]))
+        write_print(pd_ / f'support_position_{st}.dat', '# step z_support', np.column_stack([steps, zs]))
         write_print(pd_ / f'piston_velocity_{st}.dat', '# step vz_load vz_feed vz_perm', np.column_stack([steps, -0.04 * (drive < 1), 0 * steps, 0 * steps]))
         Fd = (0.3 * eps * (1 - 0.5 * np.exp(-(steps - t_start) / 1500)) * LX * LY) * (drive >= 1) + rng.normal(0, 15, n)
         Ff = 1.5 * LX * LY + rng.normal(0, 30, n)
@@ -291,7 +294,7 @@ def two_piston_comp(root, levels=('0.05', '0.10')):
         write_print(vd / f'gel_volume_bb_{st}.dat', None, np.column_stack([1600 * (Lrg + 2)]))
         write_print(vd / f'box_dimensions_{st}.dat', None, np.column_stack([steps, LX + 0 * steps, LY + 0 * steps, LZ + 0 * steps]))
         write_print(vd / f'polymer_com_{st}.dat', None, np.column_stack([steps, 20 + 0 * steps, 20 + 0 * steps, 105 + 0 * steps]))
-        write_print(vd / f'gel_edges_{st}.dat', None, np.column_stack([steps, Z_GEL_LO + 0 * steps, Z_GEL_HI - eps * L0 * drive, zd, Z_SUP + 0 * steps]))
+        write_print(vd / f'gel_edges_{st}.dat', None, np.column_stack([steps, Z_GEL_LO + 0.5 * eps * L0 * drive, Z_GEL_HI - 0.5 * eps * L0 * drive, zd, zs]))
         pro = stress_profiles(steps, eps=eps)
         for comp in ('zz', 'xx', 'yy'):
             write_ave_time_vector(sd / f'sigma{comp}_polymer_{st}.dat', 'avg', f'c_sigma{comp}_poly', steps, pro[comp][0])
@@ -302,7 +305,7 @@ def two_piston_comp(root, levels=('0.05', '0.10')):
             u = np.where(gel_mask(), -eps * L0 * (ZC - Z_GEL_LO) / L0 * (1 - np.exp(-(k + 1) / 4.0)), 0.0)
             disp.append(np.column_stack([np.where(gel_mask(), 300, 0), u]))
         write_ave_chunk(dd / f'disp_z_polymer_{st}.dat', 'avg_disp_z_poly', steps, disp, ['v_uz_poly'])
-        write_traj(r / 'traj_files' / f'traj_stress_{st}.lammpstrj', steps[:2], {4: Z_SUP, 5: Z_FEED, 6: Z_PERM, 7: Z_LOAD - eps * L0})
+        write_traj(r / 'traj_files' / f'traj_stress_{st}.lammpstrj', steps[:2], {4: Z_SUP + 0.5 * eps * L0, 5: Z_FEED, 6: Z_PERM, 7: Z_LOAD - 0.5 * eps * L0})
         for dim in ('x', 'y', 'z'):
             comps = ['polymer', 'solvent'] + (['piston', 'piston_feed', 'piston_perm', 'support'] if dim == 'z' else [])
             nb = int((LX if dim == 'x' else LY if dim == 'y' else LZ) / BW)

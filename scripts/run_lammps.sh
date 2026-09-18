@@ -11,6 +11,7 @@ if [ $# -lt 4 ]; then
     echo "  vel_seed: optional, RNG seed for create_velocity and fix langevin (default: 12345)"
     echo "  env knobs: PISTON_TRANSPARENT (slab_with_support); STRAINS / COMPRESSIONS / COMPRESS_STAGES (sweeps);"
     echo "             DP_PISTON PISTON_MASS C_PIST_FRAC NPT_PISTON_STEPS SETTLE_HALT (triaxial_*_two_pist)"
+    echo "             DRIVE_SPLIT (triaxial_compression*: piston share of the gap closure, 0.5 = symmetric)"
     exit 1
 fi
 
@@ -37,6 +38,8 @@ PISTON_MASS=${PISTON_MASS:-1000}            # mass of every piston bead (types 5
 C_PIST_FRAC=${C_PIST_FRAC:-1.0}             # piston damping as a fraction of the critical value
 NPT_PISTON_STEPS=${NPT_PISTON_STEPS:-1000000}  # Phase-1 NPT-piston settle length
 SETTLE_HALT=${SETTLE_HALT:-0}               # 1 = halt the settle early once both pistons are at rest
+DRIVE_SPLIT=${DRIVE_SPLIT:-0.5}             # compression decks: piston share of each level's gap closure
+                                            # (0.5 = symmetric drive, piston down + support up; 1.0 = old top-only)
 CALIB_FRAMES=${CALIB_FRAMES:-5}          # calibration-dump frames near run end (polymer_pure /
 CALIB_DUMP_EVERY=${CALIB_DUMP_EVERY:-2000}  # solvent_pure only; other engines ignore these vars)
 # PRERELAXED=1 tells polymer_pure to skip its Stage 0 harmonic pre-relaxation:
@@ -248,6 +251,7 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var c_pist_frac "$C_PIST_FRAC" \
     -var npt_piston_steps "$NPT_PISTON_STEPS" \
     -var settle_halt "$SETTLE_HALT" \
+    -var drive_split "$DRIVE_SPLIT" \
     \
     -in $LAMMPS_FILE &
 MPIRUN_PID=$!

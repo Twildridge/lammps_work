@@ -98,7 +98,8 @@ TYPE=""             # Options: stress, volume, stressvol, or leave empty (just t
 # -----------------------------------------------------------------------
 
 # These are STRAIN TARGETS (fraction of the BB reference thickness L0_bb): the
-# .lmp drives the piston DOWN to a displacement = strain*L0_bb, freezes it, and
+# .lmp closes the plate gap by strain*L0_bb -- piston driven DOWN and support driven
+# UP, half each (symmetric drive, 2026-09-18; DRIVE_SPLIT below) -- freezes both, and
 # measures the relaxed network stress (M = measured stress / prescribed strain).
 # The sweep is cumulative (strain steps UP).  The env var is still called
 # COMPRESSIONS and the outputs are still tagged _c<value> so run_lammps.sh /
@@ -106,6 +107,10 @@ TYPE=""             # Options: stress, volume, stressvol, or leave empty (just t
 # example: STRAIN_TARGETS=(0.05 0.10 0.15 0.20)
 STRAIN_TARGETS=(0.10)
 export COMPRESSIONS="${STRAIN_TARGETS[*]}"   # space-separated scalar for run_lammps.sh / LAMMPS -var
+# Symmetric drive (2026-09-18): share of each level's gap closure taken by the PISTON
+# (driven down); the support (driven up) takes the rest.  0.5 = half each (default);
+# 1.0 = the old top-only drive (for A/B comparison with pre-2026-09-18 runs).
+export DRIVE_SPLIT=0.5
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

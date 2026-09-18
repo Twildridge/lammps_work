@@ -17,7 +17,7 @@
 # it REPLACES the 2M-step aniso NPH Phase 0 of triaxial_compression.lmp.
 # Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,
 #   compressions (+ compressions_list), hold_auto, press_target, piston_mass,
-#   c_pist_frac, npt_piston_steps, settle_halt
+#   c_pist_frac, npt_piston_steps, settle_halt  (+ optional -var drive_split)
 #   (no cont / continue_sim.sh support: every run is a fresh start)
 #
 # Atom types: 1=crosslink, 2=chain bead, 3=solvent, 4=support (frozen),
@@ -28,10 +28,12 @@
 #       vacuum margin (permeate side)
 #     | permeate piston (type 6)  <- pushes UP, holds P_target
 #     | permeate reservoir (~10 sigma solvent)
-#     | support sheet (type 4, frozen -> seated onto the gel in Phase 1.25)
+#     | support sheet (type 4, immobile except when driven: seated onto the gel in
+#     |                Phase 1.25, driven UP with the load piston in every sweep level)
 #     | gap | gel slab | feed reservoir
 #     |   [load piston, type 7: parked mid-feed, seated onto the gel in Phase 1.25,
-#     |    driven DOWN through the solvent to each strain level]
+#     |    driven DOWN through the solvent (as the support is driven UP) to each
+#     |    strain level -- SYMMETRIC drive, half the closure on each face]
 #     | feed piston (type 5)      <- pushes DOWN, holds P_target
 #     | vacuum margin (feed side)
 #   boundary p p p is KEPT (nothing crosses z: wet pistons are WCA walls, wall-wall
@@ -54,8 +56,10 @@
 #                 piston_seat_z and the load-piston reference preload.
 #   - Phase 1.5:  epsilon = 0 REFERENCE window (_ref files; wet pistons live).
 #   - Phase 2:    the strain SWEEP of triaxial_compression.lmp, unchanged in logic:
-#                 drive the load piston at v_piston_prod to piston_seat_z - strain*L0_bb
-#                 (fix halt), freeze it, auto-sized hold, files _<hold>_c<strain>.
+#                 SYMMETRIC drive (2026-09-18) -- load piston DOWN + support UP
+#                 (drive_split shares of the closure rate v_piston_prod) until the
+#                 plate gap has closed by strain*L0_bb (fix halt on the gap), freeze
+#                 both plates, auto-sized hold, files _<hold>_c<strain>.
 #                 The load-piston force is the network stress; the two wet pistons are
 #                 logged alongside (bath pressure check) and the feed-piston
 #                 displacement (solvent expelled) goes to permeation_data.
@@ -91,7 +95,14 @@ variable phase0_steps index 50000   # index: -var override for smoke tests
 variable box_guard_gap    equal 2.0       # halt if a wet piston face comes this close to a box face
 
 # ----- Compression Phase 2 (STRAIN-CONTROLLED, as triaxial_compression.lmp) -----
-variable v_piston_prod   index 0.04       # sigma/tau, drive velocity of the LOAD piston
+variable v_piston_prod   index 0.04       # sigma/tau, total plate-gap CLOSURE rate of the strain drive
+# SYMMETRIC DRIVE (2026-09-18, as triaxial_compression.lmp): drive_split = the LOAD
+# piston's share of each level's closure strain*L0_bb (driven down); the support
+# takes the rest (driven up).  0.5 = half on each face (default); 1.0 = the old
+# load-piston-only drive.  The closure rate stays v_piston_prod for any split.
+variable drive_split     index 0.5
+variable vdrive_pist     equal ${drive_split}*${v_piston_prod}          # load piston speed, DOWN
+variable vdrive_supp     equal (1.0-${drive_split})*${v_piston_prod}    # support speed, UP
 
 # ---- STRAIN SWEEP: cumulative strain targets (index var from run_lammps.sh) ----
 variable compressions      index 0.10
@@ -692,12 +703,13 @@ run ${nsteps_settle}
 
 variable L0_bb         equal $(v_gel_lz_bb)
 variable gel_strain_bb equal (v_L0_bb - v_gel_lz_bb)/v_L0_bb
-variable piston_seat_z equal $(c_load_com[3])
+variable piston_seat_z  equal $(c_load_com[3])
+variable support_seat_z equal $(c_support_com[3])
 variable L0_gap        equal $(v_piston_support_gap)
 variable piston_strain equal (v_L0_gap-v_piston_support_gap)/v_L0_gap
 variable gel_lz_initial delete
 variable gel_lz_initial equal $(v_gel_lz_rg)
-print ">>> Reference thicknesses:  L0_bb=${L0_bb} (authoritative)  L0_rg=${gel_lz_initial}  L0_gap=${L0_gap}  piston_seat_z=${piston_seat_z}"
+print ">>> Reference thicknesses:  L0_bb=${L0_bb} (authoritative)  L0_rg=${gel_lz_initial}  L0_gap=${L0_gap}  piston_seat_z=${piston_seat_z}  support_seat_z=${support_seat_z}"
 # solvent-expelled reference: wet-piston positions at the seated state
 variable z_feed0 equal $(v_z_feed)
 variable z_perm0 equal $(v_z_perm)
@@ -800,7 +812,7 @@ variable gel_strain_bb_pct equal v_gel_strain_bb*100.0
 shell mkdir output_files/chemical_potential
 
 velocity piston_load set 0.0 0.0 0.0
-variable piston_z_now equal c_load_com[3]
+velocity support     set 0.0 0.0 0.0
 variable movie_open equal 1
 fix halt_box all halt 1000 v_box_guard > 0.5 error continue
 
@@ -809,7 +821,9 @@ print ">>> STRAIN SWEEP LIST (raw from run_lammps.sh): ${compressions_list}"
 print ">>>   first strain=${compressions}   drive cap=${nsteps_comp}"
 print ">>>   HOLD: auto=${hold_auto} (1=sized per level from tau_1=L^2/(pi^2 D_c))"
 print ">>>         Dc_est=${Dc_est}  n_tau_hold=${n_tau_hold}  hold_min=${hold_min}  flat fallback nsteps=${nsteps}"
-print ">>>   BB reference thickness L0_bb = ${L0_bb}  (strain denominator)"
+print ">>>   BB reference thickness L0_bb = ${L0_bb}  (strain denominator);  seated plate gap L0_gap = ${L0_gap}"
+print ">>>   DRIVE: symmetric, drive_split=${drive_split} (load-piston share of the closure; the support takes the rest)"
+print ">>>          closure rate ${v_piston_prod} sigma/tau -> load piston $(v_vdrive_pist:%.4f) down, support $(v_vdrive_supp:%.4f) up"
 print ">>>   feed piston z=$(v_z_feed:%.2f) vs box top $(zhi:%.2f): headroom $(zhi-v_feed_z_top-v_box_guard_gap:%.2f) sigma = strain ~$((zhi-v_feed_z_top-v_box_guard_gap)/v_L0_bb:%.3f) of expelled solvent"
 print ">>>   If the list above reads 'STALE-run_lammps.sh...', only ONE level will run."
 print "############################################################"
@@ -848,6 +862,11 @@ fix out_piston_pos all print ${strain_freq} "$(step) $(v_z_load) $(v_z_feed) $(v
 fix out_piston_vel all print ${strain_freq} "$(step) $(v_vz_load) $(v_vz_feed) $(v_vz_perm)" &
     title "# step vz_load vz_feed vz_perm" &
     file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
+# support plane z(t) -- it moves during the symmetric drive (2026-09-18); the D_c fit
+# and the wall lines in the notebooks read the held position from this file
+fix out_support_pos all print ${strain_freq} "$(step) $(c_support_com[3])" &
+    title "# step z_support" &
+    file output_files/piston_data/support_position_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 fix out_piston_force all print ${volume_freq} "$(step) $(c_fp_load[3]) $(c_fp_feed[3]) $(c_fp_perm[3])" &
     title "# step F_load F_fluid_feed F_fluid_perm   (pair force on each sheet, z)" &
     file output_files/piston_data/piston_force_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
@@ -890,14 +909,23 @@ fix out_gel_edges all print ${strain_freq} &
     "$(step) $(c_minz) $(c_maxz) $(c_load_com[3]) $(c_support_com[3])" &
     file output_files/volume_data/gel_edges_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat screen no
 
-# ----- PHASE 2a: drive the LOAD piston to the prescribed cumulative STRAIN target -----
-variable piston_target_z equal ${piston_seat_z}-${compressions}*${L0_bb}
-fix nve_load piston_load nve
-velocity piston_load set 0.0 0.0 -${v_piston_prod}
-fix halt_compress all halt ${strain_freq} v_piston_z_now <= ${piston_target_z} error continue
+# ----- PHASE 2a: SYMMETRIC drive -- LOAD piston DOWN + support UP to the cumulative STRAIN target -----
+# Target plate gap = L0_gap - strain*L0_bb; both plates translate ballistically
+# (nve + setforce 0 + set velocity, as in the seating) until the live load-support
+# gap reaches it (fix halt on v_piston_support_gap).  The support is transparent to
+# solvent, so driving it up through the permeate reservoir pushes no fluid (the
+# permeate piston holds P_target regardless).  Per-plate targets are for the log.
+variable gap_target       equal ${L0_gap}-${compressions}*${L0_bb}
+variable piston_target_z  equal ${piston_seat_z}-${drive_split}*${compressions}*${L0_bb}
+variable support_target_z equal ${support_seat_z}+(1.0-${drive_split})*${compressions}*${L0_bb}
+fix nve_load    piston_load nve
+fix nve_support support     nve
+velocity piston_load set 0.0 0.0 -${vdrive_pist}
+velocity support     set 0.0 0.0  ${vdrive_supp}
+fix halt_compress all halt ${strain_freq} v_piston_support_gap <= ${gap_target} error continue
 variable drive_dump_freq equal floor((${compressions}*${L0_bb}/(${v_piston_prod}*${timestep_prod}))/${num_drive_frames})
 if "${movie_open} == 1" then "dump_modify traj_setup every ${drive_dump_freq}"
-print ">>> [strain=${compressions}] driving load piston to z=${piston_target_z} (cap ${nsteps_comp} steps; drive frames every ${drive_dump_freq})..."
+print ">>> [strain=${compressions}] driving load piston DOWN to z=${piston_target_z} and support UP to z=${support_target_z}: target gap ${gap_target} = L0_gap - ${compressions}*L0_bb (cap ${nsteps_comp} steps; drive frames every ${drive_dump_freq})..."
 run ${nsteps_comp}
 unfix halt_compress
 if "${movie_open} == 1" then &
@@ -905,10 +933,12 @@ if "${movie_open} == 1" then &
     "variable movie_open delete" &
     "variable movie_open equal 0"
 
-# ----- Freeze the load piston at this strain for the measurement hold -----
+# ----- Freeze BOTH plates at this strain for the measurement hold -----
 velocity piston_load set 0.0 0.0 0.0
+velocity support     set 0.0 0.0 0.0
 unfix nve_load
-print ">>> [strain=${compressions}] drive done: gel_strain_bb = $(v_gel_strain_bb:%.4f)  gel_strain_rg = $(v_gel_strain:%.4f)  load_z = $(c_load_com[3]:%.2f)  step=$(step)"
+unfix nve_support
+print ">>> [strain=${compressions}] drive done: gel_strain_bb = $(v_gel_strain_bb:%.4f)  gel_strain_rg = $(v_gel_strain:%.4f)  load_z = $(c_load_com[3]:%.2f)  support_z = $(c_support_com[3]:%.2f)  gap = $(v_piston_support_gap:%.2f) (target $(v_gap_target:%.2f))  step=$(step)"
 print ">>> [strain=${compressions}] live L_bb=$(v_gel_lz_bb:%.2f) vs target $(v_hold_L:%.2f) sigma (hold_len=${hold_len} steps was sized on the target)"
 print ">>> [strain=${compressions}] bath check: P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f) (applied ${P_target});  expelled so far dV_total=$(v_dV_total:%.1f) sigma^3 = $(v_dV_total/v_area:%.2f) sigma of feed rise"
 
@@ -1080,13 +1110,16 @@ unfix out_piston_pressure_lvl
 unfix out_piston_force_avg
 unfix out_piston_force
 unfix out_piston_vel
+unfix out_support_pos
 unfix out_piston_pos
 
 print ">>> Completed strain=${compressions}:  gel_strain_bb = $(v_gel_strain_bb:%.4f)  gel_strain_rg = $(v_gel_strain:%.4f)  step=$(step)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
 
 variable hold_steps delete
-variable piston_target_z delete
-variable drive_dump_freq delete
+variable piston_target_z  delete
+variable support_target_z delete
+variable gap_target       delete
+variable drive_dump_freq  delete
 
 next compressions
 jump SELF comp_loop

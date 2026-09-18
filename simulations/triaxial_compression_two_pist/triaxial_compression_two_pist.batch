@@ -73,8 +73,9 @@ export SETTLE_HALT=0          # 1 = end the settle early once both pistons are a
 
 # -----------------------------------------------------------------------
 # Compression stress-strain SWEEP: cumulative strain targets (fraction of the BB
-# reference thickness L0_bb).  Each level: drive the load piston to the target
-# (fix halt), freeze it, auto-sized hold, files tagged _c<strain>.  Solvent expelled
+# reference thickness L0_bb).  Each level: symmetric drive -- load piston DOWN +
+# support UP, half the closure each (DRIVE_SPLIT below) -- until the plate gap
+# reaches the target (fix halt), freeze both, auto-sized hold, files tagged _c<strain>.  Solvent expelled
 # by the compression raises the FEED PISTON by ~strain*L0: the converter's
 # margin_feed (default 15 sigma ~ strain 0.10 on the rho04 slab) must cover the
 # deepest level or the box-face halt ends the run -- rebuild the data file with
@@ -88,6 +89,7 @@ export SETTLE_HALT=0          # 1 = end the settle early once both pistons are a
 # arrays); STRAIN_TARGETS is the array, COMPRESSIONS the scalar run_lammps.sh reads.
 STRAIN_TARGETS=(0.10)
 export COMPRESSIONS="${STRAIN_TARGETS[*]}"
+export DRIVE_SPLIT=0.5        # load-piston share of the gap closure (0.5 = symmetric drive; 1.0 = load piston only)
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

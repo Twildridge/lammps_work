@@ -772,6 +772,19 @@ def _piston_z_func(cfg, R, lvl):
     return (lambda t: R['z_piston']), None
 
 
+def _support_z_func(cfg, R, lvl):
+    """z(t) of the support plate over one level.  Runs since the 2026-09-18 SYMMETRIC
+    drive (piston down + support up, half the closure each) write support_position_*;
+    older top-only runs have none, and the support is then its fixed reference plane."""
+    f = cfg.path('support_position', lvl)
+    if f.exists():
+        sp = np.atleast_2d(np.loadtxt(f, comments='#'))
+        if sp.size and sp.shape[1] >= 2:
+            st, sz = sp[:, 0], sp[:, 1]
+            return (lambda t: float(np.interp(t, st, sz))), (st, sz)
+    return (lambda t: R['z_support']), None
+
+
 def load_disp(cfg, R, lvl, halt_ts=None):
     """disp_z_polymer + piston_position + gel BB for one level -> dict/None."""
     f = cfg.path('disp_z_polymer', lvl)
@@ -790,6 +803,9 @@ def load_disp(cfg, R, lvl, halt_ts=None):
     else:
         d['z_pist_held'] = R['z_piston']
         d['t_hold'] = float(d['ts'][0])
+    # held SUPPORT plane: moves up under the symmetric drive (support_position file);
+    # top-only runs (no file) keep the reference plane
+    d['z_supp_held'] = _support_z_func(cfg, R, lvl)[0](d['ts'][-1])
     fb = cfg.path('gel_dimensions_bb', lvl)
     if fb.exists():
         bb = np.atleast_2d(np.loadtxt(fb, comments='#'))
@@ -805,17 +821,31 @@ def _w_modes(zh, kk):
 
 def fit_Dc(cfg, R, disp):
     """Two-sided consolidation fit of D_c to u_z/L on the polymer domain
-    (see the D_c notes in the notebooks).  Returns a dict or None."""
+    (see the D_c notes in the notebooks).  Returns a dict or None.
+
+    The domain is bounded by the HELD plate planes.  DL is the cumulative closure of
+    the plate gap since the seated reference; f_sup is the share of it the support
+    took (0 for the top-only drive of runs before 2026-09-18, 1/2 for the symmetric
+    drive since).  Only the affine end state / plotted IC depend on f_sup: the fit
+    itself models the hold-referenced u_dat with both faces pinned, so the odd-mode
+    (centre-symmetric) expansion is the same in both cases -- the symmetric drive
+    just makes the hold-onset state actually symmetric about the gel centre."""
     if disp is None or not np.isfinite(R['z_support']):
         return None
     ts, z, Nc = disp['ts'], disp['z'], disp['Nc']
-    span = disp['z_pist_held'] - R['z_support']
+    z_sup = float(disp.get('z_supp_held', R['z_support']))
+    if not np.isfinite(z_sup):
+        z_sup = float(R['z_support'])
+    span = disp['z_pist_held'] - z_sup
     L = disp.get('L_bb', span - 2.0)
     gap = 0.5 * (span - L)
-    z_perm, z_feed = R['z_support'] + gap, disp['z_pist_held'] - gap
-    DL = R['z_piston'] - disp['z_pist_held']
+    z_perm, z_feed = z_sup + gap, disp['z_pist_held'] - gap
+    DL_pist = R['z_piston'] - disp['z_pist_held']      # piston travel DOWN since the reference
+    DL_sup = z_sup - R['z_support']                    # support travel UP since the reference
+    DL = DL_pist + DL_sup                              # total plate-gap closure
     if not (L > 0 and DL > 0):
         return None
+    f_sup = float(DL_sup / DL)
     zeta = (z - z_perm) / L
     uhat = disp['uz'] / L
     idx = np.where((Nc.min(axis=0) > cfg.Ncount_min) & (zeta > 0) & (zeta < 1))[0]
@@ -861,11 +891,15 @@ def fit_Dc(cfg, R, disp):
             return _w_modes(zh, kk) @ (A * dec)
         return A[0] * (_w_modes(zh, kk) @ (8.0 / (np.pi * kk) ** 2 * dec))
 
-    u_model = lambda zh, t: -(DL / L) * zh + T(zh, t)
+    # absolute u_z/L (referenced to the pre-drive state): affine end state
+    # (DL/L)(f_sup - zeta) -- the support face moved UP by DL_sup, the piston face
+    # DOWN by DL_pist -- plus the fitted transient
+    u_model = lambda zh, t: (DL / L) * (f_sup - zh) + T(zh, t)
     u_IC = lambda zh: u_model(zh, 0.0)
     beta = np.nan if cfg.DC_FREE_AMPS else float(A[0])
     hold_T = float(t_lj[-1])
-    return dict(Dc=Dc, A=A, beta=beta, R2=R2, L=L, DL=DL, gap=gap, z_perm=z_perm, z_feed=z_feed,
+    return dict(Dc=Dc, A=A, beta=beta, R2=R2, L=L, DL=DL, DL_pist=DL_pist, DL_sup=DL_sup, f_sup=f_sup,
+                gap=gap, z_perm=z_perm, z_feed=z_feed, z_sup=z_sup, z_pist=disp['z_pist_held'],
                 zeta=zeta, idx=idx, zf=zf, uhat=uhat, early=early, t_lj=t_lj, ts=ts,
                 T=T, u_model=u_model, u_IC=u_IC, kk=kk, hold_T=hold_T,
                 hold_check=hold_adequacy(cfg, L, hold_T, Dc))
@@ -930,6 +964,8 @@ def load_level(cfg, R, lvl, verbose=True):
     # ---- piston position, membrane bounds ------------------------------
     L['piston_z_at'], L['piston_pos'] = _piston_z_func(cfg, R, lvl)
     L['z_pist'] = L['piston_z_at'](t1)
+    L['support_z_at'], L['support_pos'] = _support_z_func(cfg, R, lvl)
+    L['z_supp'] = L['support_z_at'](t1)                 # = R['z_support'] for top-only runs
     spf = np.abs(zz['p'][-1])
     thr = cfg.gel_thresh * float(np.nanmax(spf))
     mem = spf > thr
@@ -939,7 +975,9 @@ def load_level(cfg, R, lvl, verbose=True):
     L['interior'] = (L['in_mem'] & (z >= L['z_mem_lo'] + cfg.wall_margin)
                      & (z <= L['z_pist'] - cfg.wall_margin))
     say(f'  membrane (from final polymer stress): z in [{L["z_mem_lo"]:.1f}, {L["z_mem_hi"]:.1f}] '
-        f'({L["in_mem"].sum()} bins);  held piston z = {L["z_pist"]:.2f}')
+        f'({L["in_mem"].sum()} bins);  held piston z = {L["z_pist"]:.2f}, held support z = {L["z_supp"]:.2f}'
+        + ('' if L['support_pos'] is None else
+           f' (moved {L["z_supp"] - R["z_support"]:+.2f} from the reference: symmetric drive)'))
 
     # ---- Terzaghi split per component ----------------------------------
     bw = R['bw']
@@ -1150,7 +1188,7 @@ def load_level(cfg, R, lvl, verbose=True):
     else:
         F = L['Dc']
         say(f"  D_c = {F['Dc']:.4e} sigma^2/tau  (R^2 = {F['R2']:.3f};  L = {F['L']:.2f}, "
-            f"DL/L = {F['DL'] / F['L']:.4f}, hold = {F['hold_T']:.0f} tau)")
+            f"DL/L = {F['DL'] / F['L']:.4f} [support share {F['f_sup']:.2f}], hold = {F['hold_T']:.0f} tau)")
         L['kappa'] = {}
         for key, Mk in (('net', 'M_net'), ('pist', 'M_pist')):
             if Mk in L:
@@ -1268,8 +1306,10 @@ def add_volume_fractions(cfg, R, levels=()):
 # ===========================================================================
 _PROD_DAT = ('sigmazz_polymer', 'sigmazz_solvent', 'sigmaxx_polymer', 'sigmaxx_solvent',
              'sigmayy_polymer', 'sigmayy_solvent', 'solvent_density_z', 'disp_z_polymer',
-             'strain_zz', 'strain_piston', 'piston_position', 'piston_force', 'piston_force_avg',
+             'strain_zz', 'strain_piston', 'piston_position', 'support_position', 'piston_force', 'piston_force_avg',
              'box_dimensions', 'gel_dimensions_bb', 'gel_dimensions_rg', 'polymer_com', 'gel_edges')
+# support_position: written since the 2026-09-18 symmetric drive (support driven up with the
+# piston); older top-only runs have none and every reader falls back to the reference plane.
 _REF_DAT = ('sigmazz_polymer_ref', 'sigmazz_solvent_ref', 'sigmaxx_polymer_ref', 'sigmaxx_solvent_ref',
             'sigmayy_polymer_ref', 'sigmayy_solvent_ref', 'solvent_density_z_ref')
 # written only by runs since 2026-09-05: staged when a login happens anyway, but their
@@ -1467,20 +1507,44 @@ def shade_gel(ax, R, L=None):
     ax.axvspan(zn(R, lo), zn(R, hi), **GEL_SHADE)
 
 
+def _level_support_z(R, L, t=None):
+    """Support plane of level L (held, or at time t); the reference plane when L carries
+    no support track (top-only runs, permeation)."""
+    if L is None:
+        return R['z_support']
+    if t is not None and callable(L.get('support_z_at')):
+        return L['support_z_at'](t)
+    return L.get('z_supp', R['z_support'])
+
+
 def mark_walls(ax, R, L=None, ts=None):
-    """Support (solid) + piston (dash-dot): reference position when L is None,
-    else per evolution timestep (final dark, earlier faded)."""
-    if np.isfinite(R['z_support']):
-        ax.axvline(zn(R, R['z_support']), color='k', ls='-', lw=1.5, alpha=0.85, zorder=4)
+    """Support (solid) + piston (dash-dot): reference positions when L is None, else
+    the level's HELD positions -- per evolution timestep when ts is given (final dark,
+    earlier faded).  Both plates move under the symmetric drive (2026-09-18)."""
     if L is None or ts is None:
-        pistons = [(R['z_piston'] if L is None else L['z_pist'], True)]
+        walls = [(_level_support_z(R, L), R['z_piston'] if L is None else L['z_pist'], True)]
     else:
         ts = np.asarray(ts)
-        pistons = [(L['piston_z_at'](t), i == len(ts) - 1) for i, t in enumerate(ts)]
-    for pz, last in pistons:
+        walls = [(_level_support_z(R, L, t), L['piston_z_at'](t), i == len(ts) - 1) for i, t in enumerate(ts)]
+    for sz, pz, last in walls:
+        if np.isfinite(sz):
+            ax.axvline(zn(R, sz), color=('k' if last else '0.7'), ls='-',
+                       lw=(1.5 if last else 1.0), alpha=(0.85 if last else 0.35), zorder=(4 if last else 3))
         if np.isfinite(pz):
             ax.axvline(zn(R, pz), color=('0.15' if last else '0.7'), ls='-.',
                        lw=(1.6 if last else 1.0), alpha=(0.9 if last else 0.35), zorder=(4 if last else 3))
+
+
+def mark_level_walls(ax, R, levels):
+    """Sweep panels: reference support (black solid) and, per level in its colour, the
+    held piston (dash-dot) and -- when it moved (symmetric drive) -- the held support (solid)."""
+    if np.isfinite(R['z_support']):
+        ax.axvline(zn(R, R['z_support']), color='k', ls='-', lw=1.5, alpha=0.85, zorder=4)
+    for i, L in enumerate(levels):
+        zs = _level_support_z(R, L)
+        if np.isfinite(zs) and abs(zs - R['z_support']) > 1e-6:
+            ax.axvline(zn(R, zs), color=level_color(i), ls='-', lw=1.2, alpha=0.6, zorder=4)
+        ax.axvline(zn(R, L['z_pist']), color=level_color(i), ls='-.', lw=1.2, alpha=0.6, zorder=4)
 
 
 def finish_axes(ax, ylabel, title):
@@ -1780,10 +1844,7 @@ def overlay_levels(ax, R, levels, get_z, get_ts, get_stack, cfg, ref=None, autos
             if last:
                 finals.append(stack[j])
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.4)
-    if np.isfinite(R['z_support']):
-        ax.axvline(zn(R, R['z_support']), color='k', ls='-', lw=1.5, alpha=0.85, zorder=4)
-    for i, L in enumerate(levels):
-        ax.axvline(zn(R, L['z_pist']), color=level_color(i), ls='-.', lw=1.2, alpha=0.6, zorder=4)
+    mark_level_walls(ax, R, levels)
     finish_axes(ax, ylabel, title)
     if finals:
         robust_ylim(ax, finals, zmask=autoscale_mask, pad=pad, qlo=qlo, qhi=100, include_zero=include_zero)
@@ -2303,12 +2364,16 @@ def fig_Dc(cfg, R, L):
         axl.plot(F['zf'], u0_b + F['uhat'][i][F['idx']], 'o-', color=c, ms=3, alpha=0.6)
         axr.plot(F['zf'], u0_b + F['uhat'][i][F['idx']], 'o', color=c, ms=3, alpha=0.35)
         axr.plot(zff, F['u_model'](zff, F['t_lj'][i]), '-', color=c, lw=2.0)
+    fs = F['f_sup']                       # support's share of the closure (0 top-only, 1/2 symmetric)
     for ax in (axl, axr):
         ax._tri_has_colorbar = True
-        ax.plot([0, 1], [0, -dlL], 'k:', lw=1.8, label=r'affine ($t\to\infty$):  $-(\Delta L/L)\,\zeta$')
+        ax.plot([0, 1], [fs * dlL, (fs - 1.0) * dlL], 'k:', lw=1.8,
+                label=r'affine ($t\to\infty$):  $(\Delta L/L)(f_\mathrm{sup}-\zeta)$')
         ax.plot(zff, u0f, '-', color='0.45', lw=1.6, label=r'IC: fitted hold-onset state')
-        ax.plot(0, 0, 's', color=WONG['blue'], ms=9, zorder=5, label=r'BC: $u_z(0,t)=0$ (support)')
-        ax.plot(1, -dlL, 'D', color=WONG['vermillion'], ms=9, zorder=5, label=r'BC: $u_z(1,t)=-\Delta L/L$ (piston)')
+        ax.plot(0, fs * dlL, 's', color=WONG['blue'], ms=9, zorder=5,
+                label=r'BC: $u_z(0,t)=+\Delta L_\mathrm{sup}/L$ (held support)')
+        ax.plot(1, (fs - 1.0) * dlL, 'D', color=WONG['vermillion'], ms=9, zorder=5,
+                label=r'BC: $u_z(1,t)=-\Delta L_\mathrm{pist}/L$ (held piston)')
         ax.set(xlabel=r'$\zeta=(z-z_\mathrm{perm})/L$', ylabel=r'$u_z/L$', xlim=(0, 1))
         ax.grid(alpha=0.3)
         smart_legend(ax, fontsize=11)
@@ -2318,7 +2383,10 @@ def fig_Dc(cfg, R, L):
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     fig.colorbar(sm, ax=[axl, axr], fraction=0.015, pad=0.04).set_label('timestep')
-    fig.suptitle(f'Cooperative diffusivity fit (level _c{L["lvl"]})  |  {cfg.sim_name}', fontsize=12, fontweight='bold')
+    fig.suptitle(f'Cooperative diffusivity fit (level _c{L["lvl"]})  |  {cfg.sim_name}  |  '
+                 f'plate-gap closure $\\Delta L={sig(F["DL"])}\\,\\sigma$: support {fs:.0%} / piston {1 - fs:.0%}'
+                 + ('  (symmetric drive)' if abs(fs - 0.5) < 0.05 else '  (top-only drive)' if fs < 0.05 else ''),
+                 fontsize=12, fontweight='bold')
     return _save(fig, cfg, 'Dc_consolidation_fit', L['lvl'])
 
 
@@ -2373,6 +2441,9 @@ def fig_volfrac_sweep(cfg, R, levels):
             ax.fill_between(zx, lo, hi, color=level_color(i), alpha=0.15, lw=0)
             ax.plot(zx, m, '-', color=level_color(i), lw=2.4)
             ax.axvline(zn(R, L['z_pist']), color=level_color(i), ls='-.', lw=1.2, alpha=0.6)
+            zs = _level_support_z(R, L)              # held support (moved: symmetric drive)
+            if np.isfinite(zs) and abs(zs - R['z_support']) > 1e-6:
+                ax.axvline(zn(R, zs), color=level_color(i), ls='-', lw=1.2, alpha=0.6)
             txt.append(f'{L["eps"]:.2f}: {fmt_mu(m[L["interior"]])}')
         ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)
         if np.isfinite(R['z_support']):
@@ -2444,10 +2515,7 @@ def _final_overlay(ax, cfg, R, levels, get_stack, ref_stack, ylabel, title):
         ax.plot(zx, m, '-', color=level_color(i), lw=2.6, zorder=4)
         finals.append(m)
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.4)
-    if np.isfinite(R['z_support']):
-        ax.axvline(zn(R, R['z_support']), color='k', ls='-', lw=1.5, alpha=0.85, zorder=4)
-    for i, L in enumerate(levels):
-        ax.axvline(zn(R, L['z_pist']), color=level_color(i), ls='-.', lw=1.2, alpha=0.6, zorder=4)
+    mark_level_walls(ax, R, levels)
     finish_axes(ax, ylabel, title)
     if finals:
         robust_ylim(ax, finals, zmask=_scale_mask(cfg, R, levels=levels), pad=0.2)
@@ -2740,7 +2808,8 @@ def fig_Dc_sweep(cfg, R, levels):
             c = cmap(norm(F['ts'][i]))
             ax.plot(F['zf'], u0_b + F['uhat'][i][F['idx']], 'o', color=c, ms=2.5, alpha=0.35)
             ax.plot(zff, F['u_model'](zff, F['t_lj'][i]), '-', color=c, lw=1.5)
-        ax.plot([0, 1], [0, -F['DL'] / F['L']], 'k:', lw=1.6)
+        dlL, fs = F['DL'] / F['L'], F['f_sup']
+        ax.plot([0, 1], [fs * dlL, (fs - 1.0) * dlL], 'k:', lw=1.6)
         ax.set(xlabel=r'$\zeta$', ylabel=r'$u_z/L$', xlim=(0, 1))
         ax.set_title(fr"({'bcdefgh'[k]}) $\varepsilon={L['lvl']}$:  $D_c={sig(F['Dc'])}$, $R^2={sig(F['R2'])}$",
                      fontsize=14, color=level_color(i_lvl))
