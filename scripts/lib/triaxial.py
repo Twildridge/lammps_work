@@ -2041,7 +2041,8 @@ def fig_thermo_pressure(cfg, R, L):
     h.append(Patch(alpha=0, label=note))
     lab.append(note)
     smart_legend(ax, handles=h, labels=lab, fontsize=12)
-    fig.suptitle(f'Thermodynamic pressure evolution ($\\varepsilon={L["eps"]:.2f}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    lab_eps = f'($\\varepsilon={L["eps"]:.2f}$)' if np.isfinite(L['eps']) else '(permeation drive)'
+    fig.suptitle(f'Thermodynamic pressure evolution {lab_eps}  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
     return _save(fig, cfg, 'thermo_pressure_evolution', L['lvl'])
 
 
@@ -2074,7 +2075,8 @@ def fig_osmotic_pressure(cfg, R, L):
     h.append(Patch(alpha=0, label=note))
     lab.append(note)
     smart_legend(ax, handles=h, labels=lab, fontsize=12)
-    fig.suptitle(f'Osmotic pressure ($\\varepsilon={L["eps"]:.2f}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    lab_eps = f'($\\varepsilon={L["eps"]:.2f}$)' if np.isfinite(L['eps']) else '(steady permeation; feed baseline -- p_pore is not uniform under flow)'
+    fig.suptitle(f'Osmotic pressure {lab_eps}  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
     return _save(fig, cfg, 'osmotic_pressure_final', L['lvl'])
 
 

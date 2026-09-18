@@ -100,7 +100,7 @@ Readers, the Terzaghi network/pore split, the drift-tested block-bootstrap plate
 The full diagnostic notebook the two above were distilled from (2026-09-02). Still the place for the solvent-phase stress W_s,zz/V_solv diagnostics, the ss/pp pair-virial reconstruction and cross-virial check, the piston–gel contact analysis and the Widom-insertion appendix. Sweep conventions: `COMP_LEVELS`/`DETAIL_LEVEL` select which `_c<level>` tags to load; block-bootstrap piston CI; z-grid origin includes box zlo. Supersedes `compression_analysis.ipynb`.
 
 **`triaxial_permeation.ipynb`** (current)
-Reads a `triaxial_permeation` run. Six panels — piston, thickness, stress, density, permeate, and partial-vs-ss stress — with Phase 1.5 reference overlays. Supersedes `permeation_analysis.ipynb`.
+Reads a `triaxial_permeation` run. Eight sections — piston, thickness, total stress, density, permeate, partial-vs-ss stress, the thermodynamic pressure P_th = −⅓ tr(σ^t) evolution and the osmotic pressure Π = −⅓ tr(σ′) (zero-flux reference, and the final state with the caveat that p_pore is not uniform under flow) — with Phase 1.5 reference overlays. Supersedes `permeation_analysis.ipynb`.
 
 **`triaxial_compression_single_two_pist.ipynb`** / **`triaxial_compression_sweep_two_pist.ipynb`** (two-piston compression, 2026-09-16)
 Same Config → sync → load → figures pattern and the same eleven (single) / twelve (sweep) figures as the one-piston
