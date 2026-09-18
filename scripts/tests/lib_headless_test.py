@@ -22,12 +22,13 @@ tri.add_volume_fractions(cfg, R, LEVELS)
 tri.print_summary(cfg, LEVELS)
 L = LEVELS[1]
 for f in (tri.fig_strain, tri.fig_volfrac, tri.fig_total_stress, tri.fig_partial_stress, tri.fig_network_stress,
-          tri.fig_piston, tri.fig_M, tri.fig_ratio, tri.fig_G, tri.fig_Dc, tri.fig_kappa, tri.fig_wet_pistons, tri.fig_solvent_expelled):
+          tri.fig_piston, tri.fig_M, tri.fig_ratio, tri.fig_G, tri.fig_Dc, tri.fig_kappa, tri.fig_wet_pistons, tri.fig_solvent_expelled,
+          tri.fig_thermo_pressure, tri.fig_osmotic_pressure):
     f(cfg, R, L) if f is not tri.fig_strain else f(cfg, R, [L])
     plt.close('all')
 for f in (tri.fig_volfrac_sweep, tri.fig_total_stress_sweep, tri.fig_partial_stress_sweep, tri.fig_network_stress_sweep,
           tri.fig_piston_sweep, tri.fig_M_sweep, tri.fig_stress_strain_sweep, tri.fig_ratio_sweep, tri.fig_G_sweep,
-          tri.fig_Dc_sweep, tri.fig_kappa_sweep, tri.fig_wet_pistons_sweep):
+          tri.fig_Dc_sweep, tri.fig_kappa_sweep, tri.fig_wet_pistons_sweep, tri.fig_thermo_pressure_sweep, tri.fig_osmotic_pressure_sweep):
     f(cfg, R, LEVELS)
     plt.close('all')
 tri.fig_strain(cfg, R, LEVELS, stem='sweep_strain_diagnostic')

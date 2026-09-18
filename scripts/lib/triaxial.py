@@ -1916,8 +1916,8 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
         plot_evolution(ax, cfg, R, L, R['z'], ts, ev, lab + '$(z,t)$', title, ref=ref, band=band,
                        annotate=False, legend=False)
         if kind == 't':      # zoom on the band around P_bath (edge bin excluded), keep 1 well inside
-            robust_ylim(ax, list(ev) + ([ref[0]] if ref is not None else []), pad=0.45, qlo=2, qhi=100,
-                        include_zero=False)
+            robust_ylim(ax, list(ev) + ([ref[0]] if ref is not None else []), zmask=_scale_mask(cfg, R, L),
+                        pad=0.45, qlo=2, qhi=100, include_zero=False)
             lo, hi = ax.get_ylim()
             ax.set_ylim(min(lo, 1 - 0.3 * (hi - lo)), max(hi, 1 + 0.3 * (hi - lo)))
             note = 'plateau mean in gel interior = ' + fmt_mu(S['t_plat'][L['interior']] / cfg.P_BARO)
@@ -1938,11 +1938,140 @@ def fig_total_stress(cfg, R, L):
                               f'(hold from step {fmt_step(L["evol_from"])}; plateau from {fmt_step(L["halt_ts"])})  |  {cfg.sim_name}')
 
 
+def _scale_mask(cfg, R, L=None, levels=None):
+    """z-bins used to autoscale profile figures: from wall_margin inside the gel bottom
+    up to the feed piston (two-piston runs; the bins beyond the wet pistons are vacuum,
+    where sigma^t = 0 and sigma' = -p_pore would otherwise dominate the axis)."""
+    z = R['z']
+    lo = (min(L['z_mem_lo'] for L in levels) if levels else L['z_mem_lo']) + cfg.wall_margin
+    m = z >= lo
+    if np.isfinite(R.get('z_feed', np.nan)):
+        m &= z <= R['z_feed'] - 1.0
+    return m
+
+
+def _final_state(S, plat, ci):
+    """plateau-averaged network profile with its 95 % band (t-interval across the
+    plateau snapshots; each snapshot already carries the baseline noise)."""
+    return mean_ci(S['net'][plat], ci)
+
+
+def _net_panel(ax, cfg, R, L, comp, ylabel, title, band_color=WONG['blue'], line_color=WONG['blue'], label='final (plateau)'):
+    """Reference (dashed black, grey band) + final plateau state (solid, band) of one
+    network-stress component.  Returns the final mean profile or None."""
+    S = L['stress'].get(comp)
+    Rs = R['stress'].get(comp)
+    zx = zn(R, R['z'])
+    if Rs is not None:
+        ax.fill_between(zx, Rs['net_lo'], Rs['net_hi'], color='0.5', alpha=0.25, lw=0, zorder=1)
+        ax.plot(zx, Rs['net_m'], '--', color='k', lw=2.0, alpha=0.9, zorder=2, label=r'reference ($\varepsilon=0$)')
+    m = None
+    if S is not None:
+        m, lo, hi = _final_state(S, L['plat'], cfg.ci_level)
+        ax.fill_between(zx, lo, hi, color=band_color, alpha=0.25, lw=0, zorder=3)
+        ax.plot(zx, m, '-', color=line_color, lw=2.8, zorder=4, label=label + f' ({int(L["plat"].sum())} snapshots)')
+    ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
+    shade_gel(ax, R, L)
+    mark_walls(ax, R, L)
+    finish_axes(ax, ylabel, title)
+    return m
+
+
 def fig_network_stress(cfg, R, L):
-    return _stress_evo_panels(cfg, R, L, 'net', 'network_stress_evolution',
-                              f"Network stress evolution (Terzaghi), reference -> compressed  |  "
-                              f"p_pore(final) = {fmt_val_unc(L['stress']['zz']['pore'][-1], L['stress']['zz']['pore_half'][-1])}"
-                              f"  |  {cfg.sim_name}")
+    """Network stress sigma'_ii = sigma^t_ii - p_pore (Terzaghi) for zz, xx, yy: the
+    eps = 0 REFERENCE (dashed, grey band; ~0 since the gel starts at equilibrium
+    swelling) and the FINAL plateau-averaged state (solid blue, 95 % band) only.
+    The evolution curves were dropped on 2026-09-17: while the gel consolidates the
+    pore pressure is NOT uniform (solvent is still diffusing through the network),
+    so subtracting one reservoir value is only valid in the equilibrated state."""
+    fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
+    fig.suptitle(f"Network stress (Terzaghi $\\sigma'=\\sigma^t-p_{{\\rm pore}}$): reference and final equilibrated state  |  "
+                 f"p_pore(final) = {fmt_val_unc(L['stress']['zz']['pore'][-1], L['stress']['zz']['pore_half'][-1])}  |  {cfg.sim_name}",
+                 fontsize=13, fontweight='bold')
+    for ax, comp in zip(axes, COMPONENTS):
+        title = f'({"abc"[COMPONENTS.index(comp)]}) ' + r"network $\sigma'_{%s}$" % comp
+        if comp not in L['stress']:
+            ax.text(0.5, 0.5, f'sigma{comp} files\nnot found', ha='center', va='center', transform=ax.transAxes)
+            finish_axes(ax, r"$\sigma'_{%s}$" % comp, title)
+            continue
+        m = _net_panel(ax, cfg, R, L, comp, r"$\sigma'_{%s}(z)$" % comp, title)
+        robust_ylim(ax, [m] + ([R['stress'][comp]['net_m']] if comp in R['stress'] else []), zmask=_scale_mask(cfg, R, L), pad=0.2)
+        h, lab = ax.get_legend_handles_labels()
+        note = 'final mean in gel interior = ' + fmt_mu(m[L['interior']])
+        h.append(Patch(alpha=0, label=note))
+        lab.append(note)
+        smart_legend(ax, handles=h, labels=lab, fontsize=12)
+    return _save(fig, cfg, 'network_stress_final', L['lvl'])
+
+
+def _tr3(D, key):
+    """(xx + yy + zz)/3 of the per-snapshot stacks D[comp][key]; None if a component is missing."""
+    if not all(c in D for c in COMPONENTS):
+        return None
+    return (D['xx'][key] + D['yy'][key] + D['zz'][key]) / 3.0
+
+
+def fig_thermo_pressure(cfg, R, L):
+    """Thermodynamic pressure P_th = -(1/3) tr(sigma^t) (sign convention of the
+    profiles: positive under compression), time evolution over the hold (cividis,
+    final bold) with the eps = 0 reference dashed.  Needs the xx and yy profiles."""
+    Pt = _tr3(L['stress'], 't')
+    if Pt is None:
+        print('thermodynamic-pressure figure skipped (sigmaxx / sigmayy files missing)')
+        return None
+    fig, ax = plt.subplots(figsize=(13, 7), constrained_layout=True)
+    ts, ev = post_halt(cfg, L, L['ts'], Pt)
+    ref = None
+    Rt = _tr3(R['stress'], 't')
+    if Rt is not None:
+        ref = mean_ci(Rt, cfg.ci_level)
+    plot_evolution(ax, cfg, R, L, R['z'], ts, ev, r'$P_{\rm th}(z,t)$  (LJ)',
+                   r'Thermodynamic pressure $P_{\rm th}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma}^t)$: reference -> hold -> plateau',
+                   ref=ref, annotate=False, legend=False)
+    ax.axhline(cfg.P_BARO, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
+    robust_ylim(ax, list(ev) + ([ref[0]] if ref is not None else []), zmask=_scale_mask(cfg, R, L), pad=0.45, qlo=2, qhi=100, include_zero=False)
+    lo, hi = ax.get_ylim()
+    ax.set_ylim(min(lo, cfg.P_BARO - 0.3 * (hi - lo)), max(hi, cfg.P_BARO + 0.3 * (hi - lo)))
+    h, lab = ax.get_legend_handles_labels()
+    note = f'plateau mean in gel interior = {fmt_mu(np.nanmean(Pt[L["plat"]], axis=0)[L["interior"]])}   (dotted: $P_{{\\rm bath}}={sig(cfg.P_BARO)}$)'
+    h.append(Patch(alpha=0, label=note))
+    lab.append(note)
+    smart_legend(ax, handles=h, labels=lab, fontsize=12)
+    fig.suptitle(f'Thermodynamic pressure evolution ($\\varepsilon={L["eps"]:.2f}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    return _save(fig, cfg, 'thermo_pressure_evolution', L['lvl'])
+
+
+def fig_osmotic_pressure(cfg, R, L):
+    """Osmotic pressure Pi = -(1/3) tr(sigma') (positive under compression), reference
+    (dashed, ~0) and final plateau state (solid blue) with 95 % bands.  Like the
+    network stress, only the equilibrated state is meaningful."""
+    Pn = _tr3(L['stress'], 'net')
+    if Pn is None:
+        print('osmotic-pressure figure skipped (sigmaxx / sigmayy files missing)')
+        return None
+    fig, ax = plt.subplots(figsize=(13, 7), constrained_layout=True)
+    zx = zn(R, R['z'])
+    Rn = _tr3(R['stress'], 'net')
+    if Rn is not None:
+        m, lo, hi = mean_ci(Rn, cfg.ci_level)
+        ax.fill_between(zx, lo, hi, color='0.5', alpha=0.25, lw=0, zorder=1)
+        ax.plot(zx, m, '--', color='k', lw=2.0, alpha=0.9, zorder=2, label=r'reference ($\varepsilon=0$)')
+    m, lo, hi = mean_ci(Pn[L['plat']], cfg.ci_level)
+    ax.fill_between(zx, lo, hi, color=WONG['blue'], alpha=0.25, lw=0, zorder=3)
+    ax.plot(zx, m, '-', color=WONG['blue'], lw=2.8, zorder=4, label=f'final (plateau, {int(L["plat"].sum())} snapshots)')
+    ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
+    shade_gel(ax, R, L)
+    mark_walls(ax, R, L)
+    finish_axes(ax, r'$\mathit{\Pi}(z)$  (LJ)',
+                r"Osmotic pressure $\mathit{\Pi}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma}')$: reference and final equilibrated state")
+    robust_ylim(ax, [m] + ([mean_ci(Rn, cfg.ci_level)[0]] if Rn is not None else []), zmask=_scale_mask(cfg, R, L), pad=0.2)
+    h, lab = ax.get_legend_handles_labels()
+    note = 'final mean in gel interior = ' + fmt_mu(m[L['interior']])
+    h.append(Patch(alpha=0, label=note))
+    lab.append(note)
+    smart_legend(ax, handles=h, labels=lab, fontsize=12)
+    fig.suptitle(f'Osmotic pressure ($\\varepsilon={L["eps"]:.2f}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    return _save(fig, cfg, 'osmotic_pressure_final', L['lvl'])
 
 
 def fig_partial_stress(cfg, R, L):
@@ -2255,8 +2384,7 @@ def fig_volfrac_sweep(cfg, R, levels):
 def _sweep_stress_panels(cfg, R, levels, kind, stem, suptitle):
     fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
     fig.suptitle(suptitle, fontsize=13, fontweight='bold')
-    mem_lo = min(L['z_mem_lo'] for L in levels)
-    mask = R['z'] >= mem_lo + cfg.wall_margin
+    mask = _scale_mask(cfg, R, levels=levels)
     for ax, comp in zip(axes, COMPONENTS):
         Rs = R['stress'].get(comp)
         lab = (r'$\sigma^{t}_{%s}(z,t)$' % comp) if kind == 't' else (r"$\sigma'_{%s}(z,t)$" % comp)
@@ -2276,7 +2404,7 @@ def _sweep_stress_panels(cfg, R, levels, kind, stem, suptitle):
             ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
         overlay_levels(ax, R, levels, lambda L: L['z'], lambda L: L['ts'],
                        lambda L, c=comp, sc=scale: (L['stress'][c][kind] / sc if c in L['stress'] else None), cfg,
-                       ref=ref, autoscale_mask=(mask if kind == 'net' else None), ylabel=lab, title=title,
+                       ref=ref, autoscale_mask=mask, ylabel=lab, title=title,
                        include_zero=(kind != 't'), pad=(0.45 if kind == 't' else 0.15))
         if kind == 't':
             lo, hi = ax.get_ylim()
@@ -2291,9 +2419,82 @@ def fig_total_stress_sweep(cfg, R, levels):
                                 f'(faint = early hold, bold = plateau)  |  {cfg.sim_name}')
 
 
+def _final_overlay(ax, cfg, R, levels, get_stack, ref_stack, ylabel, title):
+    """Sweep overlay of FINAL plateau states (colour = level, 95 % bands) + the
+    reference (dashed black).  get_stack(L) -> per-snapshot stack or None."""
+    zx = zn(R, R['z'])
+    finals = []
+    if ref_stack is not None:
+        m, lo, hi = mean_ci(ref_stack, cfg.ci_level)
+        ax.fill_between(zx, lo, hi, color='0.5', alpha=0.2, lw=0, zorder=1)
+        ax.plot(zx, m, '--', color='k', lw=2.0, alpha=0.9, zorder=2)
+        finals.append(m)
+    for i, L in enumerate(levels):
+        st = get_stack(L)
+        if st is None:
+            continue
+        m, lo, hi = mean_ci(st[L['plat']], cfg.ci_level)
+        ax.fill_between(zx, lo, hi, color=level_color(i), alpha=0.18, lw=0, zorder=3)
+        ax.plot(zx, m, '-', color=level_color(i), lw=2.6, zorder=4)
+        finals.append(m)
+    ax.axhline(0, color='k', ls='--', lw=1, alpha=0.4)
+    if np.isfinite(R['z_support']):
+        ax.axvline(zn(R, R['z_support']), color='k', ls='-', lw=1.5, alpha=0.85, zorder=4)
+    for i, L in enumerate(levels):
+        ax.axvline(zn(R, L['z_pist']), color=level_color(i), ls='-.', lw=1.2, alpha=0.6, zorder=4)
+    finish_axes(ax, ylabel, title)
+    if finals:
+        robust_ylim(ax, finals, zmask=_scale_mask(cfg, R, levels=levels), pad=0.2)
+    smart_legend(ax, handles=level_handles(levels, ref=ref_stack is not None), fontsize=11)
+
+
 def fig_network_stress_sweep(cfg, R, levels):
-    return _sweep_stress_panels(cfg, R, levels, 'net', 'sweep_network_stress_evolution',
-                                f'Network stress evolution (Terzaghi), all levels  |  {cfg.sim_name}')
+    """Network stress sigma'_ii, FINAL plateau state of every level (+ reference dashed).
+    No evolution curves (2026-09-17): p_pore is only uniform once consolidation is over."""
+    fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
+    fig.suptitle(f'Network stress (Terzaghi), final equilibrated state of every level  |  {cfg.sim_name}',
+                 fontsize=13, fontweight='bold')
+    for ax, comp in zip(axes, COMPONENTS):
+        title = f'({"abc"[COMPONENTS.index(comp)]}) ' + r"network $\sigma'_{%s}$" % comp
+        if not any(comp in L['stress'] for L in levels):
+            ax.text(0.5, 0.5, f'sigma{comp} files\nnot found', ha='center', va='center', transform=ax.transAxes)
+            finish_axes(ax, r"$\sigma'_{%s}$" % comp, title)
+            continue
+        Rs = R['stress'].get(comp)
+        _final_overlay(ax, cfg, R, levels, lambda L, c=comp: (L['stress'][c]['net'] if c in L['stress'] else None),
+                       Rs['net'] if Rs is not None else None, r"$\sigma'_{%s}(z)$" % comp, title)
+    return _save(fig, cfg, 'sweep_network_stress_final')
+
+
+def fig_thermo_pressure_sweep(cfg, R, levels):
+    """P_th = -(1/3) tr(sigma^t) evolution, all levels overlaid (faint -> bold), reference dashed."""
+    if not any(_tr3(L['stress'], 't') is not None for L in levels):
+        print('thermodynamic-pressure sweep figure skipped (sigmaxx / sigmayy files missing)')
+        return None
+    fig, ax = plt.subplots(figsize=(13, 7), constrained_layout=True)
+    Rt = _tr3(R['stress'], 't')
+    ref = mean_ci(Rt, cfg.ci_level) if Rt is not None else None
+    ax.axhline(cfg.P_BARO, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
+    overlay_levels(ax, R, levels, lambda L: L['z'], lambda L: L['ts'], lambda L: _tr3(L['stress'], 't'), cfg, ref=ref,
+                   autoscale_mask=_scale_mask(cfg, R, levels=levels), ylabel=r'$P_{\rm th}(z,t)$  (LJ)',
+                   title=r'Thermodynamic pressure $P_{\rm th}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma}^t)$, all levels (faint = early hold, bold = plateau)',
+                   include_zero=False, pad=0.45)
+    lo, hi = ax.get_ylim()
+    ax.set_ylim(min(lo, cfg.P_BARO - 0.3 * (hi - lo)), max(hi, cfg.P_BARO + 0.3 * (hi - lo)))
+    smart_legend(ax, handles=level_handles(levels, ref=ref is not None), fontsize=11)
+    return _save(fig, cfg, 'sweep_thermo_pressure_evolution')
+
+
+def fig_osmotic_pressure_sweep(cfg, R, levels):
+    """Pi = -(1/3) tr(sigma'), final plateau state of every level (+ reference dashed)."""
+    if not any(_tr3(L['stress'], 'net') is not None for L in levels):
+        print('osmotic-pressure sweep figure skipped (sigmaxx / sigmayy files missing)')
+        return None
+    fig, ax = plt.subplots(figsize=(13, 7), constrained_layout=True)
+    _final_overlay(ax, cfg, R, levels, lambda L: _tr3(L['stress'], 'net'), _tr3(R['stress'], 'net'),
+                   r'$\mathit{\Pi}(z)$  (LJ)',
+                   r"Osmotic pressure $\mathit{\Pi}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma}')$, final equilibrated state of every level")
+    return _save(fig, cfg, 'sweep_osmotic_pressure_final')
 
 
 def fig_partial_stress_sweep(cfg, R, levels):
