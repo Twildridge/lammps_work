@@ -61,7 +61,7 @@ INTERACTION="1.0_1.0"   # epsSS_epsSP
 # setup-phase files only.  Every reference/production file is tagged with its
 # level's AUTO-SIZED HOLD LENGTH (..._<hold>_c<strain>.dat) -- see the NSTEPS
 # block of triaxial_compression.batch; the notebooks resolve the tags (NSTEPS=None).
-NSTEPS=5000000
+NSTEPS=9000000
 TYPE=""
 PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run
 

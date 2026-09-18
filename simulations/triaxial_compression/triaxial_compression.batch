@@ -73,7 +73,7 @@ INTERACTION="1.0_1.0" # first number is solvent–solvent; second is polymer–s
 #     ~9.1M steps and a 4-level sweep ~34M + drives.  Scale --time above to match
 #     (or let it hit the wall and resume with continue_sim.sh).  The .lmp prints
 #     the sized hold for each level before it runs it.
-NSTEPS=5000000   # filename tag + flat-hold fallback (see the block above)
+NSTEPS=9000000   # filename tag + flat-hold fallback (see the block above)
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 
 # -----------------------------------------------------------------------
