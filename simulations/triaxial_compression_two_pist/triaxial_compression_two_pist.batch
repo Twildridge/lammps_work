@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-node=32
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=0
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=%x.o%j.%N
 
 # -----------------------------------------------------------------------
@@ -87,7 +87,8 @@ export SETTLE_HALT=0          # 1 = end the settle early once both pistons are a
 # -----------------------------------------------------------------------
 # NOTE: the list must be exported as a SCALAR string (bash does not export
 # arrays); STRAIN_TARGETS is the array, COMPRESSIONS the scalar run_lammps.sh reads.
-STRAIN_TARGETS=(0.10)
+# example: STRAIN_TARGETS=(0.05 0.10 0.15 0.20)
+STRAIN_TARGETS=(0.10 0.15 0.20 0.3 0.4 0.5 0.7)
 export COMPRESSIONS="${STRAIN_TARGETS[*]}"
 export DRIVE_SPLIT=0.5        # load-piston share of the gap closure (0.5 = symmetric drive; 1.0 = load piston only)
 
