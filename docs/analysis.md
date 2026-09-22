@@ -109,7 +109,11 @@ value column, `[load | feed | perm]`) — plus the **wet-piston bath check** (`f
 measured on the sheets vs `P_target` over the hold) and the **solvent expelled** (`fig_solvent_expelled`, feed-piston
 rise + permeate-piston descent). `Config(mode="compression", two_pist=True)` points the sync at
 `lammps_runs/triaxial_compression_two_pist` and pulls `piston_pressure`, `permeation`, `pressure_reservoirs` too.
-The pore-pressure baseline is the feed-reservoir interior (the box top is vacuum in this geometry).
+The pore-pressure baseline is the feed-reservoir interior (the box top is vacuum in this geometry), rebuilt per
+stress snapshot from the measured feed-piston plane (`piston_position`, column `z_feed`) with every bin kept entirely
+≥ `Config.res_wall_margin` (3 σ) clear of the piston sheet — the bin touching a wet piston under-reads σ_zz by ~0.07
+(depletion layer + wall virial booked on the piston atoms), which before 2026-09-22 shifted every σ′ by +0.016.
+The summary prints *plates over the level* (support, load piston, feed and permeate pistons: start → end).
 
 **`triaxial_permeation_single_two_pist.ipynb`** (two-piston permeation, 2026-09-16 — no sweep notebook)
 `Config(mode="permeation", two_pist=True)`; `tri.load_permeation` builds one dict `P`: total / partial / network

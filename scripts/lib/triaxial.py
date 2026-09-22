@@ -129,6 +129,13 @@ class Config:
     wall_margin: float = 4.0              # sigma trimmed off both gel ends for interior means
     baseline_zf: float = 0.95             # reservoir baseline window centre (z/Lz) for p_pore
     baseline_zf_half: float = 0.04        # its half-width
+    res_wall_margin: float = 3.0          # TWO-PISTON runs (2026-09-22): a reservoir bin enters the pore baseline only
+                                          # if it lies ENTIRELY >= this many sigma from the nearest wet-piston plane.
+                                          # The 1-sigma piston sheet perturbs the solvent (depletion, then layering)
+                                          # out to ~3 sigma and its pair virial is split with the piston atoms, which
+                                          # the solvent profile does not count: the bin touching the feed piston reads
+                                          # sigma_zz ~1.43 for a 1.50 bath and shifted every sigma' by +0.016.
+    res_gel_gap_bins: int = 2             # bins skipped between the gel edge and the reservoir window
     roll_win: int = 21                    # rolling-mean window (samples) for the piston plots
     # ---- volume fractions (lib/volfrac.py) -------------------------------
     VOR_ENABLE: bool = True               # False -> mass-fraction only (no trajectory pass)
@@ -571,19 +578,38 @@ def _component_stacks(cfg, comp, lvl=None, ref=False):
     return dict(ts=np.array([x[0] for x in sp[:n]], float), bins=sp[0][1], p=P, s=S, t=P + S)
 
 
+def reservoir_mask(z, cfg, side, z_pist, z_gel, relax=True):
+    """Bins of ONE solvent reservoir usable as a pore-pressure baseline at ONE instant
+    (two-piston runs).  side='feed': between the gel top z_gel (+ res_gel_gap_bins
+    bins) and the feed-piston plane z_pist; side='perm': between the permeate-piston
+    plane and the gel bottom.  A bin counts only when it lies ENTIRELY >=
+    cfg.res_wall_margin sigma from the piston plane (see the Config note: the bin
+    touching the piston sheet is depleted/layered and half its wall virial sits on
+    the piston atoms).  The support is solvent-permeable and needs no margin.  With
+    relax=True the margin is halved when the window would otherwise be empty (a thin
+    reservoir late in a permeation run); an empty result means 'no usable bin'."""
+    z = np.asarray(z, float)
+    h = 0.5 * cfg.binWidth
+    gap = cfg.res_gel_gap_bins * cfg.binWidth
+    margins = (cfg.res_wall_margin, 0.5 * cfg.res_wall_margin) if relax else (cfg.res_wall_margin,)
+    for margin in margins:
+        if side == 'feed':
+            m = (z >= z_gel + gap) & (z + h <= z_pist - margin)
+        else:
+            m = (z - h >= z_pist + margin) & (z <= z_gel - gap)
+        if m.sum() >= 1:
+            return m
+    return np.zeros(len(z), bool)
+
+
 def baseline_mask(z, cfg, R=None):
     """Flat far-reservoir bins used for the pore-pressure baseline (drops the
     half-empty extreme-edge bin).  Two-piston runs (R carries finite z_feed):
     the box top is VACUUM, so the baseline is the interior of the FEED reservoir
-    [gel top + 2 sigma, feed piston - 1.5 sigma] instead of z/Lz ~ baseline_zf."""
+    (reservoir_mask with the REFERENCE piston plane) instead of z/Lz ~ baseline_zf."""
     z = np.asarray(z, float)
     if R is not None and np.isfinite(R.get('z_feed', np.nan)):
-        lo = R['z_gel_hi'] + 2.0 * cfg.binWidth
-        hi = R['z_feed'] - 1.5
-        m = (z >= lo) & (z <= hi)
-        if m.sum() >= 2:
-            return m
-        m = (z > R['z_gel_hi']) & (z < R['z_feed'] - 0.5)
+        m = reservoir_mask(z, cfg, 'feed', R['z_feed'], R['z_gel_hi'])
         if m.sum() >= 1:
             return m
     zf = (z - z.min()) / (z.max() - z.min())
@@ -591,15 +617,42 @@ def baseline_mask(z, cfg, R=None):
             & (zf <= cfg.baseline_zf + cfg.baseline_zf_half) & (zf < 0.995))
 
 
+def baseline_masks_at(z, cfg, R, ts, z_feed_at=None, z_gel_hi=None):
+    """Per-snapshot pore-baseline masks, shape (n_snap, n_bins).  Two-piston runs
+    rebuild the feed-reservoir window at every snapshot from the MEASURED feed-piston
+    plane z_feed_at(t) (the wet pistons drift as solvent is expelled during a
+    compression hold, and travel during a permeation run); the gel top is the larger
+    of the reference and the level's own.  One-piston runs tile the fixed window.
+    A snapshot whose window would be empty falls back to the reference window."""
+    z = np.asarray(z, float)
+    ts = np.asarray(ts, float)
+    if np.isfinite(R.get('z_feed', np.nan)):
+        zg = R['z_gel_hi'] if z_gel_hi is None else max(float(z_gel_hi), R['z_gel_hi'])
+        zf = (lambda t: R['z_feed']) if z_feed_at is None else z_feed_at
+        rows = [reservoir_mask(z, cfg, 'feed', zf(t), zg) for t in ts]
+        return np.array([r if r.any() else R['bw'] for r in rows], bool)
+    return np.tile(np.asarray(R['bw'], bool), (len(ts), 1))
+
+
+def mask_span(z, m):
+    """'z in [lo, hi] (n bins)' for a boolean bin mask."""
+    z = np.asarray(z, float)
+    m = np.asarray(m, bool)
+    return f'z in [{z[m].min():.1f}, {z[m].max():.1f}] ({int(m.sum())} bins)' if m.any() else '(no bins)'
+
+
 def terzaghi_split(tot_stack, bw, sd_bin, ci=0.95):
     """sigma' = sigma^t - p_pore per snapshot; p_pore = mean over the baseline bins.
+    `bw` is one mask for every snapshot (1-D) or one mask PER snapshot (2-D, the
+    piston-tracking windows of baseline_masks_at).
     Returns (net_stack, pore_val, pore_half, net_half)."""
     tot = np.asarray(tot_stack, float)
+    bw = np.asarray(bw, bool)
     net = np.zeros_like(tot)
     pore = np.zeros(len(tot))
     pore_h = np.zeros(len(tot))
     for i in range(len(tot)):
-        v = tot[i][bw]
+        v = tot[i][bw[i] if bw.ndim == 2 else bw]
         v = v[np.isfinite(v)]
         p0 = float(np.nanmean(v)) if len(v) else 0.0
         se = float(stats.sem(v)) if len(v) > 1 else 0.0
@@ -690,7 +743,8 @@ def load_reference(cfg):
     # ---- reference totals, Terzaghi split per component ----------------
     R['bw'] = baseline_mask(z, cfg, R)
     if R['two_pist']:
-        print(f'pore baseline window (feed reservoir): z in [{z[R["bw"]].min():.1f}, {z[R["bw"]].max():.1f}] ({int(R["bw"].sum())} bins)')
+        print(f'pore baseline window (feed reservoir, bins >= {cfg.res_wall_margin:g} sigma clear of the feed piston): '
+              f'{mask_span(z, R["bw"])}  [levels re-derive it per snapshot from the measured piston plane]')
     for comp, S in R['stress'].items():
         S['t_m'], S['t_lo'], S['t_hi'] = mean_ci(S['t'], cfg.ci_level)
         S['p_m'] = np.nanmean(S['p'], axis=0)
@@ -783,6 +837,45 @@ def _support_z_func(cfg, R, lvl):
             st, sz = sp[:, 0], sp[:, 1]
             return (lambda t: float(np.interp(t, st, sz))), (st, sz)
     return (lambda t: R['z_support']), None
+
+
+def _wet_piston_z_funcs(cfg, R, lvl=None):
+    """z(t) of the feed and permeate pistons from piston_position[_c<lvl>] (columns
+    z_feed / z_perm of the two-piston decks); the reference planes when the file or
+    the columns are absent (one-piston runs).  Returns {feed_at, perm_at, feed_track,
+    perm_track}; a track is (step, z) or None."""
+    out = {}
+    names, tab = read_piston_table(cfg.path('piston_position', lvl))
+    for lab in ('feed', 'perm'):
+        col = table_col(names, tab, f'z_{lab}') if tab.size else None
+        z0 = float(R.get(f'z_{lab}', np.nan))
+        if col is not None and tab.shape[0] >= 1:
+            st = tab[:, 0]
+            out[f'{lab}_at'] = (lambda t, st=st, c=col: float(np.interp(t, st, c)))
+            out[f'{lab}_track'] = (st, col)
+        else:
+            out[f'{lab}_at'] = (lambda t, z0=z0: z0)
+            out[f'{lab}_track'] = None
+    return out
+
+
+def plate_tracks(R, L):
+    """{plate: (z_start, z_end)} over the level's own position files (ramp + hold):
+    the support, the loading piston and -- two-piston runs -- both wet pistons.  Only
+    the plates a run does not drive are expected to sit still; under the symmetric
+    drive the support moves too, so nothing is assumed: every plate is reported."""
+    def ends(track, const):
+        return (float(track[1][0]), float(track[1][-1])) if track is not None else (float(const), float(const))
+    T = {'support': ends(L.get('support_pos'), R['z_support']),
+         ('load piston' if R.get('two_pist') else 'piston'): ends(L.get('piston_pos'), R['z_piston'])}
+    if R.get('two_pist') and L.get('wetz'):
+        T['feed piston'] = ends(L['wetz']['feed_track'], R['z_feed'])
+        T['permeate piston'] = ends(L['wetz']['perm_track'], R['z_perm'])
+    return T
+
+
+def fmt_plates(T):
+    return ' | '.join(f'{k} {a:.2f} -> {b:.2f} ({b - a:+.2f})' for k, (a, b) in T.items())
 
 
 def load_disp(cfg, R, lvl, halt_ts=None):
@@ -979,13 +1072,24 @@ def load_level(cfg, R, lvl, verbose=True):
         + ('' if L['support_pos'] is None else
            f' (moved {L["z_supp"] - R["z_support"]:+.2f} from the reference: symmetric drive)'))
 
+    # ---- plates: what moved over this level; wet-piston tracks (2026-09-22) ----
+    L['wetz'] = _wet_piston_z_funcs(cfg, R, lvl)
+    L['plates'] = plate_tracks(R, L)
+    say('  plates over the level (start -> end): ' + fmt_plates(L['plates']))
+
     # ---- Terzaghi split per component ----------------------------------
-    bw = R['bw']
+    # pore baseline window per snapshot: two-piston runs follow the measured feed-piston
+    # plane (it rises as solvent is expelled), one-piston runs use the fixed window
+    bw = baseline_masks_at(z, cfg, R, ts, L['wetz']['feed_at'], L['z_mem_hi'])
+    L['bw'] = bw
+    if R['two_pist']:
+        say(f'  pore baseline window (feed reservoir, tracking the feed piston): first snapshot {mask_span(z, bw[0])}'
+            f' -> last {mask_span(z, bw[-1])}')
     for comp, S in L['stress'].items():
         Rs = R['stress'].get(comp)
         sd_bin = Rs['sd_bin'] if Rs is not None else None
         if sd_bin is None or Rs['t'].shape[0] < 2 or not np.any(sd_bin > 0):
-            sd_bin = np.full(len(z), float(np.nanstd(S['t'][-1][bw])))
+            sd_bin = np.full(len(z), float(np.nanstd(S['t'][-1][bw[-1]])))
         S['net'], S['pore'], S['pore_half'], S['net_half'] = terzaghi_split(S['t'], bw, sd_bin, cfg.ci_level)
         S['ref_net'] = (Rs['net_interior'] if (cfg.G_SUBTRACT_REF and Rs is not None) else 0.0)
         S['net_mem'] = np.array([np.nanmean(S['net'][i][L['in_mem']]) for i in range(len(ts))])
@@ -2011,7 +2115,7 @@ def _scale_mask(cfg, R, L=None, levels=None):
     lo = (min(L['z_mem_lo'] for L in levels) if levels else L['z_mem_lo']) + cfg.wall_margin
     m = z >= lo
     if np.isfinite(R.get('z_feed', np.nan)):
-        m &= z <= R['z_feed'] - 1.0
+        m &= z + 0.5 * cfg.binWidth <= R['z_feed'] - cfg.res_wall_margin
     return m
 
 
@@ -3096,22 +3200,35 @@ def load_permeation(cfg, R, verbose=True):
     P['wet'] = load_wet_pistons(cfg, R, None, plat_from=P['halt_ts'])
 
     # ---- Terzaghi split with the feed-reservoir baseline (+ the permeate side) ----
-    bw = R['bw']
+    # both windows are rebuilt per snapshot from the MEASURED piston planes: in a
+    # permeation run the feed piston descends and the permeate piston rises all along
+    # (2026-09-22); each bin stays >= res_wall_margin clear of its piston sheet
+    P['wetz'] = _wet_piston_z_funcs(cfg, R, None)
+    P['plates'] = {'support': (R['z_support'], R['z_support'])}
+    P['plates'].update({k: v for k, v in plate_tracks(R, dict(wetz=P['wetz'], piston_pos=None, support_pos=None)).items()
+                        if k in ('feed piston', 'permeate piston')})
+    say('plates over the run (start -> end): ' + fmt_plates(P['plates']))
+    bw = baseline_masks_at(z, cfg, R, ts, P['wetz']['feed_at'], P['z_mem_hi'])
+    P['bw'] = bw
     bw_perm = None
     if np.isfinite(R.get('z_perm', np.nan)):
-        m = (z >= R['z_perm'] + 1.5) & (z <= R['z_support'] - 0.5)
-        bw_perm = m if m.sum() >= 1 else None
+        z_bot = min(P['z_mem_lo'], R['z_gel_lo'])
+        rows = [reservoir_mask(z, cfg, 'perm', P['wetz']['perm_at'](t), z_bot) for t in ts]
+        bw_perm = np.array(rows, bool) if all(r.any() for r in rows) else None
+    P['bw_perm'] = bw_perm
+    say(f'pore baseline windows (tracking the pistons): feed {mask_span(z, bw[0])} -> {mask_span(z, bw[-1])}'
+        + (f';  permeate {mask_span(z, bw_perm[0])} -> {mask_span(z, bw_perm[-1])}' if bw_perm is not None else ''))
     for comp, S in P['stress'].items():
         Rs = R['stress'].get(comp)
         sd_bin = Rs['sd_bin'] if (Rs is not None and Rs['t'].shape[0] >= 2 and np.any(Rs['sd_bin'] > 0)) \
-            else np.full(len(z), float(np.nanstd(S['t'][-1][bw])))
+            else np.full(len(z), float(np.nanstd(S['t'][-1][bw[-1]])))
         S['net'], S['pore'], S['pore_half'], S['net_half'] = terzaghi_split(S['t'], bw, sd_bin, cfg.ci_level)
         S['ref_net'] = Rs['net_interior'] if Rs is not None else 0.0
         S['net_plat'] = np.nanmean(S['net'][P['plat']], axis=0)
         S['t_plat'] = np.nanmean(S['t'][P['plat']], axis=0)
         S['net_mem'] = np.array([np.nanmean(S['net'][i][P['in_mem']]) for i in range(len(ts))])
         if bw_perm is not None:
-            S['pore_perm'] = np.array([float(np.nanmean(S['t'][i][bw_perm])) for i in range(len(ts))])
+            S['pore_perm'] = np.array([float(np.nanmean(S['t'][i][bw_perm[i]])) for i in range(len(ts))])
     say(f"reservoir sigma_zz baselines (profiles): feed {zz['pore'][0]:.4f} -> {zz['pore'][-1]:.4f}"
         + (f";  permeate {zz['pore_perm'][0]:.4f} -> {zz['pore_perm'][-1]:.4f}" if 'pore_perm' in zz else ''))
 

@@ -829,19 +829,32 @@ compute sigmazz_solv_fpp solvent reduce/chunk chunk_zf_solv_pp sum v_sigma_s_zz_
 # ==========================================================================
 #                  ANALYSIS: RESERVOIR PRESSURES + DENSITIES
 # ==========================================================================
-#   feed     = [gel top, feed piston bottom face]   (c_maxz clamped >= 1 sigma below the face)
-#   permeate = [permeate piston top face, support plane]
+#   feed     = [gel top + res_gel_clear, feed piston bottom face - res_wall_clear]   (>= res_min_thick thick)
+#   permeate = [permeate piston top face + res_wall_clear, support plane]
 #   P_res = sum[-(sxx+syy+szz)_i/3] / V_res  (kinetic term included -> fluid pressure)
-variable res_feed_zlo equal (c_maxz<(c_feed_com[3]-1.5*${sigma}))*c_maxz+(c_maxz>=(c_feed_com[3]-1.5*${sigma}))*(c_feed_com[3]-1.5*${sigma})
-region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo v_feed_z_bot side in
-region reg_perm_res block EDGE EDGE EDGE EDGE v_perm_z_top v_support_z_live side in
+#   Wall clearance (2026-09-22): a piston sheet depletes/layers the solvent out to ~3 sigma and half of the
+#   solvent-piston pair virial is booked on the piston atoms (not in group solvent), so solvent inside that
+#   layer under-reads P by ~0.07 -- the old face-to-face windows read 1.48 for a 1.50 bath.  Each window now
+#   stops res_wall_clear from its piston FACE and res_gel_clear above the topmost polymer bead; the support
+#   is solvent-permeable (no layer).  Windows are clamped to >= res_min_thick so V never vanishes; when the
+#   feed reservoir is thinner than res_wall_clear + res_min_thick the feed reading is gel-contaminated.
+variable res_wall_clear equal 3.0*${sigma}
+variable res_gel_clear  equal 1.0*${sigma}
+variable res_min_thick  equal 1.0*${sigma}
+variable res_feed_zhi equal v_feed_z_bot-v_res_wall_clear
+variable res_feed_zlo_raw equal c_maxz+v_res_gel_clear
+variable res_feed_zlo equal (v_res_feed_zlo_raw<(v_res_feed_zhi-v_res_min_thick))*v_res_feed_zlo_raw+(v_res_feed_zlo_raw>=(v_res_feed_zhi-v_res_min_thick))*(v_res_feed_zhi-v_res_min_thick)
+variable res_perm_zlo equal v_perm_z_top+v_res_wall_clear
+variable res_perm_zhi equal (v_support_z_live>(v_res_perm_zlo+v_res_min_thick))*v_support_z_live+(v_support_z_live<=(v_res_perm_zlo+v_res_min_thick))*(v_res_perm_zlo+v_res_min_thick)
+region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo v_res_feed_zhi side in
+region reg_perm_res block EDGE EDGE EDGE EDGE v_res_perm_zlo v_res_perm_zhi side in
 group g_solvent_feed dynamic solvent region reg_feed_res every ${nevery_stress}
 group g_solvent_perm dynamic solvent region reg_perm_res every ${nevery_stress}
 variable pv_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
 compute pv_feed g_solvent_feed reduce sum v_pv_solvent
 compute pv_perm g_solvent_perm reduce sum v_pv_solvent
-variable vol_feed equal lx*ly*(v_feed_z_bot-v_res_feed_zlo)
-variable vol_perm equal lx*ly*(v_support_z_live-v_perm_z_top)
+variable vol_feed equal lx*ly*(v_res_feed_zhi-v_res_feed_zlo)
+variable vol_perm equal lx*ly*(v_res_perm_zhi-v_res_perm_zlo)
 variable P_res_feed equal c_pv_feed/v_vol_feed
 variable P_res_perm equal c_pv_perm/v_vol_perm
 variable rho_feed   equal count(g_solvent_feed)/v_vol_feed
