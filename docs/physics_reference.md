@@ -105,6 +105,11 @@ in V); reservoir pressures come from the pistons and the stress profiles.
 **Reservoir pressure readout.** Not `compute reduce sum fz` on a piston — by the time thermo/print evaluates it,
 `setforce`/`aveforce` have already modified `f` and the net is ~0 at steady state.  Use the pair force of the
 mobile atoms on the sheet: `compute fp_feed piston_feed group/group mobile`, P = ±c_fp[3]/(l_x l_y).
+The `P_*_meas` log prints are that force at a **single step** and scatter ±0.3 around P* (more on the shorter
+permeate column) — not a control diagnostic.  The bath pressure actually held is the 334k-step average of the
+solvent virial in each reservoir (`pressure_reservoirs_*.dat`, `fix avg_P_res`), which sits at 1.50 ± 0.003 on both
+sides (job 54398786, 2026-09-23).  Printing that average instead would cost nothing extra (already computed), but the fix
+would have to live for the whole run rather than be recreated per level.
 
 **Critical damping.** The paper's C = 500 is for a few-hundred-atom graphene sheet; with ~23,316 beads and m = 1000
 it would be ~50× overdamped (relaxation ~3.6 M steps).  Each deck therefore models the piston on its solvent column
