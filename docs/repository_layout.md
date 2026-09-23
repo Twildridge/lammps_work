@@ -51,7 +51,9 @@ lammps_work/                    ← This git repository
 │   ├── triaxial_permeation_single_two_pist.ipynb  ← STANDARD: two-piston permeation: profile evolutions, P_feed/P_perm measured vs applied, Q_perm(t), permeability k (no sweep)
 │   ├── tests/                           ← lint_lmp.py (deck linter), make_fixtures.py + run_plot_tests.sh + run_notebook_tests.sh + lib_headless_test.py
 │   ├── bulk_modulus_analysis.ipynb          ← Drained vs osmotic bulk modulus K
-│   ├── shear_analysis.ipynb                 ← G, N1/N2, stress profiles (shear_slab output)
+│   ├── shear_analysis_single.ipynb          ← one shear level: G (network + series estimators, increments from γ = 0), N1/N2, D_c, κ, P_th (shear_slab output)
+│   ├── shear_analysis_sweep.ipynb           ← every level of a shear sweep: G vs γ, stress–strain slope, D_c, κ
+│   ├── lib/shear.py                          ← all shear analysis code (mirrors lib/triaxial.py and imports its machinery)
 │   ├── (volume_of_mixing.ipynb, cavity_widom.py, clearance_sensitivity_cell.py → moved to archive/, 2026-08)
 │   ├── plot_lammps_log.py      ← Plot T, P, volume convergence from log.lammps (+ shear diagnostics)
 │   ├── plot_compression_strain_sweep.py ← Plot stress-strain / M across a triaxial_compression sweep

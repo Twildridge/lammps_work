@@ -1541,10 +1541,21 @@ def sync_from_expanse(cfg, levels=None, force=False):
     previous sync looked for and did NOT find on the cluster are remembered in
     DATA_DIR/.sync_absent.json so an old run that never wrote them does not
     prompt for a login every time; force=True clears that memory."""
+    data_files, traj_files, required = sync_files(cfg, levels)
+    optional = {cfg.path(n).name for n in _REF_DAT_OPT}
+    optional |= {cfg.path(n, l).name for n in _TWO_PIST_DAT for l in ([None] + list(cfg.COMP_LEVELS))}
+    sync_pull(cfg, data_files, traj_files, required, optional, force,
+              refresh=lambda: sync_files(cfg, levels))
+
+
+def sync_pull(cfg, data_files, traj_files, required, optional, force=False, refresh=None):
+    """The Expanse login + staging + SFTP pull behind sync_from_expanse, for any
+    file list (2026-09-23: shared with lib/shear.py).  `optional` = basenames whose
+    absence never triggers a login; `refresh()` -> (data_files, traj_files, required)
+    is called after the pull to re-resolve file tags."""
     import paramiko
     import getpass
     import json
-    data_files, traj_files, required = sync_files(cfg, levels)
     absent_f = cfg.DATA_DIR / '.sync_absent.json'
     absent = set()
     if absent_f.exists() and not force:
@@ -1552,8 +1563,6 @@ def sync_from_expanse(cfg, levels=None, force=False):
             absent = set(json.loads(absent_f.read_text()))
         except Exception:
             absent = set()
-    optional = {cfg.path(n).name for n in _REF_DAT_OPT}
-    optional |= {cfg.path(n, l).name for n in _TWO_PIST_DAT for l in ([None] + list(cfg.COMP_LEVELS))}
     missing_dat = [f for f in data_files if not _present(f)]
     missing_new = [f for f in missing_dat if f.name not in absent and f.name not in optional]
     missing_all = missing_dat + [f for f in traj_files if not _present(f)]
@@ -1665,7 +1674,8 @@ echo "  staged: $(ls "$STAGE/data" 2>/dev/null | wc -l) data, $(ls "$STAGE/traj"
     ssh.close()
     if not isinstance(cfg.NSTEPS, (int, dict)):
         cfg._tags = {}                                     # re-resolve the tags from the new files
-    data_files, traj_files, required = sync_files(cfg, levels)
+    if refresh is not None:
+        data_files, traj_files, required = refresh()
     still = [f.name for f in data_files if not _present(f)]
     absent_f.write_text(json.dumps(sorted(set(still)), indent=1))
     if still:

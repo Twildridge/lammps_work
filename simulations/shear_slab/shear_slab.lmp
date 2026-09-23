@@ -25,9 +25,10 @@
 # Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,
 #   strains (+ strains_list); continue_sim.sh adds cont=1 and a single strain.
 # Optional -var overrides (index-style knobs): phase1a_mode, nsteps_npt, nsteps_equil,
-#   nsteps_shear_base, nsteps_shear, min_iter, thermo_freq, thermo_p1,
-#   stress_freq, vel_seed  (for short local smoke tests, e.g.
-#    -var nsteps_npt 2000 -var nsteps_equil 2000 -var min_iter 100 -var strains 0.005 -var nsteps 4000)
+#   ref_avg_steps, ref_nfreq, series_freq, nsteps_shear_base, nsteps_shear, min_iter,
+#   thermo_freq, thermo_p1, stress_freq, vel_seed  (for short local smoke tests, e.g.
+#    -var nsteps_equil 4000 -var ref_avg_steps 4000 -var ref_nfreq 2000 -var series_freq 1000
+#    -var min_iter 100 -var nsteps_shear_base 30000 -var strains 0.005 0.01 -var nsteps 4000)
 #
 # Atom types: 1=polymer (chain bead), 2=crosslinker, 3=solvent, 4=plate.
 #             (add_plates_to_gel.ipynb convention -- the triaxial decks number
@@ -64,6 +65,12 @@
 #                rejected 2026-09-22: the 1.5-sigma plate lattice is a ~0.7 kT
 #                sieve for solvent, so a force-driven plate sinks through the fluid.)
 #   - Phase 1b:  NVT with the plates frozen: the gel thermalises before any shear.
+#   - Phase 1.5: gamma = 0 REFERENCE window (ref_avg_steps, plates frozen): bulk stress
+#                tensors, z-profiles and the fine stress series are averaged into _ref
+#                files, several snapshots so the notebooks can form CIs -- exactly the
+#                role of the compression deck's eps = 0 reference.  sigma_xz,ref ~ 0 by
+#                symmetry; the notebooks subtract it anyway (G_SUBTRACT_REF) so G is a
+#                slope like M, and it doubles as the P* = 1.5 check (Step 7 / fig P_th).
 #   - Phase 2/3: STRAIN SWEEP over ${strains} (cumulative, incremental), the shear
 #                analogue of the compression sweep.  For each target:
 #                  2. DRIVE -- plates driven at +/-vshear (fix move linear) until
@@ -119,13 +126,20 @@
 # tagged _${nsteps}_g<strain> (the shear analogue of _<hold>_c<strain>).
 #
 # Outputs, per level (${stem} = ${dataname}_${interaction}_${nsteps}):
-#   stress_data/stress_tensor_{polymer,solvent}_${stem}_g<γ>.dat    6-component bulk stress vs time
+#   stress_data/stress_tensor_{polymer,solvent}_${stem}_g<γ>.dat    6-component bulk stress vs time (one row per nfreq block)
+#   stress_data/stress_series_${stem}_g<γ>.dat           fine block-averaged bulk stresses (xx yy zz xz, polymer | solvent) every
+#                                                        series_freq steps over drive + hold -- the analogue of piston_force_avg:
+#                                                        the notebooks read the plateau <sigma_p,xz> from it (drift-tested block bootstrap)
 #   stress_data/stress_profile_z_{polymer,solvent}_${stem}_g<γ>.dat z-binned stress (gap direction)
 #   stress_data/shear_strain_${stem}_g<γ>.dat            step  gel_lz_initial  plate_sep  gamma  (drive + hold; same 4 columns as before:
 #                                                        col 3 = the strain denominator, col 4 = the strain)
 #   stress_data/shear_strain_surface_${stem}_g<γ>.dat    step  gel_gap_bb  gel_strain_surf  (slip diagnostic)
 #   displacement_data/disp_x_polymer_${stem}_g<γ>.dat    z-binned mean polymer u_x (for D_c)
 #   volume_data/{gel_volume_bb,gel_dimensions_bb,gel_volume_rg,gel_dimensions_rg,box_dimensions,polymer_com}_${stem}_g<γ>.dat
+# gamma = 0 REFERENCE (Phase 1.5, files tagged _ref_${stem}, no _g suffix -- the analogue of the
+#   compression deck's eps = 0 reference window):
+#   stress_data/stress_tensor_{polymer,solvent}_ref_${stem}.dat, stress_profile_z_{polymer,solvent}_ref_${stem}.dat,
+#   stress_data/stress_series_ref_${stem}.dat            (G is formed as an INCREMENT from these, like M and G in the compression notebooks)
 # Whole-run (stem only, from step 0):
 #   volume_data/{box_dimensions,gel_dimensions_rg,gel_volume_rg,gel_volume_bb}_${stem}.dat
 #   stress_data/shear_strain_${stem}.dat                 (plot_lammps_log.py convergence + shear panels; same 4 columns)
@@ -212,7 +226,28 @@ variable min_iter     index 5000     # minimize iterations (the gel relaxes arou
 # ----- Output Frequencies -----
 variable thermo_freq index 25000
 variable thermo_p1   index 5000      # denser thermo through Phase 1 (T, press, box) so the NPT convergence is readable
-variable stress_freq index 10000     # fix print cadence (strain, gel/box dims, COM) and the halt check
+variable stress_freq index 1000      # fix print cadence (strain, gel/box dims, COM) AND the halt check: 1000 (was 10000
+                                     # before 2026-09-23) lands each level within ~0.0004 of its strain target
+
+# ----- Phase 1.5: gamma = 0 REFERENCE window (as the compression deck's eps = 0 window) -----
+# After Phase 1b the gel is equilibrated at P* = 1.5 with the plates frozen; every
+# observable is averaged over ref_avg_steps into _ref files, one snapshot per
+# ref_nfreq (several snapshots -> CIs in the notebooks).  The window is padded to a
+# ref_nfreq epoch boundary (chunk/atom lock, as the production holds).
+variable ref_avg_steps index 50000
+variable ref_nevery    equal 100
+variable ref_nfreq     index 10000
+variable ref_nrepeat   equal v_ref_nfreq/v_ref_nevery
+
+# ----- Fine block-averaged bulk stress series (the analogue of piston_force_avg) -----
+# The bulk stress tensors are global scalars (no chunk lock), so one fix ave/time
+# can block-average them every series_freq steps across a whole drive + hold: the
+# notebooks read the plateau <sigma_p,xz> from this series with the same drift-tested
+# block bootstrap the compression notebooks apply to the piston force.
+variable series_freq    index 5000
+variable series_nevery  equal 50
+variable series_nrepeat equal floor(v_series_freq/v_series_nevery)
+variable series_nfreq   equal v_series_nevery*v_series_nrepeat
 
 # ----- Trajectory dump frame budget (single knob, as the compression deck) -----
 # num_dump_frames sets ~how many all-atom frames EACH movie gets: gel_setup
@@ -250,7 +285,7 @@ print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress} 
 print ">>> Mode: SHEAR (plate-driven xz shear of an isolated gel)"
 
 # ----- Spatial Binning -----
-variable binWidth   equal 2.0   # z-bin width (sigma); must match shear_analysis.ipynb (and the triaxial decks)
+variable binWidth   equal 2.0   # z-bin width (sigma); must match lib/shear.py Config.binWidth (and the triaxial decks)
 variable plate_excl equal 3.0   # sigma excluded next to each plate (bulk region); must match the notebook
 
 
@@ -724,6 +759,54 @@ variable ux_shear atom c_displace_shear[1]
 
 
 # ==========================================================================
+#          PHASE 1.5: gamma = 0 REFERENCE-STATE RECORDING  (skipped for cont=1)
+# ==========================================================================
+# The plates stay frozen and the gel runs NVT while every observable of the
+# production holds is averaged into _ref files: bulk stress tensors, z-profiles
+# and the fine stress series.  The chunk/atom computes are shared with the
+# production fixes, so the run is padded to a ref_nfreq epoch boundary before the
+# unfix (lock release) -- the compression deck's idiom.
+if "${cont} == 1" then "jump SELF label_after_ref"
+print "========================================"
+print "Phase 1.5: gamma = 0 reference recording (${ref_avg_steps} steps, ref_nfreq=${ref_nfreq})"
+print "========================================"
+fix freeze_top_ref plate_top move linear 0 0 0
+fix freeze_bot_ref plate_bot move linear 0 0 0
+fix nvt_ref        mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_ref        mobile momentum 100 linear 1 1 1 angular
+fix ref_tensor_p all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xy v_stress_p_xz v_stress_p_yz &
+    file output_files/stress_data/stress_tensor_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_tensor_s all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} &
+    v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xy v_stress_s_xz v_stress_s_yz &
+    file output_files/stress_data/stress_tensor_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_prof_p poly_bulk ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_polymer &
+    v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_xz v_s_p_yz norm none &
+    file output_files/stress_data/stress_profile_z_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_prof_s solv_bulk ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_solvent &
+    v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_xz v_s_s_yz norm none &
+    file output_files/stress_data/stress_profile_z_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_series all ave/time ${series_nevery} ${series_nrepeat} ${series_nfreq} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xz v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xz &
+    title2 "# TimeStep sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz   (bulk partial stresses, block-averaged; gamma = 0 reference)" &
+    file output_files/stress_data/stress_series_ref_${dataname}_${interaction}_${nsteps}.dat
+variable ref_run_steps equal (floor(($(step)+${ref_avg_steps}-1)/${ref_nfreq})+1)*${ref_nfreq}-$(step)
+print ">>> Reference window: running ${ref_run_steps} steps (>= ${ref_avg_steps}, aligned to ref_nfreq=${ref_nfreq})"
+run ${ref_run_steps}
+unfix ref_series
+unfix ref_prof_s
+unfix ref_prof_p
+unfix ref_tensor_s
+unfix ref_tensor_p
+unfix mom_ref
+unfix nvt_ref
+unfix freeze_bot_ref
+unfix freeze_top_ref
+print ">>> Reference recording done.  step=$(step)  gamma=$(v_gamma:%.5f)  sigma_p,xz(bulk)=$(v_stress_p_xz:%.5f)"
+label label_after_ref
+
+
+# ==========================================================================
 #            ONE-TIME SETUP FOR THE STRAIN SWEEP (post-equilibration)
 # ==========================================================================
 # The gel is equilibrated at P_target, the plates are frozen at their seated
@@ -782,6 +865,11 @@ fix out_shear_surf all print ${stress_freq} &
     "$(step) ${gel_gap} $(v_gel_strain_surf)" &
     title "# step gel_gap_bb gel_strain_surf   (surface-COM slip diagnostic; compare with gamma in shear_strain_*)" &
     file output_files/stress_data/shear_strain_surface_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
+# fine block-averaged bulk stresses over drive + hold (global scalars -> no chunk lock)
+fix out_series all ave/time ${series_nevery} ${series_nrepeat} ${series_nfreq} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xz v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xz &
+    title2 "# TimeStep sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz   (bulk partial stresses, block-averaged; drive + hold)" &
+    file output_files/stress_data/stress_series_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 fix out_gel_vol_bb all print ${stress_freq} "$(step) $(v_gel_vol_bb)" &
     file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
 fix out_gel_dims_bb all print ${stress_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
@@ -908,6 +996,7 @@ unfix out_gel_dims_rg
 unfix out_gel_vol_rg
 unfix out_gel_dims_bb
 unfix out_gel_vol_bb
+unfix out_series
 unfix out_shear_surf
 unfix out_shear_strain
 

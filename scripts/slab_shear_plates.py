@@ -101,7 +101,7 @@ def main():
     ap.add_argument('--solvent-delete', type=float, default=DEFAULT_SOLVENT_DELETE,
                     help='remove solvent beads closer than this (sigma) to a plate atom. CALIBRATED against the bulk gel pressure in the '
                          'shear hold: with nothing deleted the plate atoms\' excluded volume in a box the gel cannot drain from read 1.53 '
-                         'instead of 1.50 (2026-09-22). Re-check Step 7 of shear_analysis.ipynb after any change.')
+                         'instead of 1.50 (2026-09-22). Re-check the P_th(bulk) printout of shear_analysis_single.ipynb after any change.')
     ap.add_argument('--spacing',    type=float, default=apg.PLATE_SPACING)
     ap.add_argument('--offset',     type=float, default=apg.PLATE_OFFSET)
     ap.add_argument('--cutoff',     type=float, default=apg.BOND_CUTOFF)
