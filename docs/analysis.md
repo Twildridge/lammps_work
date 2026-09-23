@@ -36,7 +36,7 @@ cd ~/Documents/lammps_runs/<run_dir>
 
 **`plot_lammps_log.py`** — T, P, volume convergence (all sim types) + shear diagnostics (shear_slab only, auto-detected)
 
-For `triaxial_compression`, `triaxial_permeation`, `slab_with_support`, etc.:
+For `triaxial_*_two_pist`, `slab_with_support`, the archived one-piston triaxial runs, etc.:
 ```bash
 python ~/Documents/lammps_work/scripts/plot_lammps_log.py \
     . \
@@ -87,10 +87,10 @@ python ~/Documents/lammps_work/scripts/plot_piston_data.py \
 
 Open these on your MacBook in JupyterLab (`jupyter lab`), pointing them at data files in `flow_data_local/<sim_type>/<RUN_ID>/`. Each notebook has a config cell near the top — only `RUN_ID` and `sim_name` change between runs; all paths derive from those. For the triaxial-compression notebooks leave `NSTEPS = None`: the `<steps>` tag in the file names is each level's auto-sized hold length and is resolved from the files.
 
-**`triaxial_compression_single.ipynb`** (current — one strain level)
+**`triaxial_compression_single.ipynb`** (one-piston runs — one strain level; the one-piston deck was archived on 2026-09-22, existing runs stay analysable)
 Analysis of **one** applied-strain level of a `triaxial_compression` run: a single-level run, or one level picked out of a sweep (`LEVEL = "0.15"`). Eleven figures in a fixed order: strain diagnostic; solvent volume fraction (mass fraction / Voronoi / λ-calibrated Voronoi, reference vs compressed); total σ_zz, σ_xx, σ_yy evolution normalised by the bath pressure `P_BARO`; solvent + polymer partial stress with the total superimposed; network stress σ′_zz, σ′_xx, σ′_yy (Terzaghi split) — **reference and final equilibrated state only** with 95 % bands (the evolution curves were dropped 2026-09-17: p_pore is not uniform while the gel consolidates, so subtracting one reservoir value is only valid once equilibrated); piston pressure (linear + log); M (network vs piston); the anisotropy σ′_zz/σ′_xx, σ′_zz/σ′_yy vs step with propagated error bars; G = (σ′_zz − σ′_ii)/2ε from xx and from yy (wall-trimmed membrane interior); the D_c consolidation fit; and κ = D_c/M; then (12) the thermodynamic pressure P_th = −⅓ tr(σ^t) evolution and (13) the osmotic pressure Π = −⅓ tr(σ′) in the reference and final states (both positive under compression in the profiles' sign convention). Figure conventions: every printed number ≤ 3 significant figures, legends placed by `tri.smart_legend` so they never cover data. Layout: **Config → sync → load/compute** (one section), **figures** (one call per figure), and all method notes in a **Notes** markdown at the end. Requires the `sigmaxx_*` / `sigmayy_*` profiles the `.lmp` writes (synced automatically); the pair/bond dumps are *not* needed.
 
-**`triaxial_compression_sweep.ipynb`** (current — whole sweep)
+**`triaxial_compression_sweep.ipynb`** (one-piston runs — whole sweep)
 Same figures for **every** level of a strain sweep, overlaid (colour = level, reference dashed): profiles per level (network stress and osmotic pressure as final states only), then M, G, D_c and κ **vs applied strain**, plus the P_th evolution and final-state Π overlays. `COMP_LEVELS` must match `STRAIN_TARGETS=(...)` in `triaxial_compression.batch`. Per-level numbers come from the same `load_level` as the single-level notebook, so the two never disagree.
 
 **`lib/triaxial.py`** — the analysis code behind both notebooks
@@ -99,10 +99,10 @@ Readers, the Terzaghi network/pore split, the drift-tested block-bootstrap plate
 **`triaxial_compression.ipynb`** (long-form original, kept)
 The full diagnostic notebook the two above were distilled from (2026-09-02). Still the place for the solvent-phase stress W_s,zz/V_solv diagnostics, the ss/pp pair-virial reconstruction and cross-virial check, the piston–gel contact analysis and the Widom-insertion appendix. Sweep conventions: `COMP_LEVELS`/`DETAIL_LEVEL` select which `_c<level>` tags to load; block-bootstrap piston CI; z-grid origin includes box zlo. Supersedes `compression_analysis.ipynb`.
 
-**`triaxial_permeation.ipynb`** (current)
-Reads a `triaxial_permeation` run. Eight sections — piston, thickness, total stress, density, permeate, partial-vs-ss stress, the thermodynamic pressure P_th = −⅓ tr(σ^t) evolution and the osmotic pressure Π = −⅓ tr(σ′) (zero-flux reference, and the final state with the caveat that p_pore is not uniform under flow) — with Phase 1.5 reference overlays. Supersedes `permeation_analysis.ipynb`.
+**`triaxial_permeation.ipynb`** (one-piston runs; deck archived 2026-09-22)
+Reads a one-piston `triaxial_permeation` run. Eight sections — piston, thickness, total stress, density, permeate, partial-vs-ss stress, the thermodynamic pressure P_th = −⅓ tr(σ^t) evolution and the osmotic pressure Π = −⅓ tr(σ′) (zero-flux reference, and the final state with the caveat that p_pore is not uniform under flow) — with Phase 1.5 reference overlays. Supersedes `permeation_analysis.ipynb`.
 
-**`triaxial_compression_single_two_pist.ipynb`** / **`triaxial_compression_sweep_two_pist.ipynb`** (two-piston compression, 2026-09-16)
+**`triaxial_compression_single_two_pist.ipynb`** / **`triaxial_compression_sweep_two_pist.ipynb`** (two-piston compression, 2026-09-16 — the standard decks since 2026-09-22)
 Same Config → sync → load → figures pattern and the same eleven (single) / twelve (sweep) figures as the one-piston
 notebooks — the load piston is "the piston" (its force is the network load; the piston files carry it in the first
 value column, `[load | feed | perm]`) — plus the **wet-piston bath check** (`fig_wet_pistons[_sweep]`: P_feed, P_perm
@@ -115,7 +115,7 @@ stress snapshot from the measured feed-piston plane (`piston_position`, column `
 (depletion layer + wall virial booked on the piston atoms), which before 2026-09-22 shifted every σ′ by +0.016.
 The summary prints *plates over the level* (support, load piston, feed and permeate pistons: start → end).
 
-**`triaxial_permeation_single_two_pist.ipynb`** (two-piston permeation, 2026-09-16 — no sweep notebook)
+**`triaxial_permeation_single_two_pist.ipynb`** (two-piston permeation, 2026-09-16, standard since 2026-09-22 — no sweep notebook)
 `Config(mode="permeation", two_pist=True)`; `tri.load_permeation` builds one dict `P`: total / partial / network
 stress and density evolutions (cividis, bold final, zero-flux `_ref` baseline dashed), both wet pistons
 (displacement; `F_fluid/(lx ly)` measured vs applied; reservoir virial pressures dotted), `Q_perm(t)` from the
@@ -136,13 +136,13 @@ Drained vs. osmotic bulk modulus K. The osmotic K_osm = Π − dW/dV carries the
 Computes ΔV_mix(P*) = V_mixed − V_pure_solvent − V_pure_polymer across the pressure sweep (P* = 1.0–2.0). Cell 2 syncs `box_dimensions_*.dat` files directly from Expanse via `paramiko` SFTP — no SSH keys required; prompts for password and TOTP code in the notebook. Subsequent cells parse the box dimension files, time-average volumes over the last 50% of each run, and plot both ΔV_mix and the individual component volumes vs P*. Requires `paramiko` (`pip install paramiko`). Data lands in `flow_data_local/volmix_sweep/p{P}/`.
 
 **`shear_analysis.ipynb`**
-Reads the bulk-region polymer stress tensor from a `shear_slab` Phase 3 production run and extracts G = ⟨σ_p,xz⟩ / γ_cm, plus normal stress differences N1 / N2, x-profile stress plots, and a polymer/solvent poroelastic decomposition. Inputs: `stress_tensor_polymer_*.dat`, `stress_profile_x_polymer_*.dat`, `shear_strain_*.dat`. Atoms within 3σ of either plate are excluded from all stress computes.
+Reads the bulk-region polymer stress tensor from a `shear_slab` production hold and extracts G = ⟨σ_p,xz⟩ / γ, plus normal stress differences N1 / N2, z-profile stress plots (z = gap, x = shear since 2026-09-22), the D_c fit of u_x(z), and a polymer/solvent poroelastic decomposition. Inputs: `stress_tensor_polymer_*.dat`, `stress_profile_z_polymer_*.dat`, `shear_strain_*.dat`, `disp_x_polymer_*.dat`. Atoms within 3σ inside either plate plane are excluded from all stress computes. Config: `RUN_ID` = folder in `flow_data_local/shear/`, `dataname` = the `*_with_plates` stem, `strains` = the batch's `STRAINS_LIST`. Since the 2026-09-22 re-layout of `shear_slab.lmp` the strain is **plate-based**: γ = (x_plate,top − x_plate,bot − x₀)/plate_sep from the plate COMs (both prescribed by `fix move`), replacing the old bounding-box-gap denominator and outermost-1 %-bead numerator, which overstated the sheared thickness by ~5 % because `add_plates_to_gel` puts each plate ~1–3 σ inside the outermost beads (the bulk region is now cut `plate_excl` inside the plate planes for the same reason). The `shear_strain_*` files keep their four columns (step, gel_lz_initial, **plate_sep**, **γ**); the measured surface-COM strain goes to `shear_strain_surface_*_g<γ>.dat` as a slip diagnostic. The per-level `shear_strain_*_g<γ>.dat` spans the drive **and** the hold (the notebook and `plot_shear_strain_sweep.py` take its last row as the level's γ, i.e. the held strain), the hold is padded to the next stress-averaging epoch, and stem-suffixed whole-run trackers (`box_dimensions`, `gel_dimensions_rg`, `gel_volume_{bb,rg}`, `shear_strain`) feed `plot_lammps_log.py`'s convergence and shear-diagnostics figures; the files and columns the notebook reads are unchanged. To compare with the two-piston compression G, use the same bath pressure (P* = 1.5: the converter's calibrated solvent deletion around the plates puts the gel there, and Step 7's bulk `<p_total>` is the check — the thermo `press` of this box is not the gel pressure) and the G = (σ′_zz − σ′_xx)/2ε values from `triaxial_compression_sweep_two_pist.ipynb`.
 
 ---
 
 ### 7c. Running Python scripts manually on a cluster
 
-You may want to rerun post-processing after a job without relaunching LAMMPS — for example, after updating an analysis script, or to run `cavity_widom.py` which is not called automatically on Bridges-2. **Note:** `cavity_widom.py`'s excess-chemical-potential workflow (including the `--p-ext`/`--exclusion-buffer`/`--piston-eps` flags below) was built specifically for the now-removed `slab_with_flow`; it hasn't been ported to `triaxial_compression`/`triaxial_permeation`, which have no equivalent postprocess.sh hook for it yet. `plot_stress_profiles.py` and `plot_piston_data.py` further down are unaffected — those work for the current folders.
+You may want to rerun post-processing after a job without relaunching LAMMPS — for example, after updating an analysis script, or to run `cavity_widom.py` which is not called automatically on Bridges-2. **Note:** `cavity_widom.py`'s excess-chemical-potential workflow (including the `--p-ext`/`--exclusion-buffer`/`--piston-eps` flags below) was built specifically for the now-removed `slab_with_flow`; it hasn't been ported to the triaxial decks (two-piston, or the archived one-piston ones), which have no equivalent postprocess.sh hook for it yet. `plot_stress_profiles.py` and `plot_piston_data.py` further down are unaffected — those work for the current folders.
 
 All scripts below assume you are **inside the run's working directory** on the cluster:
 

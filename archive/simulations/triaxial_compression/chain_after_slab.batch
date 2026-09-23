@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# ARCHIVED 2026-09-22 -- kept for reference, NOT maintained.  The one-piston
+# triaxial decks were superseded by simulations/triaxial_*_two_pist/ (the
+# two-piston sequence).  This batch's self-sync guard re-execs
+# simulations/<folder>/<folder>.batch and run_lammps.sh resolves FOLDER to
+# simulations/<folder>/<folder>.lmp, so it only works again after
+#     git mv archive/simulations/<folder> simulations/
+# See archive/README.md.
+# ---------------------------------------------------------------------------
 # chain_after_slab.batch -- submit with:
 #   sbatch --dependency=afterany:<slab_jobid> chain_after_slab.batch
 # Waits for the slab_with_support 14000002-step run, copies its final data file

@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# ARCHIVED 2026-09-22 -- kept for reference, NOT maintained.  The one-piston
+# triaxial decks were superseded by simulations/triaxial_*_two_pist/ (the
+# two-piston sequence).  This batch's self-sync guard re-execs
+# simulations/<folder>/<folder>.batch and run_lammps.sh resolves FOLDER to
+# simulations/<folder>/<folder>.lmp, so it only works again after
+#     git mv archive/simulations/<folder> simulations/
+# See archive/README.md.
+# ---------------------------------------------------------------------------
 
-#SBATCH --job-name=triax_perm
+#SBATCH --job-name=triax_comp
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=40
 #SBATCH --cpus-per-task=1
@@ -25,7 +34,7 @@ module load openmpi5
 
 
 # Set simulation parameters
-FOLDER="triaxial_permeation"
+FOLDER="triaxial_compression"
 DATANAME="walled_slab_support_5beads_tall_rho04_1.0_1.0_500000"
 INTERACTION="1.0_1.0" # first number is solvent–solvent; second is polymer–solvent
 NSTEPS=100000

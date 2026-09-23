@@ -450,11 +450,11 @@ def plot_shear_diagnostics(data, folder, run_id, output):
       3. Box xz tilt          — Xz column from thermo; step jump at Phase 2 start then flat
       4. Polymer σ_p_xz       — time-averaged partial xz stress (Phase 3)
       5. Gel Rg dimensions    — lx_rg, ly_rg, lz_rg vs step
-      6. Gel strain (CM)      — gel_strain_cm from polymer COM (4-col format);
-                                starts at ~target_strain_xz after change_box affine remap,
-                                then partially relaxes during Phase 2 NVT (surface layers).
-                                Interior network held at target_strain_xz by periodic topology.
-                                G = <sigma_p_xz> / target_strain_xz (box strain, not CM).
+      6. Gel strain           — column 4 of shear_strain_*.dat (4-col format): since
+                                2026-09-22 the plate-based gamma (plate x-displacement /
+                                plate separation; z = gap, x = shear), which ramps during
+                                each drive and is flat during each hold; before that the
+                                surface-COM strain of the x-gap decks.
                                 or gel_strain_box vs gel_strain_cm comparison (5-col legacy)
 
     These collectively answer: Did shear apply cleanly? Is the polymer stress
@@ -555,30 +555,24 @@ def plot_shear_diagnostics(data, folder, run_id, output):
                 ax.legend(fontsize=8)
                 # Stable Rg → gel not melting or grossly deforming under shear
 
-        # ── Gel strain (polymer COM, change_box) — 4-column shear_strain file ─
+        # ── Gel strain — 4-column shear_strain file (step, L_ref, plate_sep, gamma) ─
         elif panel == 'gel_strain_cm':
             arr = read_fix_print(shear_str_file)
-            # cols: step  gel_lz_initial  gel_thick  gel_strain_cm
-            # With change_box approach: gel_strain_cm starts near target_strain_xz
-            # (immediately after affine remap) then partially relaxes during Phase 2 NVT.
-            # The plateau is expected to be < target_strain_xz — that is physically correct
-            # (surface layers relax; interior network held by periodic topology).
-            # G = <sigma_p_xz> / target_strain_xz  (NOT gel_strain_cm).
+            # cols: step  gel_lz_initial  plate_sep  gamma   (plate-based since 2026-09-22;
+            # the whole-run stem file spans every drive + hold, so the curve is a
+            # staircase: linear ramps at constant plate speed, flat holds)
             if arr.size and arr.shape[1] >= 4:
                 t       = arr[:, 0]
                 gs_cm   = arr[:, 3]
-                # Infer target strain from first value (should be ≈ target after change_box remap)
-                target_gamma = gs_cm[0] if len(gs_cm) else 0.10
                 ax.plot(t, gs_cm, color='darkorange', lw=1.5, marker='s', markersize=3,
-                        label='gel_strain_cm  (surface COM, partially relaxes)')
-                ax.axhline(target_gamma, color='steelblue', ls='--', lw=1.0,
-                           label=f'γ_box = {target_gamma:.3f}  (interior, fixed)')
+                        label='γ  (plate-based: plate displacement / plate separation)')
+                ax.axhline(gs_cm[-1], color='steelblue', ls='--', lw=1.0,
+                           label=f'final γ = {gs_cm[-1]:.4f}')
                 ax.axhline(0, color='k', ls=':', lw=0.8)
-                ax.set_ylabel('Gel Shear Strain γ')
+                ax.set_ylabel('Shear strain γ')
                 ax.legend(fontsize=8)
                 ax.text(0.02, 0.92,
-                        f'Surface plateau: γ_CM = {gs_cm[-1]:.4f}\n'
-                        f'Interior (box):  γ_box = {target_gamma:.4f}',
+                        f'final γ = {gs_cm[-1]:.4f}   (plate_sep = {arr[-1, 2]:.2f} σ)',
                         transform=ax.transAxes, fontsize=9, va='top',
                         bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 

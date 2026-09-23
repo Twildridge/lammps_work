@@ -41,13 +41,18 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 # Simulation parameters
 # DATANAME: isolated swollen gel from isolate_gel.ipynb
 #   (output of slab_with_support run → isolate_gel → lammps_data/input_data/)
-# NSTEPS: Phase 3 production steps only (Phase 1 + 2 lengths are in shear_slab.lmp)
-#   Phase 1 (NPT equil):  nsteps_equil = 50000
-#   Phase 2 (shear):      nsteps_shear = 200000
-#   Phase 3 (production): NSTEPS (set here)
+# NSTEPS: Phase 3 production HOLD per strain level (also the output-file tag; the
+#   hold is padded up to the next stress-averaging epoch).  The other phase
+#   lengths are index-style knobs in shear_slab.lmp (override with -var):
+#   Phase 1a:              SKIPPED (phase1a_mode = 0, default): the plated slab is already at
+#                          P* = 1.5 (the converter deletes the solvent the plates displace);
+#                          phase1a_mode = 1 = the old cube protocol's box NPT (nsteps_npt = 50000)
+#   Phase 1b (NVT):        nsteps_equil = 100000
+#   Phase 2  (shear drive): halts at each strain target (cap nsteps_shear = 570000)
+#   Phase 3  (production):  NSTEPS (set here), once per strain in STRAINS_LIST
 # -----------------------------------------------------------------------
 FOLDER="shear_slab"
-DATANAME="isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_with_plates"
+DATANAME="isolated_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_with_plates"   # 2026-09-22: periodic slab via slab_shear_plates.py (see shear_slab.batch)
 INTERACTION="1.0_0.0"   # epsSS_epsSP (solvent-solvent _ polymer-solvent)
 NSTEPS=500000
 TYPE=""                 # Options: stress, volume, stressvol, or leave empty
@@ -61,8 +66,12 @@ TYPE=""                 # Options: stress, volume, stressvol, or leave empty
 # Single value (e.g. (0.1)) gives a single operating point; if unset,
 # shear_slab.lmp falls back to a single strain of 0.1.
 # -----------------------------------------------------------------------
-STRAINS=(0.1 0.15 0.2 0.25 0.3)
-export STRAINS="${STRAINS[*]}"   # space-separated for run_lammps_bridges.sh / LAMMPS -var
+# NOTE: the LIST must be a DISTINCT array name -- bash does not export arrays, so
+# `export STRAINS="${STRAINS[*]}"` with STRAINS itself an array leaves the child
+# without it and the sweep silently collapses to a single strain (same gotcha as
+# shear_slab.batch).  Export a SCALAR string.
+STRAINS_LIST=(0.1 0.15 0.2 0.25 0.3)
+export STRAINS="${STRAINS_LIST[*]}"   # space-separated scalar for run_lammps_bridges.sh / LAMMPS -var
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

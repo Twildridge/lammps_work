@@ -58,13 +58,13 @@ if [ -z "${STRAINS:-}" ]; then
 fi
 STRAINS=${STRAINS:-0.1}      # Space-separated shear-strain list (shear_slab only); passed as a
                              # LAMMPS index variable. Default 0.1 = single operating point.
-# COMPRESSIONS: space-separated cumulative compression-strain list (triaxial_compression
-# only), passed as a LAMMPS index variable exactly like STRAINS. Set in
-# triaxial_compression.batch via COMPRESSIONS=(...). Default 0.1 = single operating
-# point (reproduces the original single-run behaviour). Same stale-batch caveat as
+# COMPRESSIONS: space-separated cumulative compression-strain list (triaxial_compression_two_pist,
+# and the archived one-piston triaxial_compression), passed as a LAMMPS index variable
+# exactly like STRAINS. Set in the compression .batch via STRAIN_TARGETS=(...) ->
+# COMPRESSIONS. Default 0.1 = single operating point (reproduces the original single-run behaviour). Same stale-batch caveat as
 # STRAINS applies: the batch must self-sync BEFORE exporting COMPRESSIONS.
 if [ -z "${COMPRESSIONS:-}" ]; then
-    echo ">>> NOTE: COMPRESSIONS unset — triaxial_compression falls back to single strain 0.1."
+    echo ">>> NOTE: COMPRESSIONS unset — the compression decks fall back to single strain 0.1."
 fi
 COMPRESSIONS=${COMPRESSIONS:-0.1}
 

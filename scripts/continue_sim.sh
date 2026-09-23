@@ -19,10 +19,14 @@
 #   cd ~/Documents/lammps_work/simulations/slab_with_support
 #   continue_sim.sh 49800123 500000
 #
-#   cd ~/Documents/lammps_work/simulations/triaxial_compression
+#   cd ~/Documents/lammps_work/simulations/shear_slab
 #   continue_sim.sh 49900456 2000000
 #
-# Supported folders and what cont=1 means for each:
+# Supported folders and what cont=1 means for each (triaxial_compression and
+# triaxial_permeation are the ONE-PISTON decks, archived 2026-09-22 under
+# archive/simulations/ -- still supported from a folder holding the original
+# SLURM output file next to the archived .lmp/.batch; the two-piston decks
+# triaxial_*_two_pist have no continuation path at all):
 #   slab_with_support               — skip push-off/minimize/gentle-NVT/NPT warm-up; run more NPT production
 #   solvent_pure, polymer_pure      — skip pre-relax/gentle-ramp stages; run more NPT production
 #   triaxial_compression (sweep)    — auto-detects the last _c<level> reached, skips the

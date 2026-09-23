@@ -34,7 +34,7 @@ lsync "my custom message"    # use a specific commit message
 
 ### Clusters → GitHub
 
-If you edit scripts or `.batch` files directly on a cluster, run `lsync` there too (after the one-time setup above) — otherwise those edits stay local to the cluster and never reach GitHub. This matters more than it sounds: `triaxial_compression.batch` self-syncs with `git pull --rebase --autostash` at job start, so an uncommitted cluster-side edit is only ever *stashed and silently reapplied*, never actually saved anywhere else. Running `lsync` on the cluster commits it for real.
+If you edit scripts or `.batch` files directly on a cluster, run `lsync` there too (after the one-time setup above) — otherwise those edits stay local to the cluster and never reach GitHub. This matters more than it sounds: the sweep batch files (`triaxial_compression_two_pist.batch`, `shear_slab.batch`, …) self-sync with `git pull --rebase --autostash` at job start, so an uncommitted cluster-side edit is only ever *stashed and silently reapplied*, never actually saved anywhere else. Running `lsync` on the cluster commits it for real.
 
 Clusters also pull automatically at the start of every job (built into `run_lammps.sh` and `run_lammps_bridges.sh`). To pull manually at any time:
 ```bash

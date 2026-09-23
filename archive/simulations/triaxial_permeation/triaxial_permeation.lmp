@@ -1,3 +1,9 @@
+# ARCHIVED 2026-09-22 -- kept for reference, NOT maintained.  Superseded by the
+# two-piston decks in simulations/triaxial_*_two_pist/ (which keep this deck's
+# strain sweep, hold sizing, observables and file conventions).  To run it again,
+# move its folder back: git mv archive/simulations/<folder> simulations/
+# (run_lammps.sh, postprocess.sh and continue_sim.sh key on the folder name).
+#
 # ================= Triaxial Permeation Simulation (piston-driven flow) =======
 # PERMEATION MODE ONLY.  Split out of slab_with_flow.lmp (which carried both
 # compression and permeation modes behind compression_mode logic gates) so the

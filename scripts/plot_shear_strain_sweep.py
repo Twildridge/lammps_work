@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Cluster-side quick-look for the shear_slab stress-strain sweep.
 
-Reads the per-strain output files written by shear_slab.lmp (tagged _g<strain>)
+Reads the per-strain output files written by shear_slab.lmp (tagged _g<strain>;
+z = gap / x = shear since 2026-09-22, sigma_xz = column 5 of the tensor files)
 and produces two PNGs in <folder>/output_plots/:
 
   1. <stem>_stress_strain_curve.png
-       sigma_zx vs gamma for every strain in the sweep, with block-SEM error
+       sigma_xz vs gamma for every strain in the sweep, with block-SEM error
        bars (scatter across the ~num_stress_curves nfreq blocks of each
        production hold) and a through-origin weighted fit for G.
 
-  2. <stem>_sigma_zx_profiles.png  (only if stress_profile_x files are present)
-       polymer sigma_zx(x) across the gap, one curve per strain.
+  2. <stem>_sigma_xz_profiles.png  (only if stress_profile_x files are present)
+       polymer sigma_xz(z) across the gap, one curve per strain.
 
 This complements (and matches) shear_analysis.ipynb Steps 12-13; it is just an
 automatic first look so you don't have to open the notebook to sanity-check a run.
@@ -29,7 +30,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 
-ZX = 4  # index of sigma_zx among the 6 tensor columns: xx yy zz xy zx yz
+XZ = 4  # index of sigma_xz among the 6 tensor columns: xx yy zz xy xz yz
 
 
 def read_ave_time(path):
@@ -111,16 +112,16 @@ def plot_stress_strain(folder, stem, strains, idx_start=0):
             print(f"  [skip] strain {s}: missing tensor or shear_strain file")
             continue
         gamma = float(ss[-1, 3])
-        bp = tp[idx_start:, ZX]
+        bp = tp[idx_start:, XZ]
         if tsv is not None:
-            n = min(len(bp), len(tsv[idx_start:, ZX]))
-            bt = bp[:n] + tsv[idx_start:idx_start + n, ZX]
+            n = min(len(bp), len(tsv[idx_start:, XZ]))
+            bt = bp[:n] + tsv[idx_start:idx_start + n, XZ]
         else:
             bt = bp
         g.append(gamma)
         mp.append(float(np.mean(bp))); ep.append(sem(bp))
         mt.append(float(np.mean(bt))); et.append(sem(bt))
-        print(f"  gamma={gamma:.4f}  <sig_p_zx>={np.mean(bp):+.5f} +/- {sem(bp):.5f} "
+        print(f"  gamma={gamma:.4f}  <sig_p_xz>={np.mean(bp):+.5f} +/- {sem(bp):.5f} "
               f"(n_blocks={len(bp)})")
 
     if not g:
@@ -145,15 +146,15 @@ def plot_stress_strain(folder, stem, strains, idx_start=0):
 
     fig, ax = plt.subplots(figsize=(8, 6.5))
     ax.errorbar(g, mp, yerr=ep, fmt='o', ms=9, color='steelblue', capsize=5, lw=2,
-                label=r'$\sigma_{p,zx}$ polymer')
+                label=r'$\sigma_{p,xz}$ polymer')
     ax.errorbar(g, mt, yerr=et, fmt='s', ms=8, color='purple', capsize=5, lw=2,
-                alpha=0.85, label=r'$\sigma_{\mathrm{tot},zx}$ total')
+                alpha=0.85, label=r'$\sigma_{\mathrm{tot},xz}$ total')
     if np.isfinite(G):
         gg = np.linspace(0, g.max() * 1.05, 100)
         ax.plot(gg, G * gg, '--', color='steelblue', lw=1.6, alpha=0.8,
                 label=fr'$G={G:.3f}\pm{G_err:.3f}$')
     ax.axhline(0, color='k', lw=0.8, alpha=0.3); ax.axvline(0, color='k', lw=0.8, alpha=0.3)
-    ax.set_xlabel(r'$\gamma_{zx}$'); ax.set_ylabel(r'$\sigma_{zx}$ (LJ)')
+    ax.set_xlabel(r'$\gamma_{xz}$'); ax.set_ylabel(r'$\sigma_{xz}$ (LJ)')
     ax.set_title('Shear stress-strain sweep'); ax.legend(fontsize=13); ax.grid(alpha=0.3)
     out = os.path.join(plot_dir, f"{stem}_stress_strain_curve.png")
     fig.tight_layout(); fig.savefig(out, dpi=150, bbox_inches='tight'); plt.close(fig)
@@ -161,8 +162,8 @@ def plot_stress_strain(folder, stem, strains, idx_start=0):
     return G
 
 
-def plot_sigma_zx_profiles(folder, stem, strains):
-    """Overlay polymer sigma_zx(x) (last snapshot) for each strain."""
+def plot_sigma_xz_profiles(folder, stem, strains):
+    """Overlay polymer sigma_xz(z) (last snapshot) for each strain."""
     sd = os.path.join(folder, 'output_files', 'stress_data')
     plot_dir = os.path.join(folder, 'output_plots')
     os.makedirs(plot_dir, exist_ok=True)
@@ -173,23 +174,23 @@ def plot_sigma_zx_profiles(folder, stem, strains):
     fig, ax = plt.subplots(figsize=(9, 6))
     plotted = False
     for s in strains:
-        snaps = read_ave_chunk(os.path.join(sd, f"stress_profile_x_polymer_{stem}_g{s}.dat"))
+        snaps = read_ave_chunk(os.path.join(sd, f"stress_profile_z_polymer_{stem}_g{s}.dat"))
         if not snaps:
             continue
         _, arr = snaps[-1]                       # last production snapshot
-        x = arr[:, 1]                            # Coord1 (reduced x)
-        zx = arr[:, 2 + 1 + ZX]                  # cols: chunk,coord,Ncount, then 6 comps
-        ax.plot(x, zx, '-o', ms=3, lw=1.5, color=cmap(norm(float(s))), label=fr'$\gamma={s}$')
+        x = arr[:, 1]                            # Coord1 (reduced z)
+        xz = arr[:, 2 + 1 + XZ]                  # cols: chunk,coord,Ncount, then 6 comps
+        ax.plot(x, xz, '-o', ms=3, lw=1.5, color=cmap(norm(float(s))), label=fr'$\gamma={s}$')
         plotted = True
     if not plotted:
         plt.close(fig)
-        print("  No stress_profile_x_polymer files found — skipping profile plot.")
+        print("  No stress_profile_z_polymer files found — skipping profile plot.")
         return
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.4)
-    ax.set_xlabel(r'$\hat{x}$ (gap, reduced)'); ax.set_ylabel(r'$\sigma_{p,zx}(x)$ (LJ)')
+    ax.set_xlabel(r'$\hat{z}$ (gap, reduced)'); ax.set_ylabel(r'$\sigma_{p,xz}(z)$ (LJ)')
     ax.set_title('Polymer shear-stress profile across the gap'); ax.legend(fontsize=12)
     ax.grid(alpha=0.3)
-    out = os.path.join(plot_dir, f"{stem}_sigma_zx_profiles.png")
+    out = os.path.join(plot_dir, f"{stem}_sigma_xz_profiles.png")
     fig.tight_layout(); fig.savefig(out, dpi=150, bbox_inches='tight'); plt.close(fig)
     print(f"  Saved: {out}")
 
@@ -204,7 +205,7 @@ if __name__ == "__main__":
     print(f"Shear sweep post-processing: stem={stem}  strains={strains}")
     try:
         plot_stress_strain(folder, stem, strains)
-        plot_sigma_zx_profiles(folder, stem, strains)
+        plot_sigma_xz_profiles(folder, stem, strains)
     except Exception as e:
         # Never let a quick-look plot fail the whole post-processing chain.
         print(f"  plot_shear_strain_sweep.py warning: {e}")

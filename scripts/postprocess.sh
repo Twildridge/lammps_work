@@ -20,8 +20,8 @@
 # Optional env vars (default to the run_lammps.sh defaults):
 #   SKIP_WIDOM=1        minimize/skip cavity_widom.py (slab_with_flow only)
 #   STRAINS="..."       space-separated shear-strain list (shear_slab only)
-#   COMPRESSIONS="..."  space-separated compression-strain list (triaxial_compression
-#                       sweep); the consolidated plotter overlays all _c<level>
+#   COMPRESSIONS="..."  space-separated compression-strain list (triaxial_compression_two_pist
+#                       sweep, or the archived one-piston triaxial_compression); the consolidated plotter overlays all _c<level>
 #                       stems onto one figure per quantity (one curve per level)
 # ==============================================================================
 set -u
@@ -43,8 +43,8 @@ OLDSTEPS=${6:-0}
 PRESS_TARGET=${7:-1.5}
 SKIP_WIDOM=${SKIP_WIDOM:-0}
 STRAINS=${STRAINS:-0.1}
-# COMPRESSIONS: space-separated cumulative compression-strain list (triaxial_compression
-# sweep). Each level's output files are tagged _c<level>, so the plotters are called
+# COMPRESSIONS: space-separated cumulative compression-strain list (triaxial_compression_two_pist
+# sweep, or the archived one-piston triaxial_compression). Each level's output files are tagged _c<level>, so the plotters are called
 # once per level with a per-level stem. Empty -> treat as a single un-swept run.
 COMPRESSIONS=${COMPRESSIONS:-}
 

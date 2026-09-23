@@ -24,3 +24,16 @@ This was caused by `xztilt`/`yztilt` not being valid LAMMPS thermo keywords — 
 Run `git stash` to set aside local changes, then `git pull`, then `git stash pop` to restore them. If conflicts persist, resolve them manually or ask for help.
 
 ---
+
+---
+
+### Per-atom stresses too high (or G too low) in a run with `bond_style hybrid` and OpenMP threads
+
+**Symptom:** the polymer partial stresses from `compute stress/atom` come out wrong (the bulk gel pressure in a `shear_slab` run read 1.70–1.76 instead of 1.50) while the thermo pressure, temperature and dynamics look normal.
+
+**Cause (found 2026-09-22):** with `-sf omp` and **more than one OpenMP thread per MPI task**, `bond_style hybrid` tallies the *per-atom* bond virial at 1/N_threads of its true value (only one thread's share survives the reduction). Forces and the global virial are correct, so only `stress/atom`-based outputs are affected — but in shear the network shear stress is mostly FENE bond virial, so G would be badly wrong. Plain `bond_style fene` (the triaxial and `compress_slab` decks) is fine with `/omp`. Verified on the plated 14000002 file: bulk P 1.70 with 4 threads, 1.50 with 1 thread or without the suffix.
+
+**Where it bites:** local smoke tests with `lmp -sf omp -pk omp N` (N > 1), or any batch with `--cpus-per-task > 1`. The Expanse `shear_slab.batch` uses 1 thread per task, so the 2026-04 shear runs were unaffected.
+
+**Fix:** `shear_slab.lmp` now wraps the bond style in `suffix off` / `bond_style hybrid fene harmonic` / `suffix on`, so the bond styles run un-suffixed whatever the thread count (the pair style still runs as `lj/cut/omp`). Do the same in any new deck that needs `bond_style hybrid`.
+
