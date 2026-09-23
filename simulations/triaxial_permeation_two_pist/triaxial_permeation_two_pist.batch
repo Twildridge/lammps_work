@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-node=32
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=0
-#SBATCH --time=14:00:00
+#SBATCH --time=16:00:00
 #SBATCH --output=%x.o%j.%N
 
 # -----------------------------------------------------------------------
@@ -53,7 +53,7 @@ module load python/3.8.12
 FOLDER="triaxial_permeation_two_pist"
 DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist"
 INTERACTION="1.0_1.0"   # epsSS_epsSP
-NSTEPS=5000000           # production steps (constant-dP drive); also the output-file tag
+NSTEPS=9000000           # production steps (constant-dP drive); also the output-file tag
 TYPE=""                 # stress, volume, stressvol, or leave empty
 PRESS_TARGET=1.5        # bath pressure P* (both pistons in the settle; permeate piston in production)
 
@@ -61,6 +61,8 @@ PRESS_TARGET=1.5        # bath pressure P* (both pistons in the settle; permeate
 export DP_PISTON=0.1          # SINGLE pressure step dP (= the current one-piston P_piston). Not a list.
 export PISTON_MASS=1000       # mass per piston bead (paper's value)
 export C_PIST_FRAC=1.0        # damping / critical damping (the .lmp prints C_crit and the piston period)
+#   C_PIST_FRAC now acts on the settle + reference window only: the .lmp drops the
+#   damper at the start of production (damp_prod=0 in the .lmp; 2026-09-23).
 export NPT_PISTON_STEPS=1000000   # Phase-1 settle; check the printed piston period (aim >= 3-5 periods)
 export SETTLE_HALT=0          # 1 = end the settle early once both pistons are at rest
 

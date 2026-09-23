@@ -137,6 +137,8 @@ class Config:
                                           # sigma_zz ~1.43 for a 1.50 bath and shifted every sigma' by +0.016.
     res_gel_gap_bins: int = 2             # bins skipped between the gel edge and the reservoir window
     roll_win: int = 21                    # rolling-mean window (samples) for the piston plots
+    q_win_steps: int = 150000             # permeation: length (steps) of the independent windows whose
+                                          # N_permeate / z_perm slopes give Q and its standard error
     # ---- volume fractions (lib/volfrac.py) -------------------------------
     VOR_ENABLE: bool = True               # False -> mass-fraction only (no trajectory pass)
     VOR_MOBILE_ONLY: bool = True          # tessellate types 1,2,3 only
@@ -512,6 +514,81 @@ def plateau_window(steps, x, plateau_frac_auto=0.45, ci=0.95, fracs=None):
     m, lo, hi, blk, tau = block_bootstrap_ci(x[sel], ci=ci)
     return dict(mean=m, lo=lo, hi=hi, step0=float(steps[sel][0]), n=int(sel.sum()),
                 block=blk, tau=tau, frac=float(fracs[-1]), warn=True)
+
+
+def windowed_slopes(steps, y, win_steps, dt=1.0, min_pts=3):
+    """Least-squares slope dy/dt (per tau) of y(steps) in consecutive NON-overlapping
+    windows of win_steps, from the start of the series.  Returns (slopes, centers)
+    with centers in steps; a trailing partial window is dropped."""
+    steps = np.asarray(steps, float)
+    y = np.asarray(y, float)
+    if len(steps) < min_pts:
+        return np.array([]), np.array([])
+    edges = np.arange(steps[0], steps[-1] + 1e-9, win_steps)
+    slopes, centers = [], []
+    for a in edges:
+        sel = (steps >= a) & (steps < a + win_steps)
+        if sel.sum() < min_pts or steps[sel][-1] - steps[sel][0] < 0.5 * win_steps:
+            continue
+        slopes.append(np.polyfit(steps[sel] * dt, y[sel], 1)[0])
+        centers.append(0.5 * (steps[sel][0] + steps[sel][-1]))
+    return np.array(slopes), np.array(centers)
+
+
+def slope_estimate(steps, y, win_steps, dt=1.0, ci=0.95):
+    """Slope of y(t) as the MEAN of the slopes of independent win_steps windows, with
+    the standard error over the windows (t-interval).  Returns dict(mean, se, lo, hi,
+    n_win, slopes, centers, slope_all) -- slope_all is the single fit over the whole
+    span (the two agree when the drift is linear)."""
+    steps = np.asarray(steps, float)
+    y = np.asarray(y, float)
+    sl, ce = windowed_slopes(steps, y, win_steps, dt)
+    out = dict(slopes=sl, centers=ce, n_win=int(len(sl)), win_steps=int(win_steps))
+    out['slope_all'] = float(np.polyfit(steps * dt, y, 1)[0]) if len(steps) >= 3 else np.nan
+    if len(sl) == 0:
+        out.update(mean=out['slope_all'], se=np.nan, lo=np.nan, hi=np.nan)
+        return out
+    m = float(sl.mean())
+    if len(sl) >= 2:
+        se = float(sl.std(ddof=1) / np.sqrt(len(sl)))
+        tcrit = float(stats.t.ppf(0.5 * (1 + ci), len(sl) - 1))
+        out.update(mean=m, se=se, lo=m - tcrit * se, hi=m + tcrit * se)
+    else:
+        out.update(mean=m, se=np.nan, lo=np.nan, hi=np.nan)
+    return out
+
+
+def plateau_window_slopes(steps, y, win_steps, dt=1.0, plateau_frac_auto=0.45, ci=0.95, fracs=None, min_win=4):
+    """Steady window for a SLOPE (flux) estimate: the longest trailing fraction of
+    (steps, y) whose per-window slopes show no trend -- the mean slope of the first
+    half of the windows agrees with that of the second half within their combined
+    standard errors (2 sigma).  Returns the slope_estimate dict of that window plus
+    step0, frac [, warn]."""
+    steps = np.asarray(steps, float)
+    y = np.asarray(y, float)
+    if fracs is None:
+        fracs = plateau_frac_auto * np.arange(9, 1, -1) / 9.0
+    t0, t1 = float(steps[0]), float(steps[-1])
+    last = None
+    for f in fracs:
+        sel = steps >= t1 - f * (t1 - t0)
+        E = slope_estimate(steps[sel], y[sel], win_steps, dt, ci)
+        if E['n_win'] < min_win:
+            continue
+        last = (E, f, sel)
+        h = E['n_win'] // 2
+        a, b = E['slopes'][:h], E['slopes'][h:]
+        se_ab = np.sqrt(a.var(ddof=1) / len(a) + b.var(ddof=1) / len(b)) if min(len(a), len(b)) >= 2 else np.inf
+        if abs(a.mean() - b.mean()) <= 2.0 * se_ab:
+            E.update(step0=float(steps[sel][0]), frac=float(f))
+            return E
+    if last is None:
+        E = slope_estimate(steps, y, win_steps, dt, ci)
+        E.update(step0=t0, frac=1.0, warn=True)
+        return E
+    E, f, sel = last
+    E.update(step0=float(steps[sel][0]), frac=float(f), warn=True)
+    return E
 
 
 def sig(x, n=3):
@@ -3006,15 +3083,37 @@ def print_summary(cfg, levels):
 # extras below add the wet-piston bath check and the permeation analysis.
 def load_wet_pistons(cfg, R, lvl=None, plat_from=None):
     """piston_pressure[_c<lvl>] (+ permeation[_c<lvl>] for compression: solvent expelled)
-    -> dict(step, P_*_meas/app series, plat means, dV_*) or None when the run is one-piston."""
+    -> dict(step, P_*_meas/app series, plat means, dV_*) or None when the run is one-piston.
+    The MEASURED pressures come from piston_force_avg (fix ave/time block means over
+    each volume_freq window, 2026-09-23) when that file exists, divided by l_x l_y;
+    the instantaneous fix-print samples of piston_pressure are the fallback.  The
+    applied pressures are interpolated onto the block-mean steps."""
     names, tab = read_piston_table(cfg.path('piston_pressure', lvl))
     if tab.size == 0 or names is None:
         return None
-    W = dict(step=tab[:, 0], names=names)
+    W = dict(step=tab[:, 0], names=names, source='piston_pressure (instantaneous samples)')
     for nm in names[1:]:
         col = table_col(names, tab, nm)
         if col is not None:
             W[nm] = col
+    fn, ft = read_piston_table(cfg.path('piston_force_avg', lvl))
+    if ft.size and fn is not None and np.isfinite(R.get('AREA', np.nan)) and R['AREA'] > 0:
+        fmap = {'F_load': ('P_load_meas', 1.0), 'F_fluid_feed': ('P_feed_meas', 1.0), 'F_fluid_perm': ('P_perm_meas', -1.0)}
+        st_avg = ft[:, 0]
+        got = {}
+        for fcol, (pname, sgn) in fmap.items():
+            c = table_col(fn, ft, fcol)
+            if c is not None and pname in W:
+                got[pname] = sgn * c / R['AREA']
+        if got:
+            st_pp = W['step']
+            for nm in names[1:]:
+                if nm in got:
+                    W[nm] = got[nm]
+                elif nm in W:
+                    W[nm] = np.interp(st_avg, st_pp, W[nm])
+            W['step'] = st_avg
+            W['source'] = 'piston_force_avg (block means per volume_freq window) / A'
     plat = W['step'] >= (plat_from if plat_from is not None else W['step'][0] + 0.75 * (W['step'][-1] - W['step'][0]))
     if plat.sum() < 1:
         plat[-1] = True
@@ -3052,6 +3151,10 @@ def _wet_panel(ax, cfg, R, L, col=None, label_prefix='', applied=True, shade=Tru
             ax.plot(st, y, ls, color=c, lw=0.9, alpha=0.3)
             ax.plot(st, rolling_mean(y, cfg.roll_win), ls, color=c, lw=2.2, alpha=0.95,
                     label=lab + f'  (plateau {sig(W["plat"][nm])})')
+            if 'P_load' not in nm and W.get('source', '').startswith('piston_force_avg'):
+                lab_src = 'block-averaged $F_{\\rm fluid}/A$'
+                if not any(h.get_label() == lab_src for h in ax.get_lines()):
+                    ax.plot([], [], '-', color='0.5', lw=2.2, label=lab_src)
         else:
             ax.plot(st, y, ls, color=c, lw=1.4, alpha=0.8, label=lab)
     if shade:
@@ -3260,17 +3363,50 @@ def load_permeation(cfg, R, verbose=True):
         st = F['step']
         prod = st >= P['evol_from']                      # the file also spans the ramp
         F['prod'] = prod
+        rho0 = R.get('rho_s0', np.nan)
+        # ---- PRIMARY flux (2026-09-23): slope of the permeate bead count N_permeate(t) ----
+        # N is an integral of the flow, so its slope over long windows averages the
+        # thermal jitter of the piston away; the block-averaged piston velocity does not
+        # (v_thermal ~ v_drift for a 2.3e7-mass sheet).  Uncertainty = standard error of
+        # the slopes of independent q_win_steps windows (t-interval), NOT a block std.
+        cnt = load2c(cfg.path('permeate_count'), 2)
+        if cnt is not None and (cnt[:, 0] >= P['evol_from']).sum() >= 8:
+            cw = cnt[:, 0] >= P['evol_from']
+            n_st, n_val, F['count'] = cnt[cw, 0], cnt[cw, 1], cnt
+        elif F['N'] is not None and prod.sum() >= 8:
+            n_st, n_val = st[prod], F['N'][prod]
+        else:
+            n_st = n_val = None
+        if n_st is not None and np.isfinite(rho0) and rho0 > 0:
+            NS = plateau_window_slopes(n_st, n_val, cfg.q_win_steps, cfg.dt_lj, cfg.plateau_frac_auto, cfg.ci_level)
+            for k in ('mean', 'se', 'lo', 'hi', 'slope_all'):
+                NS[k] = NS[k] / rho0
+            NS['slopes'] = NS['slopes'] / rho0
+            NS['rho0'] = float(rho0)
+            F['Q_N'] = NS
+            win = st >= NS['step0']
+            F['win'] = win
+            F['win_step0'] = NS['step0']
+            # z_perm slope over the same windows: Q_z = -A dz_perm/dt (piston displacement, integrated)
+            if F['z_perm'] is not None and win.sum() >= 3:
+                ZS = slope_estimate(st[win], F['z_perm'][win], cfg.q_win_steps, cfg.dt_lj, cfg.ci_level)
+                for k in ('mean', 'se', 'lo', 'hi', 'slope_all'):
+                    ZS[k] = -area * ZS[k]
+                ZS['lo'], ZS['hi'] = min(ZS['lo'], ZS['hi']), max(ZS['lo'], ZS['hi'])
+                ZS['slopes'] = -area * ZS['slopes']
+                F['Q_z'] = ZS
+                F['Q_fit'] = ZS['slope_all']
+        # ---- legacy: block-averaged piston velocity, drift-tested block-bootstrap plateau ----
         if F['Q'] is not None and prod.sum() >= 4:
             PW = plateau_window(st[prod], F['Q'][prod], cfg.plateau_frac_auto, cfg.ci_level)
             F['Q_ss'] = PW
-            win = st >= PW['step0']
-            F['win'] = win
-            # linear fit of z_perm over the window: Q_fit = -A dz/dt
-            if F['z_perm'] is not None and win.sum() >= 3:
-                slope = np.polyfit(st[win] * cfg.dt_lj, F['z_perm'][win], 1)[0]
-                F['Q_fit'] = -area * slope
-            # measured dP over the window
-            if F['P_feed_meas'] is not None and F['P_perm_meas'] is not None:
+            if 'win' not in F:
+                F['win'] = st >= PW['step0']
+                F['win_step0'] = PW['step0']
+        if 'win' in F:
+            win = F['win']
+            # measured dP over the steady window (block means per volume_freq window)
+            if F['P_feed_meas'] is not None and F['P_perm_meas'] is not None and win.sum() >= 4:
                 dpm = F['P_feed_meas'][win] - F['P_perm_meas'][win]
                 m, lo, hi, *_ = block_bootstrap_ci(dpm, cfg.ci_level)
                 F['dP_meas'], F['dP_meas_lo'], F['dP_meas_hi'] = float(m), float(lo), float(hi)
@@ -3282,19 +3418,7 @@ def load_permeation(cfg, R, verbose=True):
                 F['dP_app'] = float(np.mean((W['P_feed_app'] - W['P_perm_app'])[W['plat_mask']]))
             else:
                 F['dP_app'] = np.nan
-            # bead-count cross-check: dN/dt over the window / rho_s0
-            cnt = load2c(cfg.path('permeate_count'), 2)
-            rho0 = R.get('rho_s0', np.nan)
-            if cnt is not None and np.isfinite(rho0):
-                cw = cnt[:, 0] >= PW['step0']
-                if cw.sum() >= 3:
-                    sl = np.polyfit(cnt[cw, 0] * cfg.dt_lj, cnt[cw, 1], 1)[0]
-                    F['Q_count'] = float(sl / rho0)
-                    F['count'] = cnt
-            elif F['N'] is not None and win.sum() >= 3 and np.isfinite(rho0):
-                sl = np.polyfit(st[win] * cfg.dt_lj, F['N'][win], 1)[0]
-                F['Q_count'] = float(sl / rho0)
-            # permeability k = Q L / (A dP)   (LJ: sigma^4 ... /(eps tau) -> kappa = k/eta convention of the notebooks)
+            # permeability k = Q L / (A dP)   (LJ: sigma^5/(eps tau) -> kappa = k/eta convention of the notebooks)
             Lg = P['L_gel']
             def _k(Q, Qlo, Qhi, dP, dPlo=None, dPhi=None):
                 if not (np.isfinite(Q) and np.isfinite(dP)) or dP == 0:
@@ -3305,17 +3429,31 @@ def load_permeation(cfg, R, verbose=True):
                 h = abs(k) * np.sqrt(rq ** 2 + rp ** 2)
                 return dict(k=float(k), lo=float(k - h), hi=float(k + h))
             F['k'] = {}
-            F['k']['applied'] = _k(PW['mean'], PW['lo'], PW['hi'], F['dP_app'])
-            if 'dP_meas' in F:
-                F['k']['measured'] = _k(PW['mean'], PW['lo'], PW['hi'], F['dP_meas'], F['dP_meas_lo'], F['dP_meas_hi'])
-            if 'Q_count' in F:
-                F['k']['count'] = _k(F['Q_count'], np.nan, np.nan, F['dP_app'])
+            if 'Q_N' in F:
+                NS = F['Q_N']
+                F['k']['N_applied'] = _k(NS['mean'], NS['lo'], NS['hi'], F['dP_app'])
+                if 'dP_meas' in F:
+                    F['k']['N_measured'] = _k(NS['mean'], NS['lo'], NS['hi'], F['dP_meas'], F['dP_meas_lo'], F['dP_meas_hi'])
+            if 'Q_z' in F:
+                ZS = F['Q_z']
+                F['k']['z_applied'] = _k(ZS['mean'], ZS['lo'], ZS['hi'], F['dP_app'])
+            if 'Q_ss' in F:
+                PW = F['Q_ss']
+                F['k']['v_applied'] = _k(PW['mean'], PW['lo'], PW['hi'], F['dP_app'])
             F['k'] = {kk: v for kk, v in F['k'].items() if v is not None}
-            say(f"Q_perm steady (piston displacement): {PW['mean']:.4e} [{PW['lo']:.4e}, {PW['hi']:.4e}] sigma^3/tau "
-                f"(window last {PW['frac']:.0%}, n={PW['n']}, block={PW['block']})" + ('  DRIFT WARNING' if PW.get('warn') else ''))
-            if 'Q_fit' in F:
-                say(f"Q_perm from the z_perm linear fit: {F['Q_fit']:.4e};  bead-count cross-check: "
-                    + (f"{F['Q_count']:.4e}" if 'Q_count' in F else 'n/a'))
+            if 'Q_N' in F:
+                NS = F['Q_N']
+                say(f"Q_perm PRIMARY (N_permeate slope): {NS['mean']:.4e} +/- {NS['se']:.2e} (SE over {NS['n_win']} windows of "
+                    f"{NS['win_steps']} steps; {cfg.ci_level:.0%} CI [{NS['lo']:.4e}, {NS['hi']:.4e}]) sigma^3/tau; "
+                    f"window last {NS['frac']:.0%} (step >= {int(NS['step0'])}); single fit {NS['slope_all']:.4e}"
+                    + ('  DRIFT WARNING' if NS.get('warn') else ''))
+            if 'Q_z' in F:
+                ZS = F['Q_z']
+                say(f"Q_perm from the z_perm slope (same windows): {ZS['mean']:.4e} +/- {ZS['se']:.2e}")
+            if 'Q_ss' in F:
+                PW = F['Q_ss']
+                say(f"Q_perm legacy (block-averaged piston velocity, block bootstrap): {PW['mean']:.4e} [{PW['lo']:.4e}, {PW['hi']:.4e}]"
+                    + ('  DRIFT WARNING' if PW.get('warn') else ''))
             say(f"dP applied = {F['dP_app']:.4f};  dP measured (wet pistons) = "
                 + (f"{F['dP_meas']:.4f} [{F['dP_meas_lo']:.4f}, {F['dP_meas_hi']:.4f}]" if 'dP_meas' in F else 'n/a')
                 + f";  L_gel (Rg) = {Lg:.2f};  A = {area:.1f}")
@@ -3367,74 +3505,111 @@ def fig_perm_pistons(cfg, R, P):
     axZ.grid(alpha=0.3)
     smart_legend(axZ, fontsize=11)
     if _wet_panel(axP, cfg, R, P):
+        # reservoir virial pressures: block means at the pf cadence since 2026-09-23
+        # (one point per volume_freq window; older runs have ~10 points at the stress cadence)
         for name, col in (('pressure_feed', WONG['vermillion']), ('pressure_permeate', WONG['blue'])):
             f = cfg.path(name)
             if f.exists():
                 a = load2c(f, 2)
                 if a is not None:
-                    axP.plot(a[:, 0], a[:, 1], ':', color=col, lw=1.8, alpha=0.9,
-                             label=f'{name.split("_")[1]} reservoir virial $P_{{\\rm res}}$')
+                    dense = a.shape[0] > 3 * cfg.roll_win
+                    if dense:
+                        axP.plot(a[:, 0], a[:, 1], ':', color=col, lw=0.8, alpha=0.25)
+                    axP.plot(a[:, 0], rolling_mean(a[:, 1], cfg.roll_win) if dense else a[:, 1], ':', color=col, lw=2.0, alpha=0.95,
+                             label=f'{name.split("_")[1]} reservoir virial $P_{{\\rm res}}$' + (' (rolling mean)' if dense else ''))
+    src = (P.get('wet') or {}).get('source', '')
     axP.set_xlabel('step')
     axP.set_ylabel('pressure  (LJ)')
-    axP.set_title('(b) piston pressure: measured $F_{\\rm fluid}/A$ vs applied (dashed); reservoir virial (dotted)', fontsize=12)
+    axP.set_title('(b) piston pressure: measured ' + ('block-averaged ' if src.startswith('piston_force_avg') else '')
+                  + '$F_{\\rm fluid}/A$ vs applied (dashed); reservoir virial (dotted)', fontsize=12)
     axP.grid(alpha=0.3)
     smart_legend(axP, fontsize=10)
     return _save(fig, cfg, 'perm_pistons')
 
 
 def fig_perm_flux(cfg, R, P):
-    """(a) Q_perm(t) from the permeate-piston displacement with the drift-free steady
-    window (block-bootstrap mean) and the z_perm-fit value; (b) bead-count cross-check."""
+    """(a) Q_perm(t) from the block-averaged permeate-piston velocity (context) with the
+    steady window and the three estimates: N_permeate slope (primary, +/- SE over
+    independent windows), z_perm slope, legacy block-bootstrap mean; (b) N_permeate(t)
+    with the per-window fits that give the primary value."""
     F = P.get('flux')
-    if F is None or F.get('Q') is None:
+    if F is None or (F.get('Q') is None and F.get('Q_N') is None):
         print('flux figure skipped (no permeation file)')
         return None
     fig, (axQ, axN) = plt.subplots(1, 2, figsize=(18, 6), constrained_layout=True)
     st, Q = F['step'], F['Q']
-    axQ.plot(st, Q, '-', color=WONG['green'], lw=1.0, alpha=0.35, label=r'$Q_{\rm perm}=A\,dz_{\rm perm}/dt$ (block-avg)')
-    axQ.plot(st, rolling_mean(Q, cfg.roll_win), '-', color=WONG['green'], lw=2.4, label=f'rolling mean ({cfg.roll_win})')
+    if Q is not None:
+        axQ.plot(st, Q, '-', color=WONG['green'], lw=1.0, alpha=0.35, label=r'$Q=A\,dz_{\rm perm}/dt$ (block-avg piston velocity)')
+        axQ.plot(st, rolling_mean(Q, cfg.roll_win), '-', color=WONG['green'], lw=2.4, label=f'rolling mean ({cfg.roll_win})')
+    if 'win_step0' in F:
+        axQ.axvspan(F['win_step0'], float(st[-1]), color=WONG['green'], alpha=0.10, label='steady window (auto, slope drift test)')
+    if 'Q_N' in F:
+        NS = F['Q_N']
+        axQ.axhline(NS['mean'], color='k', ls='--', lw=1.8,
+                    label=f"$N_{{\\rm permeate}}$ slope: $Q$ = {fmt_val_unc(NS['mean'], NS['se'])}  (SE, {NS['n_win']} windows)")
+        axQ.axhspan(NS['lo'], NS['hi'], color='k', alpha=0.08)
+    if 'Q_z' in F:
+        ZS = F['Q_z']
+        axQ.axhline(ZS['mean'], color=WONG['reddishpurple'], ls=':', lw=1.6,
+                    label=f"$z_{{\\rm perm}}$ slope: {fmt_val_unc(ZS['mean'], ZS['se'])}")
     if 'Q_ss' in F:
         PW = F['Q_ss']
-        axQ.axvspan(PW['step0'], float(st[-1]), color=WONG['green'], alpha=0.10, label='steady window (auto)')
-        axQ.axhline(PW['mean'], color='k', ls='--', lw=1.5, label=f"steady $Q$ = {fmt_val_unc(PW['mean'], 0.5 * (PW['hi'] - PW['lo']))}")
-        if 'Q_fit' in F:
-            axQ.axhline(F['Q_fit'], color=WONG['reddishpurple'], ls=':', lw=1.5, label=f"from $z_{{\\rm perm}}$ fit: {sig(F['Q_fit'])}")
-        if 'Q_count' in F:
-            axQ.axhline(F['Q_count'], color='0.4', ls='-.', lw=1.3, label=f"bead count: {sig(F['Q_count'])}")
+        axQ.axhline(PW['mean'], color='0.5', ls='-.', lw=1.2,
+                    label=f"legacy block mean: {fmt_val_unc(PW['mean'], 0.5 * (PW['hi'] - PW['lo']))}")
     axQ.axvline(P['evol_from'], color='k', ls=':', lw=1, alpha=0.5)
     axQ.set_xlabel('step')
     axQ.set_ylabel(r'$Q_{\rm perm}$  ($\sigma^3/\tau$)')
-    axQ.set_title('(a) permeate flux from the permeate-piston displacement', fontsize=13)
+    axQ.set_title('(a) permeate flux: piston-velocity trace (context) and the slope estimates', fontsize=13)
     axQ.grid(alpha=0.3)
     smart_legend(axQ, fontsize=10)
     cnt = F.get('count')
     if cnt is not None:
-        axN.plot(cnt[:, 0], cnt[:, 1] - cnt[0, 1], '-', color='0.3', lw=1.8, label=r'$\Delta N_{\rm permeate}$ (crossed below the support)')
-        if 'Q_ss' in F and 'Q_count' in F:
-            cw = cnt[:, 0] >= F['Q_ss']['step0']
-            sl, ic = np.polyfit(cnt[cw, 0], cnt[cw, 1] - cnt[0, 1], 1)
-            axN.plot(cnt[cw, 0], sl * cnt[cw, 0] + ic, '--', color=WONG['vermillion'], lw=2,
-                     label=f'window slope -> $Q$ = {sig(F["Q_count"])} (rho$_0$ = {sig(R.get("rho_s0", np.nan))})')
+        n_st, n_val = cnt[:, 0], cnt[:, 1]
     elif F.get('N') is not None:
-        axN.plot(st, F['N'] - F['N'][0], '-', color='0.3', lw=1.8, label=r'$\Delta N_{\rm permeate}$')
+        n_st, n_val = st, F['N']
+    else:
+        n_st = n_val = None
+    if n_st is not None:
+        axN.plot(n_st, n_val - n_val[0], '-', color='0.3', lw=1.8, label=r'$\Delta N_{\rm permeate}$ (crossed below the support)')
+        if 'Q_N' in F:
+            NS = F['Q_N']
+            cw = n_st >= NS['step0']
+            if cw.sum() >= 3:
+                sl, ic = np.polyfit(n_st[cw], n_val[cw] - n_val[0], 1)
+                axN.plot(n_st[cw], sl * n_st[cw] + ic, '--', color=WONG['vermillion'], lw=2,
+                         label=f"single fit -> $Q$ = {sig(NS['slope_all'])}")
+            # the independent windows: short segments at the fitted slopes
+            w = NS['win_steps']
+            for j, (c, q) in enumerate(zip(NS['centers'], NS['slopes'])):
+                sel = (n_st >= c - 0.5 * w) & (n_st <= c + 0.5 * w)
+                if sel.sum() < 2:
+                    continue
+                m = np.polyfit(n_st[sel], n_val[sel] - n_val[0], 1)
+                axN.plot(n_st[sel], np.polyval(m, n_st[sel]), '-', color=WONG['blue'], lw=2.6, alpha=0.85,
+                         label=(f'{NS["n_win"]} independent windows of {w} steps -> $Q$ = {fmt_val_unc(NS["mean"], NS["se"])}' if j == 0 else None))
+            axN.axvspan(NS['step0'], float(n_st[-1]), color=WONG['green'], alpha=0.10)
+            axN.set_title(f"(b) permeate bead count: window slopes / $\\rho_{{s,0}}$ = {sig(NS['rho0'])}   (primary $Q$)", fontsize=13)
+        else:
+            axN.set_title('(b) permeate bead count', fontsize=13)
     axN.set_xlabel('step')
     axN.set_ylabel(r'$\Delta N_{\rm permeate}$  (beads)')
-    axN.set_title('(b) bead-count cross-check', fontsize=13)
     axN.grid(alpha=0.3)
     smart_legend(axN, fontsize=10)
     return _save(fig, cfg, 'perm_flux')
 
 
 def fig_perm_permeability(cfg, R, P):
-    """k = Q L/(A dP): with the applied dP, with the measured (wet-piston) dP, and from
-    the bead count; CI from the block-bootstrap of Q (and of dP_meas) in quadrature."""
+    """k = Q L/(A dP): N_permeate-slope Q with the applied and the measured (wet-piston)
+    dP (primary), the z_perm-slope Q, and the legacy block-mean piston velocity; CI =
+    the slope's SE-based interval (and dP_meas's block bootstrap) in quadrature."""
     F = P.get('flux')
     if F is None or not F.get('k'):
         print('permeability figure skipped (no flux)')
         return None
     fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
-    labs = {'applied': r'$Q_{\rm ss}$, applied $\Delta P$', 'measured': r'$Q_{\rm ss}$, measured $\Delta P$', 'count': r'bead count, applied $\Delta P$'}
-    cols = {'applied': WONG['blue'], 'measured': WONG['vermillion'], 'count': '0.4'}
+    labs = {'N_applied': r'$N$ slope, applied $\Delta P$', 'N_measured': r'$N$ slope, measured $\Delta P$',
+            'z_applied': r'$z_{\rm perm}$ slope, applied $\Delta P$', 'v_applied': r'legacy $v$ block mean, applied $\Delta P$'}
+    cols = {'N_applied': WONG['blue'], 'N_measured': WONG['vermillion'], 'z_applied': WONG['reddishpurple'], 'v_applied': '0.5'}
     for i, (kk, v) in enumerate(F['k'].items()):
         ax.errorbar([i], [v['k']], yerr=[[v['k'] - v['lo']], [v['hi'] - v['k']]], fmt='o', ms=12, color=cols[kk],
                     capsize=8, lw=2.5, label=f"{labs[kk]}:  $k = {sig(v['k'])}$")
@@ -3457,10 +3632,17 @@ def print_perm_summary(cfg, R, P):
     W = P.get('wet')
     if W is not None:
         print('  wet pistons (steady means): ' + '  '.join(f"{k}: {v:.4f}" for k, v in W['plat'].items()))
+    if 'Q_N' in F:
+        NS = F['Q_N']
+        print(f"  Q_perm (N_permeate slope) = {NS['mean']:.4e} +/- {NS['se']:.2e} sigma^3/tau  "
+              f"(SE over {NS['n_win']} windows of {NS['win_steps']} steps; Darcy velocity Q/A = {NS['mean'] / P['area']:.3e})")
+    if 'Q_z' in F:
+        print(f"  Q_perm (z_perm slope)     = {F['Q_z']['mean']:.4e} +/- {F['Q_z']['se']:.2e}")
     if 'Q_ss' in F:
         PW = F['Q_ss']
-        print(f"  Q_perm = {PW['mean']:.4e} [{PW['lo']:.4e}, {PW['hi']:.4e}] sigma^3/tau  (Darcy velocity Q/A = {PW['mean'] / P['area']:.3e})")
+        print(f"  Q_perm (legacy v block)   = {PW['mean']:.4e} [{PW['lo']:.4e}, {PW['hi']:.4e}]")
+    if F.get('k'):
         for kk, v in F['k'].items():
-            print(f"  k ({kk:8s}) = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]")
-    else:
-        print('  no steady flux (permeation file missing or too short)')
+            print(f"  k ({kk:10s}) = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]")
+    elif 'Q_N' not in F:
+        print('  no steady flux (permeation / permeate_count files missing or too short)')

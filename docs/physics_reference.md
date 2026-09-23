@@ -85,6 +85,15 @@ is wider than half the box and `rigid` mis-reconstructs it):
 the damping on the sheet is N·C_pist·v.  The pistons are not thermostatted (as in the paper); the viscous term
 removes their thermal energy.  The bead mass is a deck variable (`mass 5/6/7 ${piston_mass}`, default 1000).
 
+**The damper is a settle aid only (permeation deck, 2026-09-23).**  Under steady flow the drag acts as a pressure
+C·v·N/A on each sheet: in the 2026-09-22 run (v ≈ 2×10⁻⁴ σ/τ, C ≈ 16–19, N ≈ 23,300, A ≈ 2320) that is ≈ 0.037 per
+sheet, and the measured P_feed − P_perm was ≈ 0.03 for an applied dP = 0.1 — the damper on the two sheets ate two
+thirds of the drive.  `triaxial_permeation_two_pist.lmp` therefore redefines `fz_feed`/`fz_perm` without the −C·v
+term at the start of Phase 2 (`damp_prod = 0`, default; `damp_prod = 1` restores the old behaviour).  The sheets
+stay overdamped anyway: the gel's hydraulic resistance R = dP/Q gives an equivalent damping R·A² ≈ 0.8 of critical.
+The damper does not set the noise of the flux either — that is the sheet's thermal velocity (√(kT/M) ≈ the drift
+velocity for M = 2.3×10⁷), which the analysis removes by taking Q from the slope of the permeate bead count.
+
 **Why l_x, l_y are fixed and why a converter.** The scheme regulates pressure in z only.  It cannot swell a fresh
 lattice laterally, so the two-piston data file is *converted* from the equilibrated aniso-NPH slab
 (`slab_with_support`, piston transparent to solvent, σ_p,xx/σ_p,zz = 1.0005): l_x, l_y, the gel dimensions and the
@@ -110,8 +119,9 @@ the settle is critically-to-mildly overdamped).  For the rho04 slab (A ≈ 2077,
 prints ω ≈ 7–9 × 10⁻³/τ, periods ≈ 1.4–1.8 × 10⁵ steps and C_crit ≈ 14–18 per bead — so `NPT_PISTON_STEPS = 1 M`
 is ≈ 5–7 periods.
 
-**Modes.** Permeation: P_feed = P_target + dP, P_perm = P_target; flux Q_perm = A·dz_perm/dt from the permeate
-piston (bead count crossing the support kept as a cross-check); k = Q_perm L/(A dP).  Compression: both wet pistons
+**Modes.** Permeation: P_feed = P_target + dP, P_perm = P_target; flux Q_perm = (dN_permeate/dt)/ρ_s,0 from the
+slope of the bead count crossing the support over independent windows (2026-09-23; the permeate-piston
+displacement A·dz_perm/dt is the second estimate); k = Q_perm L/(A dP).  Compression: both wet pistons
 at P_target (drained consolidation at constant bath pressure) and a third, solvent-transparent load piston inside the
 feed reservoir loads the network through the usual strain sweep; solvent expelled by the compression raises the
 feed piston (and lowers the permeate piston), so the converter's `margin_feed` must cover the deepest strain.

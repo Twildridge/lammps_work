@@ -118,10 +118,12 @@ The summary prints *plates over the level* (support, load piston, feed and perme
 **`triaxial_permeation_single_two_pist.ipynb`** (two-piston permeation, 2026-09-16, standard since 2026-09-22 — no sweep notebook)
 `Config(mode="permeation", two_pist=True)`; `tri.load_permeation` builds one dict `P`: total / partial / network
 stress and density evolutions (cividis, bold final, zero-flux `_ref` baseline dashed), both wet pistons
-(displacement; `F_fluid/(lx ly)` measured vs applied; reservoir virial pressures dotted), `Q_perm(t)` from the
-permeate-piston displacement with the drift-free steady window (block bootstrap) and the `z_perm` linear fit, the
-bead-count cross-check, and the permeability `k = Q_perm L/(A ΔP)` with the applied and the measured ΔP (CIs in
-quadrature). Seven figures (`fig_perm_pistons`, `fig_total_stress`, `fig_partial_stress`, `fig_network_stress`,
+(displacement; block-averaged `F_fluid/(lx ly)` from `piston_force_avg` measured vs applied; reservoir virial
+pressures dotted, pf cadence since 2026-09-23), the flux `Q_perm` as the **slope of the permeate bead count** over
+independent `q_win_steps` windows with its standard error and a slope drift test (`plateau_window_slopes`,
+2026-09-23; the `z_perm` slope and the legacy block-bootstrap mean of the piston-velocity trace are drawn beside
+it — the velocity blocks are dominated by the sheet's thermal jitter and their scatter is not an error bar), and
+the permeability `k = Q_perm L/(A ΔP)` with the applied and the measured ΔP (CIs in quadrature). Seven figures (`fig_perm_pistons`, `fig_total_stress`, `fig_partial_stress`, `fig_network_stress`,
 `fig_perm_density`, `fig_perm_flux`, `fig_perm_permeability`).
 
 **Tests** (`scripts/tests/`, 2026-09-16): `run_plot_tests.sh` builds synthetic one-piston and two-piston run

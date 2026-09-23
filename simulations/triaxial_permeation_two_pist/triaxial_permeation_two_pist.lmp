@@ -47,9 +47,15 @@
 #   fix <id>_nve nve
 #   fz_feed = -P_feed*lx*ly/N - C_pist*vcm(piston,z)      (top piston pushes DOWN)
 #   fz_perm = +P_perm*lx*ly/N - C_pist*vcm(piston,z)      (bottom piston pushes UP)
+#   The viscous term is a SETTLE aid (Phases 1 and 1.5 only).  In production it is
+#   dropped by default (damp_prod=0, 2026-09-23): under steady flow the drag
+#   C*v*N/A on each sheet acted as a pressure of ~0.037 in the 2026-09-22 run, so
+#   the applied dP=0.1 reached the gel as ~0.03; the gel's own hydraulic
+#   resistance (R*A^2 ~ 0.8 C_crit) keeps the sheets overdamped without it.
 #   Pistons are NOT in `mobile` -> unthermostatted (as in the paper); their thermal
-#   energy is removed by the viscous term.  No `fix rigid` on full-width periodic
-#   sheets (see the slab_with_support periodic-piston note).
+#   energy is removed by the viscous term during the settle and by the fluid in
+#   production.  No `fix rigid` on full-width periodic sheets (see the
+#   slab_with_support periodic-piston note).
 #
 # Behaviour:
 #   - Phase 0:   read + brief minimize + short Langevin NVT (mobile) with ALL
@@ -97,12 +103,18 @@ variable timestep_gentle equal 0.001      # only if a gentle NVT stage is ever r
 # c_pist_frac: C_pist = c_pist_frac * C_crit (1.0 = critical damping).  The paper's
 #   C=500 is for a few-hundred-atom graphene sheet; with our ~23,316-bead sheets and
 #   m=1000 it would be ~50x overdamped (relaxation ~3.6M steps), hence the estimate.
+#   Applies to the Phase-1 settle and the Phase-1.5 reference window only unless
+#   damp_prod=1.
+# damp_prod: 0 (default) = redefine fz_feed/fz_perm WITHOUT the -C*v term at the
+#   start of Phase 2, so the full dP drives the flow; 1 = keep the damper through
+#   production (the 2026-09-22 behaviour: measured dP ~ dP - 2*C*v*N/A).
 # dp_piston: applied pressure step dP (P_feed = P_target + dP in production).
 # npt_piston_steps: length of the Phase-1 settle; the printed piston period tells
 #   you whether it is enough (aim for >= 3-5 periods).
 variable piston_mass      index 1000.0
 variable K_solv           index 10.0
 variable c_pist_frac      index 1.0
+variable damp_prod        index 0          # 0 = drop the piston damper in Phase 2 (edit here or -var damp_prod 1)
 variable dp_piston        index 0.1        # = the current one-piston P_piston
 variable npt_piston_steps index 1000000
 variable dP_piston        equal ${dp_piston}
@@ -198,7 +210,7 @@ comm_modify cutoff 5.0
 print "========================================"
 print "Triaxial permeation, TWO-PISTON: ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
-print "P_target=${P_target}  dP=${dP_piston}  piston_mass=${piston_mass}  c_pist_frac=${c_pist_frac}  settle=${npt_piston_steps}"
+print "P_target=${P_target}  dP=${dP_piston}  piston_mass=${piston_mass}  c_pist_frac=${c_pist_frac}  damp_prod=${damp_prod}  settle=${npt_piston_steps}"
 print "Production steps: ${nsteps}"
 print "========================================"
 
@@ -690,6 +702,22 @@ compute myTemp mobile temp/partial 1 1 0
 fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
 fix_modify nvt_prod temp myTemp
 
+# ----- Production piston law: drop the viscous damper (damp_prod=0, 2026-09-23) -----
+# Same delete + equal idiom as dP_now: fix aveforce looks the variable up BY NAME
+# at the start of every run, so the redefinition takes effect from the first ramp
+# stage on.  With the damper the 2026-09-22 run saw P_feed_meas - P_perm_meas ~ 0.03
+# for dP = 0.1 (drag ~0.037 per sheet, both sheets).  The gel's hydraulic
+# resistance R = dP/Q gives an effective damping R*A^2 ~ 0.8*C_crit*N on its own,
+# so the undamped sheets remain (nearly) critically damped under flow.
+if "${damp_prod} == 0" then &
+    "variable fz_feed delete" &
+    "variable fz_feed equal -v_P_feed_app*v_area/v_N_feed" &
+    "variable fz_perm delete" &
+    "variable fz_perm equal  v_P_perm_app*v_area/v_N_perm" &
+    "print '>>> Phase 2: piston damper OFF (damp_prod=0): fz_feed = -P_feed_app*A/N, fz_perm = +P_perm_app*A/N'" &
+else &
+    "print '>>> Phase 2: piston damper KEPT (damp_prod=1): C_pist_feed=$(v_C_pist_feed:%.3f) C_pist_perm=$(v_C_pist_perm:%.3f) per bead'"
+
 # ----- P_feed ramp (permeate stays at P_target) -----
 variable ramp_stage loop ${n_ramp}
 label ramp_loop
@@ -848,8 +876,10 @@ variable res_perm_zlo equal v_perm_z_top+v_res_wall_clear
 variable res_perm_zhi equal (v_support_z_live>(v_res_perm_zlo+v_res_min_thick))*v_support_z_live+(v_support_z_live<=(v_res_perm_zlo+v_res_min_thick))*(v_res_perm_zlo+v_res_min_thick)
 region reg_feed_res block EDGE EDGE EDGE EDGE v_res_feed_zlo v_res_feed_zhi side in
 region reg_perm_res block EDGE EDGE EDGE EDGE v_res_perm_zlo v_res_perm_zhi side in
-group g_solvent_feed dynamic solvent region reg_feed_res every ${nevery_stress}
-group g_solvent_perm dynamic solvent region reg_perm_res every ${nevery_stress}
+# refreshed at the pf cadence (pf_nevery=50): the reservoir pressures below are
+# block-averaged every volume_freq (2026-09-23), the same cadence as piston_force_avg
+group g_solvent_feed dynamic solvent region reg_feed_res every ${pf_nevery}
+group g_solvent_perm dynamic solvent region reg_perm_res every ${pf_nevery}
 variable pv_solvent atom -(c_stress_solvent[1]+c_stress_solvent[2]+c_stress_solvent[3])/3.0
 compute pv_feed g_solvent_feed reduce sum v_pv_solvent
 compute pv_perm g_solvent_perm reduce sum v_pv_solvent
@@ -906,11 +936,14 @@ fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_str
     chunk_z_polymer v_uz_poly &
     file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat
 
-fix avg_P_feed all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} v_P_res_feed v_rho_feed &
-    title2 "# TimeStep P_res_feed rho_feed" &
+# reservoir virial pressures + densities at the PISTON-FORCE cadence (pf_*: one
+# block mean per volume_freq window, ~1000 points per run), not the stress cadence
+# (nfreq_stress = nsteps/10 -> ten points, useless as a time trace).  2026-09-23.
+fix avg_P_feed all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} v_P_res_feed v_rho_feed &
+    title2 "# TimeStep P_res_feed rho_feed   (block-averaged, pf cadence)" &
     file output_files/stress_data/pressure_feed_${dataname}_${interaction}_${nsteps}.dat
-fix avg_P_perm all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} v_P_res_perm v_rho_perm &
-    title2 "# TimeStep P_res_perm rho_perm" &
+fix avg_P_perm all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} v_P_res_perm v_rho_perm &
+    title2 "# TimeStep P_res_perm rho_perm   (block-averaged, pf cadence)" &
     file output_files/stress_data/pressure_permeate_${dataname}_${interaction}_${nsteps}.dat
 
 variable gel_strain_pct equal v_gel_strain*100.0
