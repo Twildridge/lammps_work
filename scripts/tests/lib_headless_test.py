@@ -35,13 +35,29 @@ tri.fig_strain(cfg, R, LEVELS, stem='sweep_strain_diagnostic')
 assert L['wet'] is not None and 'P_feed_meas' in L['wet']['plat']
 
 print('\n################ permeation (two-piston fixture) ################')
-cfgp = tri.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', two_pist=True, base_dir=base)
+cfgp = tri.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', two_pist=True, base_dir=base,
+                  P_CAL_MODE='pore')          # the fixture traj has 80 mobile atoms: the Voronoi pass is cheap here
 Rp = tri.load_reference(cfgp)
 P = tri.load_permeation(cfgp, Rp)
+tri.add_perm_volume_fractions(cfgp, Rp, P)
 tri.print_perm_summary(cfgp, Rp, P)
 for f in (tri.fig_perm_pistons, tri.fig_total_stress, tri.fig_partial_stress, tri.fig_network_stress, tri.fig_perm_density,
-          tri.fig_perm_flux, tri.fig_perm_permeability):
+          tri.fig_perm_volfrac, tri.fig_perm_volfrac_evolution, tri.fig_perm_flux, tri.fig_perm_permeability,
+          tri.fig_thermo_pressure, tri.fig_osmotic_pressure):
     f(cfgp, Rp, P)
     plt.close('all')
-assert P['flux'] is not None and 'applied' in P['flux']['k']
+assert P['flux'] is not None and any(k.endswith('applied') for k in P['flux']['k'])
+assert P['phi_mf'] is not None and P['phi_vor'] is not None
+if Rp.get('CALIB') is not None:
+    assert P['phi_cal'] is not None and P['P_cal'] is not None
+    # the pore-pressure ramp: feed baseline above the membrane, permeate baseline below it
+    Pl = P['P_cal'][0]
+    assert Pl[P['z'] > P['z_mem_hi']].max() >= Pl[P['z'] < P['z_mem_lo']].min() - 1e-9
+    # the other two modes must run too (cached tessellation -> instant)
+    for mode in ('thermo', 'const'):
+        cfgp.P_CAL_MODE = mode
+        P2 = tri.load_permeation(cfgp, Rp, verbose=False)
+        tri.add_perm_volume_fractions(cfgp, Rp, P2)
+        assert P2['phi_cal'] is not None, mode
+        plt.close('all')
 print('\nLIB HEADLESS TEST: OK')

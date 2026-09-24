@@ -147,7 +147,19 @@ class Config:
     P_BARO: float = 1.5                   # bath / barostat pressure: the total-stress panels are drawn as sigma^t / P_BARO
     PHI_FLOOR: float = 0.02
     REF_VOR_FRAMES: int = 3               # reference frames tessellated (~20 s each)
-    VOR_MAX_FRAMES: int = 4               # plateau frames tessellated per level (~20 s each)
+    VOR_MAX_FRAMES: int = 4               # plateau / steady-window frames tessellated per level or run (~20 s each)
+    VOR_EVO_FRAMES: int = 5               # permeation: frames tessellated evenly over the drive (evolution panels)
+    P_CAL_MODE: str = 'const'             # the P handed to lambda(phi_p, P) in every z-bin (2026-09-23):
+                                          #   'const'  -> P_CAL everywhere: drained equilibrium, p_pore = P_target
+                                          #               throughout the gel (compression)
+                                          #   'pore'   -> the pore-pressure ramp across the membrane from the measured
+                                          #               feed-reservoir baseline to the measured permeate baseline
+                                          #               (permeation: p_pore drops feed -> permeate; Darcy, uniform k);
+                                          #               reservoirs take their own baseline
+                                          #   'thermo' -> the local P_th = -1/3 tr sigma^t of the nearest stress
+                                          #               snapshot (includes the network's share; noisier)
+                                          # Non-finite bins fall back to the ramp; every P is clipped to the
+                                          # calibration sweep's range (volfrac.lambda_of clamps there anyway).
     # ---- M and G as increments from the eps = 0 reference ------------------
     M_SUBTRACT_REF: bool = True           # M = (stress - its own eps = 0 reading) / eps for BOTH estimators
                                           # (2026-09-12: the seated piston carries a real preload ~+0.0014 and the
@@ -1386,10 +1398,11 @@ _VF_CACHE = {}
 
 
 def _volume_fractions(cfg, R, traj, ts_want, label=''):
-    """One streamed pass over `traj` -> dict(ts, phi_vor, phi_vor_mobile, phi_cal)
-    on the R['z'] grid, cached on (file, frames, knobs)."""
+    """One streamed pass over `traj` -> dict(ts, phi_vor, phi_vor_mobile) on the
+    R['z'] grid, cached on (file, frames, knobs).  The calibration is applied
+    afterwards by _calibrate (so P_CAL / P_CAL_MODE never force a re-tessellation)."""
     ts_want = [int(t) for t in np.atleast_1d(ts_want)]
-    key = (str(traj), tuple(ts_want), cfg.VOR_MOBILE_ONLY, cfg.VOR_NORM, cfg.binWidth, cfg.P_CAL)
+    key = (str(traj), tuple(ts_want), cfg.VOR_MOBILE_ONLY, cfg.VOR_NORM, cfg.binWidth)
     if key in _VF_CACHE:
         print(f'    {label}cached: {len(_VF_CACHE[key]["ts"])} frame(s), no re-read')
         return _VF_CACHE[key]
@@ -1399,33 +1412,114 @@ def _volume_fractions(cfg, R, traj, ts_want, label=''):
     if missing:
         print(f'    NOTE: no traj frame at {missing} -- dropped')
     ts_ok = [t for t in ts_want if t in fr]
-    out = {'ts': np.array(ts_ok, float), 'phi_vor': None, 'phi_vor_mobile': None, 'phi_cal': None}
+    out = {'ts': np.array(ts_ok, float), 'phi_vor': None, 'phi_vor_mobile': None}
     if not ts_ok:
         return out
-    pv, pm = [], []
+    pv, pm, ok = [], [], []
     for t in ts_ok:
         box, typ, xyz = fr[t]
-        zc, ph_b, ph_m = volfrac.phi_voronoi_frame(box, typ, xyz, cfg.binWidth,
-                                                   mobile_only=cfg.VOR_MOBILE_ONLY, norm='both')
+        try:
+            zc, ph_b, ph_m = volfrac.phi_voronoi_frame(box, typ, xyz, cfg.binWidth,
+                                                       mobile_only=cfg.VOR_MOBILE_ONLY, norm='both')
+        except Exception as e:                       # e.g. a frame without mobile atoms
+            print(f'      ts {t}: tessellation failed ({e}) -- frame dropped')
+            continue
         ph = ph_b if cfg.VOR_NORM == 'bin' else ph_m
         pv.append(np.interp(R['z'], zc, ph, left=np.nan, right=np.nan))
         pm.append(np.interp(R['z'], zc, ph_m, left=np.nan, right=np.nan))
+        ok.append(t)
         print(f'      ts {t}: phi^vor max = {np.nanmax(pv[-1]):.3f}')
     del fr
+    if not ok:
+        return out
+    out['ts'] = np.array(ok, float)
     out['phi_vor'] = np.array(pv)
     out['phi_vor_mobile'] = np.array(pm)
-    if R.get('CALIB') is not None:
-        out['phi_cal'] = volfrac.phi_calibrated(out['phi_vor_mobile'], cfg.P_CAL, R['CALIB'])
     _VF_CACHE[key] = out
     return out
 
 
-def add_volume_fractions(cfg, R, levels=()):
-    """Voronoi + lambda-calibrated solvent volume fractions for the reference
-    state (R) and each level in `levels`.  Reference: REF_VOR_FRAMES frames
-    evenly over the reference window (mean + CI).  Level: VOR_MAX_FRAMES frames
-    inside the plateau window (plateau mean + CI).  Mass-fraction profiles were
-    already set by load_reference / load_level."""
+def _calib_range(R):
+    """(P_min, P_max) of the calibration sweep, or (-inf, inf) without an artifact."""
+    c = R.get('CALIB')
+    if c is None:
+        return -np.inf, np.inf
+    Ps = np.asarray(c['coeffs']['pressures'], float)
+    return float(Ps.min()), float(Ps.max())
+
+
+def _p_local_fn(cfg, R, D):
+    """-> f(ts) = P_local(z) on R['z']: the pressure handed to lambda(phi_p, P) per
+    z-bin for the state D (R itself, a level L or the permeation dict P) under
+    cfg.P_CAL_MODE -- see Config.  'pore' builds the ramp from the measured
+    reservoir baselines (sigma_zz of the reservoir interior, positive under
+    compression, i.e. +P_res): the feed baseline above the membrane, the permeate
+    baseline (when the run has one) below it, linear in between.  Every mode
+    clips to the calibration's pressure range and fills non-finite bins from
+    the ramp."""
+    z = R['z']
+    const = np.full(len(z), float(cfg.P_CAL))
+    mode = cfg.P_CAL_MODE
+    if mode not in ('const', 'pore', 'thermo'):
+        raise ValueError(f"P_CAL_MODE must be 'const', 'pore' or 'thermo' (got {mode!r})")
+    if mode == 'const' or D is None or 'stress' not in D or 'zz' not in D['stress']:
+        return lambda t: const.copy()
+    zz = D['stress']['zz']
+    Pmin, Pmax = _calib_range(R)
+    if D is R:                                          # reference: one baseline, uniform
+        pf_at = pp_at = (lambda t, v=float(zz['pore']): v)
+        zlo, zhi = R['z_gel_lo'], R['z_gel_hi']
+    else:
+        ts = np.asarray(D['ts'], float)
+        pore = np.asarray(zz['pore'], float)
+        pf_at = lambda t, ts=ts, pore=pore: float(np.interp(t, ts, pore))
+        if zz.get('pore_perm') is not None:
+            pp = np.asarray(zz['pore_perm'], float)
+            pp_at = lambda t, ts=ts, pp=pp: float(np.interp(t, ts, pp))
+        else:
+            pp_at = pf_at
+        zlo, zhi = D.get('z_mem_lo', R['z_gel_lo']), D.get('z_mem_hi', R['z_gel_hi'])
+
+    def ramp(t):
+        pf, pp = pf_at(t), pp_at(t)
+        w = np.clip((z - zlo) / max(zhi - zlo, 1e-9), 0.0, 1.0)
+        return pp + w * (pf - pp)
+
+    f = ramp
+    if mode == 'thermo':
+        Pt = _tr3(D['stress'], 't')
+        if Pt is None:
+            print("NOTE: P_CAL_MODE='thermo' needs the xx and yy profiles -> falling back to the pore-pressure ramp")
+        elif D is R:
+            Pm = np.nanmean(Pt, axis=0)
+            f = lambda t, Pm=Pm: Pm.copy()
+        else:
+            ts = np.asarray(D['ts'], float)
+            f = lambda t, ts=ts, Pt=Pt: np.asarray(Pt[int(np.argmin(np.abs(ts - t)))], float).copy()
+
+    def g(t):
+        p = np.asarray(f(t), float).copy()
+        bad = ~np.isfinite(p)
+        if bad.any():
+            p[bad] = ramp(t)[bad]
+        return np.clip(p, Pmin, Pmax)
+    return g
+
+
+def _calibrate(cfg, R, vf, p_of_t):
+    """Apply lambda(phi_p, P_local) to the frames in vf -> (phi_cal, P_local, lam)
+    stacks [n_frames, nz], or (None, None, None) without a calibration artifact.
+    Solvent primary (phi_p^vor = 1 - phi_f^vor, 'mobile' norm), polymer by complement."""
+    if R.get('CALIB') is None or vf.get('phi_vor_mobile') is None:
+        return None, None, None
+    Pl = np.array([p_of_t(t) for t in vf['ts']])
+    pm = vf['phi_vor_mobile']
+    lam = volfrac.lambda_of(1.0 - pm, Pl, R['CALIB'])
+    cal = volfrac.phi_calibrated(pm, Pl, R['CALIB'])
+    return cal, Pl, lam
+
+
+def _load_calib(R):
     if 'CALIB' not in R:
         try:
             R['CALIB'] = volfrac.load_calibration()
@@ -1434,22 +1528,49 @@ def add_volume_fractions(cfg, R, levels=()):
             R['CALIB'] = None
             print('NOTE: no calibration artifact -> phi_cal skipped '
                   '(generate scripts/calibration/calibration_lambda.json with calibration_analysis.ipynb)')
+
+
+def _reference_volume_fractions(cfg, R):
+    """Voronoi + calibrated phi for the reference state: REF_VOR_FRAMES frames evenly
+    over the reference window (mean + CI).  P_local from _p_local_fn(cfg, R, R)."""
+    if R.get('phi_vor') is not None:
+        return
+    tr = cfg.traj('traj_ref')
+    if tr.exists() and 'dens_ts' in R:
+        want, _ = subsample(R['dens_ts'], R['dens_ts'][:, None], cfg.REF_VOR_FRAMES)
+        vf = _volume_fractions(cfg, R, tr, want, 'reference: ')
+        if vf['phi_vor'] is not None:
+            R['phi_vor'] = mean_ci(vf['phi_vor'], cfg.ci_level)
+            R['phi_vor_frames'] = vf['ts']
+            cal, Pl, lam = _calibrate(cfg, R, vf, _p_local_fn(cfg, R, R))
+            if cal is not None:
+                R['phi_cal'] = mean_ci(cal, cfg.ci_level)
+                R['P_cal'] = mean_ci(Pl, cfg.ci_level)
+                R['lam'] = mean_ci(lam, cfg.ci_level)
+    else:
+        print(f'NOTE: {tr.name} or reference density missing -> reference Voronoi skipped')
+
+
+def _vf_line(tag, D, mask):
+    parts = []
+    for k, lab in (('phi_mf', 'mass-frac'), ('phi_vor', 'Voronoi'), ('phi_cal', 'calibrated')):
+        if D.get(k) is not None:
+            parts.append(f'{lab} {fmt_mu(D[k][0][mask])}')
+    print(f'  {tag:<22s} ' + '   '.join(parts))
+
+
+def add_volume_fractions(cfg, R, levels=()):
+    """Voronoi + lambda-calibrated solvent volume fractions for the reference
+    state (R) and each level in `levels`.  Reference: REF_VOR_FRAMES frames
+    evenly over the reference window (mean + CI).  Level: VOR_MAX_FRAMES frames
+    inside the plateau window (plateau mean + CI).  Mass-fraction profiles were
+    already set by load_reference / load_level.  The calibration pressure per bin
+    follows cfg.P_CAL_MODE ('const' = P_CAL, the drained-equilibrium choice)."""
+    _load_calib(R)
     if not cfg.VOR_ENABLE:
         print('VOR_ENABLE=False -> Voronoi / calibrated phi skipped')
         return
-    # ---- reference ------------------------------------------------------
-    tr = cfg.traj('traj_ref')
-    if R.get('phi_vor') is None:
-        if tr.exists() and 'dens_ts' in R:
-            want, _ = subsample(R['dens_ts'], R['dens_ts'][:, None], cfg.REF_VOR_FRAMES)
-            vf = _volume_fractions(cfg, R, tr, want, 'reference: ')
-            if vf['phi_vor'] is not None:
-                R['phi_vor'] = mean_ci(vf['phi_vor'], cfg.ci_level)
-                R['phi_vor_frames'] = vf['ts']
-                if vf['phi_cal'] is not None:
-                    R['phi_cal'] = mean_ci(vf['phi_cal'], cfg.ci_level)
-        else:
-            print(f'NOTE: {tr.name} or reference density missing -> reference Voronoi skipped')
+    _reference_volume_fractions(cfg, R)
     # ---- levels ---------------------------------------------------------
     for L in levels:
         if L is None or L.get('phi_vor') is not None:
@@ -1466,20 +1587,106 @@ def add_volume_fractions(cfg, R, levels=()):
         if vf['phi_vor'] is not None:
             L['phi_vor'] = mean_ci(vf['phi_vor'], cfg.ci_level)
             L['phi_vor_frames'] = vf['ts']
-            if vf['phi_cal'] is not None:
-                L['phi_cal'] = mean_ci(vf['phi_cal'], cfg.ci_level)
+            cal, Pl, lam = _calibrate(cfg, R, vf, _p_local_fn(cfg, R, L))
+            if cal is not None:
+                L['phi_cal'] = mean_ci(cal, cfg.ci_level)
+                L['P_cal'] = mean_ci(Pl, cfg.ci_level)
+                L['lam'] = mean_ci(lam, cfg.ci_level)
     # ---- printed in-gel means ------------------------------------------
-    def _line(tag, D, mask):
-        parts = []
-        for k, lab in (('phi_mf', 'mass-frac'), ('phi_vor', 'Voronoi'), ('phi_cal', 'calibrated')):
-            if D.get(k) is not None:
-                parts.append(f'{lab} {fmt_mu(D[k][0][mask])}')
-        print(f'  {tag:<22s} ' + '   '.join(parts))
-    print('in-gel solvent volume fractions (interior, wall_margin trimmed):')
-    _line('reference (eps = 0)', R, R['interior'])
+    print(f'in-gel solvent volume fractions (interior, wall_margin trimmed; P_CAL_MODE = {cfg.P_CAL_MODE}):')
+    _vf_line('reference (eps = 0)', R, R['interior'])
     for L in levels:
         if L is not None:
-            _line(f'compressed eps={L["eps"]:.2f}', L, L['interior'])
+            _vf_line(f'compressed eps={L["eps"]:.2f}', L, L['interior'])
+
+
+def traj_timesteps(traj_file):
+    """The timesteps a lammpstrj holds (header scan only; the atom lines are skipped)."""
+    out = []
+    with open(traj_file) as f:
+        while True:
+            line = f.readline()
+            if not line:
+                break
+            if not line.startswith('ITEM: TIMESTEP'):
+                continue
+            ts = int(f.readline()); f.readline(); n = int(f.readline())
+            out.append(ts)
+            for _ in range(5 + n):            # BOX BOUNDS header, 3 bounds, ATOMS header, n atoms
+                f.readline()
+    return np.array(out, float)
+
+
+def add_perm_volume_fractions(cfg, R, P):
+    """Mass-fraction, Voronoi and lambda-calibrated solvent volume fractions for a
+    PERMEATION run (2026-09-23).  Mass fraction from every density snapshot
+    (steady mean = trailing plateau_frac window); Voronoi on VOR_EVO_FRAMES frames
+    evenly over the drive plus VOR_MAX_FRAMES frames inside the steady window, one
+    streamed pass over traj_stress (frames chosen from the ones the dump holds).
+    The calibration pressure per bin follows cfg.P_CAL_MODE -- 'pore' (the pore-
+    pressure ramp feed -> permeate across the membrane) is the choice under flow.
+    Fills P['phi_mf' | 'phi_vor' | 'phi_cal' | 'P_cal' | 'lam'] (steady mean + CI)
+    and P['vf'] (the per-frame stacks for the evolution figure)."""
+    _load_calib(R)
+    z = R['z']
+    # ---- mass fraction ----------------------------------------------------
+    P['phi_mf'] = None
+    if 'dens_m' in P and np.isfinite(R.get('rho_s0', np.nan)):
+        mf = np.array([np.interp(z, P['dens_z'], row) for row in P['dens_m']]) / R['rho_s0']
+        P['mf_stack'], P['mf_ts'] = mf, np.asarray(P['dens_ts'], float)
+        pl = P['mf_ts'] >= P['halt_ts']
+        P['phi_mf'] = mean_ci(mf[pl] if pl.any() else mf[-1:], cfg.ci_level)
+    else:
+        print('NOTE: production density or reference rho_s,0 missing -> mass-fraction phi skipped')
+    P['phi_vor'] = P['phi_cal'] = P['vf'] = None
+    P['P_cal_mode'] = cfg.P_CAL_MODE
+    if not cfg.VOR_ENABLE:
+        print('VOR_ENABLE=False -> Voronoi / calibrated phi skipped')
+        return
+    _reference_volume_fractions(cfg, R)
+    tp = cfg.traj('traj_stress')
+    if not tp.exists():
+        print(f'NOTE: {tp.name} missing -> production Voronoi skipped')
+        return
+    avail = traj_timesteps(tp)
+    prod = avail[avail >= P['evol_from']]
+    if not len(prod):
+        prod = avail
+    if not len(prod):
+        print(f'NOTE: {tp.name} holds no frames -> production Voronoi skipped')
+        return
+    evo, _ = subsample(prod, prod[:, None], cfg.VOR_EVO_FRAMES)
+    steady = prod[prod >= P['halt_ts']]
+    if len(steady):
+        st_sel, _ = subsample(steady, steady[:, None], cfg.VOR_MAX_FRAMES)
+    else:
+        st_sel = prod[-min(2, len(prod)):]
+        print(f'NOTE: no traj frame inside the steady window (step >= {P["halt_ts"]}) -> '
+              f'the last {len(st_sel)} frame(s) stand in for the steady state')
+    want = np.unique(np.concatenate([evo, st_sel]))
+    vf = dict(_volume_fractions(cfg, R, tp, want, 'permeation: '))
+    if vf['phi_vor'] is None:
+        return
+    cal, Pl, lam = _calibrate(cfg, R, vf, _p_local_fn(cfg, R, P))
+    vf.update(phi_cal=cal, P_local=Pl, lam=lam)
+    P['vf'] = vf
+    sm = np.isin(vf['ts'], st_sel)
+    if not sm.any():
+        sm[-1] = True
+    P['vor_steady_ts'] = vf['ts'][sm]
+    P['phi_vor'] = mean_ci(vf['phi_vor'][sm], cfg.ci_level)
+    if cal is not None:
+        P['phi_cal'] = mean_ci(cal[sm], cfg.ci_level)
+        P['P_cal'] = mean_ci(Pl[sm], cfg.ci_level)
+        P['lam'] = mean_ci(lam[sm], cfg.ci_level)
+    # ---- printed in-gel means --------------------------------------------
+    print(f'in-gel solvent volume fractions (interior, wall_margin trimmed; P_CAL_MODE = {cfg.P_CAL_MODE}):')
+    _vf_line('reference (zero flux)', R, R['interior'])
+    _vf_line('steady permeation', P, P['interior'])
+    if P.get('P_cal') is not None:
+        print(f'  calibration pressure over the membrane (steady): {fmt_mu(P["P_cal"][0][P["in_mem"]])}   '
+              f'lambda in the interior: {fmt_mu(P["lam"][0][P["interior"]])}   '
+              f'(frames {", ".join(fmt_step(t) for t in P["vor_steady_ts"])})')
 
 
 # ===========================================================================
@@ -2125,7 +2332,7 @@ def _phi_panel(ax, cfg, R, D, L=None, title='', bands=True):
     ax.set_ylim(0, 1.15)
     smart_legend(ax, fontsize=12)
     mask = L['interior'] if L is not None else R['interior']
-    txt = '\n'.join(f'{"mf" if "mf" in lab else ("vor" if "vor" in lab else "cal")}: {fmt_mu(m[mask])}'
+    txt = '\n'.join(f'{"mf" if "mf" in lab else ("cal" if "cal" in lab else "vor")}: {fmt_mu(m[mask])}'
                     for lab, m in drawn)
     if txt:
         annotate_box(ax, 'in-gel means\n' + txt, loc='lower right', fontsize=12)
@@ -3493,6 +3700,113 @@ def fig_perm_density(cfg, R, P):
     if np.isfinite(R.get('rho_s0', np.nan)):
         ax.axhline(R['rho_s0'], color='k', ls=':', lw=1.2, alpha=0.6)
     return _save(fig, cfg, 'perm_solvent_density_evolution')
+
+
+def fig_perm_volfrac(cfg, R, P):
+    """Solvent volume fraction under permeation: (a) the zero-flux reference and (b) the
+    steady state (trailing-window means of the mass-fraction, Voronoi and lambda-
+    calibrated estimators); (c) the calibration pressure P_local(z) handed to
+    lambda(phi_p, P) -- under P_CAL_MODE='pore' the pore-pressure ramp from the feed
+    to the permeate reservoir baseline across the membrane; (d) the resulting
+    lambda(z).  Needs add_perm_volume_fractions."""
+    if P.get('phi_mf') is None and P.get('phi_vor') is None:
+        print('volume-fraction figure skipped (run add_perm_volume_fractions first)')
+        return None
+    fig, axes = plt.subplots(2, 2, figsize=(18, 12.5), constrained_layout=True)
+    fig.suptitle(f'Solvent volume fraction under permeation  (P_CAL_MODE = {cfg.P_CAL_MODE!r}, '
+                 f'$P_{{\\rm CAL}}={cfg.P_CAL}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    _phi_panel(axes[0, 0], cfg, R, R, None, '(a) zero-flux reference (both reservoirs at $P_{\\rm target}$)')
+    _phi_panel(axes[0, 1], cfg, R, P, P, '(b) steady permeation (trailing-window mean)')
+    zx = zn(R, R['z'])
+    zz = P['stress']['zz']
+    # (c) the calibration pressure per bin
+    ax = axes[1, 0]
+    if P.get('P_cal') is not None:
+        m, lo, hi = P['P_cal']
+        ax.fill_between(zx, lo, hi, color=WONG['orange'], alpha=0.22, lw=0, zorder=2)
+        ax.plot(zx, m, '-', lw=2.4, color=WONG['orange'], label=r'$P_{\rm local}(z)$, steady permeation', zorder=3)
+        if R.get('P_cal') is not None:
+            ax.plot(zx, R['P_cal'][0], '--', lw=2.0, color='k', alpha=0.8, label=r'$P_{\rm local}(z)$, reference', zorder=3)
+        pf = float(np.nanmean(zz['pore'][P['plat']]))
+        ax.axhline(pf, color=WONG['blue'], ls=':', lw=1.4, alpha=0.8, label=f'feed baseline {pf:.3f}')
+        if 'pore_perm' in zz:
+            pp = float(np.nanmean(zz['pore_perm'][P['plat']]))
+            ax.axhline(pp, color=WONG['vermillion'], ls=':', lw=1.4, alpha=0.8, label=f'permeate baseline {pp:.3f}')
+        shade_gel(ax, R, P)
+        mark_walls(ax, R, P)
+        finish_axes(ax, r'$P_{\rm local}$  (LJ)', r'(c) calibration pressure handed to $\lambda(\phi_p, P)$')
+        vals = np.concatenate([m[np.isfinite(m)], [pf, cfg.P_BARO]])
+        span = max(float(vals.max() - vals.min()), 0.05)
+        ax.set_ylim(vals.min() - 0.6 * span, vals.max() + 0.6 * span)
+        Pmin, Pmax = _calib_range(R)
+        smart_legend(ax, fontsize=11)
+        annotate_box(ax, f'membrane mean = {fmt_mu(m[P["in_mem"]])}\n'
+                         f'calibration sweep: $P$ = {Pmin:g} ... {Pmax:g}', loc='lower left', fontsize=12)
+    else:
+        ax.text(0.5, 0.5, 'unavailable (no calibration / no tessellated frames)', ha='center', va='center', transform=ax.transAxes)
+        ax.set_title(r'(c) calibration pressure handed to $\lambda(\phi_p, P)$')
+    # (d) lambda(z)
+    ax = axes[1, 1]
+    if P.get('lam') is not None:
+        m, lo, hi = P['lam']
+        ax.fill_between(zx, lo, hi, color=WONG['green'], alpha=0.22, lw=0, zorder=2)
+        ax.plot(zx, m, '-', lw=2.4, color=WONG['green'], label=r'$\lambda(z)$, steady permeation', zorder=3)
+        if R.get('lam') is not None:
+            ax.plot(zx, R['lam'][0], '--', lw=2.0, color='k', alpha=0.8, label=r'$\lambda(z)$, reference', zorder=3)
+        ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)
+        shade_gel(ax, R, P)
+        mark_walls(ax, R, P)
+        finish_axes(ax, r'$\lambda$', r'(d) $\lambda(\phi_p^{\rm vor}, P_{\rm local})$ per bin  (reservoir bins: exactly 1)')
+        fin = m[np.isfinite(m)]
+        if fin.size:
+            span = max(float(fin.max() - fin.min()), 0.02)
+            ax.set_ylim(min(fin.min(), 1.0) - 0.5 * span, fin.max() + 0.5 * span)
+        rt = R['CALIB'].get('raw_table', {}) if R.get('CALIB') else {}
+        win = ''
+        if rt.get('phi_p_vor'):
+            pv = np.asarray(rt['phi_p_vor'], float)
+            win = f'\ncalibration data window: $\\phi_p^{{\\rm vor}}$ = {pv.min():.2f} ... {pv.max():.2f}'
+        smart_legend(ax, fontsize=11)
+        annotate_box(ax, f'interior mean = {fmt_mu(m[P["interior"]])}' + win, loc='lower left', fontsize=12)
+    else:
+        ax.text(0.5, 0.5, 'unavailable (no calibration / no tessellated frames)', ha='center', va='center', transform=ax.transAxes)
+        ax.set_title(r'(d) $\lambda(z)$')
+    return _save(fig, cfg, 'perm_volfrac_profiles')
+
+
+def fig_perm_volfrac_evolution(cfg, R, P):
+    """phi_s evolution over the drive (cividis, final bold; zero-flux reference dashed):
+    (a) mass fraction from every density snapshot, (b) Voronoi and (c) lambda-
+    calibrated Voronoi on the tessellated frames.  Needs add_perm_volume_fractions."""
+    panels = []
+    if P.get('mf_stack') is not None:
+        panels.append(('phi_mf', P['mf_ts'], P['mf_stack'], r'(a) mass fraction $\phi_s^{\rm mf}=\rho_s/\rho_{s,0}$'))
+    vf = P.get('vf')
+    if vf is not None and vf.get('phi_vor') is not None:
+        panels.append(('phi_vor', vf['ts'], vf['phi_vor'], r'(b) Voronoi $\phi_s^{\rm vor}$'))
+        if vf.get('phi_cal') is not None:
+            panels.append(('phi_cal', vf['ts'], vf['phi_cal'],
+                           r'(c) $\lambda$-calibrated $\phi_s^{\rm cal}$' + f'  (P_CAL_MODE = {cfg.P_CAL_MODE!r})'))
+    if not panels:
+        print('volume-fraction evolution skipped (run add_perm_volume_fractions first)')
+        return None
+    fig, axes = plt.subplots(1, len(panels), figsize=(8.5 * len(panels), 6.5), constrained_layout=True, squeeze=False)
+    fig.suptitle(f'Solvent volume fraction evolution: zero-flux reference -> permeation drive  |  {cfg.sim_name}',
+                 fontsize=13, fontweight='bold')
+    for ax, (key, ts, stack, title) in zip(axes[0], panels):
+        if key == 'phi_mf':
+            ts, ev = post_halt(cfg, P, ts, stack)
+        else:
+            ts, ev = np.asarray(ts, float), np.asarray(stack, float)
+        plot_evolution(ax, cfg, R, P, R['z'], ts, ev, r'$\phi_s$', title, ref=R.get(key), annotate=False, legend=False)
+        ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)
+        ax.set_ylim(0, 1.15)
+        h, lab = ax.get_legend_handles_labels()
+        if h:
+            smart_legend(ax, handles=h, labels=lab, fontsize=11)
+        if P.get(key) is not None:
+            annotate_box(ax, 'steady in-gel mean = ' + fmt_mu(P[key][0][P['interior']]), loc='lower right', fontsize=12)
+    return _save(fig, cfg, 'perm_volfrac_evolution')
 
 
 def fig_perm_pistons(cfg, R, P):

@@ -123,8 +123,17 @@ pressures dotted, pf cadence since 2026-09-23), the flux `Q_perm` as the **slope
 independent `q_win_steps` windows with its standard error and a slope drift test (`plateau_window_slopes`,
 2026-09-23; the `z_perm` slope and the legacy block-bootstrap mean of the piston-velocity trace are drawn beside
 it — the velocity blocks are dominated by the sheet's thermal jitter and their scatter is not an error bar), and
-the permeability `k = Q_perm L/(A ΔP)` with the applied and the measured ΔP (CIs in quadrature). Seven figures (`fig_perm_pistons`, `fig_total_stress`, `fig_partial_stress`, `fig_network_stress`,
-`fig_perm_density`, `fig_perm_flux`, `fig_perm_permeability`).
+the permeability `k = Q_perm L/(A ΔP)` with the applied and the measured ΔP (CIs in quadrature), and — since
+2026-09-23 — the three solvent volume-fraction estimators of the compression notebooks (`tri.add_perm_volume_fractions`:
+mass fraction from every density snapshot, Voronoi and λ-calibrated Voronoi on `VOR_EVO_FRAMES` frames over the drive
+plus `VOR_MAX_FRAMES` inside the steady window). Because the pore pressure falls feed → permeate across the membrane
+under flow, the calibration pressure handed to λ(φ_p, P) is chosen per bin by `Config.P_CAL_MODE`: `'pore'` (the
+permeation default — the ramp between the measured feed and permeate reservoir baselines across the membrane),
+`'const'` (P_CAL everywhere — the compression default, correct for a drained equilibrium) or `'thermo'` (the local
+P_th = −⅓ tr σ^t); the same knob applies to `add_volume_fractions` in the compression notebooks. Eleven figures
+(`fig_perm_pistons`, `fig_total_stress`, `fig_partial_stress`, `fig_network_stress`, `fig_perm_density`,
+`fig_perm_volfrac` — reference vs steady state, the P_local(z) used and the resulting λ(z) —, `fig_perm_volfrac_evolution`,
+`fig_perm_flux`, `fig_perm_permeability`, `fig_thermo_pressure`, `fig_osmotic_pressure`).
 
 **Tests** (`scripts/tests/`, 2026-09-16): `run_plot_tests.sh` builds synthetic one-piston and two-piston run
 trees (`make_fixtures.py`) and runs the three plotters on both formats; `run_notebook_tests.sh` executes the
