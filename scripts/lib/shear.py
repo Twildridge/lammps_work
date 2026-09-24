@@ -609,7 +609,7 @@ def shade_bulk(ax, R):
 
 
 def finish_axes(ax, ylabel, title):
-    ax.set_xlabel(r'$z/L_z$  (gap direction)')
+    ax.set_xlabel(r'$z/L$  (gap direction)')
     ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.grid(alpha=0.3)
@@ -718,7 +718,7 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
         ax.annotate(f"held: {sig(L['gamma'], 4)}  surf {sig(L.get('gamma_surf', np.nan), 4)}",
                     (L['strain_ts'][-1], L['gamma_ts'][-1]), textcoords='offset points', xytext=(-6, 9), ha='right',
                     va='bottom', fontsize=10, color=col, bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='none', alpha=0.8))
-    ax.set_xlabel('step')
+    ax.set_xlabel('time step')
     ax.set_ylabel(r'shear strain  $\gamma = \Delta x_{\rm plates}/L_{\rm plates}$')
     ax.set_title('Strain diagnostic: solid = plate-based $\\gamma$ (prescribed), dashed = surface COM,\n'
                  'dotted = target, shaded = plateau window', fontsize=15)
@@ -838,7 +838,7 @@ def fig_series(cfg, R, L):
         ax.axvline(L['t_hold'], color=WONG['blue'], ls='--', lw=1.6, alpha=0.7, label=f'hold start (step {fmt_step(L["t_hold"])})')
         if 'PF' in L:
             ax.axvspan(L['PF']['step0'], float(st[-1]), color=WONG['green'], alpha=0.10, label='plateau window (auto)')
-        ax.set_xlabel('step'); ax.grid(alpha=0.3)
+        ax.set_xlabel('time step'); ax.grid(alpha=0.3)
     axL.plot(st, x, '-', color=WONG['vermillion'], lw=1.0, alpha=0.35, label=r'$\sigma_{p,xz}$ (block-avg)')
     axL.plot(st, xr, '-', color=WONG['vermillion'], lw=2.6, alpha=0.95, label=f'rolling mean ({cfg.roll_win})')
     if 'ss_xz' in S:
@@ -921,7 +921,7 @@ def fig_normal(cfg, R, L):
         ax.plot(L['ts'], tt[:, CI[a]] - tt[:, CI[b]], ':s', ms=4, color=WONG['reddishpurple'], lw=2, label=f'total: plateau {fmt_val_unc(Nt[0], 0.5 * (Nt[2] - Nt[1]))}')
         ax.axvspan(L['halt_ts'], float(L['ts'][-1]), color=WONG['green'], alpha=0.10, label='plateau window')
         ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
-        ax.set_xlabel('step'); ax.set_ylabel(name + '  (bulk, LJ)'); ax.set_title(name); ax.grid(alpha=0.3)
+        ax.set_xlabel('time step'); ax.set_ylabel(name + '  (bulk, LJ)'); ax.set_title(name); ax.grid(alpha=0.3)
         smart_legend(ax, fontsize=12)
     return _save(fig, cfg, 'normal_stress_differences', L['lvl'])
 
@@ -993,7 +993,7 @@ def fig_thermo_pressure(cfg, R, L):
     Rf = R.get('ref')
     if Rf is not None:
         axA.axhline(Rf['Pth'][0], color='0.4', ls='--', lw=1.4, label=f"reference $\\gamma=0$: {sig(Rf['Pth'][0])}")
-    axA.set_xlabel('step'); axA.set_ylabel(r'$P_{\rm th}$  (LJ)'); axA.set_title('(a) bulk value over the hold'); axA.grid(alpha=0.3)
+    axA.set_xlabel('time step'); axA.set_ylabel(r'$P_{\rm th}$  (LJ)'); axA.set_title('(a) bulk value over the hold'); axA.grid(alpha=0.3)
     smart_legend(axA, fontsize=12)
     if L.get('Pth_prof') is not None:
         ts, ev = post_hold(cfg, L['prof_p']['ts'], L['Pth_prof'])
@@ -1096,7 +1096,7 @@ def fig_series_sweep(cfg, R, levels):
     if Rf is not None:
         ax.axhline(Rf['S_ref'], color='k', ls='--', lw=1.2, alpha=0.7, label=f"reference $\\gamma=0$: {sig(Rf['S_ref'], 2)}")
     ax.axhline(0, color='k', ls='--', lw=0.8, alpha=0.4)
-    ax.set_xlabel('step'); ax.set_ylabel(r'$\langle\sigma_{p,xz}\rangle_{\rm bulk}$  (LJ)')
+    ax.set_xlabel('time step'); ax.set_ylabel(r'$\langle\sigma_{p,xz}\rangle_{\rm bulk}$  (LJ)')
     ax.set_title(f'Bulk polymer shear stress histories (rolling mean over {cfg.roll_win} blocks; dotted = plateau)  |  {cfg.sim_name}', fontsize=13)
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=11)
@@ -1259,7 +1259,7 @@ def fig_thermo_pressure_sweep(cfg, R, levels):
     Rf = R.get('ref')
     if Rf is not None:
         ax.axhline(Rf['Pth'][0], color='0.4', ls='--', lw=1.4, label=f"reference $\\gamma=0$: {sig(Rf['Pth'][0])}")
-    ax.set_xlabel('step'); ax.set_ylabel(r'$P_{\rm th}$  (bulk, LJ)')
+    ax.set_xlabel('time step'); ax.set_ylabel(r'$P_{\rm th}$  (bulk, LJ)')
     ax.set_title(f'Thermodynamic pressure $P_{{\\rm th}}=-\\frac{{1}}{{3}}\\mathrm{{tr}}(\\sigma^t)$ over every hold  |  {cfg.sim_name}', fontsize=13)
     ax.grid(alpha=0.3); smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'sweep_thermo_pressure')

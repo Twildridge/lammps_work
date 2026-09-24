@@ -121,19 +121,27 @@ stress and density evolutions (cividis, bold final, zero-flux `_ref` baseline da
 (displacement; block-averaged `F_fluid/(lx ly)` from `piston_force_avg` measured vs applied; reservoir virial
 pressures dotted, pf cadence since 2026-09-23), the flux `Q_perm` as the **slope of the permeate bead count** over
 independent `q_win_steps` windows with its standard error and a slope drift test (`plateau_window_slopes`,
-2026-09-23; the `z_perm` slope and the legacy block-bootstrap mean of the piston-velocity trace are drawn beside
-it — the velocity blocks are dominated by the sheet's thermal jitter and their scatter is not an error bar), and
-the permeability `k = Q_perm L/(A ΔP)` with the applied and the measured ΔP (CIs in quadrature), and — since
+2026-09-23; the `z_perm` slope is drawn beside it; the legacy block-bootstrap mean of the piston-velocity trace is
+only printed since 2026-09-24 — the velocity blocks are dominated by the sheet's thermal jitter and their scatter is
+not an error bar), the permeability `κ = Q_perm L/(A ΔP_ext)` with the measured ΔP_ext (primary) and the applied one
+(CIs in quadrature), and — since
 2026-09-23 — the three solvent volume-fraction estimators of the compression notebooks (`tri.add_perm_volume_fractions`:
 mass fraction from every density snapshot, Voronoi and λ-calibrated Voronoi on `VOR_EVO_FRAMES` frames over the drive
 plus `VOR_MAX_FRAMES` inside the steady window). Because the pore pressure falls feed → permeate across the membrane
 under flow, the calibration pressure handed to λ(φ_p, P) is chosen per bin by `Config.P_CAL_MODE`: `'pore'` (the
 permeation default — the ramp between the measured feed and permeate reservoir baselines across the membrane),
 `'const'` (P_CAL everywhere — the compression default, correct for a drained equilibrium) or `'thermo'` (the local
-P_th = −⅓ tr σ^t); the same knob applies to `add_volume_fractions` in the compression notebooks. Eleven figures
-(`fig_perm_pistons`, `fig_total_stress`, `fig_partial_stress`, `fig_network_stress`, `fig_perm_density`,
-`fig_perm_volfrac` — reference vs steady state, the P_local(z) used and the resulting λ(z) —, `fig_perm_volfrac_evolution`,
-`fig_perm_flux`, `fig_perm_permeability`, `fig_thermo_pressure`, `fig_osmotic_pressure`).
+P_th = −⅓ tr σ^t); the same knob applies to `add_volume_fractions` in the compression notebooks. Since 2026-09-24
+the same frames also feed **`lib/psd.py`** (`tri.add_perm_psd`): the geometric, probe-accessible porosity per bin and the
+pore-size distribution by the Gelb–Gubbins largest-included-sphere covering (cKDTree distance field on a grid, one
+Euclidean distance transform per radius level), reference vs steady state, with `ξ = √κ` printed next to the geometric
+mean pore diameter. Eleven figures (`fig_perm_pistons`, `fig_total_stress` — normalised by P_perm —, `fig_partial_stress`,
+`fig_network_stress` and `fig_osmotic_pressure` — drawn **blank** under permeation until the deck measures the solvent
+chemical potential, since p_pore(z) is not a reservoir baseline under flow —, `fig_perm_volfrac` — reference vs steady
+state, the P_local(z) used and the resulting λ(z) —, `fig_perm_volfrac_evolution` (mass fraction + calibrated Voronoi),
+`fig_perm_psd`, `fig_perm_flux`, `fig_perm_permeability`, `fig_thermo_pressure`; `fig_perm_density` still exists but left the
+notebook). The sync logs in when a trajectory is missing and an unresolved `<steps>` tag matches digits only, so a
+permeation pattern can no longer stage a compression level's `_c<lvl>` dump (2026-09-24).
 
 **Tests** (`scripts/tests/`, 2026-09-16): `run_plot_tests.sh` builds synthetic one-piston and two-piston run
 trees (`make_fixtures.py`) and runs the three plotters on both formats; `run_notebook_tests.sh` executes the

@@ -44,6 +44,7 @@ from __future__ import annotations
 import re
 import sys
 import stat
+import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +61,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 import volfrac  # noqa: E402  (scripts/lib/volfrac.py -- Voronoi + lambda calibration)
+import psd      # noqa: E402  (scripts/lib/psd.py -- geometric porosity + pore-size distribution, 2026-09-24)
 
 
 # ===========================================================================
@@ -160,6 +162,15 @@ class Config:
                                           #               snapshot (includes the network's share; noisier)
                                           # Non-finite bins fall back to the ramp; every P is clipped to the
                                           # calibration sweep's range (volfrac.lambda_of clamps there anyway).
+    GEL_SHADE_TO_PISTON: bool = True      # permeation figures (2026-09-24): the grey membrane shading runs up to the
+                                          # FINAL feed-piston plane instead of ending at the polymer-stress edge
+                                          # (which sits ~4 bins below the piston: the remaining feed reservoir)
+    # ---- pore-size distribution (lib/psd.py, 2026-09-24) ---------------------
+    PSD_ENABLE: bool = True               # geometric porosity + PSD on the tessellated frames (needs VOR_ENABLE)
+    PSD_R_PROBE: float = 0.5              # probe radius (sigma): void = grid points >= this far from a bead surface
+    PSD_GRID: float = 0.5                 # grid spacing (sigma): 0.5 ~ 7 s/frame, 0.25 ~ 2 min/frame (the covering step)
+    PSD_DMAX: float = 8.0                 # pore-diameter histogram range (2 r_probe .. PSD_DMAX) ...
+    PSD_DBIN: float = 0.25                # ... and bin width (= the resolution of the covering step)
     # ---- M and G as increments from the eps = 0 reference ------------------
     M_SUBTRACT_REF: bool = True           # M = (stress - its own eps = 0 reading) / eps for BOTH estimators
                                           # (2026-09-12: the seated piston carries a real preload ~+0.0014 and the
@@ -1412,12 +1423,14 @@ def _volume_fractions(cfg, R, traj, ts_want, label=''):
     if missing:
         print(f'    NOTE: no traj frame at {missing} -- dropped')
     ts_ok = [t for t in ts_want if t in fr]
-    out = {'ts': np.array(ts_ok, float), 'phi_vor': None, 'phi_vor_mobile': None}
+    out = {'ts': np.array(ts_ok, float), 'phi_vor': None, 'phi_vor_mobile': None, 'frames': {}}
     if not ts_ok:
         return out
     pv, pm, ok = [], [], []
     for t in ts_ok:
         box, typ, xyz = fr[t]
+        keep = np.isin(typ, psd.POLYMER_TYPES)          # polymer beads only: the PSD pass (lib/psd.py) runs on
+        out['frames'][t] = (box, typ[keep], xyz[keep])  # these without re-reading the dump
         try:
             zc, ph_b, ph_m = volfrac.phi_voronoi_frame(box, typ, xyz, cfg.binWidth,
                                                        mobile_only=cfg.VOR_MOBILE_ONLY, norm='both')
@@ -1539,6 +1552,7 @@ def _reference_volume_fractions(cfg, R):
     if tr.exists() and 'dens_ts' in R:
         want, _ = subsample(R['dens_ts'], R['dens_ts'][:, None], cfg.REF_VOR_FRAMES)
         vf = _volume_fractions(cfg, R, tr, want, 'reference: ')
+        R['vf_ref'] = vf                                 # frames reused by add_perm_psd
         if vf['phi_vor'] is not None:
             R['phi_vor'] = mean_ci(vf['phi_vor'], cfg.ci_level)
             R['phi_vor_frames'] = vf['ts']
@@ -1689,6 +1703,171 @@ def add_perm_volume_fractions(cfg, R, P):
               f'(frames {", ".join(fmt_step(t) for t in P["vor_steady_ts"])})')
 
 
+# ---------------------------------------------------------------------------
+#  6b. geometric porosity + pore-size distribution (lib/psd.py, 2026-09-24)
+# ---------------------------------------------------------------------------
+def _psd_state(cfg, R, frames, ts, z_lo, z_hi, interior, label=''):
+    """psd.psd_frame on the frames `ts` of `frames` ({ts: (box, types, xyz)} of polymer
+    beads, kept by _volume_fractions) -> dict(ts, por, d_mean, d_med [mean_ci on
+    R['z']], d_edges, regions{name: (D, mean, lo, hi)}, D_reg{name: (mean, lo, hi)});
+    None without frames.  The grid spans the membrane plus two bins on either side
+    (porosity -> 1 in the reservoirs); regions = the interior and its feed-side /
+    permeate-side halves."""
+    ts = [int(t) for t in np.atleast_1d(ts) if int(t) in frames]
+    if not ts:
+        return None
+    z, bw = R['z'], cfg.binWidth
+    edges = np.concatenate([z - 0.5 * bw, [z[-1] + 0.5 * bw]])
+    d_edges = np.arange(2.0 * cfg.PSD_R_PROBE, cfg.PSD_DMAX + 1e-9, cfg.PSD_DBIN)
+    por, dm, dmed, hists, nvoid = [], [], [], [], []
+    for t in ts:
+        box, typ, xyz = frames[t]
+        t0 = time.time()
+        out = psd.psd_frame(box, typ, xyz, z_lo - 2 * bw, z_hi + 2 * bw, edges, h=cfg.PSD_GRID,
+                            r_probe=cfg.PSD_R_PROBE, d_edges=d_edges)
+        print(f'      {label}ts {t}: interior porosity {np.nanmean(out["por"][interior]):.3f}, '
+              f'<D> = {np.nanmean(out["d_mean"][interior]):.2f} sigma  ({time.time() - t0:.0f} s)')
+        por.append(out['por']); dm.append(out['d_mean']); dmed.append(out['d_med'])
+        hists.append(out['hist']); nvoid.append(out['n_void'])
+    S = dict(ts=np.array(ts, float), por=mean_ci(por, cfg.ci_level), d_mean=mean_ci(dm, cfg.ci_level),
+             d_med=mean_ci(dmed, cfg.ci_level), d_edges=d_edges, regions={}, D_reg={})
+    zmid = 0.5 * (z_lo + z_hi)
+    Dc = 0.5 * (d_edges[:-1] + d_edges[1:])
+    for name, mask in (('interior', interior), ('feed half', interior & (z >= zmid)), ('permeate half', interior & (z < zmid))):
+        dens = np.array([psd.region_density(h, nv, mask, d_edges)[1] for h, nv in zip(hists, nvoid)])
+        S['regions'][name] = (Dc,) + tuple(mean_ci(dens, cfg.ci_level))
+        cnt = np.array([h[mask].sum(axis=0) for h in hists])
+        with np.errstate(invalid='ignore', divide='ignore'):
+            Dm = (cnt * Dc).sum(axis=1) / cnt.sum(axis=1)
+        S['D_reg'][name] = tuple(float(v) for v in mean_ci(Dm[:, None], cfg.ci_level))
+    return S
+
+
+def add_perm_psd(cfg, R, P):
+    """Geometric porosity and pore-size distribution (lib/psd.py) of the zero-flux
+    reference and the steady permeation state, on the frames the Voronoi pass already
+    streamed (R['vf_ref']: the reference frames; P['vf']: the steady-window frames), so
+    the dump is not re-read.  Fills R['psd'] and P['psd'] (None when unavailable) and
+    prints the interior means next to the hydraulic mesh size xi = sqrt(kappa)
+    (Brinkman: kappa ~ xi^2).  Needs add_perm_volume_fractions with VOR_ENABLE."""
+    P['psd'] = None
+    if not (cfg.PSD_ENABLE and cfg.VOR_ENABLE):
+        print('PSD_ENABLE/VOR_ENABLE False -> pore-size distribution skipped')
+        return
+    print(f'pore-size distribution (grid {cfg.PSD_GRID} sigma, r_probe = {cfg.PSD_R_PROBE}, largest-included-sphere covering):')
+    vr = R.get('vf_ref')
+    if R.get('psd') is None and vr is not None and vr.get('frames'):
+        R['psd'] = _psd_state(cfg, R, vr['frames'], vr['ts'], R['z_gel_lo'], R['z_gel_hi'], R['interior'], 'reference: ')
+    vf = P.get('vf')
+    if vf is None or not vf.get('frames'):
+        print('  NOTE: no tessellated production frames (traj_stress missing?) -> steady-state PSD skipped')
+        return
+    P['psd'] = _psd_state(cfg, R, vf['frames'], P.get('vor_steady_ts', vf['ts']), P['z_mem_lo'], P['z_mem_hi'],
+                          P['interior'], 'steady: ')
+    for tag, D, S in (('reference (zero flux)', R, R.get('psd')), ('steady permeation', P, P['psd'])):
+        if S is None:
+            continue
+        print(f"  {tag:<22s} interior porosity {fmt_mu(S['por'][0][D['interior']])}   <D_pore> {fmt_mu(S['d_mean'][0][D['interior']])} sigma"
+              f"   (feed half {S['D_reg']['feed half'][0]:.2f}, permeate half {S['D_reg']['permeate half'][0]:.2f});  frames "
+              + ', '.join(fmt_step(t) for t in S['ts']))
+    k = (P.get('flux') or {}).get('k') or {}
+    kk = 'N_measured' if 'N_measured' in k else (next(iter(k)) if k else None)
+    if kk is not None:
+        xi = np.sqrt(max(k[kk]['k'], 0.0))
+        print(f"  hydraulic mesh size xi = sqrt(kappa[{kk}]) = {xi:.2f} sigma  (Brinkman: kappa ~ xi^2)  vs geometric "
+              f"<D_pore> = {np.nanmean(P['psd']['d_mean'][0][P['interior']]):.2f} sigma")
+
+
+def fig_perm_psd(cfg, R, P):
+    """(a) geometric porosity profile (reference dashed vs steady permeation, 95 % bands
+    over frames) with phi_s^cal overlaid for comparison -- the porosity is the volume a
+    solvent-sized probe can reach, NOT the thermodynamic solvent fraction; (b) mean pore
+    diameter profile with 95 % bands; (c) the volume-weighted PSD of the membrane
+    interior, reference vs steady, plus the feed-side and permeate-side halves.
+    Needs add_perm_psd."""
+    S, S0 = P.get('psd'), R.get('psd')
+    if S is None and S0 is None:
+        print('PSD figure skipped (run add_perm_psd first; needs tessellated frames)')
+        return None
+    fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
+    fig.suptitle(f'Geometric porosity and pore-size distribution of the network (largest included sphere; grid '
+                 f'{cfg.PSD_GRID} $\\sigma$, $r_{{\\rm probe}}={cfg.PSD_R_PROBE}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    zx = zn(R, R['z'])
+    n_fr = lambda X: f' ({len(X["ts"])} frames)'
+    # (a) porosity vs phi_s^cal
+    ax = axes[0]
+    if S0 is not None:
+        m, lo, hi = S0['por']
+        ax.fill_between(zx, lo, hi, color='0.5', alpha=0.25, lw=0, zorder=1)
+        ax.plot(zx, m, '--', color='k', lw=2.0, alpha=0.9, zorder=2, label=r'$\epsilon_g$ reference (zero flux)' + n_fr(S0))
+    if S is not None:
+        m, lo, hi = S['por']
+        ax.fill_between(zx, lo, hi, color=WONG['blue'], alpha=0.25, lw=0, zorder=3)
+        ax.plot(zx, m, '-', color=WONG['blue'], lw=2.8, zorder=4, label=r'$\epsilon_g$ steady permeation' + n_fr(S))
+    if R.get('phi_cal') is not None:
+        ax.plot(zx, R['phi_cal'][0], '--', color=WONG['green'], lw=1.4, alpha=0.8, zorder=3, label=r'$\phi_s^{\rm cal}$ reference (thermodynamic)')
+    if P.get('phi_cal') is not None:
+        ax.plot(zx, P['phi_cal'][0], '-', color=WONG['green'], lw=1.6, alpha=0.9, zorder=4, label=r'$\phi_s^{\rm cal}$ steady (thermodynamic)')
+    ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)
+    shade_gel(ax, R, P)
+    mark_walls(ax, R, P)
+    finish_axes(ax, r'geometric porosity $\epsilon_g$', f'(a) porosity ($r_{{\\rm probe}}={cfg.PSD_R_PROBE}$) vs $\\phi_s^{{\\rm cal}}$')
+    ax.set_ylim(0, 1.15)
+    smart_legend(ax, fontsize=11)
+    txt = []
+    if S0 is not None:
+        txt.append(f"reference: {fmt_mu(S0['por'][0][R['interior']])}")
+    if S is not None:
+        txt.append(f"steady: {fmt_mu(S['por'][0][P['interior']])}")
+        if S0 is not None:
+            txt.append(f"$\\Delta\\epsilon_g$ = {np.nanmean(S['por'][0][P['interior']]) - np.nanmean(S0['por'][0][R['interior']]):+.2g}")
+    annotate_box(ax, r'$\epsilon_g$ in gel interior' + '\n' + '\n'.join(txt), loc='lower left', fontsize=12)
+    # (b) mean pore diameter
+    ax = axes[1]
+    curves = []
+    if S0 is not None:
+        m, lo, hi = S0['d_mean']
+        ax.fill_between(zx, lo, hi, color='0.5', alpha=0.25, lw=0, zorder=1)
+        ax.plot(zx, m, '--', color='k', lw=2.0, alpha=0.9, zorder=2, label='reference (zero flux)')
+        curves.append(np.where(R['interior'], m, np.nan))
+    if S is not None:
+        m, lo, hi = S['d_mean']
+        ax.fill_between(zx, lo, hi, color=WONG['blue'], alpha=0.25, lw=0, zorder=3)
+        ax.plot(zx, m, '-', color=WONG['blue'], lw=2.8, zorder=4, label='steady permeation')
+        curves.append(np.where(P['interior'], m, np.nan))
+    shade_gel(ax, R, P)
+    mark_walls(ax, R, P)
+    finish_axes(ax, r'$\langle D_{\rm pore}\rangle$  ($\sigma$)', '(b) mean pore diameter per bin')
+    robust_ylim(ax, curves, pad=0.3, qlo=0, qhi=100, include_zero=True)
+    smart_legend(ax, fontsize=11)
+    txt = []
+    if S0 is not None:
+        txt.append(f"reference: {fmt_mu(S0['d_mean'][0][R['interior']])}")
+    if S is not None:
+        txt.append(f"steady: {fmt_mu(S['d_mean'][0][P['interior']])}")
+    annotate_box(ax, r'$\langle D_{\rm pore}\rangle$ in gel interior ($\sigma$)' + '\n' + '\n'.join(txt), loc='lower left', fontsize=12)
+    # (c) PSD of the interior
+    ax = axes[2]
+    if S0 is not None:
+        Dc, m, lo, hi = S0['regions']['interior']
+        ax.fill_between(Dc, lo, hi, color='0.5', alpha=0.25, lw=0, zorder=1)
+        ax.plot(Dc, m, '--', color='k', lw=2.0, alpha=0.9, zorder=2, label=f"reference interior  $\\langle D\\rangle$ = {sig(S0['D_reg']['interior'][0])}")
+    if S is not None:
+        Dc, m, lo, hi = S['regions']['interior']
+        ax.fill_between(Dc, lo, hi, color=WONG['blue'], alpha=0.25, lw=0, zorder=3)
+        ax.plot(Dc, m, '-', color=WONG['blue'], lw=2.8, zorder=4, label=f"steady interior  $\\langle D\\rangle$ = {sig(S['D_reg']['interior'][0])}")
+        for name, col in (('feed half', WONG['vermillion']), ('permeate half', WONG['green'])):
+            Dc, m, lo, hi = S['regions'][name]
+            ax.plot(Dc, m, '-', color=col, lw=1.8, alpha=0.9, zorder=4, label=f"steady, {name}  $\\langle D\\rangle$ = {sig(S['D_reg'][name][0])}")
+    ax.set_xlabel(r'pore diameter $D$  ($\sigma$)')
+    ax.set_ylabel('probability density')
+    ax.set_title('(c) PSD of the membrane interior (volume-weighted)')
+    ax.set_xlim(2.0 * cfg.PSD_R_PROBE, cfg.PSD_DMAX)
+    ax.grid(alpha=0.3)
+    smart_legend(ax, fontsize=11)
+    return _save(fig, cfg, 'perm_psd')
+
+
 # ===========================================================================
 #  7. EXPANSE SYNC
 # ===========================================================================
@@ -1716,9 +1895,12 @@ _PERM_REQUIRED = ('sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z', 'pi
 
 
 def _present(p):
-    """a Path exists, or (pattern with '*' in the name) something matches it."""
+    """a Path exists, or (pattern with '*' standing in for an unresolved <steps> tag)
+    a file whose tag is all digits matches it -- so a permeation pattern never
+    accepts a compression level's `<tag>_c<lvl>` file (2026-09-24)."""
     if '*' in p.name:
-        return any(True for _ in p.parent.glob(p.name))
+        rx = re.compile('^' + re.escape(p.name).replace(r'\*', '[0-9]+') + '$')
+        return p.parent.exists() and any(rx.match(f.name) for f in p.parent.iterdir())
     return p.exists()
 
 
@@ -1771,12 +1953,15 @@ def sync_pull(cfg, data_files, traj_files, required, optional, force=False, refr
         except Exception:
             absent = set()
     missing_dat = [f for f in data_files if not _present(f)]
-    missing_new = [f for f in missing_dat if f.name not in absent and f.name not in optional]
-    missing_all = missing_dat + [f for f in traj_files if not _present(f)]
+    missing_traj = [f for f in traj_files if not _present(f)]
+    # a missing trajectory logs in too (2026-09-24: before, only .dat files did, so a
+    # traj_stress the first sync mis-staged was never fetched)
+    missing_new = [f for f in missing_dat + missing_traj if f.name not in absent and f.name not in optional]
+    missing_all = missing_dat + missing_traj
     missing_req = [f for f in required if not _present(f)]
     if not force and not missing_new:
         n_opt = sum(1 for f in missing_dat if f.name in optional)
-        known = len(missing_dat) - len(missing_new) - n_opt
+        known = len(missing_all) - len(missing_new) - n_opt
         print(f'All data files present locally' + (f' except {known} known absent on the cluster' if known else '')
               + (f' (+{n_opt} optional file(s) this run never wrote, e.g. piston_force_avg_ref)' if n_opt else '')
               + f' ({len(missing_all)} target file(s) missing in total) -- skipping Expanse login.  '
@@ -1788,10 +1973,13 @@ def sync_pull(cfg, data_files, traj_files, required, optional, force=False, refr
     print(f'Syncing from Expanse ({why}); {len(missing_all)} of {len(data_files) + len(traj_files)} target files missing locally.')
     if missing_new:
         print('  missing: ' + ', '.join(f.name for f in missing_new[:6]) + (' ...' if len(missing_new) > 6 else ''))
-    bn = lambda paths: ' '.join(f'"{p.name}"' for p in paths)
+    # an unresolved <steps> tag ('*') must match DIGITS ONLY on the cluster (extglob), so a
+    # permeation request never stages a compression level's <tag>_c<lvl> file (2026-09-24)
+    bn = lambda paths: ' '.join('"' + p.name.replace('*', '+([0-9])') + '"' for p in paths)
     stage = f'{cfg.RUNS_ROOT}/triaxial_stage'
     script = r"""
 set -u
+shopt -s extglob
 RUNS="__RUNS__"; TRAJ="__TRAJ__"; STAGE="__STAGE__"
 rm -rf "$STAGE"; mkdir -p "$STAGE/data" "$STAGE/traj"
 # newest-first lists of every candidate file; each requested name may be a glob
@@ -1883,10 +2071,10 @@ echo "  staged: $(ls "$STAGE/data" 2>/dev/null | wc -l) data, $(ls "$STAGE/traj"
         cfg._tags = {}                                     # re-resolve the tags from the new files
     if refresh is not None:
         data_files, traj_files, required = refresh()
-    still = [f.name for f in data_files if not _present(f)]
+    still = [f.name for f in data_files + traj_files if not _present(f)]
     absent_f.write_text(json.dumps(sorted(set(still)), indent=1))
     if still:
-        print(f'Sync complete; {len(still)} data file(s) not found on the cluster (remembered in {absent_f.name}): '
+        print(f'Sync complete; {len(still)} file(s) not found on the cluster (remembered in {absent_f.name}): '
               + ', '.join(still[:6]) + (' ...' if len(still) > 6 else ''))
     else:
         print('Sync complete; every data file present.')
@@ -1901,7 +2089,12 @@ def zn(R, z):
 
 
 def shade_gel(ax, R, L=None):
+    """Grey membrane band: the reference gel, or level L's membrane bounds.  A
+    permeation dict carries `shade_hi` (the final feed-piston plane when
+    cfg.GEL_SHADE_TO_PISTON, 2026-09-24), which replaces the polymer-stress edge."""
     lo, hi = (L['z_mem_lo'], L['z_mem_hi']) if L is not None else (R['z_gel_lo'], R['z_gel_hi'])
+    if L is not None and L.get('shade_hi') is not None:
+        hi = L['shade_hi']
     ax.axvspan(zn(R, lo), zn(R, hi), **GEL_SHADE)
 
 
@@ -1946,7 +2139,7 @@ def mark_level_walls(ax, R, levels):
 
 
 def finish_axes(ax, ylabel, title):
-    ax.set_xlabel(r'$z/L_z$')
+    ax.set_xlabel(r'$z/L$')
     ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.set_xlim(0, 1)
@@ -2297,7 +2490,7 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
                     (st[-1], eps_rg[-1]), textcoords='offset points', xytext=(-6, 9), ha='right',
                     va='bottom', fontsize=10, color=col,
                     bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='none', alpha=0.8))
-    ax.set_xlabel('step')
+    ax.set_xlabel('time step')
     ax.set_ylabel(r'compression strain  $\varepsilon=(L_0-L)/L_0$')
     ax.set_title('Strain diagnostic: solid $\\varepsilon_{Rg}$, dashed $\\varepsilon_{BB}$,\n'
                  'dotted = applied target, shaded = plateau window', fontsize=15)
@@ -2311,7 +2504,10 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
     return _save(fig, cfg, stem, levels[0]['lvl'] if len(levels) == 1 else None)
 
 
-def _phi_panel(ax, cfg, R, D, L=None, title='', bands=True):
+def _phi_panel(ax, cfg, R, D, L=None, title='', bands=True, delta_from=None):
+    """One phi_s profile panel.  delta_from=<state dict> (2026-09-24) replaces the
+    in-gel means box by the in-gel CHANGE of each estimator relative to that state
+    (steady - reference), two significant figures."""
     zx = zn(R, R['z'])
     drawn = []
     for key, lab, col in (('phi_mf', r'$\phi_s^{\rm mf}=\rho_s/\rho_{s,0}$', WONG['blue']),
@@ -2323,7 +2519,7 @@ def _phi_panel(ax, cfg, R, D, L=None, title='', bands=True):
         if bands:
             ax.fill_between(zx, lo, hi, color=col, alpha=0.22, lw=0, zorder=2)
         ax.plot(zx, m, '-', lw=2.4, color=col, label=lab, zorder=3)
-        drawn.append((lab, m))
+        drawn.append((key, lab, m))
     ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)
     ax.axhline(cfg.PHI_FLOOR, color='r', ls=':', lw=1.0, alpha=0.5)
     shade_gel(ax, R, L)
@@ -2332,8 +2528,14 @@ def _phi_panel(ax, cfg, R, D, L=None, title='', bands=True):
     ax.set_ylim(0, 1.15)
     smart_legend(ax, fontsize=12)
     mask = L['interior'] if L is not None else R['interior']
-    txt = '\n'.join(f'{"mf" if "mf" in lab else ("cal" if "cal" in lab else "vor")}: {fmt_mu(m[mask])}'
-                    for lab, m in drawn)
+    short = lambda key: key.split('_')[1]
+    if delta_from is not None:
+        txt = '\n'.join(f'{short(key)}: {np.nanmean(m[mask]) - np.nanmean(delta_from[key][0][delta_from["interior"]]):+.2g}'
+                        for key, lab, m in drawn if delta_from.get(key) is not None)
+        if txt:
+            annotate_box(ax, r'$\Delta\phi_s$ (steady $-$ reference), in gel' + '\n' + txt, loc='lower right', fontsize=12)
+        return
+    txt = '\n'.join(f'{short(key)}: {fmt_mu(m[mask])}' for key, lab, m in drawn)
     if txt:
         annotate_box(ax, 'in-gel means\n' + txt, loc='lower right', fontsize=12)
 
@@ -2370,12 +2572,12 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
         ref = None
         if Rs is not None:
             ref = (Rs['t_m'], Rs['t_lo'], Rs['t_hi']) if kind == 't' else (Rs['net_m'], Rs['net_lo'], Rs['net_hi'])
-        if kind == 't':      # normalise by the bath pressure; leave headroom above the reservoir value ~1
-            Pb = cfg.P_BARO
+        if kind == 't':      # normalise by the bath pressure (permeation: the permeate pressure P_perm, 2026-09-24)
+            Pb = _p_norm(cfg, L)
             ev = ev / Pb
             ref = None if ref is None else tuple(np.asarray(r) / Pb for r in ref)
             ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
-            lab = lab + r'$/P_{\rm bath}$'
+            lab = lab + (r'$/P_{\rm perm}$' if _is_perm(L) else r'$/P_{\rm bath}$')
         plot_evolution(ax, cfg, R, L, R['z'], ts, ev, lab + '$(z,t)$', title, ref=ref, band=band,
                        annotate=False, legend=False)
         if kind == 't':      # zoom on the band around P_bath (edge bin excluded), keep 1 well inside
@@ -2383,7 +2585,7 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
                         pad=0.45, qlo=2, qhi=100, include_zero=False)
             lo, hi = ax.get_ylim()
             ax.set_ylim(min(lo, 1 - 0.3 * (hi - lo)), max(hi, 1 + 0.3 * (hi - lo)))
-            note = 'plateau mean in gel interior = ' + fmt_mu(S['t_plat'][L['interior']] / cfg.P_BARO)
+            note = ('steady' if _is_perm(L) else 'plateau') + ' mean in gel interior = ' + fmt_mu(S['t_plat'][L['interior']] / Pb)
         if kind == 'net':
             mask = (R['z'] >= L['z_mem_lo'] + cfg.wall_margin)
             robust_ylim(ax, list(ev), zmask=mask, pad=0.15)
@@ -2395,9 +2597,47 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
     return _save(fig, cfg, stem, L['lvl'])
 
 
+def _is_perm(L):
+    return L is not None and L.get('mode') == 'permeation'
+
+
+def _p_norm(cfg, L):
+    """Pressure the total-stress panels are normalised by: the applied permeate pressure
+    of a permeation run (P_perm = P_target; 2026-09-24), else cfg.P_BARO."""
+    W = L.get('wet') if L is not None else None
+    if _is_perm(L) and W is not None and 'P_perm_app' in W.get('plat', {}) and np.isfinite(W['plat']['P_perm_app']):
+        return float(W['plat']['P_perm_app'])
+    return float(cfg.P_BARO)
+
+
+def _pending_panels(cfg, R, L, stem, suptitle, titles, ylabels, note):
+    """Placeholder figure (permeation, 2026-09-24): the axes, membrane shading and plate
+    planes are drawn but no data -- for quantities that need the pore pressure from the
+    solvent chemical potential, which the deck does not measure yet."""
+    fig, axes = plt.subplots(1, len(titles), figsize=(25 if len(titles) == 3 else 13, 6.5),
+                             constrained_layout=True, squeeze=False)
+    fig.suptitle(suptitle, fontsize=13, fontweight='bold')
+    for ax, t, yl in zip(axes[0], titles, ylabels):
+        shade_gel(ax, R, L)
+        mark_walls(ax, R, L)
+        finish_axes(ax, yl, t)
+        ax.set_ylim(-1, 1)
+        ax.text(0.5, 0.5, note, ha='center', va='center', transform=ax.transAxes, fontsize=14, color='0.35')
+    return _save(fig, cfg, stem, L['lvl'])
+
+
+_PORE_NOTE = ('pending: needs the pore pressure from the solvent\nchemical-potential profile '
+              '($p_{\\rm pore}=\\mu_s/\\bar v_s$), which the\npermeation deck does not measure yet')
+
+
 def fig_total_stress(cfg, R, L):
+    if _is_perm(L):
+        return _stress_evo_panels(cfg, R, L, 't', 'total_stress_evolution',
+                                  f'Total stress / permeate pressure ($P_{{\\rm perm}}={sig(_p_norm(cfg, L))}$), reference $\\rightarrow$ '
+                                  f'permeation drive (production from step {fmt_step(L["evol_from"])}; steady window from '
+                                  f'{fmt_step(L["halt_ts"])})  |  {cfg.sim_name}')
     return _stress_evo_panels(cfg, R, L, 't', 'total_stress_evolution',
-                              f'Total stress / bath pressure ($P_{{\\rm bath}}={sig(cfg.P_BARO)}$), reference -> compressed '
+                              f'Total stress / bath pressure ($P_{{\\rm bath}}={sig(cfg.P_BARO)}$), reference $\\rightarrow$ compressed '
                               f'(hold from step {fmt_step(L["evol_from"])}; plateau from {fmt_step(L["halt_ts"])})  |  {cfg.sim_name}')
 
 
@@ -2446,7 +2686,14 @@ def fig_network_stress(cfg, R, L):
     swelling) and the FINAL plateau-averaged state (solid blue, 95 % band) only.
     The evolution curves were dropped on 2026-09-17: while the gel consolidates the
     pore pressure is NOT uniform (solvent is still diffusing through the network),
-    so subtracting one reservoir value is only valid in the equilibrated state."""
+    so subtracting one reservoir value is only valid in the equilibrated state.
+    PERMEATION (2026-09-24): drawn blank -- under flow p_pore(z) must come from the
+    solvent chemical-potential profile (p_pore = mu_s / v_s), not from a reservoir baseline."""
+    if _is_perm(L):
+        return _pending_panels(cfg, R, L, 'network_stress_final',
+                               f"Network stress $\\sigma'=\\sigma^t-p_{{\\rm pore}}(z)$ under permeation  |  {cfg.sim_name}",
+                               [f'({"abc"[i]}) ' + r"network $\sigma'_{%s}$" % c for i, c in enumerate(COMPONENTS)],
+                               [r"$\sigma'_{%s}(z)$" % c for c in COMPONENTS], _PORE_NOTE)
     fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
     fig.suptitle(f"Network stress (Terzaghi $\\sigma'=\\sigma^t-p_{{\\rm pore}}$): reference and final equilibrated state  |  "
                  f"p_pore(final) = {fmt_val_unc(L['stress']['zz']['pore'][-1], L['stress']['zz']['pore_half'][-1])}  |  {cfg.sim_name}",
@@ -2488,15 +2735,19 @@ def fig_thermo_pressure(cfg, R, L):
     Rt = _tr3(R['stress'], 't')
     if Rt is not None:
         ref = mean_ci(Rt, cfg.ci_level)
-    plot_evolution(ax, cfg, R, L, R['z'], ts, ev, r'$P_{\rm th}(z,t)$  (LJ)',
-                   r'Thermodynamic pressure $P_{\rm th}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma}^t)$: reference -> hold -> plateau',
+    plot_evolution(ax, cfg, R, L, R['z'], ts, ev, r'$P_{th}(z,t)$  (LJ)',
+                   r'Thermodynamic pressure $P_{th}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma}^t)$: reference $\rightarrow$ '
+                   + ('evolution' if _is_perm(L) else r'hold $\rightarrow$ plateau'),
                    ref=ref, annotate=False, legend=False)
     ax.axhline(cfg.P_BARO, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
     robust_ylim(ax, list(ev) + ([ref[0]] if ref is not None else []), zmask=_scale_mask(cfg, R, L), pad=0.45, qlo=2, qhi=100, include_zero=False)
     lo, hi = ax.get_ylim()
     ax.set_ylim(min(lo, cfg.P_BARO - 0.3 * (hi - lo)), max(hi, cfg.P_BARO + 0.3 * (hi - lo)))
     h, lab = ax.get_legend_handles_labels()
-    note = f'plateau mean in gel interior = {fmt_mu(np.nanmean(Pt[L["plat"]], axis=0)[L["interior"]])}   (dotted: $P_{{\\rm bath}}={sig(cfg.P_BARO)}$)'
+    if _is_perm(L):
+        note = f'$P_{{th}}$ in gel interior: $\\approx$ {sig(np.nanmean(np.nanmean(Pt[L["plat"]], axis=0)[L["interior"]]))}'
+    else:
+        note = f'plateau mean in gel interior = {fmt_mu(np.nanmean(Pt[L["plat"]], axis=0)[L["interior"]])}   (dotted: $P_{{\\rm bath}}={sig(cfg.P_BARO)}$)'
     h.append(Patch(alpha=0, label=note))
     lab.append(note)
     smart_legend(ax, handles=h, labels=lab, fontsize=12)
@@ -2508,7 +2759,14 @@ def fig_thermo_pressure(cfg, R, L):
 def fig_osmotic_pressure(cfg, R, L):
     """Osmotic pressure Pi = -(1/3) tr(sigma') (positive under compression), reference
     (dashed, ~0) and final plateau state (solid blue) with 95 % bands.  Like the
-    network stress, only the equilibrated state is meaningful."""
+    network stress, only the equilibrated state is meaningful.  PERMEATION
+    (2026-09-24): drawn blank until the pore pressure comes from the solvent
+    chemical potential (see fig_network_stress)."""
+    if _is_perm(L):
+        return _pending_panels(cfg, R, L, 'osmotic_pressure_final',
+                               f'Osmotic pressure $\\mathit{{\\Pi}}=-\\frac{{1}}{{3}}\\,\\mathrm{{tr}}(\\mathbf{{\\sigma}}\')$ under permeation  |  {cfg.sim_name}',
+                               [r"osmotic pressure $\mathit{\Pi}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma}')$"],
+                               [r'$\mathit{\Pi}(z)$  (LJ)'], _PORE_NOTE)
     Pn = _tr3(L['stress'], 'net')
     if Pn is None:
         print('osmotic-pressure figure skipped (sigmaxx / sigmayy files missing)')
@@ -2561,12 +2819,14 @@ def fig_partial_stress(cfg, R, L):
                     lw=(3.2 if last else 1.2), alpha=(1.0 if last else 0.6), zorder=(5 if last else 3))
         handles.append(Line2D([0], [0], color=base, lw=3, label=lab))
     handles.append(Line2D([0], [0], color='0.4', ls='--', lw=2, label=r'reference ($\varepsilon=0$)'))
-    handles.append(Line2D([0], [0], color='0.4', lw=1.2, alpha=0.6, label='hold (faint = early)'))
+    if not _is_perm(L):
+        handles.append(Line2D([0], [0], color='0.4', lw=1.2, alpha=0.6, label='hold (faint = early)'))
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
     shade_gel(ax, R, L)
     mark_walls(ax, R, L)
     finish_axes(ax, r'$\sigma_{zz}(z,t)$  (LJ)',
-                f'Partial and total $\\sigma_{{zz}}$: reference -> compressed ($\\varepsilon={L["eps"]:.2f}$)')
+                'Partial and total normal stresses: reference $\\rightarrow$ evolution' if _is_perm(L) else
+                f'Partial and total $\\sigma_{{zz}}$: reference $\\rightarrow$ compressed ($\\varepsilon={L["eps"]:.2f}$)')
     smart_legend(ax, handles=handles, fontsize=12)
     return _save(fig, cfg, 'partial_stress_evolution', L['lvl'])
 
@@ -2587,7 +2847,7 @@ def fig_piston(cfg, R, L):
         if 'PF' in L:
             ax.axvspan(L['PF']['step0'], float(steps[-1]), color=WONG['green'], alpha=0.10,
                        label='plateau window (auto)')
-        ax.set_xlabel('step')
+        ax.set_xlabel('time step')
         ax.grid(alpha=0.3)
     axL.plot(steps, P, '-', color=WONG['vermillion'], lw=1.0, alpha=0.30, label=r'$P=F_z/A$ (raw)')
     axL.plot(steps, P_roll, '-', color=WONG['vermillion'], lw=2.6, alpha=0.95, label=f'rolling mean ({cfg.roll_win})')
@@ -2632,7 +2892,7 @@ def fig_ratio(cfg, R, L):
     ax.axvspan(L['halt_ts'], float(L['ts'][-1]), color=WONG['green'], alpha=0.10, label='plateau window')
     ax.axhline(1.0, color='k', ls=':', lw=1.0, alpha=0.6)
     robust_ylim(ax, [G['ratio'] for G in L['G'].values()], pad=0.35, qlo=0, qhi=100)   # error bars may run off
-    ax.set_xlabel('step')
+    ax.set_xlabel('time step')
     ax.set_ylabel(r"$\langle\sigma'_{zz}\rangle_{\rm int}/\langle\sigma'_{ii}\rangle_{\rm int}$")
     ax.set_title(r"Network stress anisotropy $\sigma'_{zz}/\sigma'_{ii} = M/(M-2G)$"
                  + ('  (relative to $\\varepsilon=0$)' if cfg.G_SUBTRACT_REF else ''), fontsize=15)
@@ -2948,8 +3208,8 @@ def fig_thermo_pressure_sweep(cfg, R, levels):
     ref = mean_ci(Rt, cfg.ci_level) if Rt is not None else None
     ax.axhline(cfg.P_BARO, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
     overlay_levels(ax, R, levels, lambda L: L['z'], lambda L: L['ts'], lambda L: _tr3(L['stress'], 't'), cfg, ref=ref,
-                   autoscale_mask=_scale_mask(cfg, R, levels=levels), ylabel=r'$P_{\rm th}(z,t)$  (LJ)',
-                   title=r'Thermodynamic pressure $P_{\rm th}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma}^t)$, all levels (faint = early hold, bold = plateau)',
+                   autoscale_mask=_scale_mask(cfg, R, levels=levels), ylabel=r'$P_{th}(z,t)$  (LJ)',
+                   title=r'Thermodynamic pressure $P_{th}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma}^t)$, all levels (faint = early hold, bold = plateau)',
                    include_zero=False, pad=0.45)
     lo, hi = ax.get_ylim()
     ax.set_ylim(min(lo, cfg.P_BARO - 0.3 * (hi - lo)), max(hi, cfg.P_BARO + 0.3 * (hi - lo)))
@@ -3002,10 +3262,10 @@ def fig_piston_sweep(cfg, R, levels):
             axP.axvspan(L['PF']['step0'], float(st[-1]), color=col, alpha=0.06)
             axP.axhline(L['PF']['mean'], color=col, ls=':', lw=1.2, alpha=0.7)
     axP.axhline(0, color='k', ls='--', lw=0.8, alpha=0.4)
-    axP.set_xlabel('step')
+    axP.set_xlabel('time step')
     axP.set_ylabel(r'$P = F_z/A$  (LJ / $\sigma^2$)')
     axP.set_title('(a) piston pressure (rolling mean; dotted = plateau)')
-    axG.set_xlabel('step')
+    axG.set_xlabel('time step')
     axG.set_ylabel(r'$\ln P$')
     axG.set_title('(b) log piston pressure (relaxation view)')
     for ax in (axP, axG):
@@ -3030,7 +3290,7 @@ def fig_ratio_sweep(cfg, R, levels):
     robust_ylim(ax, [G['ratio'] for L in levels for G in L['G'].values()], pad=0.35, qlo=0, qhi=100)
     h = level_handles(levels) + [Line2D([0], [0], color='0.3', ls='-', lw=2, label=r"$\sigma'_{zz}/\sigma'_{xx}$"),
                                  Line2D([0], [0], color='0.3', ls='--', lw=2, label=r"$\sigma'_{zz}/\sigma'_{yy}$")]
-    ax.set_xlabel('step')
+    ax.set_xlabel('time step')
     ax.set_ylabel(r"$\langle\sigma'_{zz}\rangle_{\rm int}/\langle\sigma'_{ii}\rangle_{\rm int}$")
     ax.set_title(r"Network stress anisotropy $\sigma'_{zz}/\sigma'_{ii}=M/(M-2G)$, all levels", fontsize=15)
     ax.grid(alpha=0.3)
@@ -3389,7 +3649,7 @@ def fig_wet_pistons(cfg, R, L):
         return None
     fig, ax = plt.subplots(figsize=(11, 6), constrained_layout=True)
     _wet_panel(ax, cfg, R, L)
-    ax.set_xlabel('step')
+    ax.set_xlabel('time step')
     ax.set_ylabel(r'$P = F_{\rm fluid}/(l_x l_y)$  (LJ)')
     ax.set_title(f'Wet pistons hold the bath at $P_{{\\rm target}}={sig(cfg.P_BARO)}$;  '
                  f'load piston = network load   ($\\varepsilon={L["lvl"]}$)', fontsize=14)
@@ -3413,7 +3673,7 @@ def fig_solvent_expelled(cfg, R, L):
     if 'L_bb' in L.get('Dc', {}) if L.get('Dc') else False:
         pass
     ax.axhline(0, color='k', ls=':', lw=1, alpha=0.5)
-    ax.set_xlabel('step')
+    ax.set_xlabel('time step')
     ax.set_ylabel(r'solvent expelled  ($\sigma^3$)')
     ax.set_title(f'Solvent expelled since seating (wet-piston displacement), $\\varepsilon={L["lvl"]}$'
                  f'  |  final {sig(W["dV_total"][-1])} $\\sigma^3$ = {sig(W["dV_total"][-1] / R["AREA"])} $\\sigma$ of feed rise', fontsize=13)
@@ -3437,14 +3697,14 @@ def fig_wet_pistons_sweep(cfg, R, levels):
         if W.get('dV_total') is not None:
             axE.plot(W['exp_step'], W['dV_total'], '-', color=level_color(levels.index(L)), lw=2.0)
     axP.axhline(cfg.P_BARO, color='k', ls=':', lw=1.0, alpha=0.6, label=f'$P_{{\\rm target}}={sig(cfg.P_BARO)}$')
-    axP.set_xlabel('step')
+    axP.set_xlabel('time step')
     axP.set_ylabel(r'$P_{\rm bath}$ on the wet pistons  (LJ)')
     axP.set_title('(a) bath check per level: feed (solid), permeate (dashed), rolling means', fontsize=13)
     axP.grid(alpha=0.3)
     h = level_handles(levels) + [Line2D([0], [0], color='0.3', ls='-', lw=2, label='feed'),
                                  Line2D([0], [0], color='0.3', ls='--', lw=2, label='permeate')]
     smart_legend(axP, handles=h, fontsize=11)
-    axE.set_xlabel('step')
+    axE.set_xlabel('time step')
     axE.set_ylabel(r'solvent expelled  ($\sigma^3$)')
     axE.set_title('(b) solvent expelled since seating (cumulative over the sweep)', fontsize=13)
     axE.grid(alpha=0.3)
@@ -3517,6 +3777,7 @@ def load_permeation(cfg, R, verbose=True):
     else:
         P['piston_z_at'] = lambda t: R['z_feed']
         P['z_pist'] = R['z_feed']
+    P['shade_hi'] = P['z_pist'] if (cfg.GEL_SHADE_TO_PISTON and np.isfinite(P['z_pist'])) else None
     P['wet'] = load_wet_pistons(cfg, R, None, plat_from=P['halt_ts'])
 
     # ---- Terzaghi split with the feed-reservoir baseline (+ the permeate side) ----
@@ -3609,6 +3870,7 @@ def load_permeation(cfg, R, verbose=True):
                 ZS = slope_estimate(st[win], F['z_perm'][win], cfg.q_win_steps, cfg.dt_lj, cfg.ci_level)
                 for k in ('mean', 'se', 'lo', 'hi', 'slope_all'):
                     ZS[k] = -area * ZS[k]
+                ZS['se'] = abs(ZS['se'])                 # the sign flip above must not touch the SE (fixed 2026-09-24)
                 ZS['lo'], ZS['hi'] = min(ZS['lo'], ZS['hi']), max(ZS['lo'], ZS['hi'])
                 ZS['slopes'] = -area * ZS['slopes']
                 F['Q_z'] = ZS
@@ -3654,9 +3916,6 @@ def load_permeation(cfg, R, verbose=True):
             if 'Q_z' in F:
                 ZS = F['Q_z']
                 F['k']['z_applied'] = _k(ZS['mean'], ZS['lo'], ZS['hi'], F['dP_app'])
-            if 'Q_ss' in F:
-                PW = F['Q_ss']
-                F['k']['v_applied'] = _k(PW['mean'], PW['lo'], PW['hi'], F['dP_app'])
             F['k'] = {kk: v for kk, v in F['k'].items() if v is not None}
             if 'Q_N' in F:
                 NS = F['Q_N']
@@ -3667,14 +3926,10 @@ def load_permeation(cfg, R, verbose=True):
             if 'Q_z' in F:
                 ZS = F['Q_z']
                 say(f"Q_perm from the z_perm slope (same windows): {ZS['mean']:.4e} +/- {ZS['se']:.2e}")
-            if 'Q_ss' in F:
-                PW = F['Q_ss']
-                say(f"Q_perm legacy (block-averaged piston velocity, block bootstrap): {PW['mean']:.4e} [{PW['lo']:.4e}, {PW['hi']:.4e}]"
-                    + ('  DRIFT WARNING' if PW.get('warn') else ''))
             say(f"dP applied = {F['dP_app']:.4f};  dP measured (wet pistons) = "
                 + (f"{F['dP_meas']:.4f} [{F['dP_meas_lo']:.4f}, {F['dP_meas_hi']:.4f}]" if 'dP_meas' in F else 'n/a')
                 + f";  L_gel (Rg) = {Lg:.2f};  A = {area:.1f}")
-            say('permeability k = Q L/(A dP):  ' + '   '.join(f"{kk}: {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" for kk, v in F['k'].items()))
+            say('permeability kappa = Q L/(A dP_ext):  ' + '   '.join(f"{kk}: {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" for kk, v in F['k'].items()))
         P['flux'] = F
     else:
         say('NOTE: permeation_<stem>.dat missing -> flux / permeability skipped')
@@ -3685,7 +3940,8 @@ def load_permeation(cfg, R, verbose=True):
 #  permeation mode: figures
 # ---------------------------------------------------------------------------
 def fig_perm_density(cfg, R, P):
-    """Solvent mass-density evolution (cividis, bold final) with the zero-flux reference."""
+    """Solvent mass density evolution (cividis, bold final) with the zero-flux reference
+    (dropped from the notebook 2026-09-24: the mass-fraction panel carries the same field)."""
     if 'dens_m' not in P:
         print('density figure skipped (no solvent_density_z file)')
         return None
@@ -3716,7 +3972,7 @@ def fig_perm_volfrac(cfg, R, P):
     fig.suptitle(f'Solvent volume fraction under permeation  (P_CAL_MODE = {cfg.P_CAL_MODE!r}, '
                  f'$P_{{\\rm CAL}}={cfg.P_CAL}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
     _phi_panel(axes[0, 0], cfg, R, R, None, '(a) zero-flux reference (both reservoirs at $P_{\\rm target}$)')
-    _phi_panel(axes[0, 1], cfg, R, P, P, '(b) steady permeation (trailing-window mean)')
+    _phi_panel(axes[0, 1], cfg, R, P, P, '(b) steady permeation (trailing-window mean)', delta_from=R)
     zx = zn(R, R['z'])
     zz = P['stress']['zz']
     # (c) the calibration pressure per bin
@@ -3776,36 +4032,39 @@ def fig_perm_volfrac(cfg, R, P):
 
 def fig_perm_volfrac_evolution(cfg, R, P):
     """phi_s evolution over the drive (cividis, final bold; zero-flux reference dashed):
-    (a) mass fraction from every density snapshot, (b) Voronoi and (c) lambda-
-    calibrated Voronoi on the tessellated frames.  Needs add_perm_volume_fractions."""
+    (a) mass fraction from every density snapshot, (b) the lambda-calibrated Voronoi
+    fraction on the tessellated frames, each with its own colour bar (2026-09-24; the
+    raw Voronoi panel is kept only when no calibration artifact exists).  The box gives
+    the in-gel change from the reference.  Needs add_perm_volume_fractions."""
     panels = []
     if P.get('mf_stack') is not None:
-        panels.append(('phi_mf', P['mf_ts'], P['mf_stack'], r'(a) mass fraction $\phi_s^{\rm mf}=\rho_s/\rho_{s,0}$'))
+        panels.append(('phi_mf', P['mf_ts'], P['mf_stack'], r'mass fraction $\phi_s^{\rm mf}=\rho_s/\rho_{s,0}$'))
     vf = P.get('vf')
-    if vf is not None and vf.get('phi_vor') is not None:
-        panels.append(('phi_vor', vf['ts'], vf['phi_vor'], r'(b) Voronoi $\phi_s^{\rm vor}$'))
-        if vf.get('phi_cal') is not None:
-            panels.append(('phi_cal', vf['ts'], vf['phi_cal'],
-                           r'(c) $\lambda$-calibrated $\phi_s^{\rm cal}$' + f'  (P_CAL_MODE = {cfg.P_CAL_MODE!r})'))
+    if vf is not None and vf.get('phi_cal') is not None:
+        panels.append(('phi_cal', vf['ts'], vf['phi_cal'],
+                       r'$\lambda$-calibrated Voronoi $\phi_s^{\rm cal}$' + f'  (P_CAL_MODE = {cfg.P_CAL_MODE!r})'))
+    elif vf is not None and vf.get('phi_vor') is not None:
+        panels.append(('phi_vor', vf['ts'], vf['phi_vor'], r'Voronoi $\phi_s^{\rm vor}$ (no calibration artifact)'))
     if not panels:
         print('volume-fraction evolution skipped (run add_perm_volume_fractions first)')
         return None
     fig, axes = plt.subplots(1, len(panels), figsize=(8.5 * len(panels), 6.5), constrained_layout=True, squeeze=False)
-    fig.suptitle(f'Solvent volume fraction evolution: zero-flux reference -> permeation drive  |  {cfg.sim_name}',
+    fig.suptitle(f'Solvent volume fraction evolution: zero-flux reference $\\rightarrow$ permeation drive  |  {cfg.sim_name}',
                  fontsize=13, fontweight='bold')
-    for ax, (key, ts, stack, title) in zip(axes[0], panels):
+    for i, (ax, (key, ts, stack, title)) in enumerate(zip(axes[0], panels)):
         if key == 'phi_mf':
             ts, ev = post_halt(cfg, P, ts, stack)
         else:
             ts, ev = np.asarray(ts, float), np.asarray(stack, float)
-        plot_evolution(ax, cfg, R, P, R['z'], ts, ev, r'$\phi_s$', title, ref=R.get(key), annotate=False, legend=False)
+        plot_evolution(ax, cfg, R, P, R['z'], ts, ev, r'$\phi_s$', f'({"abc"[i]}) ' + title, ref=R.get(key), annotate=False, legend=False)
         ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)
         ax.set_ylim(0, 1.15)
         h, lab = ax.get_legend_handles_labels()
         if h:
             smart_legend(ax, handles=h, labels=lab, fontsize=11)
-        if P.get(key) is not None:
-            annotate_box(ax, 'steady in-gel mean = ' + fmt_mu(P[key][0][P['interior']]), loc='lower right', fontsize=12)
+        if P.get(key) is not None and R.get(key) is not None:
+            d = np.nanmean(P[key][0][P['interior']]) - np.nanmean(R[key][0][R['interior']])
+            annotate_box(ax, r'$\Delta\phi_s$ (steady $-$ reference), in gel: ' + f'{d:+.2g}', loc='lower right', fontsize=12)
     return _save(fig, cfg, 'perm_volfrac_evolution')
 
 
@@ -3823,7 +4082,7 @@ def fig_perm_pistons(cfg, R, P):
             axZ.plot(st, zc - zc[0], '-', color=col, lw=2.2, label=f'{lab} piston  ($z_0={sig(zc[0])}$)')
     axZ.axvspan(P['evol_from'], float(st[-1]), color=WONG['green'], alpha=0.06, label='production')
     axZ.axhline(0, color='k', ls=':', lw=1, alpha=0.5)
-    axZ.set_xlabel('step')
+    axZ.set_xlabel('time step')
     axZ.set_ylabel(r'$z - z_0$  ($\sigma$)')
     axZ.set_title('(a) wet-piston displacement (feed descends, permeate retreats)', fontsize=13)
     axZ.grid(alpha=0.3)
@@ -3842,7 +4101,7 @@ def fig_perm_pistons(cfg, R, P):
                     axP.plot(a[:, 0], rolling_mean(a[:, 1], cfg.roll_win) if dense else a[:, 1], ':', color=col, lw=2.0, alpha=0.95,
                              label=f'{name.split("_")[1]} reservoir virial $P_{{\\rm res}}$' + (' (rolling mean)' if dense else ''))
     src = (P.get('wet') or {}).get('source', '')
-    axP.set_xlabel('step')
+    axP.set_xlabel('time step')
     axP.set_ylabel('pressure  (LJ)')
     axP.set_title('(b) piston pressure: measured ' + ('block-averaged ' if src.startswith('piston_force_avg') else '')
                   + '$F_{\\rm fluid}/A$ vs applied (dashed); reservoir virial (dotted)', fontsize=12)
@@ -3853,9 +4112,9 @@ def fig_perm_pistons(cfg, R, P):
 
 def fig_perm_flux(cfg, R, P):
     """(a) Q_perm(t) from the block-averaged permeate-piston velocity (context) with the
-    steady window and the three estimates: N_permeate slope (primary, +/- SE over
-    independent windows), z_perm slope, legacy block-bootstrap mean; (b) N_permeate(t)
-    with the per-window fits that give the primary value."""
+    steady window and the two estimates: N_perm slope (primary, +/- SE over independent
+    windows) and the z_perm slope (the legacy block mean was dropped 2026-09-24);
+    (b) N_perm(t) with the per-window fits that give the primary value."""
     F = P.get('flux')
     if F is None or (F.get('Q') is None and F.get('Q_N') is None):
         print('flux figure skipped (no permeation file)')
@@ -3870,18 +4129,14 @@ def fig_perm_flux(cfg, R, P):
     if 'Q_N' in F:
         NS = F['Q_N']
         axQ.axhline(NS['mean'], color='k', ls='--', lw=1.8,
-                    label=f"$N_{{\\rm permeate}}$ slope: $Q$ = {fmt_val_unc(NS['mean'], NS['se'])}  (SE, {NS['n_win']} windows)")
+                    label=f"$N_{{\\rm perm}}$ slope: $Q$ = {fmt_val_unc(NS['mean'], NS['se'])}  (SE, {NS['n_win']} windows)")
         axQ.axhspan(NS['lo'], NS['hi'], color='k', alpha=0.08)
     if 'Q_z' in F:
         ZS = F['Q_z']
         axQ.axhline(ZS['mean'], color=WONG['reddishpurple'], ls=':', lw=1.6,
                     label=f"$z_{{\\rm perm}}$ slope: {fmt_val_unc(ZS['mean'], ZS['se'])}")
-    if 'Q_ss' in F:
-        PW = F['Q_ss']
-        axQ.axhline(PW['mean'], color='0.5', ls='-.', lw=1.2,
-                    label=f"legacy block mean: {fmt_val_unc(PW['mean'], 0.5 * (PW['hi'] - PW['lo']))}")
     axQ.axvline(P['evol_from'], color='k', ls=':', lw=1, alpha=0.5)
-    axQ.set_xlabel('step')
+    axQ.set_xlabel('time step')
     axQ.set_ylabel(r'$Q_{\rm perm}$  ($\sigma^3/\tau$)')
     axQ.set_title('(a) permeate flux: piston-velocity trace (context) and the slope estimates', fontsize=13)
     axQ.grid(alpha=0.3)
@@ -3894,14 +4149,14 @@ def fig_perm_flux(cfg, R, P):
     else:
         n_st = n_val = None
     if n_st is not None:
-        axN.plot(n_st, n_val - n_val[0], '-', color='0.3', lw=1.8, label=r'$\Delta N_{\rm permeate}$ (crossed below the support)')
+        axN.plot(n_st, n_val - n_val[0], '-', color='0.3', lw=1.8, label=r'$\Delta N_{\rm perm}$ (crossed below the support)')
         if 'Q_N' in F:
             NS = F['Q_N']
             cw = n_st >= NS['step0']
             if cw.sum() >= 3:
                 sl, ic = np.polyfit(n_st[cw], n_val[cw] - n_val[0], 1)
                 axN.plot(n_st[cw], sl * n_st[cw] + ic, '--', color=WONG['vermillion'], lw=2,
-                         label=f"single fit -> $Q$ = {sig(NS['slope_all'])}")
+                         label=f"single fit $\\rightarrow$ $Q$ = {sig(NS['slope_all'])}")
             # the independent windows: short segments at the fitted slopes
             w = NS['win_steps']
             for j, (c, q) in enumerate(zip(NS['centers'], NS['slopes'])):
@@ -3910,39 +4165,46 @@ def fig_perm_flux(cfg, R, P):
                     continue
                 m = np.polyfit(n_st[sel], n_val[sel] - n_val[0], 1)
                 axN.plot(n_st[sel], np.polyval(m, n_st[sel]), '-', color=WONG['blue'], lw=2.6, alpha=0.85,
-                         label=(f'{NS["n_win"]} independent windows of {w} steps -> $Q$ = {fmt_val_unc(NS["mean"], NS["se"])}' if j == 0 else None))
+                         label=(f'{NS["n_win"]} independent windows of {w} steps $\\rightarrow$ $Q$ = {fmt_val_unc(NS["mean"], NS["se"])}' if j == 0 else None))
             axN.axvspan(NS['step0'], float(n_st[-1]), color=WONG['green'], alpha=0.10)
             axN.set_title(f"(b) permeate bead count: window slopes / $\\rho_{{s,0}}$ = {sig(NS['rho0'])}   (primary $Q$)", fontsize=13)
         else:
             axN.set_title('(b) permeate bead count', fontsize=13)
-    axN.set_xlabel('step')
-    axN.set_ylabel(r'$\Delta N_{\rm permeate}$  (beads)')
+    axN.set_xlabel('time step')
+    axN.set_ylabel(r'$\Delta N_{\rm perm}$  (beads)')
     axN.grid(alpha=0.3)
     smart_legend(axN, fontsize=10)
     return _save(fig, cfg, 'perm_flux')
 
 
 def fig_perm_permeability(cfg, R, P):
-    """k = Q L/(A dP): N_permeate-slope Q with the applied and the measured (wet-piston)
-    dP (primary), the z_perm-slope Q, and the legacy block-mean piston velocity; CI =
-    the slope's SE-based interval (and dP_meas's block bootstrap) in quadrature."""
+    """kappa = Q L/(A dP_ext): the N_perm-slope Q with the MEASURED (wet-piston) dP_ext --
+    the primary value -- and the z_perm-slope Q with the applied dP_ext; CI = the slope's
+    SE-based interval (and dP_meas's block bootstrap) in quadrature.  (2026-09-24: the
+    N-slope/applied-dP and the legacy block-mean entries are no longer drawn; both stay
+    in P['flux']['k'] and the printed summary.)"""
     F = P.get('flux')
     if F is None or not F.get('k'):
         print('permeability figure skipped (no flux)')
         return None
+    labs = {'N_measured': r'$N_{\rm perm}$ slope, measured $\Delta P_{\mathrm{ext}}$',
+            'z_applied': r'$z_{\rm perm}$ slope, applied $\Delta P_{\mathrm{ext}}$'}
+    cols = {'N_measured': WONG['vermillion'], 'z_applied': WONG['reddishpurple']}
+    show = [kk for kk in labs if kk in F['k']]
+    if not show:
+        print('permeability figure skipped (neither the measured-dP nor the z_perm estimate is available)')
+        return None
     fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
-    labs = {'N_applied': r'$N$ slope, applied $\Delta P$', 'N_measured': r'$N$ slope, measured $\Delta P$',
-            'z_applied': r'$z_{\rm perm}$ slope, applied $\Delta P$', 'v_applied': r'legacy $v$ block mean, applied $\Delta P$'}
-    cols = {'N_applied': WONG['blue'], 'N_measured': WONG['vermillion'], 'z_applied': WONG['reddishpurple'], 'v_applied': '0.5'}
-    for i, (kk, v) in enumerate(F['k'].items()):
+    for i, kk in enumerate(show):
+        v = F['k'][kk]
         ax.errorbar([i], [v['k']], yerr=[[v['k'] - v['lo']], [v['hi'] - v['k']]], fmt='o', ms=12, color=cols[kk],
-                    capsize=8, lw=2.5, label=f"{labs[kk]}:  $k = {sig(v['k'])}$")
-    ax.set_xticks(range(len(F['k'])))
-    ax.set_xticklabels([labs[kk] for kk in F['k']], fontsize=11)
-    ax.set_ylabel(r'$k = Q L/(A\,\Delta P)$  (LJ: $\sigma^5/(\epsilon\,\tau)$)')
+                    capsize=8, lw=2.5, label=f"{labs[kk]}:  $\\kappa = {sig(v['k'])}$")
+    ax.set_xticks(range(len(show)))
+    ax.set_xticklabels([labs[kk] for kk in show], fontsize=11)
+    ax.set_ylabel(r'$\kappa = Q L/(A\,\Delta P_{\mathrm{ext}})$  (LJ: $\sigma^5/(\epsilon\,\tau)$)')
     ax.set_title(f"Permeability  ($L={sig(P['L_gel'])}\\,\\sigma$, $A={sig(P['area'])}\\,\\sigma^2$, "
-                 f"$\\Delta P_{{\\rm app}}={sig(F['dP_app'])}$)\n{cfg.sim_name}", fontsize=12)
-    ax.set_xlim(-0.6, len(F['k']) - 0.4)
+                 f"$\\Delta P_{{\\mathrm{{ext}}}}={sig(F['dP_app'])}$ applied)\n{cfg.sim_name}", fontsize=12)
+    ax.set_xlim(-0.6, len(show) - 0.4)
     ax.grid(axis='y', alpha=0.3)
     smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'perm_permeability')
@@ -3962,11 +4224,12 @@ def print_perm_summary(cfg, R, P):
               f"(SE over {NS['n_win']} windows of {NS['win_steps']} steps; Darcy velocity Q/A = {NS['mean'] / P['area']:.3e})")
     if 'Q_z' in F:
         print(f"  Q_perm (z_perm slope)     = {F['Q_z']['mean']:.4e} +/- {F['Q_z']['se']:.2e}")
-    if 'Q_ss' in F:
-        PW = F['Q_ss']
-        print(f"  Q_perm (legacy v block)   = {PW['mean']:.4e} [{PW['lo']:.4e}, {PW['hi']:.4e}]")
     if F.get('k'):
         for kk, v in F['k'].items():
-            print(f"  k ({kk:10s}) = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]")
+            print(f"  kappa ({kk:10s}) = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]")
+    S = P.get('psd')
+    if S is not None:
+        print(f"  geometric porosity (r_probe {cfg.PSD_R_PROBE}), interior: {fmt_mu(S['por'][0][P['interior']])};  "
+              f"mean pore diameter {fmt_mu(S['d_mean'][0][P['interior']])} sigma")
     elif 'Q_N' not in F:
         print('  no steady flux (permeation / permeate_count files missing or too short)')

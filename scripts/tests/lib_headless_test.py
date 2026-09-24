@@ -2,6 +2,7 @@
 two-piston notebooks do (SYNC off).  Usage: python lib_headless_test.py <fixture_root>"""
 import sys, importlib
 from pathlib import Path
+import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -40,14 +41,25 @@ cfgp = tri.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixtur
 Rp = tri.load_reference(cfgp)
 P = tri.load_permeation(cfgp, Rp)
 tri.add_perm_volume_fractions(cfgp, Rp, P)
+tri.add_perm_psd(cfgp, Rp, P)                # geometric porosity + PSD on the same (tiny) frames
 tri.print_perm_summary(cfgp, Rp, P)
 for f in (tri.fig_perm_pistons, tri.fig_total_stress, tri.fig_partial_stress, tri.fig_network_stress, tri.fig_perm_density,
-          tri.fig_perm_volfrac, tri.fig_perm_volfrac_evolution, tri.fig_perm_flux, tri.fig_perm_permeability,
+          tri.fig_perm_volfrac, tri.fig_perm_volfrac_evolution, tri.fig_perm_psd, tri.fig_perm_flux, tri.fig_perm_permeability,
           tri.fig_thermo_pressure, tri.fig_osmotic_pressure):
     f(cfgp, Rp, P)
     plt.close('all')
 assert P['flux'] is not None and any(k.endswith('applied') for k in P['flux']['k'])
+assert 'v_applied' not in P['flux']['k'], 'legacy block-mean permeability must not be reported'
 assert P['phi_mf'] is not None and P['phi_vor'] is not None
+assert P['psd'] is not None and Rp['psd'] is not None, 'PSD not computed on the fixture frames'
+por = P['psd']['por'][0]
+assert np.nanmax(por) <= 1.0 + 1e-9 and np.nanmin(por) >= 0.0
+assert np.isfinite(por[P['interior']]).all(), 'porosity missing inside the membrane'
+assert np.all(np.isnan(por[Rp['z'] < P['z_mem_lo'] - 3 * cfgp.binWidth])), 'grid must not cover the far reservoir'
+dm = P['psd']['d_mean'][0]
+assert np.nanmin(dm[P['interior']]) >= 2 * cfgp.PSD_R_PROBE - 1e-9, 'pore diameter below the probe diameter'
+Dc, m, lo, hi = P['psd']['regions']['interior']
+assert abs(np.nansum(m) * cfgp.PSD_DBIN - 1.0) < 1e-6, 'PSD not normalised'
 if Rp.get('CALIB') is not None:
     assert P['phi_cal'] is not None and P['P_cal'] is not None
     # the pore-pressure ramp: feed baseline above the membrane, permeate baseline below it
