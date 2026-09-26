@@ -36,10 +36,14 @@
 # Bond types: 1=FENE (polymer-polymer), 2=harmonic (plate-polymer, k=30, r0=1)
 #
 # GEOMETRY (periodic slab, plates on its faces):
-#       bottom plate (type 4, xy-sheet) | gel slab + thin solvent film | top plate
+#       solvent film | bottom plate (type 4, xy-sheet) | gel slab | top plate | solvent film
 #   z = gap direction (plate normal = slab normal): the gel spans gel_zlo..gel_zhi;
 #       each plate sits 0.5 sigma outside the 1-percentile polymer surface and is
-#       harmonic-bonded to it.
+#       harmonic-bonded to it.  BEHIND each plate (periodic z) lies a film of bath
+#       solvent (~7 sigma per side in the _film7 input of 2026-09-25, ~3.5 sigma in
+#       the 2026-09-22 input): the plates are a ~0.7 kT sieve for solvent, so the
+#       film is the solvent's bath and its stress is the pore pressure the
+#       notebooks subtract for the Terzaghi network stress.
 #   x = shear direction: the top plate is driven +x, the bottom plate -x.
 #   y = neutral direction.  The network wraps x and y (a laterally infinite
 #       membrane sheared face-on); boundary p p p; the box is made triclinic
@@ -59,8 +63,8 @@
 #                volume in a box the gel cannot drain from read +0.03).
 #                phase1a_mode = 1 runs the isolated-cube protocol's box NPT with
 #                the plates frozen; do NOT use it on this input: the thermo `press`
-#                it targets is the box average over the vacuum behind the plates
-#                plus the plate-gel contact virial, not the gel pressure.  (A
+#                it targets is the box average over the solvent film behind the
+#                plates plus the plate-gel contact virial, not the gel pressure.  (A
 #                force-controlled NPT-piston settle of the plates was tried and
 #                rejected 2026-09-22: the 1.5-sigma plate lattice is a ~0.7 kT
 #                sieve for solvent, so a force-driven plate sinks through the fluid.)
@@ -109,25 +113,33 @@
 #   z-faces free, so since 2026-09-22 the plates are normal to z, driven +/-x.
 #
 # Recorded observables (z-profiles, z-normal binning -- the compression decks'
-# binning; BULK atoms only, i.e.
-# >= plate_excl sigma inside either PLATE PLANE, where the plate-bond constraint
-# stresses live -- the shear analogue of the wall-trimmed membrane interior the
-# compression notebook uses for G; before 2026-09-22 the cut was measured from the
-# outermost bead, which let ~1 sigma of plate-adjacent material into the bulk):
+# binning).  Since 2026-09-25 the z-PROFILES cover the WHOLE BOX for ALL polymer
+# and ALL solvent atoms (film behind the plates, plate-adjacent layers, gel), so
+# the notebooks see where the plates and the gel are and read the pore pressure
+# from the solvent-only film; the notebooks trim the gel interior themselves
+# (wall_margin).  The BOX-INTEGRATED tensors keep the BULK region (>= plate_excl
+# sigma inside either PLATE PLANE, where the plate-bond constraint stresses live)
+# through DYNAMIC groups re-evaluated every 50 steps -- the 2026-09-22/23 runs
+# used static group snapshots, and solvent exchanging through the sieve-like
+# plates with the film silently removed ~7 % of the profiled solvent (the
+# notebooks' SWAP_CORR undoes it for those files).
 #   1) box-integrated polymer + solvent partial stress tensors vs time (group-
 #      based stress/atom NULL, which INCLUDES the kinetic term n*kT -- see the
 #      KINETIC TERM note in the compression deck; the off-diagonal zx term used
 #      for G carries no kinetic bias once the plates are frozen)
-#   2) z-binned polymer + solvent partial stress tensors (gap profiles)
+#   2) z-binned polymer + solvent partial stress tensors (whole-box profiles)
 #   3) polymer x-displacement profile u_x(z) for the shear D_c (D_c = G/zeta)
 #   4) gamma (plate-based), surface-COM slip strain, Rg + BB gel dimensions, box
-#      dimensions, polymer COM
+#      dimensions + bounds, polymer COM
+#   5) the TOTAL x-force on each plate / (lx*ly) = the shear stress the gel
+#      transmits to the boundary (plate_pressure_* columns 6-7, 2026-09-25): the
+#      shear analogue of the compression decks' piston pressure -> G_plate
 # Whole-run (stem-suffixed) trackers feed plot_lammps_log.py; per-level files are
 # tagged _${nsteps}_g<strain> (the shear analogue of _<hold>_c<strain>).
 #
 # Outputs, per level (${stem} = ${dataname}_${interaction}_${nsteps}):
 #   stress_data/stress_tensor_{polymer,solvent}_${stem}_g<γ>.dat    6-component bulk stress vs time (one row per nfreq block)
-#   stress_data/stress_series_${stem}_g<γ>.dat           fine block-averaged bulk stresses (xx yy zz xz, polymer | solvent) every
+#   stress_data/stress_series_${stem}_g<γ>.dat           fine block-averaged bulk stresses (xx yy zz xz, polymer | solvent) + plate sigma_xz (S_top S_bot) every
 #                                                        series_freq steps over drive + hold -- the analogue of piston_force_avg:
 #                                                        the notebooks read the plateau <sigma_p,xz> from it (drift-tested block bootstrap)
 #   stress_data/stress_profile_z_{polymer,solvent}_${stem}_g<γ>.dat z-binned stress (gap direction)
@@ -143,7 +155,8 @@
 # Whole-run (stem only, from step 0):
 #   volume_data/{box_dimensions,gel_dimensions_rg,gel_volume_rg,gel_volume_bb}_${stem}.dat
 #   stress_data/shear_strain_${stem}.dat                 (plot_lammps_log.py convergence + shear panels; same 4 columns)
-#   piston_data/plate_pressure_${stem}.dat               step z_top z_bot P_top_pair P_bot_pair  (plate planes + the PAIR force
+#   volume_data/box_bounds_${stem}.dat                   step xlo xhi ylo yhi zlo zhi  (whole run; plate planes are absolute z)
+#   piston_data/plate_pressure_${stem}.dat               step z_top z_bot P_top_pair P_bot_pair S_top S_bot  (plate planes + the PAIR force
 #                                                        of the gel on each plate / area, whole run; the harmonic-bond part is not
 #                                                        included, so read it for drift, not as the absolute gel pressure)
 
@@ -406,6 +419,16 @@ compute fp_top plate_top group/group mobile
 compute fp_bot plate_bot group/group mobile
 variable P_top_pair equal  c_fp_top[3]/(lx*ly)   # gel pushes the top plate UP
 variable P_bot_pair equal -c_fp_bot[3]/(lx*ly)   # gel pushes the bottom plate DOWN
+# TOTAL x-force on each sheet (pair + plate-polymer harmonic bonds; the plates are
+# position-controlled, so this is the traction the gel exerts on the boundary):
+# S_top = -F_x(top)/(lx*ly) = sigma_xz at the top plate (the gel drags the +x-driven
+# top plate back, -x, for gamma > 0 -> +sigma_xz), S_bot = +F_x(bot)/(lx*ly).  The
+# notebooks' G_plate = (plateau mean of (S_top+S_bot)/2 - reference) / gamma is the
+# boundary-based estimate, the shear analogue of M_piston (2026-09-25).
+compute fx_top plate_top reduce sum fx
+compute fx_bot plate_bot reduce sum fx
+variable S_top equal -c_fx_top/(lx*ly)
+variable S_bot equal  c_fx_bot/(lx*ly)
 
 
 # ==========================================================================
@@ -472,14 +495,17 @@ variable box_lz equal lz
 
 fix trk_box all print ${stress_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
     file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_box_bounds all print ${stress_freq} "$(step) $(xlo) $(xhi) $(ylo) $(yhi) $(zlo) $(zhi)" &
+    title "# step xlo xhi ylo yhi zlo zhi   (box bounds; the plate planes in plate_pressure_* are absolute z: reduced z = (z - zlo)/lz)" &
+    file output_files/volume_data/box_bounds_${dataname}_${interaction}_${nsteps}.dat screen no
 fix trk_dims_rg all print ${stress_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
     file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
 fix trk_vol_rg all print ${stress_freq} "$(step) $(v_gel_vol_rg)" &
     file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
 fix trk_vol_bb all print ${stress_freq} "$(v_gel_vol_bb)" &
     file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
-fix trk_plates all print ${stress_freq} "$(step) $(c_plate_t_com[3]) $(c_plate_b_com[3]) $(v_P_top_pair) $(v_P_bot_pair)" &
-    title "# step z_top z_bot P_top_pair P_bot_pair   (plate planes; pair force of the gel on each plate / lx*ly, bond part excluded)" &
+fix trk_plates all print ${stress_freq} "$(step) $(c_plate_t_com[3]) $(c_plate_b_com[3]) $(v_P_top_pair) $(v_P_bot_pair) $(v_S_top) $(v_S_bot)" &
+    title "# step z_top z_bot P_top_pair P_bot_pair S_top S_bot   (plate planes; pair force of the gel on each plate / lx*ly, bond part excluded; S_* = TOTAL x-force / lx*ly = sigma_xz at each plate, pair + bond)" &
     file output_files/piston_data/plate_pressure_${dataname}_${interaction}_${nsteps}.dat screen no
 
 
@@ -653,20 +679,22 @@ print ">>> vshear = ${vshear} sigma/tau  (constant plate speed; halt fires at ea
 #             BULK REGION (exclude plate_excl sigma inside each plate plane)   [ONCE]
 # ==========================================================================
 # Atoms within plate_excl of either PLATE PLANE are harmonic-bonded to the plate
-# (or lie outside it) and carry artefactual constraint stresses; they are excluded
-# from every stress/displacement measurement so only the interior gel is sampled.
-# Stress is normalised by the BULK volume lx*ly*bulk_lz (lx, ly are fixed after
-# Phase 1a).  Group membership is a static snapshot taken here.
+# (or lie outside it) and carry artefactual constraint stresses; the BOX-INTEGRATED
+# tensors and the fine stress series therefore sum over the BULK region only,
+# normalised by lx*ly*bulk_lz (lx, ly are fixed after Phase 1a).  The groups are
+# DYNAMIC (2026-09-25; re-evaluated every 50 steps = series_nevery): a static
+# snapshot let solvent that diffused through the sieve-like plates into the film
+# behind them keep counting, and film solvent that came in go uncounted.  The
+# z-PROFILES bin ALL polymer / ALL solvent over the whole box (see the chunk
+# section) and are trimmed to the interior by the notebooks.
 variable zlo_bulk equal ${z_plate_b}+${plate_excl}
 variable zhi_bulk equal ${z_plate_t}-${plate_excl}
 variable bulk_lz  equal v_zhi_bulk-v_zlo_bulk       # z-extent of the bulk region
 variable bulk_vol equal lx*ly*v_bulk_lz             # bulk volume
 region   reg_bulk block EDGE EDGE EDGE EDGE ${zlo_bulk} ${zhi_bulk} units box
-group    all_bulk  region reg_bulk
-group    poly_bulk intersect polymer all_bulk
-group    solv_bulk intersect solvent all_bulk
-print ">>> Bulk z-range: ${zlo_bulk} to ${zhi_bulk}  (bulk_lz = $(v_bulk_lz), bulk_vol = $(v_bulk_vol))"
-print ">>> poly_bulk: $(count(poly_bulk))  solv_bulk: $(count(solv_bulk))"
+group    poly_bulk dynamic polymer region reg_bulk every 50
+group    solv_bulk dynamic solvent region reg_bulk every 50
+print ">>> Bulk z-range: ${zlo_bulk} to ${zhi_bulk}  (bulk_lz = $(v_bulk_lz), bulk_vol = $(v_bulk_vol)); poly_bulk / solv_bulk are DYNAMIC groups (counts valid once a run has started)"
 
 
 # ==========================================================================
@@ -677,8 +705,11 @@ print ">>> poly_bulk: $(count(poly_bulk))  solv_bulk: $(count(solv_bulk))"
 # For the diagonal components that is the same convention as the triaxial
 # profiles; the off-diagonal xz term used for G has zero mean kinetic part once
 # the plates are frozen.  (stress/atom order: xx yy zz xy xz yz -> [5] = xz.)
-compute stress_polymer poly_bulk stress/atom NULL
-compute stress_solvent solv_bulk stress/atom NULL
+# Per-atom stress of ALL polymer / ALL solvent atoms (2026-09-25; was the static bulk
+# groups): the whole-box z-profiles need every atom, the bulk sums below select
+# the bulk region through the dynamic groups.
+compute stress_polymer polymer stress/atom NULL
+compute stress_solvent solvent stress/atom NULL
 
 # ----- Box-integrated polymer stress (bulk only) -----
 compute sig_p_xx poly_bulk reduce sum c_stress_polymer[1]
@@ -731,8 +762,12 @@ variable s_s_yz atom c_stress_solvent[6]/(lx*ly*${binWidth})
 # ==========================================================================
 #              ANALYSIS: CHUNK DEFINITIONS (z-binning)   [defined ONCE]
 # ==========================================================================
-# z-binning of the BULK atoms (gap direction).  Triclinic box -> chunk/atom
-# needs units reduced; binWidth_reduced is frozen now (lz is fixed after Phase 1a).
+# z-binning of ALL polymer / ALL solvent atoms over the WHOLE BOX (gap direction;
+# 2026-09-25 -- was the static bulk groups), so the profiles show the solvent
+# film behind the plates, the plate-adjacent layers and the gel; the notebooks
+# locate the plates from plate_pressure_* + box_bounds_* and trim the interior.
+# Triclinic box -> chunk/atom needs units reduced; binWidth_reduced is frozen now
+# (lz is fixed after Phase 1a).
 # One chunk/atom per fix ave/chunk user, the compression deck's idiom (LAMMPS
 # locks a chunk/atom compute to the fixes using it; a private compute per user
 # is never ambiguous):
@@ -740,9 +775,9 @@ variable s_s_yz atom c_stress_solvent[6]/(lx*ly*${binWidth})
 #   chunk_z_solvent   -> avg_prof_z_solv
 #   chunk_z_poly_disp -> avg_disp_z_poly  (u_x displacement profile)
 variable binWidth_reduced equal $(v_binWidth/lz)
-compute chunk_z_polymer   poly_bulk chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
-compute chunk_z_solvent   solv_bulk chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
-compute chunk_z_poly_disp poly_bulk chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+compute chunk_z_polymer   polymer chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+compute chunk_z_solvent   solvent chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+compute chunk_z_poly_disp polymer chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
 
 
 # ==========================================================================
@@ -780,15 +815,15 @@ fix ref_tensor_p all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} &
 fix ref_tensor_s all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} &
     v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xy v_stress_s_xz v_stress_s_yz &
     file output_files/stress_data/stress_tensor_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_prof_p poly_bulk ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_polymer &
+fix ref_prof_p polymer ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_polymer &
     v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_xz v_s_p_yz norm none &
     file output_files/stress_data/stress_profile_z_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
-fix ref_prof_s solv_bulk ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_solvent &
+fix ref_prof_s solvent ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_solvent &
     v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_xz v_s_s_yz norm none &
     file output_files/stress_data/stress_profile_z_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
 fix ref_series all ave/time ${series_nevery} ${series_nrepeat} ${series_nfreq} &
-    v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xz v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xz &
-    title2 "# TimeStep sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz   (bulk partial stresses, block-averaged; gamma = 0 reference)" &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xz v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xz v_S_top v_S_bot &
+    title2 "# TimeStep sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz S_top S_bot   (bulk partial stresses + plate sigma_xz, block-averaged; gamma = 0 reference)" &
     file output_files/stress_data/stress_series_ref_${dataname}_${interaction}_${nsteps}.dat
 variable ref_run_steps equal (floor(($(step)+${ref_avg_steps}-1)/${ref_nfreq})+1)*${ref_nfreq}-$(step)
 print ">>> Reference window: running ${ref_run_steps} steps (>= ${ref_avg_steps}, aligned to ref_nfreq=${ref_nfreq})"
@@ -867,8 +902,8 @@ fix out_shear_surf all print ${stress_freq} &
     file output_files/stress_data/shear_strain_surface_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
 # fine block-averaged bulk stresses over drive + hold (global scalars -> no chunk lock)
 fix out_series all ave/time ${series_nevery} ${series_nrepeat} ${series_nfreq} &
-    v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xz v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xz &
-    title2 "# TimeStep sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz   (bulk partial stresses, block-averaged; drive + hold)" &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xz v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xz v_S_top v_S_bot &
+    title2 "# TimeStep sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz S_top S_bot   (bulk partial stresses + plate sigma_xz, block-averaged; drive + hold)" &
     file output_files/stress_data/stress_series_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 fix out_gel_vol_bb all print ${stress_freq} "$(step) $(v_gel_vol_bb)" &
     file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
@@ -952,20 +987,20 @@ fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_s
     file output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 
 # -- z-profile stress tensors (columns xx yy zz xy xz yz) --
-fix avg_prof_z_poly poly_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+fix avg_prof_z_poly polymer ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_polymer &
     v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_xz v_s_p_yz &
     norm none &
     file output_files/stress_data/stress_profile_z_polymer_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 
-fix avg_prof_z_solv solv_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+fix avg_prof_z_solv solvent ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_solvent &
     v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_xz v_s_s_yz &
     norm none &
     file output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 
 # -- Polymer x-displacement profile u_x(z) (mean per z-bin) for D_c --
-fix avg_disp_z_poly poly_bulk ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+fix avg_disp_z_poly polymer ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_poly_disp v_ux_shear &
     file output_files/displacement_data/disp_x_polymer_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 
@@ -1026,6 +1061,7 @@ unfix trk_vol_bb
 unfix trk_vol_rg
 unfix trk_dims_rg
 unfix trk_box
+unfix trk_box_bounds
 
 variable outfile string "final_shear_${dataname}_${interaction}_${nsteps}"
 write_data ${outfile}.data

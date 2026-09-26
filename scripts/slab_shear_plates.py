@@ -30,8 +30,18 @@ the pre-2026-09-22 deck.)
 
 Input:  final_config_slab_support_periodic_..._14000002.data  (the 2026-09-07
         piston-transparent aniso-NPH slab, same input as the two-piston converter)
-Output: isolated_slab_support_periodic_..._14000002_with_plates.data (+ .info.json,
+Output: isolated_slab_support_periodic_..._14000002_with_plates_film7.data (+ .info.json,
         an intermediate _isolated.data, and a slab_data_file_info.md entry)
+
+SOLVENT FILM BEHIND THE PLATES (2026-09-25).  The plates sit 0.5 sigma inside the
+outermost polymer beads, so the isolate step's `clearance` of bath solvent beyond
+the polymer span ends up BEHIND each plate (periodic z): with clearance 0.5 the
+film was ~3.5 sigma per side (the _with_plates file of 2026-09-22).  The default
+clearance is now 4.0 -> ~7 sigma of bath solvent per side (14 sigma across the
+periodic image), so the film is a proper solvent-only reservoir: shear_slab.lmp
+profiles the WHOLE box and the notebooks read p_pore from it (Terzaghi network
+stress), and the plates are permeable to solvent, so the film is the solvent's
+bath.  The input slab carries >= 7 sigma of bath solvent on both faces.
 Note:   image flags and the Velocities section of the input are dropped (the
         parsers read x y z only); bonds across x/y are minimum-image, which the
         deck's `boundary p p p` handles, and shear_slab.lmp creates velocities.
@@ -52,12 +62,13 @@ import isolate_gel as ig            # noqa: E402
 import add_plates_to_gel as apg     # noqa: E402
 
 DATA_DIR = HERE.parent.parent / 'lammps_data_files_local'
-DEFAULT_CLEARANCE = 0.5    # sigma per face (isolate_gel's value): the film keeps the bath solvent at bath density
+DEFAULT_CLEARANCE = 4.0    # sigma of bath solvent kept beyond the polymer span per face -> ~7 sigma film behind each
+                           # plate (2026-09-25; was 0.5 -> ~3.5 sigma film).  The film is bath solvent at bath density.
 DEFAULT_SOLVENT_DELETE = 0.87  # sigma; CALIBRATED 2026-09-22 on the 14000002 slab: bulk gel P in the shear hold =
                                # 1.530 - 2.2e-5 * n_deleted (0 -> 1.530, 772 @0.7 sigma -> 1.513, 1943 @1.0 sigma -> 1.487);
                                # 0.87 sigma deletes ~1350 beads -> 1.500.  Re-calibrate for a different slab or plate lattice.
 DEFAULT_INPUT  = str(DATA_DIR / 'final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002.data')
-DEFAULT_OUTPUT = str(DATA_DIR / 'isolated_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_with_plates.data')
+DEFAULT_OUTPUT = str(DATA_DIR / 'isolated_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_with_plates_film7.data')
 INFO_MD = HERE.parent / 'slab_data_file_info.md'
 
 
@@ -97,7 +108,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--input',  default=DEFAULT_INPUT)
     ap.add_argument('--output', default=DEFAULT_OUTPUT)
-    ap.add_argument('--clearance',  type=float, default=DEFAULT_CLEARANCE, help='box z clearance beyond the polymer span on each free face (sigma); the film is bath solvent at bath density, so this does not set the gel pressure')
+    ap.add_argument('--clearance',  type=float, default=DEFAULT_CLEARANCE, help='bath solvent kept beyond the polymer span on each free face (sigma) = the solvent film behind each plate (about clearance + 3 sigma); bath density, so this does not set the gel pressure')
     ap.add_argument('--solvent-delete', type=float, default=DEFAULT_SOLVENT_DELETE,
                     help='remove solvent beads closer than this (sigma) to a plate atom. CALIBRATED against the bulk gel pressure in the '
                          'shear hold: with nothing deleted the plate atoms\' excluded volume in a box the gel cannot drain from read 1.53 '
@@ -114,7 +125,7 @@ def main():
     inp, out = Path(args.input), Path(args.output)
     if not inp.exists():
         raise SystemExit(f"input not found: {inp}")
-    iso = out.with_name(out.name.replace('_with_plates', '_isolated'))
+    iso = out.with_name(out.name.replace('_with_plates', '_isolated').replace('_film7', ''))
 
     atoms, bonds, box, masses = isolate(str(inp), args.clearance)
     ig.write_lammps_data(str(iso), atoms, bonds, box, masses)

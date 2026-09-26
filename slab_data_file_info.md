@@ -558,3 +558,11 @@ Shear input from the PERIODIC slab  [2026-09-22 22:14, slab_shear_plates.py]:
   Gel Z-extent 1.81..128.22 (gel_gap 126.41); plates at Z = 4.79, 125.24 (spacing 1.5, offset 0.5, box_buffer 2.0, solvent_delete 0.87)
   Crosslinks: 15066   Chain beads: 89424   Solvent: 65809   Plates: 1922   plate-polymer bonds: 1922 (cutoff 2.5)
   Total atoms: 172221   Total bonds: 121154   Output: isolated_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_with_plates.data
+
+Shear input from the PERIODIC slab  [2026-09-25 20:05, slab_shear_plates.py]:
+  Input: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002.data
+  Steps: isolate (support/piston/bath solvent removed; x,y periodic kept; z = polymer span + 4.0) -> plates NORMAL TO z on the slab faces (driven +/-x in shear_slab.lmp)
+  Box: X (shear, periodic) 47.970 x Y 47.874 x Z (gap) 134.411
+  Gel Z-extent 1.81..128.22 (gel_gap 126.41); plates at Z = 4.79, 125.24 (spacing 1.5, offset 0.5, box_buffer 2.0, solvent_delete 0.87)
+  Crosslinks: 15066   Chain beads: 89424   Solvent: 73358   Plates: 1922   plate-polymer bonds: 1922 (cutoff 2.5)
+  Total atoms: 179770   Total bonds: 121154   Output: isolated_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_with_plates_film7.data

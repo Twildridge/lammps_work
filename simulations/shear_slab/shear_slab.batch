@@ -53,11 +53,15 @@ module load python/3.8.12
 #   isolates the 14000002 piston-transparent aniso-NPH slab (same input as the two-piston
 #   converter, so G here and G from the two-piston compression sweep come from the same
 #   gel state) and plates its two free faces: plates NORMAL TO z, driven +/-x (z = gap,
-#   x = shear, the compression decks' axes; no rotation).  Copy the *_with_plates.data
+#   x = shear, the compression decks' axes; no rotation).  Copy the *_with_plates*.data
 #   it writes into ~/Documents/lammps_data/input_data/ on Expanse.  The gap is the slab
 #   thickness (plate separation ~120 sigma, periodic 48 x 48 laterally) instead of the
 #   isolated cube's 48 sigma; strain targets are unchanged (plate travel scales).
-#   Previous input (isolated cube): isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_with_plates
+#   _film7 (2026-09-25): converter clearance 4.0 -> ~7 sigma of bath solvent BEHIND each
+#   plate (was ~3.5), a proper solvent-only reservoir for the pore pressure; the deck now
+#   profiles the whole box, uses dynamic bulk groups and logs the plate shear force.
+#   Previous inputs: ..._14000002_with_plates (3.5 sigma film, 2026-09-22);
+#   isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_with_plates (isolated cube)
 # NSTEPS: Phase 3 production HOLD per strain level (also the output-file tag; the
 #   hold is padded up to the next stress-averaging epoch).  The other phase
 #   lengths are index-style knobs in shear_slab.lmp (override with -var):
@@ -69,7 +73,7 @@ module load python/3.8.12
 #   Phase 3  (production):  NSTEPS (set here), once per strain in STRAINS_LIST
 # -----------------------------------------------------------------------
 FOLDER="shear_slab"
-DATANAME="isolated_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_with_plates"
+DATANAME="isolated_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_with_plates_film7"
 INTERACTION="1.0_1.0"   # epsSS_epsSP (solvent-solvent _ polymer-solvent)
 NSTEPS=9000000
 TYPE=""                 # Options: stress, volume, stressvol, or leave empty

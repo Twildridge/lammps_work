@@ -10,17 +10,29 @@ G is estimated the way the compression notebooks estimate M and G:
   * the eps = 0 reference of the compression deck is the gamma = 0 REFERENCE
     window of shear_slab.lmp (Phase 1.5, _ref files): every G is an INCREMENT
     from that reading (G_SUBTRACT_REF), i.e. a slope, like M and G there;
-  * M_network <-> G_network:  plateau-averaged polymer sigma_xz(z) profile over
-    the last plateau_frac of the hold, mean over the wall-trimmed interior bins,
+  * Terzaghi (2026-09-25, as the compression notebooks): the NETWORK stress is
+    sigma' = sigma^t - p_pore, the total stress minus the solvent-only value
+    behind the plates (one scalar per component; P_PORE_MODE), NOT the polymer
+    partial stress sigma_p (whose per-atom virial split hands the solvent half
+    of every polymer-solvent contact, so sigma_s,xz != 0 under shear);
+  * M_network <-> G_network:  plateau-averaged sigma'_xz(z) profile over the
+    last plateau_frac of the hold, mean over the wall-trimmed interior bins,
     CI = t-interval over the bins (+) the reference's own interval in quadrature;
-  * M_piston  <-> G_series:   the fine block-averaged bulk sigma_p,xz(t) series
+  * M_piston  <-> G_series:   the fine block-averaged bulk sigma^t_xz(t) series
     (stress_series_*, the analogue of piston_force_avg) read over the longest
     drift-free trailing window with the same circular block bootstrap;
+  * sign convention = the triaxial decks': normal components compression-
+    POSITIVE (-stress/atom), shear components in the mechanical sign
+    (sigma_xz = +G gamma for gamma > 0); P_th = +(1/3) tr sigma^t;
+  * static-group swap correction (SWAP_CORR): the deck bins only the static
+    solv_bulk group while solvent exchanges through the permeable plates with
+    the film behind them, so the profiles are rescaled by the reference count
+    (see _swap_correct);
   * the strain is the PRESCRIBED plate-based gamma the deck records (plate
     x-displacement / plate separation), averaged over the plateau window;
   * D_c from the transverse (even-sine) relaxation fit of u_x(z,t) during the
     hold, kappa = D_c/G  (= k/eta, the same kappa as D_c/M in compression);
-  * P_th = -(1/3) tr(sigma^t) in the bulk is the P* = 1.5 check.
+  * P_th = (1/3) tr(sigma^t) (compression positive) is the P* = 1.5 check.
 
 Shared machinery (style, readers, block bootstrap, plateau window, formatting,
 smart_legend, annotate_box, the Expanse puller) is imported from triaxial.py;
@@ -74,7 +86,13 @@ smart_legend, annotate_box, robust_ylim, rolling_mean, subsample = (tri.smart_le
                                                                      tri.robust_ylim, tri.rolling_mean, tri.subsample)
 COMP = ('xx', 'yy', 'zz', 'xy', 'xz', 'yz')          # column order of every tensor/profile file
 CI = {c: i for i, c in enumerate(COMP)}
+DIAG = ('xx', 'yy', 'zz')
 SERIES_COLS = ('sp_xx', 'sp_yy', 'sp_zz', 'sp_xz', 'ss_xx', 'ss_yy', 'ss_zz', 'ss_xz')
+# Sign convention (2026-09-25) = the triaxial decks': the deck writes raw stress/atom
+# (tension positive); the readers flip the NORMAL components so compression is
+# positive (sigma_zz = -c_stress[3]/V there) and leave the shear components in the
+# mechanical sign, so sigma_xz = +G gamma for gamma > 0.
+SIGN = {c: (-1.0 if c in DIAG else 1.0) for c in COMP}
 
 
 # ===========================================================================
@@ -105,6 +123,20 @@ class Config:
     plateau_frac_auto: float = 0.45       # LONGEST candidate trailing window for plateau_window (series -> G_series)
     roll_win: int = 11                    # rolling-mean window (samples) for the series plots
     P_BARO: float = 1.5                   # bath pressure of the compression runs = the P_th check line
+    # ---- network stress sigma' = sigma^t - p_pore (Terzaghi, the compression notebooks' split; 2026-09-25) ----
+    P_PORE_MODE: str = 'auto'             # 'film' -> p_pore per component = mean TOTAL stress over the solvent-only bins
+                                          #           behind the plates, per snapshot (needs a deck that profiles ALL solvent;
+                                          #           shear_slab.lmp bins only the static bulk groups, so the film is unseen);
+                                          # 'bath' -> p_pore = P_BARO on the diagonal, 0 off-diagonal (drained equilibrium,
+                                          #           the triaxial P_CAL_MODE='const' idea);
+                                          # 'auto' -> 'film' when the first reference snapshot populates the film bins, else 'bath'
+    film_margin: float = 3.0              # a film bin must be >= this far (sigma) from the nearest plate plane ('film' mode;
+                                          # the outermost polymer beads reach ~3 sigma beyond the plates)
+    film_poly_max: int = 20               # ... and hold at most this many polymer atoms (solvent-only)
+    SWAP_CORR: object = 'auto'            # rescale the solvent profile bins by N_s(z, first ref snapshot)/N_s(z,t) to undo the
+                                          # static solv_bulk group's exchange with the film behind the permeable plates (decks
+                                          # before 2026-09-25); 'auto' applies it only to such files (film bins empty in the
+                                          # first reference snapshot), True/False force it
     # ---- G as an increment from the gamma = 0 reference --------------------
     G_SUBTRACT_REF: bool = True           # G = (stress - its own gamma = 0 reading) / gamma for BOTH estimators
                                           # (needs the _ref files of Phase 1.5; older runs fall back to absolute, flagged)
@@ -182,22 +214,36 @@ class Config:
 # ===========================================================================
 #  2. FILE READERS
 # ===========================================================================
+def _to_convention(a6):
+    """raw stress/atom columns (xx yy zz xy xz yz) -> SIGN convention (normal components
+    compression-positive, shear components untouched)."""
+    a = np.array(a6, float)
+    for c in DIAG:
+        a[..., CI[c]] *= -1.0
+    return a
+
+
 def read_tensor(path):
-    """fix ave/time scalar file (step + 6 components) -> (steps, array[n, 6]); None if absent."""
+    """fix ave/time scalar file (step + 6 components) -> (steps, array[n, 6]) in the SIGN
+    convention; None if absent."""
     a = tri.load2c(path, 7)
     if a is None:
         return None, None
-    return a[:, 0].astype(int), a[:, 1:7]
+    return a[:, 0].astype(int), _to_convention(a[:, 1:7])
 
 
 def read_series(path):
-    """stress_series file (step + sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz) -> dict of arrays."""
+    """stress_series file (step + sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz) -> dict of
+    arrays in the SIGN convention."""
     a = tri.load2c(path, 9)
     if a is None:
         return None
     d = {'step': a[:, 0].astype(int)}
     for j, c in enumerate(SERIES_COLS):
-        d[c] = a[:, 1 + j]
+        d[c] = a[:, 1 + j] * SIGN[c[-2:]]
+    if a.shape[1] >= 11:                       # 2026-09-25 deck: block-averaged plate sigma_xz (S_top S_bot)
+        d['S_top'], d['S_bot'] = a[:, 9], a[:, 10]
+        d['S_plate'] = 0.5 * (a[:, 9] + a[:, 10])
     return d
 
 
@@ -214,7 +260,7 @@ def read_profiles(path):
     ts = np.array([s[0] for s in snaps])
     zf = snaps[-1][1][:nb, 1]
     N = np.array([s[1][:nb, 2] for s in snaps])
-    stack = {c: np.array([s[1][:nb, 3 + j] for s in snaps]) for j, c in enumerate(COMP)}
+    stack = {c: SIGN[c] * np.array([s[1][:nb, 3 + j] for s in snaps]) for j, c in enumerate(COMP)}
     return dict(ts=ts, zf=zf, N=N, stack=stack)
 
 
@@ -239,7 +285,11 @@ def _first_col(path, ncol, col):
 #  3. REFERENCE STATE  (gamma = 0; shared by every level)
 # ===========================================================================
 def _geometry(cfg, R, lvl_for_fallback=None):
-    """Box, plate planes (reduced z), bulk and interior masks on the profile grid."""
+    """Box, plate planes (reduced z), bulk and interior masks on the profile grid.
+    Since the 2026-09-25 deck the profiles cover the WHOLE box and box_bounds_* gives
+    zlo, so the plate planes are EXACT ((z_plate - zlo)/lz) and the bulk = polymer bins
+    inside the planes by plate_excl; older files bin only the bulk region, and the
+    planes are placed plate_excl outside the populated bins."""
     B = tri.load2c(cfg.path('box_dimensions'), 4)
     if B is None and lvl_for_fallback is not None:
         B = tri.load2c(cfg.path('box_dimensions', lvl_for_fallback), 4)
@@ -257,20 +307,29 @@ def _geometry(cfg, R, lvl_for_fallback=None):
     R['z_top_abs'], R['z_bot_abs'] = (float(PP[0, 1]), float(PP[0, 2])) if PP is not None else (np.nan, np.nan)
     if np.isfinite(R['z_top_abs']) and not np.isfinite(R['plate_sep']):
         R['plate_sep'] = R['z_top_abs'] - R['z_bot_abs']
-    # masks on the profile grid: bulk = populated bins; the plate planes sit plate_excl outside
-    # the bulk edges, so interior = bins >= (wall_margin - plate_excl) inside the bulk edges
+    BB = tri.load2c(cfg.path('box_bounds'), 7)
+    R['zlo_abs'] = float(BB[0, 5]) if BB is not None else np.nan
     zf, N = R['zf'], R['N_ref']
-    bulk = N.min(axis=0) > cfg.Ncount_min
+    dz = cfg.binWidth / R['LZ'] if np.isfinite(R['LZ']) else (zf[1] - zf[0])
+    populated = N.min(axis=0) > cfg.Ncount_min
+    exact = np.isfinite(R['zlo_abs']) and np.isfinite(R['z_top_abs']) and np.isfinite(R['LZ'])
+    R['planes_exact'] = bool(exact)
+    if exact:
+        R['zf_bot'] = (R['z_bot_abs'] - R['zlo_abs']) / R['LZ']
+        R['zf_top'] = (R['z_top_abs'] - R['zlo_abs']) / R['LZ']
+        excl, marg = cfg.plate_excl / R['LZ'], cfg.wall_margin / R['LZ']
+        R['in_bulk'] = populated & (zf > R['zf_bot'] + excl) & (zf < R['zf_top'] - excl)
+        R['interior'] = populated & (zf > R['zf_bot'] + marg) & (zf < R['zf_top'] - marg)
+        return R
+    bulk = populated
     R['in_bulk'] = bulk
     if bulk.any():
         i_lo, i_hi = int(np.argmax(bulk)), int(len(bulk) - 1 - np.argmax(bulk[::-1]))
-        dz = cfg.binWidth / R['LZ'] if np.isfinite(R['LZ']) else (zf[1] - zf[0])
         R['zf_bot'] = float(zf[i_lo] - 0.5 * dz - cfg.plate_excl / R['LZ']) if np.isfinite(R['LZ']) else np.nan
         R['zf_top'] = float(zf[i_hi] + 0.5 * dz + cfg.plate_excl / R['LZ']) if np.isfinite(R['LZ']) else np.nan
         extra = max(0, int(np.ceil((cfg.wall_margin - cfg.plate_excl) / cfg.binWidth - 1e-9)))
         interior = bulk.copy()
         interior[:i_lo + extra] = False
-        interior[len(bulk) - extra:] = False if extra else interior[len(bulk) - extra:]
         interior[i_hi + 1 - extra:] = False
         R['interior'] = interior
     else:
@@ -279,10 +338,111 @@ def _geometry(cfg, R, lvl_for_fallback=None):
     return R
 
 
+def _film_mask(cfg, R, sp=None):
+    """Solvent-only bins BEHIND the plates: solvent populated (first reference
+    snapshot), at most film_poly_max polymer atoms in any reference snapshot and
+    >= film_margin sigma from the nearest plate plane (periodic in z) -- the shear
+    analogue of the triaxial reservoir baseline window."""
+    zf, Np = R['zf'], R['N_ref']
+    free = Np.max(axis=0) <= cfg.film_poly_max
+    if sp is not None:
+        free &= sp['N'][0] > cfg.Ncount_min
+    if not all(np.isfinite(R.get(k, np.nan)) for k in ('zf_bot', 'zf_top', 'LZ')):
+        return np.zeros_like(free)
+    d = np.full(len(zf), np.inf)
+    for p in (R['zf_bot'], R['zf_top']):
+        for shift in (-1.0, 0.0, 1.0):
+            d = np.minimum(d, np.abs(zf - (p + shift)))
+    return free & (d * R['LZ'] >= cfg.film_margin)
+
+
+def _outside_mask(R):
+    """Bins whose centre lies beyond the plate planes (film side)."""
+    zf = R['zf']
+    if not (np.isfinite(R.get('zf_bot', np.nan)) and np.isfinite(R.get('zf_top', np.nan))):
+        return np.zeros(len(zf), bool)
+    return (zf < R['zf_bot']) | (zf > R['zf_top'])
+
+
+def _swap_fraction(R, prof):
+    """Per snapshot: fraction of the (static) profiled group found behind the plates."""
+    out = _outside_mask(R)
+    tot = prof['N'].sum(axis=1)
+    return np.where(tot > 0, prof['N'][:, out].sum(axis=1) / np.maximum(tot, 1e-30), np.nan)
+
+
+def _swap_correct(cfg, R, sp):
+    """Static-group correction of a SOLVENT profile (2026-09-25).  shear_slab.lmp bins
+    the static group solv_bulk, but the plates are permeable to solvent and a ~7 sigma
+    solvent film sits behind them (periodic z), so group atoms diffuse out and film atoms
+    -- invisible to the profile -- diffuse in.  The net solvent content of the gap is
+    conserved (trajectory check on periodic_rho04_14M_9M_shear_1: 5665 -> 5870 solvent
+    beads behind the plates out of 65809 over the whole run), so the profile simply
+    under-counts the interior solvent stress by the swapped fraction (~7 % after the
+    drive: P_th read 1.40 for a 1.50 gel).  The correction rescales every solvent bin
+    by N_s(z, first reference snapshot) / N_s(z, t) on the bins the reference populates
+    (>= Ncount_min) -- identical particles carry the same per-atom stress -- and leaves
+    every other bin alone.  The raw stack is kept as sp['stack_raw']."""
+    sp['stack_raw'] = {c: v.copy() for c, v in sp['stack'].items()}
+    N0 = R.get('N_s0')
+    f = np.ones_like(sp['N'], dtype=float)
+    if R.get('swap_corr', False) and N0 is not None and N0.shape == sp['N'].shape[1:]:
+        ok = N0 > cfg.Ncount_min
+        with np.errstate(divide='ignore', invalid='ignore'):
+            fo = N0[ok][None, :] / sp['N'][:, ok]
+        f[:, ok] = np.where(np.isfinite(fo) & (fo > 0), fo, 1.0)
+    sp['corr'] = f
+    sp['stack'] = {c: sp['stack_raw'][c] * f for c in COMP}
+    return sp
+
+
+def _resolve_pore_mode(cfg, R, sp):
+    mode = cfg.P_PORE_MODE
+    film = R['film']
+    if mode == 'auto':
+        mode = 'film' if (sp is not None and film.any() and float(sp['N'][0][film].min()) > cfg.Ncount_min) else 'bath'
+    if mode not in ('film', 'bath'):
+        raise ValueError(f"P_PORE_MODE must be 'film', 'bath' or 'auto' (got {mode!r})")
+    if mode == 'film' and not film.any():
+        print(f"  NOTE: P_PORE_MODE='film' but no solvent-only bin lies >= {cfg.film_margin:g} sigma behind the plates -> 'bath'")
+        mode = 'bath'
+    return mode
+
+
+def pore_baseline(cfg, R, tot, n):
+    """p_pore per component and snapshot -- ONE scalar per component per snapshot, as
+    triaxial.terzaghi_split: 'film' = mean of the total stress over the film bins behind
+    the plates; 'bath' = P_BARO on the diagonal, 0 off-diagonal."""
+    b = {}
+    for c in COMP:
+        if R['pore_mode'] == 'film':
+            b[c] = np.nanmean(tot[c][:, R['film']], axis=1)
+        else:
+            b[c] = np.full(n, cfg.P_BARO if c in DIAG else 0.0)
+    return b
+
+
+def read_plate_S(cfg):
+    """Whole-run plate file -> (step, S) with S = (S_top + S_bot)/2 = sigma_xz transmitted to
+    the plates (TOTAL x-force / lx*ly, pair + bond; deck columns 6-7 since 2026-09-25), or
+    None for older 5-column files."""
+    PP = tri.load2c(cfg.path('plate_pressure'), 7)
+    if PP is None:
+        return None
+    return dict(step=PP[:, 0], S=0.5 * (PP[:, 5] + PP[:, 6]), S_top=PP[:, 5], S_bot=PP[:, 6])
+
+
+def _interior_series(stack, im):
+    """Interior mean per snapshot of a (n_snap, n_bins) stack."""
+    return np.array([np.nanmean(stack[i][im]) for i in range(stack.shape[0])])
+
+
 def load_reference(cfg, verbose=True):
     """The gamma = 0 reference state: geometry + the _ref stress tensors, profiles and
     fine series of Phase 1.5.  Runs older than 2026-09-23 have no _ref files: the
-    geometry is then taken from the first level and every G is ABSOLUTE (flagged)."""
+    geometry is then taken from the first level and every G is ABSOLUTE (flagged).
+    Builds the film mask, the p_pore mode, the swap-corrected solvent profile, the
+    Terzaghi network profiles sigma' = sigma^t - p_pore and their interior means."""
     say = print if verbose else (lambda *a, **k: None)
     R = dict(have_ref=False)
     first = cfg.STRAINS[0]
@@ -296,12 +456,31 @@ def load_reference(cfg, verbose=True):
                                     ' -- run the sync cell')
     R['zf'], R['N_ref'] = prof['zf'], prof['N']
     _geometry(cfg, R, first)
-    say(f"reference geometry from the {src} profile: {len(R['zf'])} bins, bulk {int(R['in_bulk'].sum())} bins, "
-        f"interior {int(R['interior'].sum())} bins;  Lz = {R['LZ']:.2f}, plate_sep = {R['plate_sep']:.2f} sigma, "
+    sp = read_profiles(cfg.path('stress_profile_z_solvent_ref')) if src == 'reference' else None
+    R['film'] = _film_mask(cfg, R, sp)
+    say(f"reference geometry from the {src} profile ({'exact plate planes from box_bounds + plate_pressure' if R['planes_exact'] else 'plate planes estimated from the populated bins + plate_excl'}): "
+        f"{len(R['zf'])} bins, bulk {int(R['in_bulk'].sum())} bins, "
+        f"interior {int(R['interior'].sum())} bins, film (solvent-only, >= {cfg.film_margin:g} sigma behind the plates) "
+        f"{int(R['film'].sum())} bins;  Lz = {R['LZ']:.2f}, plate_sep = {R['plate_sep']:.2f} sigma, "
         f"plates at z/Lz = {R['zf_bot']:.3f} / {R['zf_top']:.3f}")
     # ---- reference stresses (only when the _ref files exist) ----------------
     tp_ts, tp = read_tensor(cfg.path('stress_tensor_polymer_ref'))
     ts_ts, tsv = read_tensor(cfg.path('stress_tensor_solvent_ref'))
+    R['N_s0'] = sp['N'][0].copy() if sp is not None else None
+    # static-group signature (decks before 2026-09-25): the film behind the plates is empty in the first reference snapshot
+    out = _outside_mask(R)
+    R['static_groups'] = bool(sp is not None and out.any() and sp['N'][0][out].sum() < 0.02 * sp['N'][0].sum())
+    # bins drawn in every profile figure: whole-box files show everything populated (film, plate layers, gel);
+    # static-group files only their bulk bins (their film bins hold the partial count of swapped-out atoms)
+    Ntot = R['N_ref'].max(axis=0) + (sp['N'].max(axis=0) if sp is not None else 0.0)
+    R['shown'] = R['in_bulk'].copy() if R['static_groups'] else (Ntot > cfg.Ncount_min)
+    R['swap_corr'] = bool(cfg.SWAP_CORR) if cfg.SWAP_CORR != 'auto' else R['static_groups']
+    say(f"  profile files: {'STATIC bulk groups (pre-2026-09-25 deck) -> solvent swap correction ' + ('ON' if R['swap_corr'] else 'off') if R['static_groups'] else 'whole-box, all atoms (2026-09-25 deck) -> no swap correction' + (' (SWAP_CORR forced on)' if R['swap_corr'] else '')}")      # the un-swapped solvent count per bin
+    R['pore_mode'] = _resolve_pore_mode(cfg, R, sp)
+    say("network stress sigma' = sigma^t - p_pore:  p_pore mode '" + R['pore_mode'] + "' "
+        + ("(P_bath on the diagonal, 0 off-diagonal -- the profile files bin only the static bulk groups, so the "
+           "solvent film behind the plates is not measured)" if R['pore_mode'] == 'bath'
+           else f"(mean total stress over the {int(R['film'].sum())} film bins behind the plates, per snapshot)"))
     if tp is None or src != 'reference':
         say('  NOTE: no gamma = 0 reference files (pre-2026-09-23 run, or not synced) -> G will be ABSOLUTE')
         R['ref'] = None
@@ -309,39 +488,74 @@ def load_reference(cfg, verbose=True):
     R['have_ref'] = True
     Rf = dict(ts=tp_ts, tensor_p=tp, tensor_s=tsv)
     pp = prof
-    sp = read_profiles(cfg.path('stress_profile_z_solvent_ref'))
+    if sp is not None:
+        _swap_correct(cfg, R, sp)
+        Rf['swap'] = _swap_fraction(R, sp)
     Rf['prof_p'], Rf['prof_s'] = pp, sp
     im = R['interior']
-    # polymer sigma_xz: interior mean per snapshot -> mean + t-interval over the snapshots
-    per_snap = np.array([np.nanmean(pp['stack']['xz'][i][im]) for i in range(len(pp['ts']))])
-    m, lo, hi = mean_ci(per_snap, cfg.ci_level)
+    n = len(pp['ts'])
+    # polymer partial sigma_p,xz interior mean (the pre-2026-09-25 estimator, kept as a check)
+    m, lo, hi = mean_ci(_interior_series(pp['stack']['xz'], im), cfg.ci_level)
     Rf['sp_xz_int'], Rf['sp_xz_int_half'] = float(m), float(0.5 * (hi - lo))
-    if sp is not None:
-        tot = pp['stack']['xz'] + sp['stack']['xz']
-        per_t = np.array([np.nanmean(tot[i][im]) for i in range(len(pp['ts']))])
-        m, lo, hi = mean_ci(per_t, cfg.ci_level)
-        Rf['st_xz_int'], Rf['st_xz_int_half'] = float(m), float(0.5 * (hi - lo))
-    # profile means with bands (mean over the reference snapshots, per bin)
     Rf['prof_mean'] = {c: mean_ci(pp['stack'][c], cfg.ci_level) for c in COMP}
     if sp is not None:
-        Rf['prof_tot_mean'] = {c: mean_ci(pp['stack'][c] + sp['stack'][c], cfg.ci_level) for c in COMP}
-    # bulk tensor means (P_th, N1, N2 of the reference)
+        tot = {c: pp['stack'][c] + sp['stack'][c] for c in COMP}
+        Rf['pore'] = pore_baseline(cfg, R, tot, n)
+        net = {c: tot[c] - Rf['pore'][c][:, None] for c in COMP}
+        Rf['prof_t'], Rf['prof_net'] = tot, net
+        Rf['prof_tot_mean'] = {c: mean_ci(tot[c], cfg.ci_level) for c in COMP}
+        Rf['prof_net_mean'] = {c: mean_ci(net[c], cfg.ci_level) for c in COMP}
+        m, lo, hi = mean_ci(_interior_series(net['xz'], im), cfg.ci_level)
+        Rf['net_xz_int'], Rf['net_xz_int_half'] = float(m), float(0.5 * (hi - lo))
+        Rf['Pth_prof'] = (tot['xx'] + tot['yy'] + tot['zz']) / 3.0
+        raw = {c: pp['stack'][c] + sp['stack_raw'][c] for c in DIAG}
+        Rf['Pth_prof_raw'] = (raw['xx'] + raw['yy'] + raw['zz']) / 3.0
+        Rf['Pth_prof_int'] = mean_ci(_interior_series(Rf['Pth_prof'], im), cfg.ci_level)
+        Rf['Pth_prof_raw_int'] = mean_ci(_interior_series(Rf['Pth_prof_raw'], im), cfg.ci_level)
+    # bulk tensor means (P_th, N1, N2 of the reference; static bulk groups)
     T = tp + (tsv if tsv is not None else 0.0)
-    Rf['Pth'] = mean_ci(-(T[:, CI['xx']] + T[:, CI['yy']] + T[:, CI['zz']]) / 3.0, cfg.ci_level)
+    Rf['Pth'] = mean_ci((T[:, CI['xx']] + T[:, CI['yy']] + T[:, CI['zz']]) / 3.0, cfg.ci_level)
     Rf['N1_p'] = mean_ci(tp[:, CI['xx']] - tp[:, CI['yy']], cfg.ci_level)
     Rf['N2_p'] = mean_ci(tp[:, CI['yy']] - tp[:, CI['zz']], cfg.ci_level)
-    # fine series: block bootstrap of the bulk polymer sigma_xz (the analogue of P_ref)
+    # fine series: block bootstrap of the bulk TOTAL sigma^t_xz (minus the xz baseline) -- the analogue of P_ref;
+    # the polymer partial series is kept for the check
     S = read_series(cfg.path('stress_series_ref'))
     Rf['series'] = S
-    if S is not None and len(S['step']) >= 2:
-        m, lo, hi, blk, tau = block_bootstrap_ci(S['sp_xz'], cfg.ci_level)
-        Rf['S_ref'], Rf['S_ref_lo'], Rf['S_ref_hi'] = m, lo, hi
+    Rf['b_xz'] = float(np.nanmean(Rf['pore']['xz'])) if 'pore' in Rf else 0.0
+    # plate shear force over the reference window (block bootstrap) -> reference for G_plate
+    if S is not None and 'S_plate' in S and len(S['step']) >= 2:
+        R['plate_src'] = 'series'                    # block-averaged in the deck (2026-09-25 deck)
+        m, lo, hi, blk, tau = block_bootstrap_ci(S['S_plate'], cfg.ci_level)
+        Rf['S_plate_ref'], Rf['S_plate_ref_lo'], Rf['S_plate_ref_hi'] = m, lo, hi
     else:
-        Rf['S_ref'] = Rf['sp_xz_int']; Rf['S_ref_lo'] = Rf['sp_xz_int'] - Rf['sp_xz_int_half']; Rf['S_ref_hi'] = Rf['sp_xz_int'] + Rf['sp_xz_int_half']
+        PS = read_plate_S(cfg)                       # instantaneous samples of the whole-run plate file (fallback)
+        R['plate_S'] = PS
+        if PS is not None:
+            R['plate_src'] = 'plate_pressure'
+            nf = float(tp_ts[1] - tp_ts[0]) if len(tp_ts) > 1 else 0.0
+            w = (PS['step'] > tp_ts[0] - nf) & (PS['step'] <= tp_ts[-1])
+            if w.sum() >= 4:
+                m, lo, hi, blk, tau = block_bootstrap_ci(PS['S'][w], cfg.ci_level)
+                Rf['S_plate_ref'], Rf['S_plate_ref_lo'], Rf['S_plate_ref_hi'] = m, lo, hi
+    if S is not None and len(S['step']) >= 2:
+        m, lo, hi, blk, tau = block_bootstrap_ci(S['sp_xz'] + S['ss_xz'] - Rf['b_xz'], cfg.ci_level)
+        Rf['S_ref'], Rf['S_ref_lo'], Rf['S_ref_hi'] = m, lo, hi
+        m, lo, hi, blk, tau = block_bootstrap_ci(S['sp_xz'], cfg.ci_level)
+        Rf['S_ref_pp'], Rf['S_ref_pp_lo'], Rf['S_ref_pp_hi'] = m, lo, hi
+    else:
+        v, h = Rf.get('net_xz_int', Rf['sp_xz_int']), Rf.get('net_xz_int_half', Rf['sp_xz_int_half'])
+        Rf['S_ref'], Rf['S_ref_lo'], Rf['S_ref_hi'] = v, v - h, v + h
+        Rf['S_ref_pp'], Rf['S_ref_pp_lo'], Rf['S_ref_pp_hi'] = Rf['sp_xz_int'], Rf['sp_xz_int'] - Rf['sp_xz_int_half'], Rf['sp_xz_int'] + Rf['sp_xz_int_half']
     R['ref'] = Rf
-    say(f"  reference (gamma = 0, {len(pp['ts'])} snapshots): <sigma_p,xz>_int = {Rf['sp_xz_int']:+.5f} ± {Rf['sp_xz_int_half']:.5f}"
-        f"   series <sigma_p,xz> = {Rf['S_ref']:+.5f} [{Rf['S_ref_lo']:+.5f}, {Rf['S_ref_hi']:+.5f}]"
-        f"   P_th(bulk) = {Rf['Pth'][0]:.4f} [{Rf['Pth'][1]:.4f}, {Rf['Pth'][2]:.4f}]  (P_bath {cfg.P_BARO})")
+    say(f"  reference (gamma = 0, {n} snapshots): <sigma'_xz>_int = {Rf.get('net_xz_int', np.nan):+.5f} ± {Rf.get('net_xz_int_half', np.nan):.5f}"
+        f"   series <sigma^t_xz> = {Rf['S_ref']:+.5f} [{Rf['S_ref_lo']:+.5f}, {Rf['S_ref_hi']:+.5f}]"
+        f"   (polymer partial <sigma_p,xz>_int = {Rf['sp_xz_int']:+.5f})"
+        + (f"   plate sigma_xz = {Rf['S_plate_ref']:+.5f} [{Rf['S_plate_ref_lo']:+.5f}, {Rf['S_plate_ref_hi']:+.5f}]" if 'S_plate_ref' in Rf else ''))
+    say(f"  reference P_th: {'static-group' if R['static_groups'] else 'bulk'} tensor {Rf['Pth'][0]:.4f} [{Rf['Pth'][1]:.4f}, {Rf['Pth'][2]:.4f}]"
+        + ((f";  profile interior {Rf['Pth_prof_int'][0]:.4f}" + (f" (swap-corrected; raw {Rf['Pth_prof_raw_int'][0]:.4f})" if R['swap_corr'] else '')) if 'Pth_prof_int' in Rf else '')
+        + f"  (P_bath {cfg.P_BARO})"
+        + ((f";  static solv_bulk group behind the plates: {Rf['swap'][0]:.1%} -> {Rf['swap'][-1]:.1%} over the window" if R['static_groups']
+            else f";  profiled solvent behind the plates (film): {Rf['swap'][-1]:.1%}") if 'swap' in Rf else ''))
     return R
 
 
@@ -415,9 +629,11 @@ def fit_Dc(cfg, R, disp, t_hold):
 
 def load_level(cfg, R, lvl, verbose=True):
     """Everything for ONE shear-strain level `lvl` (string, e.g. "0.1"): strain history,
-    bulk stress tensors, z-profiles, the fine sigma_p,xz series + plateau, G (profile and
-    series estimators, increments from gamma = 0), N1/N2, P_th, the D_c fit and kappa.
-    Returns a dict L, or None if the core files are missing."""
+    bulk stress tensors, z-profiles (polymer, swap-corrected solvent, total, NETWORK
+    sigma' = sigma^t - p_pore), the fine sigma^t_xz series + plateau, G (profile and
+    series estimators from sigma'_xz, increments from gamma = 0; polymer-partial check),
+    N1/N2, P_th, the D_c fit and kappa.  Returns a dict L, or None if the core files are
+    missing."""
     say = print if verbose else (lambda *a, **k: None)
     L = dict(lvl=lvl, gamma_target=float(lvl))
     say(f'\n=== level _g{lvl}  (target shear strain {float(lvl):.4f}) ===')
@@ -457,9 +673,12 @@ def load_level(cfg, R, lvl, verbose=True):
     say(f"  strain: held plate-based gamma = {g:.5f} (G denominator; target {L['gamma_target']}), "
         f"surface-COM gamma = {L.get('gamma_surf', np.nan):.5f}, plate_sep = {L['plate_sep']:.2f}")
 
-    # ---- profiles (bulk z-bins) ---------------------------------------------
+    # ---- profiles (bulk z-bins): polymer, solvent (swap-corrected), total, network ----
     pp = read_profiles(cfg.path('stress_profile_z_polymer', lvl))
     sp = read_profiles(cfg.path('stress_profile_z_solvent', lvl))
+    if sp is not None:
+        _swap_correct(cfg, R, sp)
+        L['swap'] = _swap_fraction(R, sp)
     L['prof_p'], L['prof_s'] = pp, sp
     im = R['interior']
     if pp is not None:
@@ -469,81 +688,122 @@ def load_level(cfg, R, lvl, verbose=True):
         L['prof_plat'] = pl_p
         L['prof_p_plat'] = {c: np.nanmean(pp['stack'][c][pl_p], axis=0) for c in COMP}
         if sp is not None:
+            n = len(pp['ts'])
             L['prof_t'] = {c: pp['stack'][c] + sp['stack'][c] for c in COMP}
+            L['pore'] = pore_baseline(cfg, R, L['prof_t'], n)
+            L['prof_net'] = {c: L['prof_t'][c] - L['pore'][c][:, None] for c in COMP}
             L['prof_t_plat'] = {c: np.nanmean(L['prof_t'][c][pl_p], axis=0) for c in COMP}
-            L['Pth_prof'] = -(L['prof_t']['xx'] + L['prof_t']['yy'] + L['prof_t']['zz']) / 3.0
+            L['prof_net_plat'] = {c: np.nanmean(L['prof_net'][c][pl_p], axis=0) for c in COMP}
+            L['pore_plat'] = {c: float(np.nanmean(L['pore'][c][pl_p])) for c in COMP}
+            L['Pth_prof'] = (L['prof_t']['xx'] + L['prof_t']['yy'] + L['prof_t']['zz']) / 3.0
+            raw = {c: pp['stack'][c] + sp['stack_raw'][c] for c in DIAG}
+            L['Pth_prof_raw'] = (raw['xx'] + raw['yy'] + raw['zz']) / 3.0
+            L['Pth_prof_int_ts'] = _interior_series(L['Pth_prof'], im)
+            L['Pth_prof_raw_int_ts'] = _interior_series(L['Pth_prof_raw'], im)
+            L['Pth_prof_int'] = mean_ci(L['Pth_prof_int_ts'][pl_p], cfg.ci_level)
+            L['Pth_prof_raw_int'] = mean_ci(L['Pth_prof_raw_int_ts'][pl_p], cfg.ci_level)
+            L['swap_plat'] = float(np.nanmean(L['swap'][pl_p]))
+            if R.get('static_groups'):
+                say(f"  static solv_bulk group behind the plates: {L['swap'][0]:.1%} (first snapshot) -> {L['swap_plat']:.1%} (plateau)"
+                    + (';  solvent profile rescaled by the reference count (SWAP_CORR)' if R.get('swap_corr') else ''))
+            else:
+                say(f"  profiled solvent behind the plates (film): {L['swap_plat']:.1%} (plateau)")
+            say(f"  p_pore ({R['pore_mode']}, plateau): " + '  '.join(f"{c} {L['pore_plat'][c]:+.4f}" for c in COMP))
 
-    # ---- fine series + plateau window (the analogue of the piston force) ----
+    # ---- fine series + plateau window (the analogue of the piston force): TOTAL sigma^t_xz ----
     S = read_series(cfg.path('stress_series', lvl))
     L['series'] = S
     if S is not None:
+        S['st_xz'] = S['sp_xz'] + S['ss_xz']
         hold = S['step'] >= L['t_hold']
         if hold.sum() >= 4:
-            L['PF'] = plateau_window(S['step'][hold], S['sp_xz'][hold], cfg.plateau_frac_auto, cfg.ci_level)
+            L['PF'] = plateau_window(S['step'][hold], S['st_xz'][hold], cfg.plateau_frac_auto, cfg.ci_level)
             p = L['PF']
-            say(f"  series plateau <sigma_p,xz> = {p['mean']:+.5f} [{p['lo']:+.5f}, {p['hi']:+.5f}]  "
+            say(f"  series plateau <sigma^t_xz> = {p['mean']:+.5f} [{p['lo']:+.5f}, {p['hi']:+.5f}]  "
                 f"(auto window last {p['frac']:.0%} of the hold, n={p['n']}, block={p['block']}, tau~{p['tau']:.1f})"
                 + ('  DRIFT WARNING: no drift-free window -- extend the hold' if p.get('warn') else ''))
     else:
         say('  NOTE: no stress_series file -> G_series skipped')
 
-    # ---- G: network (profile) and series estimators, increments from gamma = 0 ----
+    # ---- G: network (profile) and series estimators from sigma'_xz, increments from gamma = 0;
+    #      polymer-partial estimator kept as the check ----
     Rf = R.get('ref')
     sub = bool(cfg.G_SUBTRACT_REF) and Rf is not None
     L['G_ref'] = 'measured' if sub else ('absent' if cfg.G_SUBTRACT_REF else 'off')
     L['G'] = {}
-    if pp is not None:
-        ref_v = Rf['sp_xz_int'] if sub else 0.0
-        ref_h = Rf['sp_xz_int_half'] if sub else 0.0
-        bins = L['prof_p_plat']['xz'][im]
+
+    def _est(bins, ref_v, ref_h):
         bins = bins[np.isfinite(bins)]
         Ga, Ga_lo, Ga_hi = mean_ci(bins / g, cfg.ci_level)
         m, lo, hi = mean_ci((bins - ref_v) / g, cfg.ci_level)
         half = np.sqrt((0.5 * (hi - lo)) ** 2 + (ref_h / g) ** 2)
-        L['G']['net'] = dict(G=float(m), lo=float(m - half), hi=float(m + half), abs=float(Ga), abs_lo=float(Ga_lo),
-                             abs_hi=float(Ga_hi), ref=ref_v, nbins=len(bins), sigma=float(np.mean(bins)))
-        if sp is not None:
-            tb = L['prof_t_plat']['xz'][im]
-            tb = tb[np.isfinite(tb)]
-            rv = Rf['st_xz_int'] if (sub and 'st_xz_int' in Rf) else 0.0
-            rh = Rf['st_xz_int_half'] if (sub and 'st_xz_int_half' in Rf) else 0.0
-            m, lo, hi = mean_ci((tb - rv) / g, cfg.ci_level)
-            half = np.sqrt((0.5 * (hi - lo)) ** 2 + (rh / g) ** 2)
-            Ta, Ta_lo, Ta_hi = mean_ci(tb / g, cfg.ci_level)
-            L['G']['tot'] = dict(G=float(m), lo=float(m - half), hi=float(m + half), ref=rv, sigma=float(np.mean(tb)),
-                                 abs=float(Ta), abs_lo=float(Ta_lo), abs_hi=float(Ta_hi),
-                                 solvent_share=float(np.mean(L['prof_t_plat']['xz'][im] - L['prof_p_plat']['xz'][im]) / max(abs(np.mean(tb)), 1e-30)))
+        return dict(G=float(m), lo=float(m - half), hi=float(m + half), abs=float(Ga), abs_lo=float(Ga_lo),
+                    abs_hi=float(Ga_hi), ref=ref_v, nbins=len(bins), sigma=float(np.mean(bins)))
+
+    if L.get('prof_net') is not None:
+        rv = Rf['net_xz_int'] if (sub and 'net_xz_int' in Rf) else 0.0
+        rh = Rf['net_xz_int_half'] if (sub and 'net_xz_int_half' in Rf) else 0.0
+        L['G']['net'] = _est(L['prof_net_plat']['xz'][im], rv, rh)
+        L['G']['net']['pore'] = L['pore_plat']['xz']
+    if pp is not None:
+        rv = Rf['sp_xz_int'] if sub else 0.0
+        rh = Rf['sp_xz_int_half'] if sub else 0.0
+        L['G']['pp'] = _est(L['prof_p_plat']['xz'][im], rv, rh)
+        if 'net' in L['G']:
+            sn = L['G']['net']['sigma']
+            L['G']['pp']['solvent_share'] = float((sn - L['G']['pp']['sigma']) / max(abs(sn), 1e-30))
     if 'PF' in L:
         p = L['PF']
+        b_xz = L['pore_plat']['xz'] if 'pore_plat' in L else 0.0
         rv = Rf['S_ref'] if sub else 0.0
         rh = 0.5 * (Rf['S_ref_hi'] - Rf['S_ref_lo']) if sub else 0.0
         half = np.sqrt((0.5 * (p['hi'] - p['lo'])) ** 2 + rh ** 2) / g
-        L['G']['ser'] = dict(G=(p['mean'] - rv) / g, lo=(p['mean'] - rv) / g - half, hi=(p['mean'] - rv) / g + half,
-                             abs=p['mean'] / g, abs_lo=p['lo'] / g, abs_hi=p['hi'] / g, ref=rv, sigma=p['mean'])
+        v = (p['mean'] - b_xz - rv) / g
+        L['G']['ser'] = dict(G=v, lo=v - half, hi=v + half, abs=(p['mean'] - b_xz) / g, abs_lo=(p['lo'] - b_xz) / g,
+                             abs_hi=(p['hi'] - b_xz) / g, ref=rv, sigma=p['mean'] - b_xz, pore=b_xz)
+    PS = None
+    if S is not None and 'S_plate' in S:
+        PS = dict(step=S['step'], S=S['S_plate'])
+        L['plate_series'] = PS
+    elif R.get('plate_S') is not None:
+        PS = R['plate_S']
+    if PS is not None:
+        w = (PS['step'] >= L['t_hold']) & (PS['step'] <= t1)
+        if w.sum() >= 4:
+            L['PF_plate'] = plateau_window(PS['step'][w], PS['S'][w], cfg.plateau_frac_auto, cfg.ci_level)
+            p = L['PF_plate']
+            rv = Rf['S_plate_ref'] if (sub and 'S_plate_ref' in Rf) else 0.0
+            rh = 0.5 * (Rf['S_plate_ref_hi'] - Rf['S_plate_ref_lo']) if (sub and 'S_plate_ref' in Rf) else 0.0
+            half = np.sqrt((0.5 * (p['hi'] - p['lo'])) ** 2 + rh ** 2) / g
+            v = (p['mean'] - rv) / g
+            L['G']['plate'] = dict(G=v, lo=v - half, hi=v + half, abs=p['mean'] / g, abs_lo=p['lo'] / g, abs_hi=p['hi'] / g,
+                                   ref=rv, sigma=p['mean'])
     how = 'increment from gamma = 0' if sub else ('ABSOLUTE (no _ref files)' if cfg.G_SUBTRACT_REF else 'absolute')
-    for key, name in (('net', 'G_network (profile, interior bins)'), ('ser', 'G_series   (plateau window)'),
-                      ('tot', 'G_total    (sigma^t_xz, poroelastic check)')):
+    for key, name in (('net', "G_network (sigma'_xz profile, interior bins)"), ('ser', "G_series  (sigma^t_xz series, plateau window)"),
+                      ('plate', 'G_plate   (plate x-force / area, plateau window)'), ('pp', 'G_polymer (sigma_p,xz partial -- check only)')):
         Gd = L['G'].get(key)
         if Gd:
             say(f"  {name} = {Gd['G']:.4f} [{Gd['lo']:.4f}, {Gd['hi']:.4f}]  ({how}"
                 + (f"; ref {Gd['ref']:+.5f} subtracted; absolute {Gd.get('abs', np.nan):.4f}" if sub else '')
                 + (f"; {Gd['nbins']} bins" if 'nbins' in Gd else '')
-                + (f"; solvent share of sigma_xz {Gd['solvent_share']:+.1%}" if 'solvent_share' in Gd else '') + ')')
+                + (f"; solvent share of sigma'_xz {Gd['solvent_share']:+.1%}" if 'solvent_share' in Gd else '') + ')')
 
-    # ---- normal stress differences and P_th from the bulk tensors ----------
+    # ---- normal stress differences and P_th from the bulk tensors (static bulk groups) ----
     tt = tp + (tsv if tsv is not None else 0.0)
     pl = L['plat']
     L['N1_p'] = mean_ci((tp[:, CI['xx']] - tp[:, CI['yy']])[pl], cfg.ci_level)
     L['N2_p'] = mean_ci((tp[:, CI['yy']] - tp[:, CI['zz']])[pl], cfg.ci_level)
     L['N1_t'] = mean_ci((tt[:, CI['xx']] - tt[:, CI['yy']])[pl], cfg.ci_level)
     L['N2_t'] = mean_ci((tt[:, CI['yy']] - tt[:, CI['zz']])[pl], cfg.ci_level)
-    L['Pth_ts'] = -(tt[:, CI['xx']] + tt[:, CI['yy']] + tt[:, CI['zz']]) / 3.0
+    L['Pth_ts'] = (tt[:, CI['xx']] + tt[:, CI['yy']] + tt[:, CI['zz']]) / 3.0
     L['Pth'] = mean_ci(L['Pth_ts'][pl], cfg.ci_level)
     L['sxz_p_ts'] = tp[:, CI['xz']]
     L['sxz_t_ts'] = tt[:, CI['xz']]
-    say(f"  bulk P_th (plateau) = {L['Pth'][0]:.4f} [{L['Pth'][1]:.4f}, {L['Pth'][2]:.4f}]  (P_bath {cfg.P_BARO});  "
-        f"N1_p/sigma_p,xz = {L['N1_p'][0] / max(abs(np.nanmean(L['sxz_p_ts'][pl])), 1e-30):+.3f}, "
-        f"N2_p/sigma_p,xz = {L['N2_p'][0] / max(abs(np.nanmean(L['sxz_p_ts'][pl])), 1e-30):+.3f}")
+    say(f"  P_th (plateau): {'static-group' if R.get('static_groups') else 'bulk'} tensor {L['Pth'][0]:.4f} [{L['Pth'][1]:.4f}, {L['Pth'][2]:.4f}]"
+        + ((f";  profile interior {L['Pth_prof_int'][0]:.4f}" + (f" (swap-corrected; raw {L['Pth_prof_raw_int'][0]:.4f})" if R.get('swap_corr') else '')) if 'Pth_prof_int' in L else '')
+        + f"  (P_bath {cfg.P_BARO});  "
+        f"N1_t/sigma^t_xz = {L['N1_t'][0] / max(abs(np.nanmean(L['sxz_t_ts'][pl])), 1e-30):+.3f}, "
+        f"N2_t/sigma^t_xz = {L['N2_t'][0] / max(abs(np.nanmean(L['sxz_t_ts'][pl])), 1e-30):+.3f}")
 
     # ---- D_c and kappa --------------------------------------------------------
     L['Dc'] = fit_Dc(cfg, R, read_disp(cfg.path('disp_x_polymer', lvl)), L['t_hold'])
@@ -568,7 +828,7 @@ def load_level(cfg, R, lvl, verbose=True):
 # ===========================================================================
 _REF_DAT = ('stress_tensor_polymer_ref', 'stress_tensor_solvent_ref', 'stress_profile_z_polymer_ref',
             'stress_profile_z_solvent_ref', 'stress_series_ref')
-_RUN_DAT = ('shear_strain', 'plate_pressure', 'box_dimensions', 'gel_dimensions_rg', 'gel_volume_rg', 'gel_volume_bb')
+_RUN_DAT = ('shear_strain', 'plate_pressure', 'box_dimensions', 'box_bounds', 'gel_dimensions_rg', 'gel_volume_rg', 'gel_volume_bb')
 _PROD_DAT = ('stress_tensor_polymer', 'stress_tensor_solvent', 'stress_profile_z_polymer', 'stress_profile_z_solvent',
              'stress_series', 'shear_strain', 'shear_strain_surface', 'disp_x_polymer', 'gel_dimensions_rg',
              'gel_dimensions_bb', 'gel_volume_rg', 'gel_volume_bb', 'box_dimensions', 'polymer_com')
@@ -589,17 +849,21 @@ def sync_from_expanse(cfg, levels=None, force=False):
     """Pull every file the shear notebooks read from Expanse in ONE login (the
     triaxial puller); the _ref files are optional for runs older than 2026-09-23."""
     data, traj, req = sync_files(cfg, levels)
-    optional = {cfg.path(n).name for n in _REF_DAT}
+    optional = {cfg.path(n).name for n in _REF_DAT} | {cfg.path('box_bounds').name}
     tri.sync_pull(cfg, data, traj, req, optional, force, refresh=lambda: sync_files(cfg, levels))
 
 
 # ===========================================================================
 #  6. PLOTTING PRIMITIVES
 # ===========================================================================
-def mark_plates(ax, R):
+def mark_plates(ax, R, label=True):
+    """Plate planes (dash-dot) with a 'plate' tag at the top of the axes."""
     for zf in (R.get('zf_bot'), R.get('zf_top')):
         if zf is not None and np.isfinite(zf):
             ax.axvline(zf, color='k', ls='-.', lw=1.5, alpha=0.85, zorder=4)
+            if label:
+                ax.text(zf, 1.005, 'plate', transform=ax.get_xaxis_transform(), ha='center', va='bottom',
+                        fontsize=9, color='0.25', clip_on=False)
 
 
 def shade_bulk(ax, R):
@@ -621,12 +885,11 @@ R_XLIM = None
 
 
 def _xlim_from(R):
+    """Profile x-range: the WHOLE box (0..1 in z/L) so the film behind the plates, the
+    plate planes and the gel are all visible (before 2026-09-25 the axes zoomed to the
+    plates; the bulk-only files of the old deck simply show empty film bins)."""
     global R_XLIM
-    if np.isfinite(R.get('zf_bot', np.nan)) and np.isfinite(R.get('zf_top', np.nan)):
-        w = R['zf_top'] - R['zf_bot']
-        R_XLIM = (max(0.0, R['zf_bot'] - 0.05 * w), min(1.0, R['zf_top'] + 0.05 * w))
-    else:
-        R_XLIM = (0.0, 1.0)
+    R_XLIM = (0.0, 1.0)
 
 
 def _save(fig, cfg, stem, lvl=None):
@@ -645,7 +908,7 @@ def plot_evolution(ax, cfg, R, ts, stack, ylabel, title, ref=None, band=None, co
     norm = Normalize(vmin=ts.min(), vmax=ts.max())
     cmap = plt.get_cmap(EVO_CMAP)
     zx = R['zf']
-    b = R['in_bulk']
+    b = R.get('shown', R['in_bulk'])
     if ref is not None:
         rm, rlo, rhi = ref
         ax.fill_between(zx[b], np.asarray(rlo)[b], np.asarray(rhi)[b], color=WONG['skyblue'], alpha=0.25, lw=0, zorder=1)
@@ -671,20 +934,22 @@ def plot_evolution(ax, cfg, R, ts, stack, ylabel, title, ref=None, band=None, co
 
 
 def _final_profile(ax, R, zx_mask, m, lo, hi, color, label):
-    b = R['in_bulk']
+    b = R.get('shown', R['in_bulk'])
     ax.fill_between(R['zf'][b], np.asarray(lo)[b], np.asarray(hi)[b], color=color, alpha=0.25, lw=0, zorder=3)
     ax.plot(R['zf'][b], np.asarray(m)[b], '-', color=color, lw=2.8, zorder=4, label=label)
 
 
-def _ref_profile(ax, R, key, comp, tot=False):
+def _ref_profile(ax, R, key, comp):
+    """Reference (gamma = 0) profile of `comp` from Rf[key] (prof_mean = polymer partial,
+    prof_tot_mean = total, prof_net_mean = network sigma'), dashed with its band."""
     Rf = R.get('ref')
     if Rf is None:
         return None
-    src = Rf.get('prof_tot_mean' if tot else 'prof_mean')
+    src = Rf.get(key)
     if src is None:
         return None
     m, lo, hi = src[comp]
-    b = R['in_bulk']
+    b = R.get('shown', R['in_bulk'])
     ax.fill_between(R['zf'][b], lo[b], hi[b], color='0.5', alpha=0.25, lw=0, zorder=1)
     ax.plot(R['zf'][b], m[b], '--', color='k', lw=2.0, alpha=0.9, zorder=2, label=r'reference ($\gamma=0$)')
     return m
@@ -732,7 +997,8 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
 
 
 def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
-    """1 x 4 evolution panels (xz, xx, yy, zz) of kind 't' (total) or 'p' (polymer)."""
+    """1 x 4 evolution panels (xz, xx, yy, zz) of kind 't' (total) or 'p' (polymer).
+    Normal components are compression-positive and drawn / P_bath (the triaxial panels)."""
     if L.get('prof_p') is None or (kind == 't' and L.get('prof_t') is None):
         print(f'{stem} skipped (profile files missing)')
         return None
@@ -750,16 +1016,19 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
                 ref = src[comp]
         lab = (r'$\sigma^t_{%s}$' % comp) if kind == 't' else (r'$\sigma_{p,%s}$' % comp)
         title = f'({"abcd"[k]}) ' + ('total' if kind == 't' else 'polymer (network)') + ' ' + lab
-        if kind == 't' and comp in ('xx', 'yy', 'zz'):
+        if kind == 't' and comp in DIAG:
             Pb = cfg.P_BARO
-            ev = -ev / Pb
-            ref = None if ref is None else tuple(-np.asarray(r) / Pb for r in ref)
+            ev = ev / Pb
+            ref = None if ref is None else tuple(np.asarray(r) / Pb for r in ref)
             ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
-            lab = r'$-$' + lab + r'$/P_{\rm bath}$'
+            lab = lab + r'$/P_{\rm bath}$'
         plot_evolution(ax, cfg, R, ts, ev, lab + '$(z,t)$', title, ref=ref, legend=False)
         fin = ev[-1][R['interior']]
         robust_ylim(ax, list(ev) + ([ref[0]] if ref is not None else []), zmask=R['in_bulk'], pad=0.3,
                     include_zero=(comp == 'xz'))
+        if comp == 'xz':                         # headroom so the legend can sit inside, above the curves
+            lo, hi = ax.get_ylim()
+            ax.set_ylim(lo, hi + 0.45 * (hi - lo))
         h, lb = ax.get_legend_handles_labels()
         note = 'plateau mean, interior = ' + fmt_mu(fin)
         h.append(Patch(alpha=0, label=note)); lb.append(note)
@@ -770,11 +1039,14 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
 def fig_total_stress(cfg, R, L):
     return _stress_evo_panels(cfg, R, L, 't', 'total_stress_evolution',
                               f'Total stress: shear $\\sigma^t_{{xz}}$ and normal components / $P_{{\\rm bath}}={sig(cfg.P_BARO)}$, '
-                              f'reference -> sheared (hold from step {fmt_step(L["t_hold"])}; plateau from {fmt_step(L["halt_ts"])})  |  {cfg.sim_name}')
+                              f'reference $\\rightarrow$ sheared (hold from step {fmt_step(L["t_hold"])}; plateau from {fmt_step(L["halt_ts"])})  |  {cfg.sim_name}')
 
 
 def fig_partial_stress(cfg, R, L):
-    """solvent | polymer | total sigma_xz(z) evolutions (the poroelastic split of the shear stress)."""
+    """solvent | polymer | total sigma_xz(z) evolutions.  The partial stresses are the
+    per-atom virial split (each polymer-solvent contact is shared half/half), so the
+    solvent partial xz is NOT zero under shear -- which is why G is read from the
+    network stress sigma'_xz = sigma^t_xz - p_pore,xz (figure 5), not from sigma_p,xz."""
     if L.get('prof_p') is None or L.get('prof_s') is None:
         print('partial-stress figure skipped (profile files missing)')
         return None
@@ -784,7 +1056,7 @@ def fig_partial_stress(cfg, R, L):
     for k, (ax, st, lab, title) in enumerate(zip(axes,
             (L['prof_s']['stack']['xz'], L['prof_p']['stack']['xz'], L['prof_t']['xz']),
             (r'$\sigma_{s,xz}$', r'$\sigma_{p,xz}$', r'$\sigma^t_{xz}$'),
-            ('(a) solvent partial (-> 0 at rest)', '(b) polymer partial = network shear stress', '(c) total'))):
+            ('(a) solvent partial stress', '(b) polymer partial stress', '(c) total'))):
         ts, ev = post_hold(cfg, L['prof_p']['ts'], st)
         plot_evolution(ax, cfg, R, ts, ev, lab + '$(z,t)$', title, legend=False)
         robust_ylim(ax, list(ev), zmask=R['in_bulk'], pad=0.3)
@@ -796,53 +1068,66 @@ def fig_partial_stress(cfg, R, L):
 
 
 def fig_network_stress(cfg, R, L):
-    """Network shear stress sigma_p,xz(z): the gamma = 0 REFERENCE (dashed, grey band, ~0)
-    and the FINAL plateau-averaged state (solid, 95 % band) -- the shear analogue of the
-    compression notebooks' network-stress figure; the interior mean over gamma is G."""
-    if L.get('prof_p') is None:
-        print('network-stress figure skipped (no polymer profile)')
+    """Network stress sigma' = sigma^t - p_pore (Terzaghi, one scalar per component from
+    the solvent-only region behind the plates or P_bath: cfg.P_PORE_MODE): the gamma = 0
+    REFERENCE (dashed, grey band) and the FINAL plateau-averaged state (solid, 95 % band)
+    -- the shear analogue of the compression notebooks' network-stress figure.
+    (a) sigma'_xz: interior mean / gamma = G_network;  (b) sigma'_xx (normal)."""
+    if L.get('prof_net') is None:
+        print('network-stress figure skipped (no polymer + solvent profiles)')
         return None
+    mode = R['pore_mode']
+    pdesc = (r'$p_{\rm pore}$ = solvent-only film behind the plates' if mode == 'film'
+             else r'$p_{\rm pore}=P_{\rm bath}$ on the diagonal, 0 off-diagonal')
     fig, (axA, axB) = plt.subplots(1, 2, figsize=(17, 6.5), constrained_layout=True)
-    fig.suptitle(f'Network shear stress: reference and final equilibrated state  |  $\\gamma = {sig(L["gamma"], 4)}$  |  {cfg.sim_name}',
-                 fontsize=13, fontweight='bold')
-    for ax, comp, title in ((axA, 'xz', r'(a) polymer $\sigma_{p,xz}(z)$  (G = interior mean / $\gamma$)'),
-                            (axB, 'xx', r'(b) polymer $\sigma_{p,xx}(z)$  (normal, for $N_1$)')):
-        rm = _ref_profile(ax, R, 'prof_mean', comp)
-        m, lo, hi = mean_ci(L['prof_p']['stack'][comp][L['prof_plat']], cfg.ci_level)
+    fig.suptitle(f"Network stress $\\sigma'=\\sigma^t-p_{{\\rm pore}}$: reference and final equilibrated state  ({pdesc})  |  "
+                 f"$\\gamma = {sig(L['gamma'], 4)}$  |  {cfg.sim_name}", fontsize=13, fontweight='bold')
+    for ax, comp, title in ((axA, 'xz', r"(a) network $\sigma'_{xz}(z)$  ($G$ = interior mean / $\gamma$)"),
+                            (axB, 'xx', r"(b) network $\sigma'_{xx}(z)=\sigma^t_{xx}-p_{\rm pore}$  (normal)")):
+        rm = _ref_profile(ax, R, 'prof_net_mean', comp)
+        m, lo, hi = mean_ci(L['prof_net'][comp][L['prof_plat']], cfg.ci_level)
         _final_profile(ax, R, None, m, lo, hi, WONG['blue'], f'final (plateau, {int(L["prof_plat"].sum())} snapshots)')
         ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
         shade_bulk(ax, R); mark_plates(ax, R)
-        finish_axes(ax, r'$\sigma_{p,%s}(z)$' % comp, title)
+        finish_axes(ax, r"$\sigma'_{%s}(z)$" % comp, title)
         robust_ylim(ax, [m] + ([rm] if rm is not None else []), zmask=R['in_bulk'], pad=0.25)
         h, lb = ax.get_legend_handles_labels()
-        note = 'final mean, interior = ' + fmt_mu(m[R['interior']]) + (f"  ->  $G_{{\\rm net}}$ = {sig(L['G']['net']['G'])}" if comp == 'xz' and 'net' in L['G'] else '')
+        note = ('final mean, interior = ' + fmt_mu(m[R['interior']])
+                + (f"  $\\rightarrow$  $G_{{\\rm net}}$ = {sig(L['G']['net']['G'])}" if comp == 'xz' and 'net' in L['G'] else '')
+                + f"\n$p_{{\\rm pore,{comp}}}$ (plateau) = {sig(L['pore_plat'][comp], 3)}")
         h.append(Patch(alpha=0, label=note)); lb.append(note)
         smart_legend(ax, handles=h, labels=lb, fontsize=12)
     return _save(fig, cfg, 'network_stress_final', L['lvl'])
 
 
 def fig_series(cfg, R, L):
-    """Bulk polymer shear stress sigma_p,xz(t) from the fine block-averaged series
-    (drive + hold), linear and log |sigma|, with the auto plateau window -- the
-    analogue of the compression notebooks' piston-pressure history."""
+    """Bulk TOTAL shear stress sigma^t_xz(t) from the fine block-averaged series (drive +
+    hold; static bulk groups), with the polymer and solvent partials, linear and log
+    |sigma|, with the auto plateau window -- the analogue of the compression notebooks'
+    piston-pressure history.  G_series = (plateau - p_pore,xz - reference) / gamma."""
     S = L.get('series')
     if S is None:
         print('series figure skipped (no stress_series file)')
         return None
-    st, x = S['step'], S['sp_xz']
+    st, x = S['step'], S['st_xz']
     xr = rolling_mean(x, cfg.roll_win)
     fig, (axL, axG) = plt.subplots(1, 2, figsize=(17, 6), constrained_layout=True)
-    fig.suptitle(f'Bulk polymer shear stress history (block-averaged every {int(st[1] - st[0]) if len(st) > 1 else "?"} steps)  |  '
+    fig.suptitle(f'Bulk shear stress history (block-averaged every {int(st[1] - st[0]) if len(st) > 1 else "?"} steps)  |  '
                  f'$\\gamma = {sig(L["gamma"], 4)}$  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
     for ax in (axL, axG):
         ax.axvline(L['t_hold'], color=WONG['blue'], ls='--', lw=1.6, alpha=0.7, label=f'hold start (step {fmt_step(L["t_hold"])})')
         if 'PF' in L:
             ax.axvspan(L['PF']['step0'], float(st[-1]), color=WONG['green'], alpha=0.10, label='plateau window (auto)')
         ax.set_xlabel('time step'); ax.grid(alpha=0.3)
-    axL.plot(st, x, '-', color=WONG['vermillion'], lw=1.0, alpha=0.35, label=r'$\sigma_{p,xz}$ (block-avg)')
+    axL.plot(st, x, '-', color=WONG['vermillion'], lw=1.0, alpha=0.35, label=r'$\sigma^t_{xz}$ total (block-avg)')
     axL.plot(st, xr, '-', color=WONG['vermillion'], lw=2.6, alpha=0.95, label=f'rolling mean ({cfg.roll_win})')
-    if 'ss_xz' in S:
-        axL.plot(st, S['ss_xz'], '-', color=WONG['skyblue'], lw=1.2, alpha=0.8, label=r'$\sigma_{s,xz}$ (solvent)')
+    axL.plot(st, rolling_mean(S['sp_xz'], cfg.roll_win), '-', color=WONG['blue'], lw=1.4, alpha=0.8, label=r'$\sigma_{p,xz}$ polymer partial')
+    axL.plot(st, rolling_mean(S['ss_xz'], cfg.roll_win), '-', color=WONG['skyblue'], lw=1.4, alpha=0.9, label=r'$\sigma_{s,xz}$ solvent partial')
+    PS = L.get('plate_series', R.get('plate_S'))
+    if PS is not None:
+        w = (PS['step'] >= st[0]) & (PS['step'] <= st[-1])
+        axL.plot(PS['step'][w], rolling_mean(PS['S'][w], cfg.roll_win), '-', color=WONG['green'], lw=1.4, alpha=0.9,
+                 label=r'$\sigma_{xz}$ at the plates (x-force / area)')
     Rf = R.get('ref')
     if Rf is not None:
         axL.axhline(Rf['S_ref'], color='k', ls=':', lw=1.2, alpha=0.7, label=f"reference $\\gamma=0$: {sig(Rf['S_ref'], 2)}")
@@ -850,14 +1135,14 @@ def fig_series(cfg, R, L):
     axL.set_ylabel(r'$\sigma_{xz}$  (bulk, LJ)'); axL.set_title('(a) shear stress')
     smart_legend(axL, fontsize=12)
     pos = np.abs(x) > 0
-    axG.plot(st[pos], np.log(np.abs(x[pos])), '-', color=WONG['vermillion'], lw=1.0, alpha=0.35, label=r'$\ln|\sigma_{p,xz}|$')
+    axG.plot(st[pos], np.log(np.abs(x[pos])), '-', color=WONG['vermillion'], lw=1.0, alpha=0.35, label=r'$\ln|\sigma^t_{xz}|$')
     posr = np.abs(xr) > 0
     axG.plot(st[posr], np.log(np.abs(xr[posr])), '-', color=WONG['vermillion'], lw=2.6, alpha=0.95, label=f'rolling mean ({cfg.roll_win})')
-    axG.set_ylabel(r'$\ln|\sigma_{p,xz}|$'); axG.set_title('(b) log shear stress (relaxation view)')
+    axG.set_ylabel(r'$\ln|\sigma^t_{xz}|$'); axG.set_title('(b) log shear stress (relaxation view)')
     smart_legend(axG, fontsize=12)
     if 'PF' in L:
         p = L['PF']
-        annotate_box(axL, f"plateau $\\langle\\sigma_{{p,xz}}\\rangle$ = {fmt_val_unc(p['mean'], 0.5 * (p['hi'] - p['lo']))}\n"
+        annotate_box(axL, f"plateau $\\langle\\sigma^t_{{xz}}\\rangle$ = {fmt_val_unc(p['mean'], 0.5 * (p['hi'] - p['lo']))}\n"
                           f"last {p['frac']:.0%} of the hold, n={p['n']}, block={p['block']}", loc='upper right', fontsize=12)
     return _save(fig, cfg, 'shear_stress_history', L['lvl'])
 
@@ -872,17 +1157,20 @@ def _pt(ax, x, d, marker, color, ms, label, hollow=False, key='G'):
 def fig_G(cfg, R, L):
     """Shear modulus, two panes (the layout of the compression notebooks' M figure):
     (a) the increment estimates next to the absolute stress/gamma values they replace
-    (hollow) and the total-stress estimate (poroelastic check); (b) network and series
-    estimates alone."""
+    (hollow) and the polymer-partial estimate (check: its shortfall is the solvent's
+    share of the network shear stress); (b) network and series estimates alone."""
     if not L['G']:
         print('G figure skipped (no profile / series files)')
         return None
     fig, (axA, axB) = plt.subplots(1, 2, figsize=(14, 6), constrained_layout=True)
     ci = int(cfg.ci_level * 100)
     sub = L['G_ref'] == 'measured'
-    fig.suptitle('Shear modulus' + (' (increment from $\\gamma=0$)' if sub else ' (absolute: no $\\gamma=0$ reference files)')
+    fig.suptitle("Shear modulus from the network stress $\\sigma'_{xz}$" + (' (increment from $\\gamma=0$)' if sub else ' (absolute: no $\\gamma=0$ reference files)')
                  + f'   |   {cfg.RUN_ID}   |   $\\gamma = {sig(L["gamma"], 4)}$', fontsize=14, fontweight='bold')
-    spec = (('net', 'o', WONG['blue'], 'network'), ('ser', 's', WONG['vermillion'], 'series'))
+    spec = [('net', 'o', WONG['blue'], 'network'), ('ser', 's', WONG['vermillion'], 'series')]
+    if 'plate' in L['G']:
+        spec.append(('plate', '^', WONG['green'], 'plate'))
+    n_est = len(spec)
     for ax, pane in ((axA, 'a'), (axB, 'b')):
         for k, (key, mk, col, name) in enumerate(spec):
             d = L['G'].get(key)
@@ -892,18 +1180,23 @@ def fig_G(cfg, R, L):
             ax.axhline(d['G'], color=col, ls='--', lw=1.2, alpha=0.5)
             if pane == 'a' and sub and 'abs' in d:
                 _pt(ax, k + 0.15, d, mk, col, 10, f"absolute $\\sigma/\\gamma = {sig(d['abs'])}$\n(ref {d['ref']:+.5f} subtracted)", hollow=True, key='abs')
-        if pane == 'a' and 'tot' in L['G']:
-            d = L['G']['tot']
-            ax.errorbar([2], [d['G']], yerr=[[d['G'] - d['lo']], [d['hi'] - d['G']]], fmt='D', ms=10, color=WONG['green'],
-                        capsize=6, lw=1.8, mfc='none', label=f"total $\\sigma^t_{{xz}}/\\gamma = {sig(d['G'])}$\n(solvent share {d['solvent_share']:+.1%})")
-        ax.set_xticks([0, 1, 2] if pane == 'a' else [0, 1])
-        ax.set_xticklabels(([r'network' + '\n' + r'$\Delta\langle\sigma_{p,xz}\rangle_{\rm int}/\gamma$',
-                             r'series' + '\n' + r'$\Delta\langle\sigma_{p,xz}\rangle_{\rm plateau}/\gamma$']
-                            + (['total\n' + r'$\Delta\sigma^t_{xz}/\gamma$'] if pane == 'a' else [])), fontsize=13)
+        if pane == 'a' and 'pp' in L['G']:
+            d = L['G']['pp']
+            ax.errorbar([n_est], [d['G']], yerr=[[d['G'] - d['lo']], [d['hi'] - d['G']]], fmt='D', ms=10, color=WONG['reddishpurple'],
+                        capsize=6, lw=1.8, mfc='none', label=f"polymer partial $\\Delta\\sigma_{{p,xz}}/\\gamma = {sig(d['G'])}$"
+                        + (f"\n(solvent share of $\\sigma'_{{xz}}$: {d['solvent_share']:+.1%})" if 'solvent_share' in d else ''))
+        labels = [r'network' + '\n' + r"$\Delta\langle\sigma'_{xz}\rangle_{\rm int}/\gamma$",
+                  r'series' + '\n' + r"$\Delta\langle\sigma'_{xz}\rangle_{\rm plateau}/\gamma$"]
+        if 'plate' in L['G']:
+            labels.append('plate\n' + r'$\Delta F_x/(A\,\gamma)$')
+        if pane == 'a':
+            labels.append('polymer partial\n' + r'$\Delta\sigma_{p,xz}/\gamma$ (check)')
+        ax.set_xticks(list(range(len(labels))))
+        ax.set_xticklabels(labels, fontsize=12)
         ax.set_ylabel(r'$G$  (LJ units)')
-        ax.set_xlim(-0.5, 2.6 if pane == 'a' else 1.5)
+        ax.set_xlim(-0.5, len(labels) - 0.4)
         ax.grid(axis='y', alpha=0.3)
-        ax.set_title('(a) with the absolute values (hollow) and the total-stress check' if pane == 'a'
+        ax.set_title('(a) with the absolute values (hollow) and the polymer-partial check' if pane == 'a'
                      else '(b) shear modulus, two estimates', fontsize=13)
         smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'G_comparison', L['lvl'])
@@ -914,7 +1207,7 @@ def fig_normal(cfg, R, L):
     plateau shaded -- the linearity / isotropy check (both should vanish)."""
     fig, axes = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
     tp, tt = L['tensor_p'], L['tensor_p'] + (L['tensor_s'] if L['tensor_s'] is not None else 0.0)
-    fig.suptitle(f'Normal stress differences over the hold  |  $\\gamma = {sig(L["gamma"], 4)}$  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    fig.suptitle(f'Normal stress differences over the hold (normal stresses compression-positive)  |  $\\gamma = {sig(L["gamma"], 4)}$  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
     for ax, (a, b, name, Np, Nt) in zip(axes, (('xx', 'yy', r'$N_1=\sigma_{xx}-\sigma_{yy}$', L['N1_p'], L['N1_t']),
                                                ('yy', 'zz', r'$N_2=\sigma_{yy}-\sigma_{zz}$', L['N2_p'], L['N2_t']))):
         ax.plot(L['ts'], tp[:, CI[a]] - tp[:, CI[b]], '-o', ms=4, color=WONG['blue'], lw=2, label=f'polymer: plateau {fmt_val_unc(Np[0], 0.5 * (Np[2] - Np[1]))}')
@@ -981,30 +1274,50 @@ def fig_kappa(cfg, R, L):
 
 
 def fig_thermo_pressure(cfg, R, L):
-    """P_th = -(1/3) tr(sigma^t): (a) bulk value vs step with the reference and P_bath,
-    (b) profile evolution over the hold -- the P* = 1.5 check for the shear box (the
-    thermo `press` of the deck is a box average over vacuum and is NOT this)."""
+    """P_th = (1/3) tr(sigma^t), compression positive -- the P* = 1.5 check for the shear box.
+    (a) over the hold: the static-group bulk tensor (sum over the static bulk groups /
+    V_bulk, insensitive to the solvent swap through the plates), the profile-interior mean
+    (swap-corrected) and the raw profile-interior mean (what the profile files report);
+    (b) profile evolution (swap-corrected), raw final profile dotted.  The thermo `press`
+    of the deck is a box average over the film behind the plates and is NOT this."""
     fig, (axA, axB) = plt.subplots(1, 2, figsize=(19, 6.5), constrained_layout=True)
-    fig.suptitle(f'Thermodynamic pressure $P_{{\\rm th}}=-\\frac{{1}}{{3}}\\mathrm{{tr}}(\\sigma^t)$ in the bulk  |  $\\gamma = {sig(L["gamma"], 4)}$  |  {cfg.sim_name}',
+    fig.suptitle(f'Thermodynamic pressure $P_{{th}}=\\frac{{1}}{{3}}\\mathrm{{tr}}(\\sigma^t)$ in the bulk  |  $\\gamma = {sig(L["gamma"], 4)}$  |  {cfg.sim_name}',
                  fontsize=13, fontweight='bold')
-    axA.plot(L['ts'], L['Pth_ts'], '-o', ms=4, lw=2, color=WONG['blue'], label=f"bulk $P_{{\\rm th}}$: plateau {fmt_val_unc(L['Pth'][0], 0.5 * (L['Pth'][2] - L['Pth'][1]))}")
+    static = bool(R.get('static_groups'))
+    axA.plot(L['ts'], L['Pth_ts'], '-o', ms=4, lw=2, color=WONG['blue'],
+             label=('static-group bulk tensor' if static else 'bulk tensor (box-integrated, dynamic bulk groups)')
+                   + f": plateau {fmt_val_unc(L['Pth'][0], 0.5 * (L['Pth'][2] - L['Pth'][1]))}")
+    if 'Pth_prof_int_ts' in L:
+        pts = L['prof_p']['ts']
+        axA.plot(pts, L['Pth_prof_int_ts'], '-s', ms=4, lw=2, color=WONG['vermillion'],
+                 label=('profile interior, swap-corrected' if static else 'profile interior')
+                       + f": plateau {fmt_val_unc(L['Pth_prof_int'][0], 0.5 * (L['Pth_prof_int'][2] - L['Pth_prof_int'][1]))}")
+        if static:
+            axA.plot(pts, L['Pth_prof_raw_int_ts'], '--^', ms=4, lw=1.4, color='0.45',
+                     label=f"profile interior, raw: plateau {fmt_val_unc(L['Pth_prof_raw_int'][0], 0.5 * (L['Pth_prof_raw_int'][2] - L['Pth_prof_raw_int'][1]))}"
+                           + (f"\n(static solv_bulk group behind the plates: {L['swap_plat']:.1%})" if 'swap_plat' in L else ''))
     axA.axvspan(L['halt_ts'], float(L['ts'][-1]), color=WONG['green'], alpha=0.10, label='plateau window')
     axA.axhline(cfg.P_BARO, color='k', ls=':', lw=1.4, label=f'$P_{{\\rm bath}} = {sig(cfg.P_BARO)}$ (compression runs)')
     Rf = R.get('ref')
     if Rf is not None:
-        axA.axhline(Rf['Pth'][0], color='0.4', ls='--', lw=1.4, label=f"reference $\\gamma=0$: {sig(Rf['Pth'][0])}")
-    axA.set_xlabel('time step'); axA.set_ylabel(r'$P_{\rm th}$  (LJ)'); axA.set_title('(a) bulk value over the hold'); axA.grid(alpha=0.3)
-    smart_legend(axA, fontsize=12)
+        axA.axhline(Rf['Pth'][0], color='0.4', ls='--', lw=1.4, label=f"reference $\\gamma=0$ (tensor): {sig(Rf['Pth'][0])}")
+    axA.set_xlabel('time step'); axA.set_ylabel(r'$P_{th}$  (LJ)'); axA.set_title('(a) bulk value over the hold'); axA.grid(alpha=0.3)
+    robust_ylim(axA, [L['Pth_ts'], L.get('Pth_prof_int_ts', L['Pth_ts']), L.get('Pth_prof_raw_int_ts', L['Pth_ts']), [cfg.P_BARO]],
+                pad=0.6, qlo=0, qhi=100, include_zero=False)
+    smart_legend(axA, fontsize=11)
     if L.get('Pth_prof') is not None:
         ts, ev = post_hold(cfg, L['prof_p']['ts'], L['Pth_prof'])
         ref = None
-        if Rf is not None and Rf.get('prof_tot_mean') is not None:
-            pm = Rf['prof_tot_mean']
-            ref = tuple(-(pm['xx'][j] + pm['yy'][j] + pm['zz'][j]) / 3.0 for j in range(3))
-            ref = (ref[0], np.minimum(ref[1], ref[2]), np.maximum(ref[1], ref[2]))
-        plot_evolution(axB, cfg, R, ts, ev, r'$P_{\rm th}(z,t)$  (LJ)', '(b) profile: reference -> hold -> plateau', ref=ref, legend=False)
+        if Rf is not None and Rf.get('Pth_prof') is not None:
+            ref = mean_ci(Rf['Pth_prof'], cfg.ci_level)
+        plot_evolution(axB, cfg, R, ts, ev, r'$P_{th}(z,t)$  (LJ)', r'(b) profile: reference $\rightarrow$ hold $\rightarrow$ plateau'
+                       + (' (swap-corrected)' if static else ''), ref=ref, legend=False)
+        b = R.get('shown', R['in_bulk'])
+        raw_fin = np.nanmean(L['Pth_prof_raw'][L['prof_plat']], axis=0)
+        if R.get('static_groups'):
+            axB.plot(R['zf'][b], raw_fin[b], ':', color='0.45', lw=2.0, zorder=4, label='final, raw profile (static group)')
         axB.axhline(cfg.P_BARO, color='k', ls=':', lw=1.2, alpha=0.6)
-        robust_ylim(axB, list(ev) + ([ref[0]] if ref is not None else []), zmask=R['in_bulk'], pad=0.45, include_zero=False)
+        robust_ylim(axB, list(ev) + [raw_fin] + ([ref[0]] if ref is not None else []), zmask=R['in_bulk'], pad=0.45, include_zero=False)
         h, lb = axB.get_legend_handles_labels()
         note = 'plateau mean, interior = ' + fmt_mu(np.nanmean(L['Pth_prof'][L['prof_plat']], axis=0)[R['interior']])
         h.append(Patch(alpha=0, label=note)); lb.append(note)
@@ -1018,7 +1331,7 @@ def fig_thermo_pressure(cfg, R, L):
 #  8. FIGURES -- SWEEP
 # ===========================================================================
 def _final_overlay(ax, cfg, R, levels, get_final, ref, ylabel, title, include_zero=True):
-    b = R['in_bulk']
+    b = R.get('shown', R['in_bulk'])
     finals = []
     if ref is not None:
         m, lo, hi = ref
@@ -1034,22 +1347,23 @@ def _final_overlay(ax, cfg, R, levels, get_final, ref, ylabel, title, include_ze
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.4)
     shade_bulk(ax, R); mark_plates(ax, R)
     finish_axes(ax, ylabel, title)
-    robust_ylim(ax, finals, zmask=b, pad=0.25, include_zero=include_zero)
+    robust_ylim(ax, finals, zmask=R['in_bulk'], pad=0.25, include_zero=include_zero)
 
 
 def fig_network_stress_sweep(cfg, R, levels):
-    """Final plateau sigma_p,xz(z) and sigma_p,xx(z) of every level + the reference."""
-    hp = [L for L in levels if L.get('prof_p') is not None]
+    """Final plateau network stress sigma'_xz(z) and sigma'_xx(z) of every level + the reference."""
+    hp = [L for L in levels if L.get('prof_net') is not None]
     if not hp:
-        print('network-stress sweep figure skipped (no profiles)')
+        print('network-stress sweep figure skipped (no polymer + solvent profiles)')
         return None
     fig, axes = plt.subplots(1, 2, figsize=(17, 6.5), constrained_layout=True)
-    fig.suptitle(f'Network shear stress, final state of every level  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    fig.suptitle(f"Network stress $\\sigma'=\\sigma^t-p_{{\\rm pore}}$ ({R['pore_mode']}), final state of every level  |  {cfg.sim_name}",
+                 fontsize=13, fontweight='bold')
     Rf = R.get('ref')
-    for ax, comp, title in ((axes[0], 'xz', r'(a) polymer $\sigma_{p,xz}(z)$'), (axes[1], 'xx', r'(b) polymer $\sigma_{p,xx}(z)$')):
-        ref = Rf['prof_mean'][comp] if Rf is not None else None
-        _final_overlay(ax, cfg, R, hp, lambda L, c=comp: L['prof_p_plat'][c], ref, r'$\sigma_{p,%s}(z)$' % comp, title)
-        smart_legend(ax, handles=level_handles(hp, ref=Rf is not None), fontsize=11)
+    for ax, comp, title in ((axes[0], 'xz', r"(a) network $\sigma'_{xz}(z)$"), (axes[1], 'xx', r"(b) network $\sigma'_{xx}(z)$")):
+        ref = Rf['prof_net_mean'][comp] if (Rf is not None and 'prof_net_mean' in Rf) else None
+        _final_overlay(ax, cfg, R, hp, lambda L, c=comp: L['prof_net_plat'][c], ref, r"$\sigma'_{%s}(z)$" % comp, title)
+        smart_legend(ax, handles=level_handles(hp, ref=ref is not None), fontsize=11)
     return _save(fig, cfg, 'sweep_network_stress')
 
 
@@ -1061,16 +1375,16 @@ def fig_total_stress_sweep(cfg, R, levels):
         return None
     comps = ('xz', 'xx', 'yy', 'zz')
     fig, axes = plt.subplots(1, 4, figsize=(30, 6.5), constrained_layout=True)
-    fig.suptitle(f'Total stress, final state of every level (normal components / $P_{{\\rm bath}}={sig(cfg.P_BARO)}$)  |  {cfg.sim_name}',
+    fig.suptitle(f'Total stress, final state of every level (normal components compression-positive / $P_{{\\rm bath}}={sig(cfg.P_BARO)}$)  |  {cfg.sim_name}',
                  fontsize=13, fontweight='bold')
     Rf = R.get('ref')
     for k, (ax, comp) in enumerate(zip(axes, comps)):
-        s = 1.0 if comp == 'xz' else -1.0 / cfg.P_BARO
+        s = 1.0 if comp == 'xz' else 1.0 / cfg.P_BARO
         ref = None
         if Rf is not None and Rf.get('prof_tot_mean') is not None:
             m, lo, hi = Rf['prof_tot_mean'][comp]
             ref = (s * m, np.minimum(s * lo, s * hi), np.maximum(s * lo, s * hi))
-        lab = (r'$\sigma^t_{xz}$' if comp == 'xz' else r'$-\sigma^t_{%s}/P_{\rm bath}$' % comp)
+        lab = (r'$\sigma^t_{xz}$' if comp == 'xz' else r'$\sigma^t_{%s}/P_{\rm bath}$' % comp)
         _final_overlay(ax, cfg, R, hp, lambda L, c=comp, s=s: s * L['prof_t_plat'][c], ref, lab + '$(z)$',
                        f'({"abcd"[k]}) total {lab}', include_zero=(comp == 'xz'))
         if comp != 'xz':
@@ -1080,7 +1394,7 @@ def fig_total_stress_sweep(cfg, R, levels):
 
 
 def fig_series_sweep(cfg, R, levels):
-    """sigma_p,xz(t) of every level from the fine series (drive + hold), plateau dotted."""
+    """Total sigma^t_xz(t) of every level from the fine series (drive + hold), plateau dotted."""
     hs = [L for L in levels if L.get('series') is not None]
     if not hs:
         print('series sweep figure skipped')
@@ -1088,7 +1402,7 @@ def fig_series_sweep(cfg, R, levels):
     fig, ax = plt.subplots(figsize=(13, 6.5), constrained_layout=True)
     for i, L in enumerate(hs):
         S = L['series']
-        ax.plot(S['step'], rolling_mean(S['sp_xz'], cfg.roll_win), '-', color=level_color(i), lw=2.0,
+        ax.plot(S['step'], rolling_mean(S['st_xz'], cfg.roll_win), '-', color=level_color(i), lw=2.0,
                 label=fr"$\gamma={sig(L['gamma'], 4)}$" + (f":  plateau {sig(L['PF']['mean'], 3)}" if 'PF' in L else ''))
         if 'PF' in L:
             ax.hlines(L['PF']['mean'], L['PF']['step0'], S['step'][-1], colors=level_color(i), linestyles=':', lw=1.5)
@@ -1096,8 +1410,8 @@ def fig_series_sweep(cfg, R, levels):
     if Rf is not None:
         ax.axhline(Rf['S_ref'], color='k', ls='--', lw=1.2, alpha=0.7, label=f"reference $\\gamma=0$: {sig(Rf['S_ref'], 2)}")
     ax.axhline(0, color='k', ls='--', lw=0.8, alpha=0.4)
-    ax.set_xlabel('time step'); ax.set_ylabel(r'$\langle\sigma_{p,xz}\rangle_{\rm bulk}$  (LJ)')
-    ax.set_title(f'Bulk polymer shear stress histories (rolling mean over {cfg.roll_win} blocks; dotted = plateau)  |  {cfg.sim_name}', fontsize=13)
+    ax.set_xlabel('time step'); ax.set_ylabel(r'$\langle\sigma^t_{xz}\rangle_{\rm bulk}$  (LJ)')
+    ax.set_title(f'Bulk total shear stress histories (rolling mean over {cfg.roll_win} blocks; dotted = plateau)  |  {cfg.sim_name}', fontsize=13)
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'sweep_shear_stress_history')
@@ -1108,7 +1422,7 @@ def fig_G_sweep(cfg, R, levels):
     and the total-stress check, (b) the network and series estimates alone."""
     fig, (axA, axB) = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
     sub = all(L['G_ref'] == 'measured' for L in levels)
-    fig.suptitle('Shear modulus across the sweep' + (' (increment from $\\gamma=0$)' if sub else ' (absolute)') + f'   |   {cfg.sim_name}',
+    fig.suptitle("Shear modulus across the sweep (network stress $\\sigma'_{xz}$)" + (' (increment from $\\gamma=0$)' if sub else ' (absolute)') + f'   |   {cfg.sim_name}',
                  fontsize=13, fontweight='bold')
 
     def _ser(ax, key, marker, color, label, hollow=False, dx=0.0, val='G'):
@@ -1123,25 +1437,26 @@ def fig_G_sweep(cfg, R, levels):
         ax.errorbar(g + dx, v, yerr=[v - lo, hi - v], fmt=marker, color=color, label=label, **kw)
 
     for ax, pane in ((axA, 'a'), (axB, 'b')):
-        _ser(ax, 'net', 'o', WONG['blue'], r'network  $\Delta\langle\sigma_{p,xz}\rangle_{\rm int}/\gamma$')
-        _ser(ax, 'ser', 's', WONG['vermillion'], r'series  $\Delta\langle\sigma_{p,xz}\rangle_{\rm plateau}/\gamma$')
+        _ser(ax, 'net', 'o', WONG['blue'], r"network  $\Delta\langle\sigma'_{xz}\rangle_{\rm int}/\gamma$")
+        _ser(ax, 'ser', 's', WONG['vermillion'], r"series  $\Delta\langle\sigma'_{xz}\rangle_{\rm plateau}/\gamma$")
+        _ser(ax, 'plate', '^', WONG['green'], r"plate  $\Delta F_x/(A\,\gamma)$")
         if pane == 'a':
             if sub:
                 _ser(ax, 'net', 'o', WONG['blue'], 'network, absolute', hollow=True, dx=0.002, val='abs')
                 _ser(ax, 'ser', 's', WONG['vermillion'], 'series, absolute', hollow=True, dx=-0.002, val='abs')
-            Ls = [L for L in levels if 'tot' in L['G']]
+            Ls = [L for L in levels if 'pp' in L['G']]
             if Ls:
-                g = np.array([L['gamma'] for L in Ls]); v = np.array([L['G']['tot']['G'] for L in Ls])
-                ax.errorbar(g, v, yerr=[v - [L['G']['tot']['lo'] for L in Ls], [L['G']['tot']['hi'] for L in Ls] - v],
-                            fmt='D', mfc='none', color=WONG['green'], ms=8, lw=1.5, capsize=4, ls=':', label=r'total $\sigma^t_{xz}/\gamma$ (check)')
+                g = np.array([L['gamma'] for L in Ls]); v = np.array([L['G']['pp']['G'] for L in Ls])
+                ax.errorbar(g, v, yerr=[v - [L['G']['pp']['lo'] for L in Ls], [L['G']['pp']['hi'] for L in Ls] - v],
+                            fmt='D', mfc='none', color=WONG['reddishpurple'], ms=8, lw=1.5, capsize=4, ls=':', label=r'polymer partial $\Delta\sigma_{p,xz}/\gamma$ (check)')
         ax.set_xlabel(r'held shear strain  $\gamma$'); ax.set_ylabel(r'$G$  (LJ units)'); ax.grid(alpha=0.3)
-        ax.set_title('(a) with the absolute values (hollow) and the total-stress check' if pane == 'a' else '(b) shear modulus per level, two estimates', fontsize=13)
+        ax.set_title('(a) with the absolute values (hollow) and the polymer-partial check' if pane == 'a' else '(b) shear modulus per level, two estimates', fontsize=13)
         smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'sweep_G')
 
 
 def fig_stress_strain_sweep(cfg, R, levels):
-    """The stress-strain curve itself: plateau sigma_p,xz (profile interior and series) vs
+    """The stress-strain curve itself: plateau network sigma'_xz (profile interior and series) vs
     held gamma, INCLUDING the gamma = 0 reading (hollow), with a least-squares line through
     each series (slope = offset-free G, as the compression notebooks' figure 7b) and the
     through-origin fit for comparison."""
@@ -1168,14 +1483,14 @@ def fig_stress_strain_sweep(cfg, R, levels):
             G0 = float(np.sum(np.array(gg) * np.array(ss)) / np.sum(np.array(gg) ** 2))
             fits.append((name.split()[0], slope, G0, len(gg)))
 
-    _series('net', WONG['blue'], 'o', 'network $\\langle\\sigma_{p,xz}\\rangle_{\\rm int}$ (plateau)',
-            Rf['sp_xz_int'] if Rf else None, Rf['sp_xz_int_half'] if Rf else None)
-    _series('ser', WONG['vermillion'], 's', 'series $\\langle\\sigma_{p,xz}\\rangle$ (plateau)',
+    _series('net', WONG['blue'], 'o', "network $\\langle\\sigma'_{xz}\\rangle_{\\rm int}$ (plateau)",
+            Rf.get('net_xz_int') if Rf else None, Rf.get('net_xz_int_half') if Rf else None)
+    _series('ser', WONG['vermillion'], 's', "series $\\langle\\sigma'_{xz}\\rangle$ (plateau)",
             Rf['S_ref'] if Rf else None, 0.5 * (Rf['S_ref_hi'] - Rf['S_ref_lo']) if Rf else None)
     ax.plot([], [], 'o', mfc='none', color='0.4', label=r'hollow = $\gamma=0$ reading')
     ax.set_title('Stress vs strain: least-squares slopes incl. $\\gamma=0$ (dotted) and through-origin:  '
                  + ',  '.join(f"$G_{{\\rm {n[:4]}}}\\approx{sig(s)}$ / {sig(g0)} ({k} pts)" for n, s, g0, k in fits) + '\n' + cfg.sim_name, fontsize=11)
-    ax.set_xlabel(r'held shear strain  $\gamma$'); ax.set_ylabel(r'plateau $\sigma_{p,xz}$  (LJ)')
+    ax.set_xlabel(r'held shear strain  $\gamma$'); ax.set_ylabel(r"plateau $\sigma'_{xz}$  (LJ)")
     ax.grid(alpha=0.3); ax.set_xlim(left=-0.005)
     smart_legend(ax, fontsize=12)
     L_fits = {n: (s, g0) for n, s, g0, k in fits}
@@ -1193,7 +1508,7 @@ def fig_normal_sweep(cfg, R, levels):
                     label=lab, **({'mfc': 'none'} if hollow else {}))
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
     ax.set_xlabel(r'held shear strain  $\gamma$'); ax.set_ylabel('normal stress difference  (LJ)')
-    ax.set_title('Normal stress differences vs strain (plateau means; both -> 0 for a linear isotropic network)', fontsize=12)
+    ax.set_title(r'Normal stress differences vs strain (plateau means; both $\rightarrow 0$ for a linear isotropic network)', fontsize=12)
     ax.grid(alpha=0.3); smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'sweep_normal_stress')
 
@@ -1259,8 +1574,8 @@ def fig_thermo_pressure_sweep(cfg, R, levels):
     Rf = R.get('ref')
     if Rf is not None:
         ax.axhline(Rf['Pth'][0], color='0.4', ls='--', lw=1.4, label=f"reference $\\gamma=0$: {sig(Rf['Pth'][0])}")
-    ax.set_xlabel('time step'); ax.set_ylabel(r'$P_{\rm th}$  (bulk, LJ)')
-    ax.set_title(f'Thermodynamic pressure $P_{{\\rm th}}=-\\frac{{1}}{{3}}\\mathrm{{tr}}(\\sigma^t)$ over every hold  |  {cfg.sim_name}', fontsize=13)
+    ax.set_xlabel('time step'); ax.set_ylabel(r'$P_{th}$  (static-group bulk tensor, LJ)')
+    ax.set_title(f'Thermodynamic pressure $P_{{th}}=\\frac{{1}}{{3}}\\mathrm{{tr}}(\\sigma^t)$ over every hold  |  {cfg.sim_name}', fontsize=13)
     ax.grid(alpha=0.3); smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'sweep_thermo_pressure')
 
@@ -1287,17 +1602,26 @@ def print_hold_check(cfg, levels):
 
 def print_summary(cfg, levels):
     ci = int(cfg.ci_level * 100)
-    how = 'G = increment from the gamma = 0 reference' if cfg.G_SUBTRACT_REF else 'G = absolute stress / gamma'
+    how = "G = increment from the gamma = 0 reference" if cfg.G_SUBTRACT_REF else 'G = absolute stress / gamma'
     if cfg.G_SUBTRACT_REF and any(L['G_ref'] == 'absent' for L in levels):
         how += '; ABSOLUTE for levels without _ref files'
-    print(f'\nSUMMARY  ({cfg.sim_name}; {ci}% CIs; {how})')
-    print(f"{'target':>7s} {'gamma':>8s} {'G_net':>21s} {'G_ser':>21s} {'G_tot':>21s} {'P_th':>7s} {'N1/sxz':>7s} {'D_c':>10s} {'kappa_net':>10s}")
+    print(f"\nSUMMARY  ({cfg.sim_name}; {ci}% CIs; {how}; network stress sigma' = sigma^t - p_pore)")
+    print(f"{'target':>7s} {'gamma':>8s} {'G_net':>21s} {'G_ser':>21s} {'G_plate':>21s} {'G_polymer(check)':>21s} {'P_th,tens':>9s} {'P_th,prof':>9s} "
+          f"{'swap':>6s} {'N1/sxz':>7s} {'D_c':>10s} {'kappa_net':>10s}")
     for L in levels:
         def ci_(d):
             return f"{d['G']:.4f} [{d['lo']:.4f},{d['hi']:.4f}]" if d else 'n/a'
-        sxz = abs(np.nanmean(L['sxz_p_ts'][L['plat']]))
+        sxz = abs(np.nanmean(L['sxz_t_ts'][L['plat']]))
         dc = f"{L['Dc']['Dc']:.3e}" if L.get('Dc') else 'n/a'
         kn = f"{L['kappa']['net']['k']:.3e}" if L.get('kappa', {}).get('net') else 'n/a'
+        pp = f"{L['Pth_prof_int'][0]:9.4f}" if 'Pth_prof_int' in L else f"{'n/a':>9s}"
+        sw = f"{L['swap_plat']:6.1%}" if 'swap_plat' in L else f"{'n/a':>6s}"
         print(f"{L['gamma_target']:7.4f} {L['gamma']:8.5f} {ci_(L['G'].get('net')):>21s} {ci_(L['G'].get('ser')):>21s} "
-              f"{ci_(L['G'].get('tot')):>21s} {L['Pth'][0]:7.4f} {L['N1_p'][0] / max(sxz, 1e-30):+7.3f} {dc:>10s} {kn:>10s}")
+              f"{ci_(L['G'].get('plate')):>21s} {ci_(L['G'].get('pp')):>21s} {L['Pth'][0]:9.4f} {pp} {sw} "
+              f"{L['N1_t'][0] / max(sxz, 1e-30):+7.3f} {dc:>10s} {kn:>10s}")
+    print('  P_th,tens = bulk tensor (box-integrated); P_th,prof = profile interior (swap-corrected for static-group files); '
+          'swap = fraction of the profiled solvent behind the plates in the plateau (static-group files: the swapped-out fraction; '
+          'whole-box files: the film)')
     print_hold_check(cfg, levels)
+
+
