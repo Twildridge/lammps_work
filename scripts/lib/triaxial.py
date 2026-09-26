@@ -41,6 +41,7 @@ Physics conventions (see the Notes section at the end of either notebook):
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 import stat
@@ -1417,13 +1418,32 @@ def _volume_fractions(cfg, R, traj, ts_want, label=''):
     if key in _VF_CACHE:
         print(f'    {label}cached: {len(_VF_CACHE[key]["ts"])} frame(s), no re-read')
         return _VF_CACHE[key]
+    # ---- on-disk cache (2026-09-26): <DATA_DIR>/vor_cache/<traj stem>__<hash>.npz keyed on the
+    #      frames + knobs, so a kernel restart or a reload of this module never re-tessellates.
+    #      Only phi profiles are stored; the polymer frames the PSD pass needs are re-streamed
+    #      on demand (_frames_of).  Delete the folder to force a recompute.
+    cdir = Path(cfg.DATA_DIR) / 'vor_cache'
+    ck = hashlib.md5(repr((Path(traj).name, tuple(ts_want), cfg.VOR_MOBILE_ONLY, cfg.VOR_NORM, cfg.binWidth,
+                           np.round(np.asarray(R['z'], float), 6).tolist())).encode()).hexdigest()[:12]
+    cfile = cdir / f'{Path(traj).stem}__{ck}.npz'
+    if cfile.exists():
+        try:
+            d = np.load(cfile, allow_pickle=False)
+            out = {'ts': d['ts'], 'phi_vor': (d['phi_vor'] if d['phi_vor'].ndim == 2 else None),
+                   'phi_vor_mobile': (d['phi_vor_mobile'] if d['phi_vor_mobile'].ndim == 2 else None),
+                   'frames': {}, 'traj': str(traj)}
+            print(f'    {label}disk-cached ({cfile.parent.name}/{cfile.name}): {len(out["ts"])} frame(s), no re-read')
+            _VF_CACHE[key] = out
+            return out
+        except Exception as e:
+            print(f'    {label}vor_cache unreadable ({type(e).__name__}) -> recomputing')
     print(f'    {label}streaming {Path(traj).name} for {len(ts_want)} frame(s): Voronoi (~20 s/frame) ...')
     fr = volfrac.stream_traj_frames(traj, ts_want)
     missing = [t for t in ts_want if t not in fr]
     if missing:
         print(f'    NOTE: no traj frame at {missing} -- dropped')
     ts_ok = [t for t in ts_want if t in fr]
-    out = {'ts': np.array(ts_ok, float), 'phi_vor': None, 'phi_vor_mobile': None, 'frames': {}}
+    out = {'ts': np.array(ts_ok, float), 'phi_vor': None, 'phi_vor_mobile': None, 'frames': {}, 'traj': str(traj)}
     if not ts_ok:
         return out
     pv, pm, ok = [], [], []
@@ -1449,7 +1469,32 @@ def _volume_fractions(cfg, R, traj, ts_want, label=''):
     out['phi_vor'] = np.array(pv)
     out['phi_vor_mobile'] = np.array(pm)
     _VF_CACHE[key] = out
+    try:
+        cdir.mkdir(parents=True, exist_ok=True)
+        np.savez(cfile, ts=out['ts'], phi_vor=out['phi_vor'], phi_vor_mobile=out['phi_vor_mobile'])
+        print(f'    {label}saved to {cfile.parent.name}/{cfile.name}')
+    except Exception as e:
+        print(f'    {label}(vor_cache not written: {type(e).__name__}: {e})')
     return out
+
+
+def _frames_of(vf, ts=None):
+    """Polymer frames {ts: (box, types, xyz)} of a _volume_fractions result; re-streamed
+    from vf['traj'] when the result came from the on-disk cache (frames are not stored)."""
+    if vf is None:
+        return {}
+    ts = [int(t) for t in (vf['ts'] if ts is None else np.atleast_1d(ts))]
+    if all(t in vf.get('frames', {}) for t in ts):
+        return vf['frames']
+    traj = vf.get('traj')
+    if not traj or not Path(traj).exists():
+        return vf.get('frames', {})
+    print(f'    re-streaming {Path(traj).name} for the PSD pass ({len(ts)} frame(s); phi came from the disk cache)')
+    fr = volfrac.stream_traj_frames(traj, ts)
+    for t, (box, typ, xyz) in fr.items():
+        keep = np.isin(typ, psd.POLYMER_TYPES)
+        vf.setdefault('frames', {})[t] = (box, typ[keep], xyz[keep])
+    return vf['frames']
 
 
 def _calib_range(R):
@@ -1756,10 +1801,10 @@ def add_perm_psd(cfg, R, P):
         return
     print(f'pore-size distribution (grid {cfg.PSD_GRID} sigma, r_probe = {cfg.PSD_R_PROBE}, largest-included-sphere covering):')
     vr = R.get('vf_ref')
-    if R.get('psd') is None and vr is not None and vr.get('frames'):
+    if R.get('psd') is None and vr is not None and _frames_of(vr):
         R['psd'] = _psd_state(cfg, R, vr['frames'], vr['ts'], R['z_gel_lo'], R['z_gel_hi'], R['interior'], 'reference: ')
     vf = P.get('vf')
-    if vf is None or not vf.get('frames'):
+    if vf is None or not _frames_of(vf, P.get('vor_steady_ts', vf['ts']) if vf else None):
         print('  NOTE: no tessellated production frames (traj_stress missing?) -> steady-state PSD skipped')
         return
     P['psd'] = _psd_state(cfg, R, vf['frames'], P.get('vor_steady_ts', vf['ts']), P['z_mem_lo'], P['z_mem_hi'],
@@ -3154,13 +3199,39 @@ def fig_total_stress_sweep(cfg, R, levels):
                                 f'(faint = early hold, bold = plateau)  |  {cfg.sim_name}')
 
 
-def _final_overlay(ax, cfg, R, levels, get_stack, ref_stack, ylabel, title):
+def _matter_mask(cfg, D, comp='zz', thr=0.05):
+    """Bins that hold matter in the plateau state of D (a level or R): |sigma^t_comp| > thr.
+    Beyond the wet pistons and below the support the box is vacuum, where sigma^t = 0 and
+    the Terzaghi sigma' = -p_pore would draw as a -P_bath shelf; those bins are blanked in
+    the network-stress / osmotic-pressure overlays (2026-09-26)."""
+    S = D['stress'].get(comp) if isinstance(D.get('stress'), dict) else None
+    if S is None:
+        return None
+    t = S.get('t_plat')
+    if t is None:
+        t = S.get('t_m')
+    if t is None:
+        return None
+    return np.abs(np.asarray(t, float)) > thr
+
+
+def _final_overlay(ax, cfg, R, levels, get_stack, ref_stack, ylabel, title, matter_only=False):
     """Sweep overlay of FINAL plateau states (colour = level, 95 % bands) + the
-    reference (dashed black).  get_stack(L) -> per-snapshot stack or None."""
+    reference (dashed black).  get_stack(L) -> per-snapshot stack or None.
+    matter_only=True blanks the vacuum bins (see _matter_mask)."""
     zx = zn(R, R['z'])
     finals = []
+
+    def _blank(m, lo, hi, D):
+        if not matter_only:
+            return m, lo, hi
+        mk = _matter_mask(cfg, D)
+        if mk is None:
+            return m, lo, hi
+        return tuple(np.where(mk, np.asarray(v, float), np.nan) for v in (m, lo, hi))
+
     if ref_stack is not None:
-        m, lo, hi = mean_ci(ref_stack, cfg.ci_level)
+        m, lo, hi = _blank(*mean_ci(ref_stack, cfg.ci_level), R)
         ax.fill_between(zx, lo, hi, color='0.5', alpha=0.2, lw=0, zorder=1)
         ax.plot(zx, m, '--', color='k', lw=2.0, alpha=0.9, zorder=2)
         finals.append(m)
@@ -3168,7 +3239,7 @@ def _final_overlay(ax, cfg, R, levels, get_stack, ref_stack, ylabel, title):
         st = get_stack(L)
         if st is None:
             continue
-        m, lo, hi = mean_ci(st[L['plat']], cfg.ci_level)
+        m, lo, hi = _blank(*mean_ci(st[L['plat']], cfg.ci_level), L)
         ax.fill_between(zx, lo, hi, color=level_color(i), alpha=0.18, lw=0, zorder=3)
         ax.plot(zx, m, '-', color=level_color(i), lw=2.6, zorder=4)
         finals.append(m)
@@ -3184,7 +3255,8 @@ def fig_network_stress_sweep(cfg, R, levels):
     """Network stress sigma'_ii, FINAL plateau state of every level (+ reference dashed).
     No evolution curves (2026-09-17): p_pore is only uniform once consolidation is over."""
     fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
-    fig.suptitle(f'Network stress (Terzaghi), final equilibrated state of every level  |  {cfg.sim_name}',
+    fig.suptitle(f'Network stress (Terzaghi), final equilibrated state of every level  |  {cfg.sim_name}\n'
+                 r"(drawn where there is matter: beyond the wet pistons and below the support $\sigma^t=0$, so $\sigma'=-p_{\rm pore}$ there is blanked)",
                  fontsize=13, fontweight='bold')
     for ax, comp in zip(axes, COMPONENTS):
         title = f'({"abc"[COMPONENTS.index(comp)]}) ' + r"network $\sigma'_{%s}$" % comp
@@ -3194,7 +3266,7 @@ def fig_network_stress_sweep(cfg, R, levels):
             continue
         Rs = R['stress'].get(comp)
         _final_overlay(ax, cfg, R, levels, lambda L, c=comp: (L['stress'][c]['net'] if c in L['stress'] else None),
-                       Rs['net'] if Rs is not None else None, r"$\sigma'_{%s}(z)$" % comp, title)
+                       Rs['net'] if Rs is not None else None, r"$\sigma'_{%s}(z)$" % comp, title, matter_only=True)
     return _save(fig, cfg, 'sweep_network_stress_final')
 
 
@@ -3225,7 +3297,8 @@ def fig_osmotic_pressure_sweep(cfg, R, levels):
     fig, ax = plt.subplots(figsize=(13, 7), constrained_layout=True)
     _final_overlay(ax, cfg, R, levels, lambda L: _tr3(L['stress'], 'net'), _tr3(R['stress'], 'net'),
                    r'$\mathit{\Pi}(z)$  (LJ)',
-                   r"Osmotic pressure $\mathit{\Pi}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma}')$, final equilibrated state of every level")
+                   r"Osmotic pressure $\mathit{\Pi}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma}')$, final equilibrated state of every level",
+                   matter_only=True)
     return _save(fig, cfg, 'sweep_osmotic_pressure_final')
 
 
