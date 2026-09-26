@@ -1,4 +1,21 @@
 #!/bin/bash
+# ── Whole-file parse guard ────────────────────────────────────────────────────
+# Bash reads a script INCREMENTALLY, re-reading from the file after every
+# command it forks. This script lives in the git checkout on NFS home and runs
+# for days on a compute node, while git pulls from OTHER NFS clients (lsync on
+# the login node, the self-sync at the start of every other job) replace the
+# file's inode underneath it. Cross-client NFS does not keep an unlinked open
+# file alive, so the next read after the replacement fails (stale handle), bash
+# treats it as EOF and exits SILENTLY with status 0. Job 54398786
+# (triaxial_compression_two_pist, 43 h) lost its whole post-processing step this
+# way: commit f9e0772 rewrote this file 7 h into the run, and the shell died the
+# moment the mpirun polling loop ended (log ends at "Total wall time", no
+# post-processing banner, no error, exit 0). Wrapping the body in ONE { ... }
+# group makes bash parse the entire file before executing a single command,
+# and the trailing `exit` stops it from ever reading past the group. Nothing
+# else changes: a group runs in the current shell, so cd/export/exit behave
+# exactly as before. Same guard in continue_sim.sh. (2026-09-26)
+{
 if [ $# -lt 4 ]; then
     echo "Usage: ./run_lammps.sh <folder_name> <dataname> <interaction> <nsteps> [type] [press_target]"
     echo "Example (fresh run):  ./run_lammps.sh slab_with_support slab_support_5beads_... 1.5_1.4 20000"
@@ -315,3 +332,8 @@ fi
 export SKIP_WIDOM STRAINS COMPRESSIONS
 bash "$SCRIPT_DIR/postprocess.sh" \
     "$WORK_DIR" "$FOLDER" "$DATANAME" "$INTERACTION" "$TOTSTEPS" 0 "$PRESS_TARGET"
+
+# Never fall through the closing brace: bash would try to read the file again
+# (see the parse guard at the top). Propagate postprocess.sh's status.
+exit $?
+}

@@ -48,6 +48,14 @@
 # Output goes into a continuation subfolder inside the original run directory:
 #   ~/Documents/lammps_runs/{folder}/{original_run_dir}/continuation_{timestamp}/
 
+# ── Whole-file parse guard ────────────────────────────────────────────────────
+# Same guard as run_lammps.sh (see the note there): this script runs mpirun for
+# hours on a compute node while git pulls from other NFS clients can replace
+# the file underneath the running bash, which then hits a stale handle, treats
+# it as EOF and exits silently before the post-processing lines. The { ... }
+# group makes bash parse the whole file up front; the trailing `exit` stops it
+# reading past the group. (2026-09-26)
+{
 set -e
 
 # ── Per-folder output-file prefix (set by each .lmp script's write_data/
@@ -340,3 +348,7 @@ python "$SCRIPT_DIR/plot_piston_data.py"      "." "$STEM" "$OLDSTEPS"
 echo "======================================"
 echo "Done! Results in: $CONT_DIR"
 echo "======================================"
+
+# Never fall through the closing brace (see the parse guard above).
+exit $?
+}
