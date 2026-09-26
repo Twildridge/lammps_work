@@ -69,6 +69,9 @@
 #                rejected 2026-09-22: the 1.5-sigma plate lattice is a ~0.7 kT
 #                sieve for solvent, so a force-driven plate sinks through the fluid.)
 #   - Phase 1b:  NVT with the plates frozen: the gel thermalises before any shear.
+#   - Phase 4:   UNLOAD (unload = 1, default): plates driven back to gamma = 0, then a
+#                hold like Phase 3 with every output tagged _unload -- the residual-
+#                stress check (sigma_xz should return to the reference reading).
 #   - Phase 1.5: gamma = 0 REFERENCE window (ref_avg_steps, plates frozen): bulk stress
 #                tensors, z-profiles and the fine stress series are averaged into _ref
 #                files, several snapshots so the notebooks can form CIs -- exactly the
@@ -150,6 +153,8 @@
 #   volume_data/{gel_volume_bb,gel_dimensions_bb,gel_volume_rg,gel_dimensions_rg,box_dimensions,polymer_com}_${stem}_g<γ>.dat
 # gamma = 0 REFERENCE (Phase 1.5, files tagged _ref_${stem}, no _g suffix -- the analogue of the
 #   compression deck's eps = 0 reference window):
+#   UNLOAD (Phase 4, unload = 1): the same per-level files with the tag _unload in place of _g<γ>
+#   (stress_tensor_*, stress_profile_z_*, stress_series, shear_strain[_surface], disp_x_polymer, gel/box dims, polymer_com).
 #   stress_data/stress_tensor_{polymer,solvent}_ref_${stem}.dat, stress_profile_z_{polymer,solvent}_ref_${stem}.dat,
 #   stress_data/stress_series_ref_${stem}.dat            (G is formed as an INCREMENT from these, like M and G in the compression notebooks)
 # Whole-run (stem only, from step 0):
@@ -221,6 +226,15 @@ variable strains_list index "STALE-run_lammps.sh--no-list-passed--running-single
 variable strain_rate_ref   equal 0.10
 variable nsteps_shear_base index 285000   # steps a 0.10 increment would take at vshear/1.1
 variable nsteps_shear      index 570000   # safety cap per increment (2x); the halt fires first
+# ----- Phase 4: UNLOAD (residual-stress check, 2026-09-25) -----
+# unload 1 (default): after the last level the plates are driven BACK to gamma = 0
+# at the same |vshear| (halt at gamma <= 0) and a hold of unload_hold_steps
+# (0 -> = nsteps) is recorded with the full production output set tagged
+# _unload: a reversible network returns sigma_xz to its reference reading; a
+# residual means plastic rearrangement, plate-bond slip or a relaxation slower
+# than the hold.  0 skips it; always skipped under cont=1.
+variable unload            index 1
+variable unload_hold_steps index 0
 
 # ----- Phase 1 lengths (index: -var override for smoke tests) -----
 # phase1a_mode: 0 = skip Phase 1a (DEFAULT since 2026-09-22 for the periodic-slab
@@ -1042,6 +1056,130 @@ variable drive_dump_freq delete   # recomputed per level; delete to allow redefi
 
 next strains
 jump SELF strain_loop
+
+
+# ==========================================================================
+#   PHASE 4: UNLOAD -- plates back to gamma = 0, then a residual-stress HOLD (2026-09-25)
+# ==========================================================================
+# Same drive machinery as Phase 2 (reversed velocities, halt at gamma <= 0) and
+# the same output set as Phase 3, tagged _unload.  The displacement reference is
+# reset at the hold onset as for a level, so disp_x_polymer_*_unload records the
+# recovery.  Skipped when unload = 0 or under cont=1.
+if "${unload} == 0 || ${cont} == 1" then "jump SELF label_after_unload"
+print "########################################################"
+print "  PHASE 4: UNLOAD  (gamma $(v_gamma:%.4f) -> 0, then residual-stress hold)"
+print "########################################################"
+
+fix out_shear_strain all print ${stress_freq} &
+    "$(step) ${gel_lz_initial} ${plate_sep} $(v_gamma)" &
+    file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}_unload.dat screen no
+fix out_shear_surf all print ${stress_freq} &
+    "$(step) ${gel_gap} $(v_gel_strain_surf)" &
+    title "# step gel_gap_bb gel_strain_surf   (surface-COM slip diagnostic; unload)" &
+    file output_files/stress_data/shear_strain_surface_${dataname}_${interaction}_${nsteps}_unload.dat screen no
+fix out_series all ave/time ${series_nevery} ${series_nrepeat} ${series_nfreq} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xz v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xz v_S_top v_S_bot &
+    title2 "# TimeStep sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz S_top S_bot   (bulk partial stresses + plate sigma_xz, block-averaged; unload drive + hold)" &
+    file output_files/stress_data/stress_series_${dataname}_${interaction}_${nsteps}_unload.dat
+fix out_gel_vol_bb all print ${stress_freq} "$(step) $(v_gel_vol_bb)" &
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}_unload.dat screen no
+fix out_gel_dims_bb all print ${stress_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
+    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${nsteps}_unload.dat screen no
+fix out_gel_vol_rg all print ${stress_freq} "$(step) $(v_gel_vol_rg)" &
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}_unload.dat screen no
+fix out_gel_dims_rg all print ${stress_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}_unload.dat screen no
+fix out_box_dims all print ${stress_freq} "$(step) $(lx) $(ly) $(lz) $(xy) $(xz) $(yz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}_unload.dat screen no
+fix out_polymer_com all print ${stress_freq} &
+    "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}_unload.dat screen no
+
+# ----- unload DRIVE: reversed velocities until gamma <= 0 (cap = 1.2 x the travel back) -----
+variable unload_cap equal $(ceil(1.2*v_gamma*v_plate_sep/(2.0*v_vshear*v_timestep_prod))+1000)
+fix drive_top plate_top move linear ${neg_vshear} 0 0
+fix drive_bot plate_bot move linear ${vshear}     0 0
+fix nvt_shear   mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_lin     mobile momentum 100 linear 1 1 1
+fix mom_rot     mobile momentum 100 angular
+fix halt_unload all halt ${stress_freq} v_gamma <= 0.0 error continue
+print ">>> [unload] driving plates back at -/+${vshear} sigma/tau until gamma <= 0 (cap ${unload_cap} steps)..."
+run ${unload_cap}
+unfix halt_unload
+unfix mom_rot
+unfix mom_lin
+unfix nvt_shear
+unfix drive_bot
+unfix drive_top
+print ">>> [unload] drive done: gamma = $(v_gamma:%.4f);  surface-COM strain = $(v_gel_strain_surf:%.4f)  step=$(step)"
+
+variable  ux_shear delete
+uncompute displace_shear
+compute   displace_shear polymer displace/atom
+variable  ux_shear atom c_displace_shear[1]
+
+# ----- unload HOLD (plates frozen): the Phase 3 output set tagged _unload -----
+fix freeze_top plate_top move linear 0 0 0
+fix freeze_bot plate_bot move linear 0 0 0
+fix nvt_prod     mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_prod     mobile momentum 100 linear 1 1 1 angular
+dump traj_prod gel_system custom ${dump_freq_prod} &
+    traj_files/gel_prod_${dataname}_${interaction}_${nsteps}_unload.lammpstrj &
+    id type mol x y z
+fix avg_stress_polymer all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz &
+    v_stress_p_xy v_stress_p_xz v_stress_p_yz &
+    file output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}_unload.dat
+fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_stress_s_xx v_stress_s_yy v_stress_s_zz &
+    v_stress_s_xy v_stress_s_xz v_stress_s_yz &
+    file output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}_unload.dat
+fix avg_prof_z_poly polymer ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_polymer &
+    v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_xz v_s_p_yz &
+    norm none &
+    file output_files/stress_data/stress_profile_z_polymer_${dataname}_${interaction}_${nsteps}_unload.dat
+fix avg_prof_z_solv solvent ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_solvent &
+    v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_xz v_s_s_yz &
+    norm none &
+    file output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}_unload.dat
+fix avg_disp_z_poly polymer ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_poly_disp v_ux_shear &
+    file output_files/displacement_data/disp_x_polymer_${dataname}_${interaction}_${nsteps}_unload.dat
+
+variable unload_len equal (${unload_hold_steps}>0)*${unload_hold_steps}+(${unload_hold_steps}<=0)*${nsteps}
+variable hold_steps equal (floor(($(step)+${unload_len}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print "========================================"
+print ">>> [unload] residual-stress HOLD (plates frozen) for ${hold_steps} steps (>= ${unload_len}, aligned to nfreq_stress=${nfreq_stress});  gamma = $(v_gamma:%.4f)"
+print "========================================"
+run ${hold_steps}
+
+unfix avg_disp_z_poly
+unfix avg_prof_z_solv
+unfix avg_prof_z_poly
+unfix avg_stress_solvent
+unfix avg_stress_polymer
+undump traj_prod
+unfix mom_prod
+unfix nvt_prod
+unfix freeze_bot
+unfix freeze_top
+unfix out_polymer_com
+unfix out_box_dims
+unfix out_gel_dims_rg
+unfix out_gel_vol_rg
+unfix out_gel_dims_bb
+unfix out_gel_vol_bb
+unfix out_series
+unfix out_shear_surf
+unfix out_shear_strain
+print ">>> Completed unload:  gamma = $(v_gamma:%.4f)  surface-COM strain = $(v_gel_strain_surf:%.4f)  step=$(step)  (residual sigma_p,xz(bulk) = $(v_stress_p_xz:%.5f))"
+variable hold_steps delete
+variable unload_len delete
+variable unload_cap delete
+
+label label_after_unload
 
 
 # ==========================================================================

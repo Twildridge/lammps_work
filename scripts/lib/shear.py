@@ -180,7 +180,7 @@ class Config:
     # ---- <steps> tag: one tag for every file of a shear run --------------
     def _glob_tag(self):
         pat = re.compile(rf'^stress_tensor_polymer(?:_ref)?_{re.escape(self.DATANAME)}_'
-                         rf'{re.escape(self.INTERACTION)}_(\d+)(?:_g[0-9.]+)?\.dat$')
+                         rf'{re.escape(self.INTERACTION)}_(\d+)(?:_g[0-9.]+|_unload)?\.dat$')
         hits = sorted({int(m.group(1)) for f in self.DATA_DIR.glob('stress_tensor_polymer*.dat')
                        if (m := pat.match(f.name)) and f.stat().st_size > 0})
         return str(hits[-1]) if hits else None
@@ -196,7 +196,7 @@ class Config:
         return self._tags['tag']
 
     def gsuf(self, lvl):
-        return '' if lvl is None else f'_g{lvl}'
+        return '' if lvl is None else ('_unload' if str(lvl) == 'unload' else f'_g{lvl}')
 
     def stem(self, lvl=None):
         t = self.tag_for()
@@ -627,6 +627,63 @@ def fit_Dc(cfg, R, disp, t_hold):
                 u_model=u_model, u_inf=u_inf, kk=kk, hold_T=hold_T, hold_check=check, at_bound=(Dc >= 0.999 * cfg.DC_BOUNDS[1]))
 
 
+def _finish_unload(cfg, R, L, say):
+    """Residual stresses of the Phase 4 unload hold (gamma driven back to 0): plateau
+    sigma'_xz (profile interior), sigma^t_xz (series) and the plate sigma_xz, each as an
+    INCREMENT from the gamma = 0 reference with CIs in quadrature; plus P_th and N1/N2."""
+    Rf = R.get('ref')
+    im = R['interior']
+    res = {}
+    if L.get('prof_net') is not None:
+        bins = L['prof_net_plat']['xz'][im]
+        bins = bins[np.isfinite(bins)]
+        m, lo, hi = mean_ci(bins, cfg.ci_level)
+        rv = Rf['net_xz_int'] if (Rf and 'net_xz_int' in Rf) else 0.0
+        rh = Rf['net_xz_int_half'] if (Rf and 'net_xz_int_half' in Rf) else 0.0
+        half = np.sqrt((0.5 * (hi - lo)) ** 2 + rh ** 2)
+        res['net'] = dict(v=float(m - rv), lo=float(m - rv - half), hi=float(m - rv + half), abs=float(m), ref=rv)
+    if 'PF' in L:
+        p = L['PF']
+        b_xz = L['pore_plat']['xz'] if 'pore_plat' in L else 0.0
+        rv = Rf['S_ref'] if Rf else 0.0
+        rh = 0.5 * (Rf['S_ref_hi'] - Rf['S_ref_lo']) if Rf else 0.0
+        half = np.sqrt((0.5 * (p['hi'] - p['lo'])) ** 2 + rh ** 2)
+        v = p['mean'] - b_xz - rv
+        res['ser'] = dict(v=v, lo=v - half, hi=v + half, abs=p['mean'] - b_xz, ref=rv)
+    S = L.get('series')
+    if S is not None and 'S_plate' in S:
+        t1 = float(L['ts'][-1])
+        w = (S['step'] >= L['t_hold']) & (S['step'] <= t1)
+        if w.sum() >= 4:
+            L['PF_plate'] = plateau_window(S['step'][w], S['S_plate'][w], cfg.plateau_frac_auto, cfg.ci_level)
+            L['plate_series'] = dict(step=S['step'], S=S['S_plate'])
+            p = L['PF_plate']
+            rv = Rf['S_plate_ref'] if (Rf and 'S_plate_ref' in Rf) else 0.0
+            rh = 0.5 * (Rf['S_plate_ref_hi'] - Rf['S_plate_ref_lo']) if (Rf and 'S_plate_ref' in Rf) else 0.0
+            half = np.sqrt((0.5 * (p['hi'] - p['lo'])) ** 2 + rh ** 2)
+            v = p['mean'] - rv
+            res['plate'] = dict(v=v, lo=v - half, hi=v + half, abs=p['mean'], ref=rv)
+    L['residual'] = res
+    for key, name in (('net', "sigma'_xz profile, interior"), ('ser', 'sigma^t_xz series, plateau'), ('plate', 'plate sigma_xz, plateau')):
+        r = res.get(key)
+        if r:
+            say(f"  residual {name}: {r['v']:+.5f} [{r['lo']:+.5f}, {r['hi']:+.5f}]  (absolute {r['abs']:+.5f}, reference {r['ref']:+.5f} subtracted)")
+    tp, tsv = L['tensor_p'], L['tensor_s']
+    tt = tp + (tsv if tsv is not None else 0.0)
+    pl = L['plat']
+    L['N1_p'] = mean_ci((tp[:, CI['xx']] - tp[:, CI['yy']])[pl], cfg.ci_level)
+    L['N2_p'] = mean_ci((tp[:, CI['yy']] - tp[:, CI['zz']])[pl], cfg.ci_level)
+    L['N1_t'] = mean_ci((tt[:, CI['xx']] - tt[:, CI['yy']])[pl], cfg.ci_level)
+    L['N2_t'] = mean_ci((tt[:, CI['yy']] - tt[:, CI['zz']])[pl], cfg.ci_level)
+    L['Pth_ts'] = (tt[:, CI['xx']] + tt[:, CI['yy']] + tt[:, CI['zz']]) / 3.0
+    L['Pth'] = mean_ci(L['Pth_ts'][pl], cfg.ci_level)
+    L['sxz_p_ts'] = tp[:, CI['xz']]
+    L['sxz_t_ts'] = tt[:, CI['xz']]
+    say(f"  P_th (plateau): {L['Pth'][0]:.4f};  N1_t = {L['N1_t'][0]:+.4f}, N2_t = {L['N2_t'][0]:+.4f}  (loaded-state values in the level printout)")
+    L['Dc'] = None
+    return L
+
+
 def load_level(cfg, R, lvl, verbose=True):
     """Everything for ONE shear-strain level `lvl` (string, e.g. "0.1"): strain history,
     bulk stress tensors, z-profiles (polymer, swap-corrected solvent, total, NETWORK
@@ -635,11 +692,12 @@ def load_level(cfg, R, lvl, verbose=True):
     N1/N2, P_th, the D_c fit and kappa.  Returns a dict L, or None if the core files are
     missing."""
     say = print if verbose else (lambda *a, **k: None)
-    L = dict(lvl=lvl, gamma_target=float(lvl))
-    say(f'\n=== level _g{lvl}  (target shear strain {float(lvl):.4f}) ===')
+    unload = str(lvl) == 'unload'
+    L = dict(lvl=lvl, gamma_target=(0.0 if unload else float(lvl)), is_unload=unload)
+    say(f'\n=== {"UNLOAD (Phase 4: plates back to gamma = 0, residual-stress hold)" if unload else f"level _g{lvl}  (target shear strain {float(lvl):.4f})"} ===')
     ts, tp = read_tensor(cfg.path('stress_tensor_polymer', lvl))
     if tp is None:
-        say(f'  level {lvl}: stress_tensor_polymer file missing -- skipping level')
+        say(f'  {"unload" if unload else "level " + str(lvl)}: stress_tensor_polymer file missing -- skipping' + ('' if unload else ' level'))
         return None
     _, tsv = read_tensor(cfg.path('stress_tensor_solvent', lvl))
     L['ts'], L['tensor_p'], L['tensor_s'] = ts, tp, tsv
@@ -731,6 +789,8 @@ def load_level(cfg, R, lvl, verbose=True):
     sub = bool(cfg.G_SUBTRACT_REF) and Rf is not None
     L['G_ref'] = 'measured' if sub else ('absent' if cfg.G_SUBTRACT_REF else 'off')
     L['G'] = {}
+    if unload:
+        return _finish_unload(cfg, R, L, say)
 
     def _est(bins, ref_v, ref_h):
         bins = bins[np.isfinite(bins)]
@@ -841,7 +901,8 @@ def sync_files(cfg, levels=None):
     req = []
     for l in levels:
         data += [cfg.path(n, l) for n in _PROD_DAT]
-        req += [cfg.path(n, l) for n in _REQUIRED]
+        if l != 'unload':                      # the Phase 4 unload set (2026-09-25 deck) is optional
+            req += [cfg.path(n, l) for n in _REQUIRED]
     return data, [], req
 
 
@@ -849,7 +910,8 @@ def sync_from_expanse(cfg, levels=None, force=False):
     """Pull every file the shear notebooks read from Expanse in ONE login (the
     triaxial puller); the _ref files are optional for runs older than 2026-09-23."""
     data, traj, req = sync_files(cfg, levels)
-    optional = {cfg.path(n).name for n in _REF_DAT} | {cfg.path('box_bounds').name}
+    optional = ({cfg.path(n).name for n in _REF_DAT} | {cfg.path('box_bounds').name}
+                | {cfg.path(n, 'unload').name for n in _PROD_DAT})
     tri.sync_pull(cfg, data, traj, req, optional, force, refresh=lambda: sync_files(cfg, levels))
 
 
@@ -1325,6 +1387,58 @@ def fig_thermo_pressure(cfg, R, L):
     else:
         axB.text(0.5, 0.5, 'solvent profile\nnot found', ha='center', va='center', transform=axB.transAxes)
     return _save(fig, cfg, 'thermo_pressure', L['lvl'])
+
+
+def fig_residual(cfg, R, L, U):
+    """Residual-stress check (Phase 4 unload): (a) sigma^t_xz series through the level's
+    drive + hold and the unload drive + hold (plate sigma_xz thin), with the reference
+    line and both plateau windows; (b) sigma'_xz(z): reference, loaded final, unloaded
+    final.  A reversible network returns to the reference reading."""
+    if U is None:
+        print('residual-stress figure skipped (no _unload files: deck before 2026-09-25 or unload = 0)')
+        return None
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(19, 6.5), constrained_layout=True)
+    fig.suptitle(f"Residual stress after unloading (Phase 4): $\\gamma = {sig(L['gamma'], 4)} \\rightarrow {sig(U['gamma'], 4)}$  |  {cfg.sim_name}",
+                 fontsize=13, fontweight='bold')
+    Rf = R.get('ref')
+    for X, col, name in ((L, WONG['vermillion'], 'loaded'), (U, WONG['blue'], 'unloaded')):
+        S = X.get('series')
+        if S is None:
+            continue
+        axA.plot(S['step'], S['st_xz'], '-', color=col, lw=1.0, alpha=0.3)
+        axA.plot(S['step'], rolling_mean(S['st_xz'], cfg.roll_win), '-', color=col, lw=2.4, alpha=0.95, label=fr'$\sigma^t_{{xz}}$ {name} (drive + hold)')
+        if 'S_plate' in S:
+            axA.plot(S['step'], rolling_mean(S['S_plate'], cfg.roll_win), '-', color=col, lw=1.2, alpha=0.6, label=f'plate $\\sigma_{{xz}}$ {name}')
+        axA.axvline(X['t_hold'], color=col, ls='--', lw=1.4, alpha=0.7)
+        if 'PF' in X:
+            axA.axvspan(X['PF']['step0'], float(S['step'][-1]), color=col, alpha=0.08)
+    if Rf is not None:
+        axA.axhline(Rf['S_ref'], color='k', ls=':', lw=1.3, alpha=0.8, label=f"reference $\\gamma=0$: {sig(Rf['S_ref'], 2)}")
+    axA.axhline(0, color='k', ls='--', lw=0.8, alpha=0.4)
+    axA.set_xlabel('time step'); axA.set_ylabel(r'$\sigma_{xz}$  (bulk, LJ)'); axA.grid(alpha=0.3)
+    axA.set_title('(a) shear stress: load, hold, unload, hold (dashed = hold starts; shaded = plateau windows)', fontsize=13)
+    res = U.get('residual', {})
+    txt = '\n'.join(f"{k}: {fmt_val_unc(r['v'], 0.5 * (r['hi'] - r['lo']))}" for k, r in
+                    (('series', res.get('ser')), ('network', res.get('net')), ('plate', res.get('plate'))) if r)
+    if txt:
+        annotate_box(axA, 'residual (unloaded plateau $-$ reference)\n' + txt
+                     + (f"\nloaded plateau: {sig(L['PF']['mean'], 3)}" if 'PF' in L else ''), loc='upper right', fontsize=12)
+    smart_legend(axA, fontsize=11)
+    b = R.get('shown', R['in_bulk'])
+    rm = _ref_profile(axB, R, 'prof_net_mean', 'xz')
+    curves = [] + ([rm] if rm is not None else [])
+    for X, col, name in ((L, WONG['vermillion'], 'loaded final'), (U, WONG['blue'], 'unloaded final')):
+        if X.get('prof_net') is None:
+            continue
+        m, lo, hi = mean_ci(X['prof_net']['xz'][X['prof_plat']], cfg.ci_level)
+        _final_profile(axB, R, None, m, lo, hi, col, f"{name} ($\\gamma={sig(X['gamma'], 3)}$)")
+        curves.append(m)
+    axB.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
+    shade_bulk(axB, R); mark_plates(axB, R)
+    finish_axes(axB, r"$\sigma'_{xz}(z)$", r"(b) network $\sigma'_{xz}(z)$: reference, loaded, unloaded")
+    robust_ylim(axB, curves, zmask=R['in_bulk'], pad=0.25)
+    smart_legend(axB, fontsize=12)
+    return _save(fig, cfg, 'residual_stress', L['lvl'])
 
 
 # ===========================================================================
