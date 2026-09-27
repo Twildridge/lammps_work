@@ -1134,18 +1134,17 @@ def fig_network_stress(cfg, R, L):
     the solvent-only region behind the plates or P_bath: cfg.P_PORE_MODE): the gamma = 0
     REFERENCE (dashed, grey band) and the FINAL plateau-averaged state (solid, 95 % band)
     -- the shear analogue of the compression notebooks' network-stress figure.
-    (a) sigma'_xz: interior mean / gamma = G_network;  (b) sigma'_xx (normal)."""
+    sigma'_xz only: interior mean / gamma = G_network."""
     if L.get('prof_net') is None:
         print('network-stress figure skipped (no polymer + solvent profiles)')
         return None
     mode = R['pore_mode']
     pdesc = (r'$p_{\rm pore}$ = solvent-only film behind the plates' if mode == 'film'
              else r'$p_{\rm pore}=P_{\rm bath}$ on the diagonal, 0 off-diagonal')
-    fig, (axA, axB) = plt.subplots(1, 2, figsize=(17, 6.5), constrained_layout=True)
-    fig.suptitle(f"Network stress $\\sigma'=\\sigma^t-p_{{\\rm pore}}$: reference and final equilibrated state  ({pdesc})  |  "
-                 f"$\\gamma = {sig(L['gamma'], 4)}$  |  {cfg.sim_name}", fontsize=13, fontweight='bold')
-    for ax, comp, title in ((axA, 'xz', r"(a) network $\sigma'_{xz}(z)$  ($G$ = interior mean / $\gamma$)"),
-                            (axB, 'xx', r"(b) network $\sigma'_{xx}(z)=\sigma^t_{xx}-p_{\rm pore}$  (normal)")):
+    fig, ax = plt.subplots(figsize=(11, 6.5), constrained_layout=True)
+    fig.suptitle(f"Network stress $\\sigma'=\\sigma^t-p_{{\\rm pore}}$: reference and final equilibrated state  |  "
+                 f"$\\gamma = {sig(L['gamma'], 4)}$\n{pdesc}  |  {cfg.RUN_ID}", fontsize=13, fontweight='bold')
+    for ax, comp, title in ((ax, 'xz', r"network $\sigma'_{xz}(z)$  ($G$ = interior mean / $\gamma$)"),):
         rm = _ref_profile(ax, R, 'prof_net_mean', comp)
         m, lo, hi = mean_ci(L['prof_net'][comp][L['prof_plat']], cfg.ci_level)
         _final_profile(ax, R, None, m, lo, hi, WONG['blue'], f'final (plateau, {int(L["prof_plat"].sum())} snapshots)')
@@ -1220,7 +1219,8 @@ def fig_G(cfg, R, L):
     """Shear modulus, two panes (the layout of the compression notebooks' M figure):
     (a) the increment estimates next to the absolute stress/gamma values they replace
     (hollow) and the polymer-partial estimate (check: its shortfall is the solvent's
-    share of the network shear stress); (b) network and series estimates alone."""
+    share of the network shear stress); (b) network and series estimates alone.
+    G_plate is not drawn here (see fig_G_sweep / print_summary)."""
     if not L['G']:
         print('G figure skipped (no profile / series files)')
         return None
@@ -1229,9 +1229,8 @@ def fig_G(cfg, R, L):
     sub = L['G_ref'] == 'measured'
     fig.suptitle("Shear modulus from the network stress $\\sigma'_{xz}$" + (' (increment from $\\gamma=0$)' if sub else ' (absolute: no $\\gamma=0$ reference files)')
                  + f'   |   {cfg.RUN_ID}   |   $\\gamma = {sig(L["gamma"], 4)}$', fontsize=14, fontweight='bold')
+    # G_plate (boundary estimate) is computed and printed but not drawn here (it stays in the sweep figure)
     spec = [('net', 'o', WONG['blue'], 'network'), ('ser', 's', WONG['vermillion'], 'series')]
-    if 'plate' in L['G']:
-        spec.append(('plate', '^', WONG['green'], 'plate'))
     n_est = len(spec)
     for ax, pane in ((axA, 'a'), (axB, 'b')):
         for k, (key, mk, col, name) in enumerate(spec):
@@ -1249,8 +1248,6 @@ def fig_G(cfg, R, L):
                         + (f"\n(solvent share of $\\sigma'_{{xz}}$: {d['solvent_share']:+.1%})" if 'solvent_share' in d else ''))
         labels = [r'network' + '\n' + r"$\Delta\langle\sigma'_{xz}\rangle_{\rm int}/\gamma$",
                   r'series' + '\n' + r"$\Delta\langle\sigma'_{xz}\rangle_{\rm plateau}/\gamma$"]
-        if 'plate' in L['G']:
-            labels.append('plate\n' + r'$\Delta F_x/(A\,\gamma)$')
         if pane == 'a':
             labels.append('polymer partial\n' + r'$\Delta\sigma_{p,xz}/\gamma$ (check)')
         ax.set_xticks(list(range(len(labels))))

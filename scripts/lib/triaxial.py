@@ -52,7 +52,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy import stats
-from scipy.optimize import minimize_scalar
+from scipy.optimize import minimize_scalar, curve_fit
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from matplotlib.lines import Line2D
@@ -178,6 +178,17 @@ class Config:
                                           # profile method a constant ~-0.002 bias; absolute M inherits that
                                           # ~0.002 gap.  Piston reference needs piston_force_avg_ref.)
     G_SUBTRACT_REF: bool = True           # use increments relative to the eps = 0 reference state
+    RELAX_SYS: bool = True                # 2026-09-27: unrelaxed-hold systematic on M.  An exponential tail is fitted to
+                                          # the block-averaged piston P over the last RELAX_TAIL_FRAC of the hold; the
+                                          # plateau mean minus the fitted asymptote, / eps, is delta_sys and is added to the
+                                          # LOWER bound of BOTH M estimators (the true M is lower), hence to the UPPER bound
+                                          # of kappa = D_c/M.  0 when the tail is flat or the fit is not credible.
+    RELAX_TAIL_FRAC: float = 0.6          # trailing fraction of the hold the tail is fitted over
+    SS_FIT_NPTS: int = 3                  # fig_stress_strain_sweep (2026-09-27): the dotted line of each estimator is
+                                          # anchored at its eps = 0 reading and its slope is the through-anchor
+                                          # least-squares fit of the first SS_FIT_NPTS levels (the linear regime);
+                                          # the higher levels are NOT in the fit, so their stiffening shows as
+                                          # departure from the line instead of a negative intercept
     # ---- D_c consolidation fit ------------------------------------------
     DC_N_MODES: int = 5
     DC_KMAX_IC: int = 199
@@ -538,6 +549,46 @@ def plateau_window(steps, x, plateau_frac_auto=0.45, ci=0.95, fracs=None):
     m, lo, hi, blk, tau = block_bootstrap_ci(x[sel], ci=ci)
     return dict(mean=m, lo=lo, hi=hi, step0=float(steps[sel][0]), n=int(sel.sum()),
                 block=blk, tau=tau, frac=float(fracs[-1]), warn=True)
+
+
+def relax_tail(steps, x, plateau_mean, dt=1.0, frac=0.6):
+    """Unrelaxed excess of a plateau reading (2026-09-27).  Fits x(t) = x_inf + A exp(-t/tau)
+    over the trailing `frac` of the series and returns dict(x_inf, A, tau, T_fit, excess, ok,
+    why) with excess = plateau_mean - x_inf (>= 0).  The fit is credible (ok) only when it
+    converged, relaxes DOWNWARD (A > 0, compression-positive), and tau is shorter than the
+    fitted window (otherwise the tail is indistinguishable from a line and the asymptote is
+    unconstrained); excess is 0 whenever not ok or the asymptote lies above the plateau."""
+    steps = np.asarray(steps, float)
+    x = np.asarray(x, float)
+    out = dict(x_inf=np.nan, A=np.nan, tau=np.nan, T_fit=np.nan, excess=0.0, ok=False, why='')
+    if len(steps) < 20:
+        out['why'] = 'too few points'
+        return out
+    t = (steps - steps[0]) * dt
+    sel = t >= (1.0 - frac) * t[-1]
+    tw, xw = t[sel] - t[sel][0], x[sel]
+    T = float(tw[-1])
+    out['T_fit'] = T
+    if sel.sum() < 20 or T <= 0:
+        out['why'] = 'window too short'
+        return out
+    f = lambda tt, xi, A, tau: xi + A * np.exp(-tt / tau)
+    try:
+        p, _ = curve_fit(f, tw, xw, p0=[xw[-1], xw[0] - xw[-1], 0.3 * T], maxfev=20000)
+    except Exception:
+        out['why'] = 'fit did not converge'
+        return out
+    xi, A, tau = (float(v) for v in p)
+    out.update(x_inf=xi, A=A, tau=tau)
+    if not np.isfinite(tau) or tau <= 0 or tau > T:
+        out['why'] = 'tau not shorter than the window (asymptote unconstrained)'
+        return out
+    if A <= 0:
+        out['why'] = 'tail not relaxing downward'
+        return out
+    out['ok'] = True
+    out['excess'] = float(max(plateau_mean - xi, 0.0))
+    return out
 
 
 def windowed_slopes(steps, y, win_steps, dt=1.0, min_pts=3):
@@ -1315,6 +1366,24 @@ def load_level(cfg, R, lvl, verbose=True):
             L['M_pist_lo'], L['M_pist_hi'] = L['M_pist'] - half, L['M_pist'] + half
         else:
             L['M_pist'], L['M_pist_lo'], L['M_pist_hi'] = L['M_pist_abs'], L['M_pist_abs_lo'], L['M_pist_abs_hi']
+    # ---- unrelaxed-hold systematic (2026-09-27, RELAX_SYS): the piston tail's excess over its
+    #      fitted asymptote, / eps, widens the LOWER bound of BOTH M estimators (same relaxation
+    #      drives both); kappa = D_c/M below inherits it on its upper bound.  The block-bootstrap
+    #      CIs see only the scatter inside the plateau window, not the drift that is still in it.
+    L['M_sys'] = 0.0
+    if cfg.RELAX_SYS and 'PF' in L and 'pfa_P' in L:
+        rt = relax_tail(L['pfa_step'], L['pfa_P'], L['PF']['mean'], cfg.dt_lj, cfg.RELAX_TAIL_FRAC)
+        L['relax'] = rt
+        L['M_sys'] = rt['excess'] / eps
+        L['M_net_lo'] -= L['M_sys']
+        if 'M_pist' in L:
+            L['M_pist_lo'] -= L['M_sys']
+        if rt['ok']:
+            say(f"  unrelaxed-hold systematic: piston tail -> P_inf = {rt['x_inf']:.4f} (tau ~ {rt['tau']:.0f} tau over the last "
+                f"{cfg.RELAX_TAIL_FRAC:.0%}), plateau excess {rt['excess']:+.4f} = {rt['excess'] / max(L['PF']['mean'], 1e-30):+.1%}"
+                f"  ->  delta_sys = {L['M_sys']:.4f} added to the LOWER bound of M_network and M_piston")
+        else:
+            say(f"  unrelaxed-hold systematic: 0 ({rt['why']})")
     how = 'increment from eps = 0' if sub else 'absolute'
     say(f"  M_network = {L['M_net']:.4f} [{L['M_net_lo']:.4f}, {L['M_net_hi']:.4f}] "
         f"({how}; plateau mean, {L['M_net_mask']}, {L['M_net_nbins']} bins"
@@ -1348,6 +1417,17 @@ def load_level(cfg, R, lvl, verbose=True):
         g_bins = (dzz_p - dxx_p)[im] / (2.0 * eps)
         g_bins = g_bins[np.isfinite(g_bins)]
         Gm, Glo, Ghi = mean_ci(g_bins, cfg.ci_level)
+        # unrelaxed-hold systematic (RELAX_SYS, 2026-09-27): the unrelaxed excess is undrained pore
+        # pressure, i.e. ISOTROPIC -- on run 7 sigma'_xx and sigma'_yy drift by the same amount as
+        # sigma'_zz (0.142 vs 0.143 at eps = 0.5) -- so it cancels in sigma'_zz - sigma'_xx and G
+        # carries only the anisotropic residual.  That residual is measured directly: the drop of the
+        # interior anisotropy over the second half of the hold (3-snapshot means), / 2 eps, >= 0.
+        G_sys = 0.0
+        if cfg.RELAX_SYS and len(ts) >= 8:
+            an = np.array([np.nanmean((dzz[i] - dxx[i])[im]) for i in range(len(ts))])
+            h = len(ts) // 2
+            G_sys = float(max(np.nanmean(an[h:h + 3]) - np.nanmean(an[-3:]), 0.0) / (2.0 * eps))
+        Glo -= G_sys
         lam = float(np.nanmean(dxx_p[im])) / eps
         with np.errstate(invalid='ignore', divide='ignore'):
             ratio = np.array([np.nanmean(dzz[i][im]) / np.nanmean(dxx[i][im]) for i in range(len(ts))])
@@ -1370,9 +1450,10 @@ def load_level(cfg, R, lvl, verbose=True):
         with np.errstate(invalid='ignore', divide='ignore'):
             ratio_plat = float(np.nanmean(dzz_p[im]) / np.nanmean(dxx_p[im]))
         ratio_plat_err = float(np.sqrt(np.nanmean(ratio_err[L['plat']] ** 2) / max(int(L['plat'].sum()), 1)))
-        L['G'][comp] = dict(G=Gm, lo=Glo, hi=Ghi, lam=lam, ratio=ratio, ratio_err=ratio_err,
+        L['G'][comp] = dict(G=Gm, lo=Glo, hi=Ghi, sys=G_sys, lam=lam, ratio=ratio, ratio_err=ratio_err,
                             nbins=len(g_bins), ratio_final=ratio_plat, ratio_final_err=ratio_plat_err)
-        say(f"  G from {comp}: {Gm:.4f} [{Glo:.4f}, {Ghi:.4f}]   lambda_{comp} = {lam:.4f}   "
+        say(f"  G from {comp}: {Gm:.4f} [{Glo:.4f}, {Ghi:.4f}]" + (f" (lower bound incl. anisotropy drift {G_sys:.4f})" if G_sys > 0 else '')
+            + f"   lambda_{comp} = {lam:.4f}   "
             f"sigma'_zz/sigma'_{comp} (plateau) = {ratio_plat:.3f} ± {ratio_plat_err:.3f}"
             + (f"   (ref sigma'_{comp} subtracted: {S['ref_net']:+.4f})" if cfg.G_SUBTRACT_REF else ''))
 
@@ -3433,31 +3514,40 @@ def fig_M_sweep(cfg, R, levels):
 
 def fig_stress_strain_sweep(cfg, R, levels):
     """The stress-strain curve itself: plateau piston stress and interior network stress vs
-    applied strain, INCLUDING each estimator's eps = 0 reading (hollow), with a least-squares
-    line through each series.  The slopes are a separate estimate of M that uses only
-    differences BETWEEN levels, so any constant offset an estimator carries (piston preload,
-    profile bias) cancels whether or not M_SUBTRACT_REF is on; curvature of the points is the
-    stress-strain nonlinearity.  (Was panel (b) of fig_M_sweep until 2026-09-14.)"""
+    applied strain, INCLUDING each estimator's eps = 0 reading (hollow), with a dotted line
+    through each series.  The line is ANCHORED at the estimator's own eps = 0 reading and its
+    slope is the through-anchor least-squares fit of the first cfg.SS_FIT_NPTS levels only
+    (2026-09-27; was a free-intercept fit of every point, whose intercept went negative as
+    the stiffening levels pulled it).  The slope is the small-strain M of that estimator,
+    referenced to its own zero like M_SUBTRACT_REF; the higher levels' departure from the
+    line is the stress-strain nonlinearity.  (Was panel (b) of fig_M_sweep until 2026-09-14.)"""
     fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
     eps = np.array([L['eps'] for L in levels])
     hp = [L for L in levels if 'M_pist' in L]
     Rzz = R['stress']['zz']
+    n_fit = int(max(1, cfg.SS_FIT_NPTS))
     fits = []
 
     def _series(e, s, err, color, marker, name, e0=None, s0=None, err0=None):
         ax.errorbar(e, s, yerr=err, fmt=marker + '-', lw=2, ms=9, color=color, capsize=6, label=name)
-        ee, ss = list(e), list(s)
+        e, s = np.asarray(e, float), np.asarray(s, float)
+        anchor = float(s0) if (e0 is not None and s0 is not None and np.isfinite(s0)) else 0.0
         if e0 is not None and s0 is not None and np.isfinite(s0):
             ax.errorbar([e0], [s0], yerr=err0, fmt=marker, ms=9, mfc='none', color=color, capsize=6)
-            ee, ss = [e0] + ee, [s0] + ss
-        if len(ee) >= 2:
-            slope, icpt = np.polyfit(ee, ss, 1)
-            xs = np.linspace(0, max(ee) * 1.05, 20)
-            ax.plot(xs, slope * xs + icpt, ls=':', lw=1.5, color=color, alpha=0.8)
-            fits.append((name.split()[0], slope, len(ee)))
+        order = np.argsort(e)
+        ef, sf = e[order][:n_fit], s[order][:n_fit]
+        if len(ef) >= 1:
+            # least squares through the anchor (0, s0):  slope = sum eps (s - s0) / sum eps^2
+            slope = float(np.sum(ef * (sf - anchor)) / np.sum(ef ** 2))
+            xs = np.linspace(0, max(e) * 1.05, 20)
+            ax.plot(xs, anchor + slope * xs, ls=':', lw=1.5, color=color, alpha=0.8)
+            fits.append((name.split()[0], slope, len(ef)))
 
+    # unrelaxed-hold systematic (RELAX_SYS): the plateau stress is over by the piston tail's excess,
+    # so both series carry it on their LOWER bar (as M does through delta_sys)
+    exc = np.array([L.get('relax', {}).get('excess', 0.0) for L in levels])
     sn = np.array([L['M_net_abs'] * L['eps'] for L in levels])
-    sn_err = [np.abs(np.array([L['M_net_abs_lo'] * L['eps'] for L in levels]) - sn),
+    sn_err = [np.abs(np.array([L['M_net_abs_lo'] * L['eps'] for L in levels]) - sn) + exc,
               np.abs(np.array([L['M_net_abs_hi'] * L['eps'] for L in levels]) - sn)]
     _series(eps, sn, sn_err, WONG['blue'], 'o', "network $\\langle\\sigma'_{zz}\\rangle_{\\rm int}$ (plateau)",
             e0=0.0, s0=float(Rzz['net_interior']), err0=float(Rzz.get('net_interior_half', 0.0)))
@@ -3465,12 +3555,16 @@ def fig_stress_strain_sweep(cfg, R, levels):
         ep = np.array([L['eps'] for L in hp])
         Pp = np.array([L['P_final'] for L in hp])
         pref = R.get('P_ref', np.nan)
-        _series(ep, Pp, [Pp - [L['PF']['lo'] for L in hp], [L['PF']['hi'] for L in hp] - Pp],
+        exc_p = np.array([L.get('relax', {}).get('excess', 0.0) for L in hp])
+        _series(ep, Pp, [Pp - [L['PF']['lo'] for L in hp] + exc_p, [L['PF']['hi'] for L in hp] - Pp],
                 WONG['vermillion'], 's', 'piston $P=\\langle F_z\\rangle/A$ (plateau)',
                 e0=0.0, s0=pref, err0=(float(R['P_ref_hi'] - R['P_ref_lo']) / 2 if np.isfinite(pref) else None))
     ax.plot([], [], 'o', mfc='none', color='0.4', label=r'hollow = $\varepsilon=0$ reading')
-    ax.set_title('Stress vs strain, least-squares slopes incl. $\\varepsilon=0$:  ' +
-                 ',  '.join(f"$M_{{\\rm {n[:4]}}}\\approx{sig(s)}$ ({k} pts)" for n, s, k in fits) + '\n' + cfg.sim_name,
+    ax.plot([], [], ls=':', lw=1.5, color='0.4', label=f'dotted = through the $\\varepsilon=0$ reading, slope from the first {n_fit} levels')
+    if np.any(exc > 0):
+        ax.plot([], [], ' ', label='lower bars include the unrelaxed-hold excess')
+    ax.set_title('Stress vs strain, small-strain slopes through $\\varepsilon=0$:  ' +
+                 ',  '.join(f"$M_{{\\rm {n[:4]}}}\\approx{sig(s)}$ ({k} levels)" for n, s, k in fits) + '\n' + cfg.sim_name,
                  fontsize=12)
     ax.set_xlabel(r'applied strain  $\varepsilon$')
     ax.set_ylabel(r'plateau stress  (LJ)')
@@ -3608,10 +3702,14 @@ def print_summary(cfg, levels):
     if cfg.M_SUBTRACT_REF and any(L.get('M_pist_ref') == 'absent' for L in levels):
         how += '; piston M ABSOLUTE (no piston_force_avg_ref file)'
     print(f'\nSUMMARY  ({cfg.sim_name}; {ci}% CIs; {how})')
-    print(f"{'eps':>6s} {'M_net':>18s} {'M_pist':>18s} {'G_x':>18s} {'G_y':>18s} {'D_c':>10s} {'kappa_net':>10s} {'kappa_pist':>10s}")
+    if cfg.RELAX_SYS:
+        how += '; M lower bounds include delta_sys (unrelaxed-hold excess, last column)'
+    print(f"{'eps':>6s} {'M_net':>18s} {'M_pist':>18s} {'G_x':>18s} {'G_y':>18s} {'D_c':>10s} {'kappa_net':>10s} {'kappa_pist':>10s} {'delta_sys':>10s}")
     for L in levels:
         def ci_(v, lo, hi):
             return f'{v:.3f} [{lo:.3f},{hi:.3f}]'
+        ds = L.get('M_sys', 0.0)
+        ds_s = f"{ds:.3f}" + (' *' if ds > 0.5 * (L['M_net_hi'] - L['M_net']) else '') if cfg.RELAX_SYS else ''
         mp = ci_(L['M_pist'], L['M_pist_lo'], L['M_pist_hi']) if 'M_pist' in L else 'n/a'
         gx = ci_(L['G']['xx']['G'], L['G']['xx']['lo'], L['G']['xx']['hi']) if 'xx' in L['G'] else 'n/a'
         gy = ci_(L['G']['yy']['G'], L['G']['yy']['lo'], L['G']['yy']['hi']) if 'yy' in L['G'] else 'n/a'
@@ -3619,7 +3717,9 @@ def print_summary(cfg, levels):
         kn = f"{L['kappa']['net']['k']:.3e}" if L.get('kappa', {}).get('net') else 'n/a'
         kp = f"{L['kappa']['pist']['k']:.3e}" if L.get('kappa', {}).get('pist') else 'n/a'
         print(f"{L['eps']:6.3f} {ci_(L['M_net'], L['M_net_lo'], L['M_net_hi']):>18s} {mp:>18s} {gx:>18s} {gy:>18s} "
-              f"{dc:>10s} {kn:>10s} {kp:>10s}")
+              f"{dc:>10s} {kn:>10s} {kp:>10s} {ds_s:>10s}")
+    if cfg.RELAX_SYS:
+        print('  delta_sys = (piston plateau - fitted tail asymptote) / eps;  * = larger than the M_net bootstrap half-width')
     print_hold_check(cfg, levels)
 
 
