@@ -159,6 +159,20 @@ variable nrepeat_stress equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepea
 variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 print ">>> Stress: nevery=${nevery_stress} nrepeat=${nrepeat_stress} nfreq=${nfreq_stress}"
+
+# ----- Polymer displacement profile cadence (2026-09-28) -----
+# The one-sided consolidation transient after the dP step (tau_1 = 4 L^2/(pi^2 D_c),
+# ~1M steps for L ~ 125 sigma, D_c ~ 1.3) needs far more snapshots than the stress
+# cadence (nsteps/10; its first window even starts one interval after the onset, so
+# the first perm run recorded nothing of the transient).  u_z(z) is block-averaged
+# over every disp_nfreq steps (nevery x nrepeat = nfreq: each snapshot is the window
+# mean, tagged with the window end; lib/triaxial.py averages its fitted modes the
+# same way and reads the stride from the file).
+variable disp_nfreq      index 50000
+variable disp_nevery     equal 100
+variable disp_nrepeat    equal floor(v_disp_nfreq/v_disp_nevery)
+variable disp_nfreq_eff  equal v_disp_nevery*v_disp_nrepeat
+print ">>> Displacement profile: nevery=${disp_nevery} nrepeat=${disp_nrepeat} nfreq=${disp_nfreq_eff}"
 print ">>> Mode: PERMEATION, TWO-PISTON (feed/permeate NPT-piston reservoirs)"
 
 # ----- Phase 1.5 reference averaging -----
@@ -399,7 +413,8 @@ variable box_lx equal lx
 variable box_ly equal ly
 variable box_lz equal lz
 
-# Polymer z-displacement reference (reset at production onset)
+# Polymer z-displacement reference (reset at production onset; profile written every
+# disp_nfreq steps -> D_c and M in triaxial_permeation_single_two_pist.ipynb, 2026-09-28)
 compute displace_poly polymer displace/atom
 
 
@@ -932,7 +947,7 @@ dump traj_stress_sync gel_system custom ${nfreq_stress} &
     traj_files/traj_stress_${dataname}_${interaction}_${nsteps}.lammpstrj &
     id type mol x y z
 
-fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+fix avg_disp_z_poly all ave/chunk ${disp_nevery} ${disp_nrepeat} ${disp_nfreq_eff} &
     chunk_z_polymer v_uz_poly &
     file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat
 

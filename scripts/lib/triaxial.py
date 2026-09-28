@@ -25,7 +25,8 @@ Layout of this file
    10. figures, sweep               fig_*_sweep
    11. summaries                    print_summary, print_hold_check
    12. two-piston (2026-09-16)      mode='permeation' loader + figures, wet-piston
-                                    panels for two-piston compression runs
+                                    panels for two-piston compression runs; D_c and M from
+                                    the polymer displacement under permeation (2026-09-28)
 
 Physics conventions (see the Notes section at the end of either notebook):
   * total stress sigma^t = sigma_p + sigma_s (group stress/atom, kinetic term included)
@@ -172,6 +173,17 @@ class Config:
     PSD_GRID: float = 0.5                 # grid spacing (sigma): 0.5 ~ 7 s/frame, 0.25 ~ 2 min/frame (the covering step)
     PSD_DMAX: float = 8.0                 # pore-diameter histogram range (2 r_probe .. PSD_DMAX) ...
     PSD_DBIN: float = 0.25                # ... and bin width (= the resolution of the covering step)
+    # ---- permeation: D_c and M from the polymer displacement (2026-09-28) ----------
+    PERM_GAP: float = 1.0                 # sigma: the pinned polymer face z^P = z_support + PERM_GAP (the plate-bead
+                                          # exclusion; the compression fit's plate gap is the same ~1 sigma).  zeta = (z - z^P)/L_0
+    PERM_L0_STEPS: int = 100000           # steps before the production onset averaged for L_0 (bounding-box thickness; lies
+                                          # inside the zero-flux reference window)
+    PERM_DC_WINDOW_AVG: bool = True       # the fitted modes are averaged over each ave/chunk window: the deck block-averages
+                                          # u_z over the whole nfreq interval and tags the snapshot with the window END
+    PERM_DC_BOUNDS: tuple = (1e-6, 50.0)  # D_c search interval of the permeation fits (sigma^2/tau).  The one-sided
+                                          # problem relaxes 4x slower than the compression fit's two-sided one for the
+                                          # same D_c, and the first perm run's early transient (~0.6M steps for
+                                          # L_0 ~ 126) needs D_c ~ 2-3: the compression DC_BOUNDS cap of 1.0 would peg it
     # ---- M and G as increments from the eps = 0 reference ------------------
     M_SUBTRACT_REF: bool = True           # M = (stress - its own eps = 0 reading) / eps for BOTH estimators
                                           # (2026-09-12: the seated piston carries a real preload ~+0.0014 and the
@@ -4383,6 +4395,431 @@ def fig_perm_permeability(cfg, R, P):
     return _save(fig, cfg, 'perm_permeability')
 
 
+# ---------------------------------------------------------------------------
+#  permeation mode: D_c and M from the polymer displacement (2026-09-28)
+#
+#  Linear 1-D poroelasticity with the polymer at rest in the steady state,
+#      du_z/dt = q_s + D_c d2u_z/dz2,     q_s = phi_s v_s = Q_perm / A  (Darcy flux),
+#  on the membrane z^P <= z <= z^F with  u_z(z^P) = 0 (support: the polymer is pinned),
+#  du_z/dz|z^F = 0 (free feed face, sigma' = 0)  and  u_z(z, 0) = 0 (the deck resets
+#  displace/atom at the production onset; the 5 k-step feed-pressure ramp is negligible
+#  against the consolidation time).  With zeta = (z - z^P)/L and mu_k = (k - 1/2) pi:
+#      u_z(zeta, t) = u_ss(zeta) + sum_k a_k sin(mu_k zeta) exp(-mu_k^2 D_c t / L^2),
+#      u_ss(zeta)   = -(q_s L^2 / 2 D_c) [zeta^2 - 2 zeta] = -(dP L / 2 M) [zeta^2 - 2 zeta]
+#  (Darcy q_s = D_c dP/(L M)), so the feed face settles at u_F = u_ss(1) = -dP L/(2M):
+#      M = dP L / (2 |u_F|) = dP / (2 |c|),   u_ss(zeta)/L = c zeta (2 - zeta).
+#  The zero IC fixes the modal amplitudes, a_k = -4 u_F (-1)^(k+1)/mu_k^3, so the feed-face
+#  trace is  u_F(t) = u_F [1 - sum_k b_k exp(-mu_k^2 D_c t/L^2)],  b_k = 4(-1)^(k+1)/mu_k^3.
+#
+#  Three readings of the displacement data (all referenced to the onset):
+#    * profile fit  (fig 12 a-b): u_z(zeta, t)/L of the disp_z_polymer snapshots with FREE
+#      amplitudes (the compression fit's idiom, DC_FREE_AMPS) -> D_c; the amplitudes are
+#      multiplied by [g_k(t) - 1] so u = 0 at t = 0 whatever they are.
+#    * thickness trace (fig 12 c): u_F(t) = L_bb(t) - L_0 (5 k-step cadence) against the
+#      exact zero-IC series -> (u_F(inf), D_c); this resolves the early transient that the
+#      stress-cadence snapshots (first window >= 1 nfreq after the onset) miss entirely.
+#    * M (fig 13): from the steady thickness change L_0 - L_ss (the definition), from the
+#      steady-profile parabola c, and from the trace asymptote u_F(inf).
+# ---------------------------------------------------------------------------
+_PERM_TRACE_MODES = 60        # terms of the exact zero-IC series (coefficients fall as 1/mu^3)
+
+
+def _perm_mu(n):
+    """eigenvalues of d2/dzeta2 on 0 < zeta < 1 with u(0) = 0, u'(1) = 0: modes sin(mu_k zeta)."""
+    return (np.arange(1, n + 1) - 0.5) * np.pi
+
+
+def _perm_decay(mu, Dc, L, t, W=0.0):
+    """exp(-mu^2 Dc t/L^2), averaged over the ave/chunk window [t - W, t] when W > 0
+    (the deck block-averages u_z over the whole nfreq interval and tags it with the
+    window END; the mean of the exponential over the window is exp(-lam t)(e^{lam W}-1)/(lam W))."""
+    lam = (np.asarray(mu, float) / L) ** 2 * Dc
+    if W <= 0:
+        return np.exp(-lam * t)
+    # mean over [t - W, t] = exp(-lam (t - W)) (1 - e^{-lam W}) / (lam W): no overflow for any lam
+    x = lam * W
+    safe = np.where(x > 1e-12, x, 1.0)
+    return np.exp(-lam * max(t - W, 0.0)) * np.where(x > 1e-12, -np.expm1(-safe) / safe, 1.0)
+
+
+def _perm_trace_series(t_lj, Dc, L, n=_PERM_TRACE_MODES):
+    """1 - sum_k b_k exp(-mu_k^2 Dc t/L^2): the feed-face displacement over its asymptote
+    for the zero initial condition (b_k = 4 (-1)^(k+1)/mu_k^3, sum b_k = 1)."""
+    mu = _perm_mu(n)
+    b = 4.0 * (-1.0) ** np.arange(n) / mu ** 3
+    t = np.atleast_1d(np.asarray(t_lj, float))
+    return 1.0 - np.exp(-np.outer(t, (mu / L) ** 2 * Dc)) @ b
+
+
+def perm_onset_step(cfg):
+    """the production onset: the first step at which the APPLIED feed pressure reaches
+    P_target + dP (piston_pressure: the end of the n_ramp x ramp_steps ramp, after which
+    the deck resets displace/atom).  None when the file or the columns are missing."""
+    names, tab = read_piston_table(cfg.path('piston_pressure'))
+    if tab.size == 0 or names is None:
+        return None
+    fa, pa = table_col(names, tab, 'P_feed_app'), table_col(names, tab, 'P_perm_app')
+    if fa is None or pa is None:
+        return None
+    dp = fa - pa
+    dp_full = float(np.nanmax(dp))
+    if not dp_full > 0:
+        return None
+    return float(tab[int(np.argmax(dp >= 0.999 * dp_full)), 0])
+
+
+def load_perm_disp(cfg, R, P):
+    """disp_z_polymer (fix ave/chunk of the per-atom z displacement since the production
+    onset, binned by CURRENT z) + the polymer bounding-box thickness trace + the onset
+    step -> dict, or None when the displacement file is missing / has < 2 snapshots."""
+    f = cfg.path('disp_z_polymer')
+    if not f.exists():
+        return None
+    snaps = read_ave_chunk_file(f)
+    if len(snaps) < 2:
+        return None
+    d = dict(ts=np.array([s[0] for s in snaps], float), z=snaps[0][1][:, 1],
+             Nc=np.array([s[1][:, 2] for s in snaps]), uz=np.array([s[1][:, 3] for s in snaps]))
+    d['stride'] = float(np.min(np.diff(d['ts'])))       # = the ave/chunk window (nfreq = nevery x nrepeat in the deck)
+    t_on = perm_onset_step(cfg)
+    d['onset_source'] = 'piston_pressure (applied dP reaches its full value)'
+    if t_on is None or t_on > d['ts'][0] - d['stride'] + 1e-6:
+        # the first window must lie entirely after the onset: assume it starts there
+        t_on = float(d['ts'][0] - d['stride'])
+        d['onset_source'] = 'assumed = first displacement window start (no usable piston_pressure)'
+    d['t_onset'] = t_on
+    bb = load2c(cfg.path('gel_dimensions_bb'), 4)
+    if bb is not None:
+        d['bb_step'], d['bb_L'] = bb[:, 0], bb[:, 3]
+    return d
+
+
+def fit_perm_Dc(cfg, R, P, disp):
+    """One-sided consolidation fit of a permeation run (see the section comment):
+    D_c from the displacement profiles (free amplitudes) and from the feed-face
+    thickness trace (exact zero-IC series), M from the steady thickness change,
+    the steady-profile parabola and the trace asymptote.  Returns a dict or None."""
+    if disp is None or not np.isfinite(R.get('z_support', np.nan)):
+        return None
+    ts, z, Nc, uz = disp['ts'], disp['z'], disp['Nc'], disp['uz']
+    t_on = disp['t_onset']
+    z_P = float(R['z_support']) + cfg.PERM_GAP
+    # ---- L_0: bounding-box thickness over the PERM_L0_STEPS before the onset ----
+    L0_ci = (np.nan, np.nan)
+    if 'bb_L' in disp:
+        w0 = (disp['bb_step'] >= t_on - cfg.PERM_L0_STEPS) & (disp['bb_step'] < t_on)
+        if w0.sum() >= 4:
+            L0, lo, hi, *_ = block_bootstrap_ci(disp['bb_L'][w0], cfg.ci_level)
+            L0_ci = (lo, hi)
+        else:
+            L0 = float(disp['bb_L'][disp['bb_step'] <= t_on][-1]) if (disp['bb_step'] <= t_on).any() else float(disp['bb_L'][0])
+        L0_source = 'gel_dimensions_bb'
+    else:
+        L0 = float(R['z_gel_hi'] + 0.5 * cfg.binWidth - z_P)
+        L0_source = 'reference polymer-stress edge'
+    if not L0 > 0:
+        return None
+    z_F = z_P + L0
+    zeta = (z - z_P) / L0
+    uhat = uz / L0
+    idx = np.where((Nc.min(axis=0) > cfg.Ncount_min) & (zeta > 0) & (zeta < 1))[0]
+    if len(idx) < 4 + 2 * cfg.DC_TRIM_BINS:
+        return None
+    if cfg.DC_TRIM_BINS:
+        idx = idx[cfg.DC_TRIM_BINS:-cfg.DC_TRIM_BINS]
+    zf = zeta[idx]
+    t_lj = (ts - t_on) * cfg.dt_lj
+    W = disp['stride'] * cfg.dt_lj if cfg.PERM_DC_WINDOW_AVG else 0.0
+    early = np.where(t_lj <= cfg.DC_FRAC_EARLY * t_lj[-1])[0]
+    if len(early) < 2:
+        return None
+    mu = _perm_mu(cfg.DC_N_MODES)
+    modes = np.sin(np.outer(zf, mu))                       # (bins, modes)
+
+    def design(Dc, t):
+        return modes * (_perm_decay(mu, Dc, L0, t, W) - 1.0)[None, :]
+
+    def amps(Dc):
+        X = np.vstack([design(Dc, t_lj[i]) for i in early])
+        y = np.concatenate([uhat[i][idx] for i in early])
+        return np.linalg.lstsq(X, y, rcond=None)[0]
+
+    def resid(Dc):
+        A = amps(Dc)
+        return float(sum(np.sum((design(Dc, t_lj[i]) @ A - uhat[i][idx]) ** 2) for i in early))
+
+    Dc = float(minimize_scalar(resid, bounds=cfg.PERM_DC_BOUNDS, method='bounded').x)
+    A = amps(Dc)
+    y_all = np.concatenate([uhat[i][idx] for i in early])
+    p_all = np.concatenate([design(Dc, t_lj[i]) @ A for i in early])
+    ss_t = np.sum((y_all - np.mean(y_all)) ** 2)
+    R2 = float(1.0 - np.sum((y_all - p_all) ** 2) / ss_t) if ss_t > 1e-30 else np.nan
+
+    def u_model(zh, t, Wm=W):
+        """u_z/L_0 since the onset at zeta = zh (array) and time t (LJ, scalar); window-averaged like the data."""
+        zh = np.atleast_1d(np.asarray(zh, float))
+        return np.sin(np.outer(zh, mu)) @ (A * (_perm_decay(mu, Dc, L0, t, Wm) - 1.0))
+
+    def u_inf(zh):
+        zh = np.atleast_1d(np.asarray(zh, float))
+        return -(np.sin(np.outer(zh, mu)) @ A)
+
+    tau1 = 4.0 * L0 ** 2 / (np.pi ** 2 * Dc)                   # first-mode time, one-sided (mu_1 = pi/2)
+    T_prod = float(t_lj[-1])
+    F = dict(Dc=Dc, A=A, R2=R2, L0=L0, L0_ci=L0_ci, L0_source=L0_source, z_P=z_P, z_F=z_F, t_onset=t_on,
+             onset_source=disp['onset_source'], stride=disp['stride'], W=W, zeta=zeta, idx=idx, zf=zf, uhat=uhat,
+             early=early, t_lj=t_lj, ts=ts, mu=mu, u_model=u_model, u_inf=u_inf, tau1=tau1, T_prod=T_prod,
+             n_tau=T_prod / tau1, unrelaxed=float(8.0 / np.pi ** 2 * np.exp(-T_prod / tau1)))
+
+    # ---- steady profile: parabola c zeta (2 - zeta) per bin over the steady-window snapshots ----
+    steady = np.where(ts >= P['halt_ts'])[0]
+    if len(steady) == 0:
+        steady = np.array([len(ts) - 1])
+    F['steady'] = steady
+    shape = zf * (2.0 - zf)
+    c_bins = np.mean(uhat[steady][:, idx], axis=0) / shape
+    c, c_lo, c_hi = mean_ci(c_bins, cfg.ci_level)
+    u_ss = np.mean(uhat[steady][:, idx], axis=0)
+    ss_p = np.sum((u_ss - np.mean(u_ss)) ** 2)
+    F.update(c=float(c), c_lo=float(c_lo), c_hi=float(c_hi), c_nbins=len(c_bins), u_ss=u_ss,
+             parab_R2=float(1.0 - np.sum((u_ss - c * shape) ** 2) / ss_p) if ss_p > 1e-30 else np.nan)
+
+    # ---- feed-face thickness trace: exact zero-IC series, (u_F(inf), D_c) by least squares ----
+    F['trace'] = None
+    if 'bb_L' in disp:
+        wt = disp['bb_step'] >= t_on
+        st, uF = disp['bb_step'][wt], disp['bb_L'][wt] - L0
+        tt = (st - t_on) * cfg.dt_lj
+        fit = tt <= cfg.DC_FRAC_EARLY * tt[-1]
+        if fit.sum() >= 8:
+            def model(t, u_inf_, Dc_):
+                return u_inf_ * _perm_trace_series(t, Dc_, L0)
+            try:
+                p0 = (float(np.mean(uF[-max(3, len(uF) // 10):])), float(cfg.DC_SLOW_REF))
+                popt, pcov = curve_fit(model, tt[fit], uF[fit], p0=p0,
+                                       bounds=((-np.inf, cfg.PERM_DC_BOUNDS[0]), (np.inf, cfg.PERM_DC_BOUNDS[1])))
+                res = uF[fit] - model(tt[fit], *popt)
+                tau_ac = autocorr_time(res)                # samples; the 5 k-step points are correlated
+                se = np.sqrt(np.diag(pcov)) * np.sqrt(tau_ac)
+                ss = np.sum((uF[fit] - np.mean(uF[fit])) ** 2)
+                F['trace'] = dict(step=st, t_lj=tt, uF=uF, fit=fit, u_inf=float(popt[0]), u_inf_se=float(se[0]),
+                                  Dc=float(popt[1]), Dc_se=float(se[1]), tau_ac=float(tau_ac),
+                                  R2=float(1.0 - np.sum(res ** 2) / ss) if ss > 1e-30 else np.nan,
+                                  model=lambda t, p=popt: model(t, *p),
+                                  tau1=4.0 * L0 ** 2 / (np.pi ** 2 * float(popt[1])))
+            except (RuntimeError, ValueError) as e:
+                print(f'  NOTE: thickness-trace fit failed ({e})')
+        # steady thickness (the steady window of the stress snapshots) for M from dL
+        ws = disp['bb_step'] >= P['halt_ts']
+        if ws.sum() >= 4:
+            Lss, lo, hi, *_ = block_bootstrap_ci(disp['bb_L'][ws], cfg.ci_level)
+            F['L_ss'], F['L_ss_ci'] = float(Lss), (float(lo), float(hi))
+        elif ws.any():
+            F['L_ss'], F['L_ss_ci'] = float(np.mean(disp['bb_L'][ws])), (np.nan, np.nan)
+    return F
+
+
+def perm_M_estimates(cfg, P, F):
+    """M = dP_ext L_0/(2 |u_F|) from (bb) the steady thickness change L_0 - L_ss, (prof) the
+    steady-profile parabola c = u_F/L_0 and (trace) the fitted asymptote u_F(inf).  dP_ext is
+    the MEASURED piston difference (block-bootstrap CI) when the flux loader has it, else the
+    applied one; every CI combines the relative half-widths in quadrature.  L_0 (the thickness
+    at the onset, the linearisation state) is the primary L; the L_ss variants are stored."""
+    flux = P.get('flux') or {}
+    if 'dP_meas' in flux:
+        dP, dP_h, dP_src = flux['dP_meas'], 0.5 * (flux['dP_meas_hi'] - flux['dP_meas_lo']), 'measured'
+    elif np.isfinite(flux.get('dP_app', np.nan)):
+        dP, dP_h, dP_src = flux['dP_app'], 0.0, 'applied'
+    else:
+        return None
+    if not dP > 0:
+        return None
+    L0 = F['L0']
+    out = dict(dP=float(dP), dP_h=float(dP_h), dP_src=dP_src, L0=L0, L_ss=F.get('L_ss', np.nan))
+    rdp = dP_h / dP
+
+    def _m(uF, uF_h, tag, how):
+        if not (np.isfinite(uF) and uF != 0):
+            return None
+        M = dP * L0 / (2.0 * abs(uF))
+        rel = np.sqrt((uF_h / abs(uF)) ** 2 + rdp ** 2) if np.isfinite(uF_h) else rdp
+        d = dict(M=float(M), lo=float(M * (1 - rel)), hi=float(M * (1 + rel)), uF=float(uF), uF_h=float(uF_h),
+                 eps=float(abs(uF) / L0), how=how)
+        if np.isfinite(out['L_ss']):
+            d['M_Lss'] = float(M * out['L_ss'] / L0)
+        return d
+
+    if np.isfinite(F.get('L_ss', np.nan)):
+        h0 = 0.5 * (F['L0_ci'][1] - F['L0_ci'][0]) if np.isfinite(F['L0_ci'][0]) else 0.0
+        hs = 0.5 * (F['L_ss_ci'][1] - F['L_ss_ci'][0]) if np.isfinite(F['L_ss_ci'][0]) else 0.0
+        out['bb'] = _m(F['L_ss'] - L0, np.sqrt(h0 ** 2 + hs ** 2), 'bb', 'steady thickness change L_0 - L_ss (bounding box)')
+    out['prof'] = _m(F['c'] * L0, 0.5 * (F['c_hi'] - F['c_lo']) * L0, 'prof',
+                     f"steady-profile parabola c zeta(2 - zeta), {F['c_nbins']} bins")
+    T = F.get('trace')
+    if T is not None:
+        out['trace'] = _m(T['u_inf'], T['u_inf_se'] * _Z95, 'trace', 'thickness-trace asymptote u_F(inf), zero-IC series')
+    out = {k: v for k, v in out.items() if v is not None}
+    return out
+
+
+def add_perm_displacement(cfg, R, P, verbose=True):
+    """P['disp'], P['Dc'] (fit_perm_Dc), P['M_perm'] (perm_M_estimates) and P['kappa_Dc']
+    (D_c/M against the Darcy kappa of figure 9).  Missing files -> the keys are None and
+    figures 12-13 are skipped."""
+    say = print if verbose else (lambda *a, **k: None)
+    P['disp'] = load_perm_disp(cfg, R, P)
+    P['Dc'] = P['M_perm'] = P['kappa_Dc'] = None
+    if P['disp'] is None:
+        say('  NOTE: no disp_z_polymer file (or < 2 snapshots) -> D_c / M from the displacement skipped')
+        return P
+    F = fit_perm_Dc(cfg, R, P, P['disp'])
+    if F is None:
+        say('  NOTE: D_c fit not possible (no support plane, L_0 <= 0 or too few polymer bins)')
+        return P
+    P['Dc'] = F
+    d = P['disp']
+    say(f"displacement: {len(d['ts'])} snapshots (windows of {int(d['stride'])} steps, "
+        f"first {int(d['ts'][0])}), onset step {int(F['t_onset'])} [{F['onset_source']}];  "
+        f"L_0 = {F['L0']:.2f} sigma ({F['L0_source']}), z^P = {F['z_P']:.2f}, z^F = {F['z_F']:.2f}; "
+        f"fit domain {len(F['idx'])} bins, zeta in [{F['zf'][0]:.3f}, {F['zf'][-1]:.3f}]")
+    say(f"  D_c (profile fit, {len(F['early'])} snapshots{', window-averaged modes' if F['W'] > 0 else ''}) = "
+        f"{F['Dc']:.4e} sigma^2/tau  (R^2 = {F['R2']:.3f});  tau_1 = 4L_0^2/(pi^2 D_c) = {F['tau1']:.0f} tau = "
+        f"{F['tau1'] / cfg.dt_lj / 1e6:.2f}M steps;  production = {F['n_tau']:.2f} tau_1 "
+        f"-> {100 * F['unrelaxed']:.1f}% of u_F still unrelaxed at the end (first mode)")
+    T = F.get('trace')
+    if T is not None:
+        say(f"  D_c (thickness trace, zero-IC series) = {T['Dc']:.4e} +/- {T['Dc_se']:.1e} sigma^2/tau  "
+            f"(u_F(inf) = {T['u_inf']:.2f} +/- {T['u_inf_se']:.2f} sigma, R^2 = {T['R2']:.3f}, tau_ac = {T['tau_ac']:.0f} samples);  "
+            f"tau_1 = {T['tau1']:.0f} tau = {T['tau1'] / cfg.dt_lj / 1e6:.2f}M steps")
+    say(f"  steady profile: c = u_F/L_0 = {F['c']:.4f} [{F['c_lo']:.4f}, {F['c_hi']:.4f}] (parabola R^2 = {F['parab_R2']:.3f})"
+        + (f";  L_ss = {F['L_ss']:.2f} sigma (dL = {F['L0'] - F['L_ss']:.2f}, eps_F = {(F['L0'] - F['L_ss']) / F['L0']:.4f})" if 'L_ss' in F else ''))
+    Mp = perm_M_estimates(cfg, P, F)
+    P['M_perm'] = Mp
+    if Mp:
+        say(f"  M = dP_ext L_0/(2 |u_F|)  with dP_ext = {Mp['dP']:.4f} ({Mp['dP_src']}), L_0 = {Mp['L0']:.2f}:")
+        for key in ('bb', 'prof', 'trace'):
+            v = Mp.get(key)
+            if v:
+                say(f"    {key:5s} M = {v['M']:.4f} [{v['lo']:.4f}, {v['hi']:.4f}]  (u_F = {v['uF']:+.2f} sigma, eps_F = {v['eps']:.4f}"
+                    + (f"; x L_ss/L_0 -> {v['M_Lss']:.4f}" if 'M_Lss' in v else '') + f")  {v['how']}")
+        Mref = Mp.get('bb') or Mp.get('prof') or Mp.get('trace')
+        if Mref:
+            K = {'profile': dict(k=F['Dc'] / Mref['M'], lo=F['Dc'] / Mref['hi'], hi=F['Dc'] / Mref['lo'])}
+            if T is not None:
+                K['trace'] = dict(k=T['Dc'] / Mref['M'], lo=(T['Dc'] - _Z95 * T['Dc_se']) / Mref['hi'],
+                                  hi=(T['Dc'] + _Z95 * T['Dc_se']) / Mref['lo'])
+            P['kappa_Dc'] = K
+            kd = (P.get('flux') or {}).get('k', {}).get('N_measured')
+            say('  kappa = D_c/M (M from the thickness change):  '
+                + '   '.join(f"{k}: {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" for k, v in K.items())
+                + (f"   |  Darcy kappa = Q L/(A dP) (fig 9): {kd['k']:.4e}  ->  D_c(Darcy) = kappa M = {kd['k'] * Mref['M']:.4e}" if kd else ''))
+    return P
+
+
+def fig_perm_Dc(cfg, R, P):
+    """Figure 12: (a) u_z(zeta, t)/L_0 snapshots, (b) data + the one-sided consolidation
+    model (D_c), (c) the feed-face displacement u_F(t) from the thickness trace with the
+    exact zero-IC series and the profile fit's own u(1, t)."""
+    F = P.get('Dc')
+    if F is None:
+        print('D_c figure skipped (no fit)')
+        return None
+    zff = np.linspace(0.0, 1.0, 400)
+    fig, (axl, axr, axt) = plt.subplots(1, 3, figsize=(25, 7), constrained_layout=True,
+                                        gridspec_kw=dict(width_ratios=[1.0, 1.0, 1.15]))
+    norm = Normalize(vmin=F['ts'][F['early'][0]], vmax=F['ts'][F['early'][-1]])
+    cmap = plt.cm.viridis
+    for i in F['early']:
+        c = cmap(norm(F['ts'][i]))
+        axl.plot(F['zf'], F['uhat'][i][F['idx']], 'o-', color=c, ms=3, alpha=0.6)
+        axr.plot(F['zf'], F['uhat'][i][F['idx']], 'o', color=c, ms=3, alpha=0.35)
+        axr.plot(zff, F['u_model'](zff, F['t_lj'][i]), '-', color=c, lw=2.0)
+    u_end = float(F['u_inf'](1.0)[0])
+    for ax in (axl, axr):
+        ax._tri_has_colorbar = True
+        ax.axhline(0.0, color='0.45', lw=1.6, label=r'IC: $u_z(\zeta,0)=0$ (production onset)')
+        ax.plot(zff, F['u_inf'](zff), 'k:', lw=1.8, label=r'steady state ($t\to\infty$, fitted modes)')
+        ax.plot(zff, F['c'] * zff * (2.0 - zff), '--', color='0.35', lw=1.4,
+                label=rf"steady-window parabola $c\,\zeta(2-\zeta)$, $c={sig(F['c'])}$  ($\to M$)")
+        ax.plot(0.0, 0.0, 's', color=WONG['blue'], ms=9, zorder=5, label=r'BC: $u_z(0,t)=0$ (support, pinned)')
+        ax.plot([0.93, 1.0], [u_end, u_end], '-', color=WONG['vermillion'], lw=4, solid_capstyle='butt', zorder=5,
+                label=r'BC: $\partial u_z/\partial\zeta\,|_{\zeta=1}=0$ (free feed face)')
+        ax.set(xlabel=r'$\zeta=(z-z^P)/L_0$', ylabel=r'$u_z/L_0$', xlim=(0, 1))
+        ax.grid(alpha=0.3)
+        smart_legend(ax, fontsize=10)
+    axl.set_title(r'(a) $u_z(\zeta,t)/L_0$ -- production snapshots (displacement since the onset)', fontsize=13)
+    axr.set_title(rf"(b) one-sided consolidation fit: $D_c={sig(F['Dc'])}\ \sigma^2/\tau$, $R^2={sig(F['R2'])}$"
+                  + (r'  (window-averaged modes)' if F['W'] > 0 else ''), fontsize=13)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    fig.colorbar(sm, ax=[axl, axr], fraction=0.015, pad=0.04).set_label('timestep (window end)')
+    # ---- (c) feed-face displacement vs time ----
+    T = F.get('trace')
+    if T is not None:
+        axt.plot(T['step'], T['uF'] / F['L0'], '-', color='0.6', lw=0.7, alpha=0.6,
+                 label=r'$u_F(t)=L_{bb}(t)-L_0$  (bounding box, 5k-step samples)')
+        axt.plot(T['step'], rolling_mean(T['uF'], cfg.roll_win) / F['L0'], '-', color='0.25', lw=1.8,
+                 label=f'rolling mean ({cfg.roll_win})')
+        tt = np.linspace(0.0, T['t_lj'][-1], 400)
+        axt.plot(F['t_onset'] + tt / cfg.dt_lj, T['model'](tt) / F['L0'], '-', color=WONG['vermillion'], lw=2.4,
+                 label=(rf"zero-IC series fit: $D_c={sig(T['Dc'])}$, $u_F(\infty)/L_0={sig(T['u_inf'] / F['L0'])}$, "
+                        rf"$R^2={sig(T['R2'])}$"))
+        if T['fit'].sum() < len(T['fit']):
+            axt.axvline(T['step'][T['fit']][-1], color=WONG['vermillion'], ls=':', lw=1.2, alpha=0.7)
+    tt = np.linspace(0.0, F['t_lj'][-1], 400)
+    axt.plot(F['t_onset'] + tt / cfg.dt_lj, [float(F['u_model'](1.0, t, 0.0)[0]) for t in tt], '--',
+             color=WONG['blue'], lw=2.0, label=rf"profile fit at $\zeta=1$ (instantaneous): $D_c={sig(F['Dc'])}$")
+    jt = F['idx'][-1]
+    axt.plot(F['ts'] - 0.5 * F['stride'], F['uhat'][:, jt], 'o', color=WONG['blue'], ms=7, zorder=5,
+             label=rf"top fitted bin of the snapshots ($\zeta={F['zf'][-1]:.2f}$, at the window centre)")
+    axt.axvspan(P['halt_ts'], float(F['ts'][-1]), color=WONG['green'], alpha=0.10, label='steady window')
+    axt.axvline(F['t_onset'], color='k', ls=':', lw=1, alpha=0.6)
+    axt.axhline(0.0, color='k', ls=':', lw=1, alpha=0.4)
+    axt.set_xlabel('time step')
+    axt.set_ylabel(r'$u_F/L_0$')
+    axt.set_title(r'(c) feed-face displacement: thickness trace vs the two fits', fontsize=13)
+    axt.grid(alpha=0.3)
+    smart_legend(axt, fontsize=9)
+    fig.suptitle(f'Cooperative diffusivity, permeation drive  |  {cfg.sim_name}  |  '
+                 rf"$L_0={sig(F['L0'])}\,\sigma$, $z^P={F['z_P']:.1f}$, production $={F['n_tau']:.2f}\,\tau_1$ "
+                 rf"($\tau_1=4L_0^2/\pi^2 D_c={F['tau1']:.0f}\,\tau$, profile fit)", fontsize=12, fontweight='bold')
+    return _save(fig, cfg, 'perm_Dc_consolidation_fit')
+
+
+def fig_perm_M(cfg, R, P):
+    """Figure 13: M = dP_ext L_0/(2 |u_F|) -- one point per reading of the feed-face
+    displacement (thickness change, steady-profile parabola, trace asymptote), with CIs."""
+    Mp = P.get('M_perm')
+    if not Mp:
+        print('M figure skipped (no displacement fit or no dP)')
+        return None
+    order = (('bb', 'thickness change' + '\n' + r'$\Delta L = L_0 - L_{ss}$', WONG['blue'], 'o'),
+             ('prof', 'steady profile' + '\n' + r'parabola $c\,\zeta(2-\zeta)$', WONG['vermillion'], 's'),
+             ('trace', 'thickness trace' + '\n' + r'asymptote $u_F(\infty)$', WONG['green'], 'D'))
+    show = [o for o in order if o[0] in Mp]
+    fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
+    ci = int(cfg.ci_level * 100)
+    for k, (key, lab, col, mk) in enumerate(show):
+        v = Mp[key]
+        ax.errorbar([k], [v['M']], yerr=[[v['M'] - v['lo']], [v['hi'] - v['M']]], fmt=mk, ms=13, color=col,
+                    capsize=8, lw=2.5,
+                    label=f"{lab.splitlines()[0]}:  $M = {sig(v['M'])}$\n{ci}% CI [{sig(v['lo'])}, {sig(v['hi'])}]"
+                          rf"  ($\varepsilon_F = {v['eps']:.3f}$)")
+        ax.axhline(v['M'], color=col, ls='--', lw=1.0, alpha=0.4)
+    ax.set_xticks(range(len(show)))
+    ax.set_xticklabels([o[1] for o in show], fontsize=13)
+    ax.set_ylabel(r'$M$  (LJ units)')
+    ax.set_xlim(-0.6, len(show) - 0.4)
+    ax.grid(axis='y', alpha=0.3)
+    lss = (rf", $L_{{ss}}={sig(Mp['L_ss'])}\,\sigma$ (steady; with it every $M$ is $\times{Mp['L_ss'] / Mp['L0']:.3f}$)"
+           if np.isfinite(Mp.get('L_ss', np.nan)) else '')
+    ax.set_title(r'Longitudinal modulus from the permeation drive:  $M = \Delta P_{\mathrm{ext}}\,L_0\,/\,(2\,|u_F|)$'
+                 + '\n' + rf"$\Delta P_{{\mathrm{{ext}}}}={sig(Mp['dP'])}$ ({Mp['dP_src']}), "
+                 rf"$L_0={sig(Mp['L0'])}\,\sigma$ (onset)" + lss + f'\n{cfg.sim_name}', fontsize=12)
+    smart_legend(ax, fontsize=11)
+    return _save(fig, cfg, 'perm_M')
+
+
 def print_perm_summary(cfg, R, P):
     F = P.get('flux') or {}
     print(f'\nPERMEATION SUMMARY  ({cfg.sim_name})')
@@ -4400,6 +4837,19 @@ def print_perm_summary(cfg, R, P):
     if F.get('k'):
         for kk, v in F['k'].items():
             print(f"  kappa ({kk:10s}) = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]")
+    F2, Mp = P.get('Dc'), P.get('M_perm')
+    if F2 is not None:
+        T = F2.get('trace')
+        print(f"  D_c (profile fit) = {F2['Dc']:.4e} sigma^2/tau (R^2 {F2['R2']:.3f}; production {F2['n_tau']:.2f} tau_1)"
+              + (f";  D_c (thickness trace) = {T['Dc']:.4e} +/- {T['Dc_se']:.1e} (R^2 {T['R2']:.3f})" if T else ''))
+    if Mp:
+        print('  M = dP L_0/(2|u_F|): ' + '  '.join(f"{k}: {v['M']:.4f} [{v['lo']:.4f}, {v['hi']:.4f}]"
+                                                 for k, v in Mp.items() if isinstance(v, dict)))
+    K = P.get('kappa_Dc')
+    if K:
+        kd = F.get('k', {}).get('N_measured')
+        print('  kappa = D_c/M: ' + '  '.join(f"{k}: {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" for k, v in K.items())
+              + (f"   vs Darcy kappa (N slope, measured dP) {kd['k']:.4e} [{kd['lo']:.4e}, {kd['hi']:.4e}]" if kd else ''))
     S = P.get('psd')
     if S is not None:
         print(f"  geometric porosity (r_probe {cfg.PSD_R_PROBE}), interior: {fmt_mu(S['por'][0][P['interior']])};  "
