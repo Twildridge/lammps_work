@@ -61,6 +61,22 @@ so
 
 (Note the ratio is M/(M − 2G), **not** M/(M − 2G/3): λ = K − 2G/3 and M = K + 4G/3, so M − 2G = λ.) `M_network` uses the plateau network profile averaged over the membrane; `M_piston` = ⟨P⟩/ε from the block-bootstrapped piston force is the independent check. G is formed once from xx and once from yy; by symmetry the two must agree, and their spread is a second error estimate. The cooperative diffusivity D_c from the consolidation fit of u_z(z,t) then gives the hydraulic permeability κ = D_c/M (κ = k/η). All of this is implemented in `scripts/lib/triaxial.py` and drawn by `triaxial_compression_{single,sweep}.ipynb` (see `docs/analysis.md` §7b).
 
+**Consolidation modes (re-derived 2026-09-28).** The 1-D equation is ∂u_z/∂t = q(t) + D_c ∂²u_z/∂z² with q the total
+(mixture) flux — uniform in z but time-dependent — so the boundary conditions on u alone never fix the modes; the closure
+for q does, and it depends on what the apparatus controls. Differentiating in z removes q and leaves the strain diffusing,
+∂ε/∂t = D_c ∂²ε/∂z². *Held slab* (compression hold: both plates pinned, both faces drained at the same bath pressure):
+u''(0) = u''(1) = −q/D_c and ε(0) = ε(1) (uniform total stress) make the strain modes periodic, cos/sin(2mπζ), so u
+relaxes in sin(2mπζ) and cos(2mπζ) − 1 at 4m²π²D_c/L² — **τ₁ = L²/(4π²D_c)**, four times faster than Terzaghi's
+constant-load L²/(π²D_c); q = 0 exactly for the symmetric drive, non-zero for a top-only hold, but the modes are the same.
+*Prescribed pressure drop* (permeation: NPT pistons hold P_feed and P_perm, free feed face): the network stress at the
+support equals ΔP from t = 0⁺, so ε has Dirichlet ends (ΔP/M at the support, 0 at the free face), the displacement modes
+are 1 − cos(kπζ) at k²π²D_c/L² — **τ₁ = L²/(π²D_c)** — and the steady state is the parabola u_ss = −(ΔP L/2M)[ζ² − 2ζ],
+u_F = −ΔP L/(2M), i.e. **M = ΔP L/(2|u_F|)**. A *prescribed flux* (a pump, not our case) would give sin((k − ½)πζ) and
+τ₁ = 4L²/(π²D_c). Both fits in `lib/triaxial.py` had used a wrong family before 2026-09-28 (compression: Terzaghi's
+load-control shapes bent to vanish at both plates, ~5× too high a D_c; permeation, briefly: the prescribed-flux modes, 4×).
+With the corrected modes, comp_1 at ε = 0.1 gives D_c = 0.043 and κ = D_c/M = 0.13; perm_2 gives D_c ≈ 0.2, M ≈ 0.48
+and κ = D_c/M ≈ 0.4 against the Darcy κ = Q L/(A ΔP) = 0.29 — the two-piston consistency test now agrees to a factor 2–3.
+
 
 ## NPT-piston reservoirs (two-piston sequence)
 
@@ -126,7 +142,11 @@ is ≈ 5–7 periods.
 
 **Modes.** Permeation: P_feed = P_target + dP, P_perm = P_target; flux Q_perm = (dN_permeate/dt)/ρ_s,0 from the
 slope of the bead count crossing the support over independent windows (2026-09-23; the permeate-piston
-displacement A·dz_perm/dt is the second estimate); k = Q_perm L/(A dP).  Compression: both wet pistons
+displacement A·dz_perm/dt is the second estimate); k = Q_perm L/(A dP); since 2026-09-28 also D_c and M from the
+polymer displacement (see *Consolidation modes* above) and the flux the fits imply, Q(t) = A[(D_c/M) ΔP(t)/L₀ −
+d⟨u_z⟩/dt], as a check against the measured Q. The dP step is ramped over 1 M steps (100 × 10 k, `n_ramp` × `ramp_steps`;
+was 5 × 1 k) because the 5 k-step ramp rang the undamped sheets for ~2 M steps (Q overshot 25×) — the steady thermal
+ripple of the sheets is unaffected by the ramp.  Compression: both wet pistons
 at P_target (drained consolidation at constant bath pressure) and a third, solvent-transparent load piston inside the
 feed reservoir loads the network through the usual strain sweep; solvent expelled by the compression raises the
 feed piston (and lowers the permeate piston), so the converter's `margin_feed` must cover the deepest strain.

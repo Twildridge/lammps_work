@@ -114,6 +114,14 @@ stress snapshot from the measured feed-piston plane (`piston_position`, column `
 ≥ `Config.res_wall_margin` (3 σ) clear of the piston sheet — the bin touching a wet piston under-reads σ_zz by ~0.07
 (depletion layer + wall virial booked on the piston atoms), which before 2026-09-22 shifted every σ′ by +0.016.
 The summary prints *plates over the level* (support, load piston, feed and permeate pistons: start → end).
+**D_c fit corrected 2026-09-28** (`fit_Dc`, both compression notebooks): a slab held between two drained plates at
+the same bath pressure relaxes in the periodic strain modes cos/sin(2mπζ) — `u` in sin(2mπζ) and cos(2mπζ) − 1 at
+4m²π²D_c/L², **τ₁ = L²/(4π²D_c)** — not in the (2ζ − 1) + cos(kπζ) shapes at k²π²D_c/L² used before (Terzaghi's
+constant-load series bent to vanish at both plates; on the exact relaxation it returned ~5× the true D_c). The decay
+times never changed, the conversion to D_c did: comp_1 at ε = 0.1 now reads D_c = 0.043 and κ = D_c/M = 0.13 (was
+0.49 / 1.5). The hold-adequacy line uses the corrected τ₁ for the fitted D_c and keeps the deck's own sizing formula
+for the *slow* line; levels above ε ≈ 0.2 now show as held for fewer than 5 τ₁, and their D_c is correspondingly less
+certain (the `RELAX_SYS` tail fit is the direct measure of the unrelaxed stress).
 
 **`triaxial_permeation_single_two_pist.ipynb`** (two-piston permeation, 2026-09-16, standard since 2026-09-22 — no sweep notebook)
 `Config(mode="permeation", two_pist=True)`; `tri.load_permeation` builds one dict `P`: total / partial / network
@@ -142,6 +150,24 @@ state, the P_local(z) used and the resulting λ(z) —, `fig_perm_volfrac_evolut
 `fig_perm_psd`, `fig_perm_flux`, `fig_perm_permeability`, `fig_thermo_pressure`; `fig_perm_density` still exists but left the
 notebook). The sync logs in when a trajectory is missing and an unresolved `<steps>` tag matches digits only, so a
 permeation pattern can no longer stage a compression level's `_c<lvl>` dump (2026-09-24).
+Since **2026-09-28** the notebook also measures **D_c and M from the polymer displacement** (`tri.add_perm_displacement`,
+figures 12–14): `disp_z_polymer` (the deck's `fix ave/chunk` of the per-atom z displacement since the reset, every
+`disp_nfreq` = 50 k steps, block-averaged) and the bounding-box thickness trace. Model: 1-D poroelasticity
+`∂u_z/∂t = q(t) + D_c ∂²u_z/∂z²` with `u_z = 0` at the support and a free feed face; because the pistons prescribe the
+*pressure drop* and the total stress is uniform, the network stress at the support equals ΔP from t = 0⁺, so the strain
+obeys the diffusion equation with Dirichlet ends and the displacement modes are 1 − cos(kπζ) at k²π²D_c/L₀², τ₁ =
+L₀²/(π²D_c); the drive is the applied-ΔP history read from `piston_pressure` (any ramp shape is exact), the reset
+convention (ramp start since 2026-09-28, ramp end in older decks) is auto-detected. `fig_perm_Dc`: the profile snapshots
+with free modal amplitudes (window-averaged modes, D_c) and the feed-face trace `L_bb(t) − L₀` against the exact zero-IC
+series (a second D_c and the asymptote u_F(∞)). `fig_perm_M`: **M = ΔP_ext L₀/(2|u_F|)** from the steady thickness
+change (primary), the steady-profile parabola and the trace asymptote, CIs with the measured ΔP_ext in quadrature; the
+loader prints κ = D_c/M next to the Darcy κ. `fig_perm_flux_check` (figure 14, a check): the flux the fits imply,
+Q(t) = A[(D_c/M) ΔP(t)/L₀ − d⟨u_z⟩/dt], against the measured piston-velocity trace, the N_perm-slope Q and the cumulative
+bead count — nothing in it is fitted to the flux. perm_2 (dP = 0.1): D_c 0.18 (profile) / 0.21 ± 0.03 (trace), M 0.48,
+κ = D_c/M 0.4 vs Darcy 0.29; the profile fit is under-determined there (six stress-cadence snapshots, the transient
+unrecorded — hence the 50 k cadence and the 1 M-step ramp in the deck). Knobs: `PERM_GAP`, `PERM_L0_STEPS`,
+`PERM_DC_WINDOW_AVG`, `PERM_DC_BOUNDS`, `PERM_DISP_RESET`, `PERM_TRACE_SKIP` (leave a short-ramp run's piston ringing out
+of the trace fit).
 
 **Tests** (`scripts/tests/`, 2026-09-16): `run_plot_tests.sh` builds synthetic one-piston and two-piston run
 trees (`make_fixtures.py`) and runs the three plotters on both formats; `run_notebook_tests.sh` executes the
