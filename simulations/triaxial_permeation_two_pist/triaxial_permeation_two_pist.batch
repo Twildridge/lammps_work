@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-node=32
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=0
-#SBATCH --time=16:00:00
+#SBATCH --time=30:00:00
 #SBATCH --output=%x.o%j.%N
 
 # -----------------------------------------------------------------------
@@ -47,13 +47,26 @@ module load python/3.8.12
 # constant-pressure drive at ONE dP (P_feed = P_target + DP_PISTON, P_perm =
 # P_target) for NSTEPS, exactly like triaxial_permeation.batch.
 #
-# DATANAME is the CONVERTER output (scripts/slab_two_pistons.ipynb) of the
+# DATANAME is the CONVERTER output (scripts/slab_two_pistons.py) of the
 # 2026-09-07 piston-transparent slab; copy it to ~/Documents/lammps_data/input_data/.
+#   _two_pist       (2026-09-17): permeate vacuum margin 18.7 sigma (auto).  perm_2 (9M steps
+#                   requested) ended at step 7.67M when the permeate piston reached the box-face
+#                   guard: 16 sigma of travel = the gel's ~16 sigma transient (3 sigma rigid drop
+#                   onto the support + 13 sigma consolidation) with the Darcy throughflow
+#                   (~1.2 sigma per M steps at dP = 0.1) hardly started.
+#   _two_pist_pm40  (2026-09-29): same gel, same reservoirs, --margin-perm 40 (box lz 186.6 ->
+#                   207.8, all of it vacuum; atom count unchanged).  ~38 sigma of piston travel
+#                   before the guard: the transient plus ~18M steps of steady flow.  The feed
+#                   reservoir (13.7 sigma, thinning ~0.5 sigma per M steps late in perm_2) is
+#                   the next limit at ~20M+ steps.
 # =======================================================================
 FOLDER="triaxial_permeation_two_pist"
-DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist"
+DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist_pm40"
 INTERACTION="1.0_1.0"   # epsSS_epsSP
-NSTEPS=9000000           # production steps (constant-dP drive); also the output-file tag
+NSTEPS=10800000          # production steps (constant-dP drive); also the output-file tag.  perm_2 asked
+                         # 9M and was cut at 7.67M by the permeate guard; 10.8M (+20%) after the 1M ramp
+                         # is ~5.5 tau_1 (tau_1 = L0^2/pi^2 D_c ~ 2.1M steps from perm_2) -> first mode
+                         # <0.5% unrelaxed, and the steady window (last 25%) sits beyond 4 tau_1
 TYPE=""                 # stress, volume, stressvol, or leave empty
 PRESS_TARGET=1.5        # bath pressure P* (both pistons in the settle; permeate piston in production)
 
@@ -69,7 +82,10 @@ export SETTLE_HALT=0          # 1 = end the settle early once both pistons are a
 # >>> WALL TIME <<<  setup ~ 50k + NPT_PISTON_STEPS + 150k (reference) + 1M (ramp:
 # n_ramp x ramp_steps in the .lmp, 100 x 10k since 2026-09-28; was 5k)
 # before the NSTEPS production; ~290k atoms (the converter adds ~55k sheet/pad
-# beads to the 239k slab).  Size --time as for triaxial_permeation plus the settle.
+# beads to the 239k slab).  13M steps in total for NSTEPS = 10.8M (perm_2: 8.9M
+# within its 16 h); --time 30 h leaves room, run_lammps.sh force-returns 5 min
+# before the limit and every output file is streamed, so an early cut only
+# shortens the steady window.
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

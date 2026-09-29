@@ -566,3 +566,12 @@ Shear input from the PERIODIC slab  [2026-09-25 20:05, slab_shear_plates.py]:
   Gel Z-extent 1.81..128.22 (gel_gap 126.41); plates at Z = 4.79, 125.24 (spacing 1.5, offset 0.5, box_buffer 2.0, solvent_delete 0.87)
   Crosslinks: 15066   Chain beads: 89424   Solvent: 73358   Plates: 1922   plate-polymer bonds: 1922 (cutoff 2.5)
   Total atoms: 179770   Total bonds: 121154   Output: isolated_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_with_plates_film7.data
+
+Converted two-piston (feed/permeate) data file  [2026-09-29 10:40, slab_two_pistons.py]:
+  Input: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002.data
+  Box: 47.9701 x 47.8741 x 207.844   (lx, ly unchanged from the input; zlo = 0)
+  z: perm piston 40.00 | support 51.00 | gel BB [52.70, 179.11] (L_bb 126.41, L_rg 121.81) | load piston 185.98 | feed piston 192.84
+  Reservoirs: permeate 10.0 sigma (padded +4972 beads at rho=0.4696), feed 13.73 sigma; margins perm 40.0 / feed 15.0 sigma (vacuum)
+  Sheets: 23316 beads each (support pattern, spacing 0.2387); piston_clearance 1.0, load_piston_frac 0.5, seed 42
+  Crosslinks: 15066   Chain beads: 89424   Solvent: 92567   Support: 23316   Feed piston: 23316   Permeate piston: 23316   Load piston: 23316
+  Total atoms: 290321   Total bonds: 119232   Output: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist_pm40.data

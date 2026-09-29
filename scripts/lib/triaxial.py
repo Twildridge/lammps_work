@@ -194,6 +194,22 @@ class Config:
     PERM_DC_BOUNDS: tuple = (1e-6, 50.0)  # D_c search interval of the permeation fits (sigma^2/tau); wide so that a
                                           # fit driven by a fast non-consolidation transient (the piston ringing of a
                                           # short ramp) shows up as a large D_c rather than pegging at DC_BOUNDS
+    PERM_RIGID: str = 'contact'           # rigid shift removed before the consolidation fit (2026-09-28 pm): 'contact'
+                                          # subtracts u_0(t), the displacement of the contact layer (the PERM_PIN_NBINS
+                                          # lowest populated bins).  At zero flux a solvent layer separates the plate and
+                                          # the polymer face (perm_2: the face sat ~3 sigma above z^P); the drag closes it
+                                          # and the whole network arrives at the plate displaced by u_0 with no strain
+                                          # attached -- the pinned modes cannot carry that offset.  'none' = old behaviour
+    PERM_PIN_NBINS: int = 2               # bins of the contact layer averaged for u_0(t)
+    PERM_COORDS: str = 'lagrangian'       # 'lagrangian': zeta = (z - u_z - Z^P)/L_0 -- each bin's atoms placed where they
+                                          # were at the reset, Z^P = z^P - u_0 the reference position of the pinned face;
+                                          # the top bins, which empty as the face comes down, then reach zeta -> 1.
+                                          # 'eulerian': the bin centre, zeta = (z - z^P)/L_0 (old behaviour)
+    PERM_DC_N_MODES: int = 0              # modes of the permeation profile fit (0 -> DC_N_MODES)
+    PERM_M_PRIMARY: str = 'prof'          # the M that feeds kappa = D_c/M and the q(t) check: 'prof' (steady-profile
+                                          # parabola, the default since 2026-09-28 pm: it reads the deformation of the
+                                          # network alone) | 'bb' (bounding-box thickness change: its ends are the extreme
+                                          # beads, which carry ~2 sigma of the rigid drop / tail into |u_F| in perm_2) | 'trace'
     # ---- M and G as increments from the eps = 0 reference ------------------
     M_SUBTRACT_REF: bool = True           # M = (stress - its own eps = 0 reading) / eps for BOTH estimators
                                           # (2026-09-12: the seated piston carries a real preload ~+0.0014 and the
@@ -4452,8 +4468,17 @@ def fig_perm_permeability(cfg, R, P):
 #  (older decks, PERM_DISP_RESET): the data are u(t) - u(t_reset), so the profile fit uses
 #  H_k(t) - H_k(t_reset) and the amplitudes stay free.
 #
+#  Rigid drop (2026-09-28 pm, perm_2): at zero flux the polymer face sits ~3 sigma above the
+#  contact plane z^P (a solvent layer between the plate and the network, see the reference
+#  polymer profile); the drag closes it and the whole network arrives at the plate displaced by
+#  u_0 ~ -3 sigma with no strain attached.  The contact-layer bins then read u_0 for the rest of
+#  the run.  Left in the data, u_0 makes the pinned modes ring (a step at zeta = 0 built from 5
+#  cosines) and biases the steady parabola; PERM_RIGID = 'contact' subtracts it (u_0(t) from the
+#  PERM_PIN_NBINS lowest populated bins) and PERM_COORDS = 'lagrangian' places each bin at its
+#  material coordinate zeta = (z - u_z - Z^P)/L_0, Z^P = z^P - u_0 (the emptying top bins then
+#  reach zeta -> 1 instead of stopping at the last bin populated in EVERY snapshot).
 #  Three readings of the displacement data:
-#    * profile fit  (fig 12 a-b): u_z(zeta, t)/L of the disp_z_polymer snapshots with FREE
+#    * profile fit  (fig 12 a-b): (u_z - u_0)(zeta, t)/L of the disp_z_polymer snapshots with FREE
 #      amplitudes (the compression fit's idiom, DC_FREE_AMPS) -> D_c; u = 0 at t_reset whatever
 #      the amplitudes.
 #    * thickness trace (fig 12 c): u_F(t) = L_bb(t) - L_0 (5 k-step cadence) against the
@@ -4562,7 +4587,10 @@ def load_perm_disp(cfg, R, P):
     d['forcing'] = fz
     mode = cfg.PERM_DISP_RESET
     if mode == 'auto':
-        mode = 'ramp_start' if d['ts'][0] < fz['t_end'] else 'ramp_end'
+        # the profile fix is created at the reset, so its FIRST WINDOW starts within one stride of
+        # it: a window starting before the end of the ramp means a ramp-start reset (the snapshot
+        # itself can land after a ramp shorter than two strides -- the local smoke test)
+        mode = 'ramp_start' if d['ts'][0] - d['stride'] < fz['t_end'] else 'ramp_end'
     d['reset_mode'] = mode
     d['t_reset'] = fz['t0'] if mode == 'ramp_start' else fz['t_end']
     bb = load2c(cfg.path('gel_dimensions_bb'), 4)
@@ -4600,22 +4628,58 @@ def fit_perm_Dc(cfg, R, P, disp):
     if not L0 > 0:
         return None
     z_F = z_P + L0
-    zeta = (z - z_P) / L0
-    uhat = uz / L0
-    idx = np.where((Nc.min(axis=0) > cfg.Ncount_min) & (zeta > 0) & (zeta < 1))[0]
-    if len(idx) < 4 + 2 * cfg.DC_TRIM_BINS:
+    n_snap = len(ts)
+    steady = np.where(ts >= P['halt_ts'])[0]
+    if len(steady) == 0:
+        steady = np.array([n_snap - 1])
+    # ---- populated bins per snapshot: the top bins empty as the face comes down, so the old
+    #      all-snapshot intersection threw the early snapshots' top ~10 % away ----
+    pop = [np.where(Nc[i] > cfg.Ncount_min)[0] for i in range(n_snap)]
+    nb = max(int(cfg.PERM_PIN_NBINS), 1)
+    if min(len(p) for p in pop) < 4 + 2 * cfg.DC_TRIM_BINS + nb:
         return None
-    if cfg.DC_TRIM_BINS:
-        idx = idx[cfg.DC_TRIM_BINS:-cfg.DC_TRIM_BINS]
-    zf = zeta[idx]
+    # ---- rigid shift u_0(t) = displacement of the contact layer (Nc-weighted mean of the nb lowest
+    #      populated bins).  At zero flux a solvent layer separates the plate and the polymer face
+    #      (perm_2: the face sat ~3 sigma above z^P = z_support + PERM_GAP); the drag closes it and
+    #      the whole network arrives at the plate displaced by u_0 with no strain attached.  The
+    #      pinned modes 1 - cos(mu zeta) vanish at zeta = 0 and cannot carry it: left in, u_0 shows
+    #      up as ringing of the fitted modes (a step at zeta = 0 built from 5 cosines) and as a
+    #      parabola c biased by the small-zeta bins (u/[zeta(2 - zeta)] -> large). ----
+    if cfg.PERM_RIGID == 'contact':
+        u0 = np.array([np.average(uz[i][p[:nb]], weights=Nc[i][p[:nb]]) for i, p in enumerate(pop)])
+        u0_sd = np.array([np.sqrt(np.average((uz[i][p[:nb]] - u0[i]) ** 2, weights=Nc[i][p[:nb]]))
+                          for i, p in enumerate(pop)])
+    else:
+        u0 = np.zeros(n_snap)
+        u0_sd = np.zeros(n_snap)
+    u0_ss = float(np.median(u0[steady]))
+    Z_P = z_P - u0_ss                                      # reference (material) position of the pinned face
+    Z_F = Z_P + L0
+    # ---- coordinates and the deformation, per snapshot ----
+    lagr = cfg.PERM_COORDS == 'lagrangian'
+    zl, yl, il = [], [], []
+    for i, p in enumerate(pop):
+        if cfg.DC_TRIM_BINS:
+            p = p[cfg.DC_TRIM_BINS:len(p) - cfg.DC_TRIM_BINS]
+        zi = (z[p] - uz[i][p] - Z_P) / L0 if lagr else (z[p] - z_P) / L0
+        yi = (uz[i][p] - u0[i]) / L0
+        ok = (zi > 0) & (zi < 1)
+        zl.append(zi[ok])
+        yl.append(yi[ok])
+        il.append(p[ok])
+    if min(len(zz) for zz in zl) < 4:
+        return None
+    zeta = (z - z_P) / L0                                  # Eulerian bin coordinate (bookkeeping)
+    uhat = uz / L0
     t_lj = (ts - t_on) * cfg.dt_lj
     W = disp['stride'] * cfg.dt_lj if cfg.PERM_DC_WINDOW_AVG else 0.0
     early = np.where(t_lj <= cfg.DC_FRAC_EARLY * t_lj[-1])[0]
     if len(early) < 2:
         return None
-    mu = _perm_mu(cfg.DC_N_MODES)
-    modes = _perm_phi(zf, mu)                              # (bins, modes)
-    y_all = np.concatenate([uhat[i][idx] for i in early])
+    n_modes = int(cfg.PERM_DC_N_MODES) or int(cfg.DC_N_MODES)
+    mu = _perm_mu(n_modes)
+    modes_l = [_perm_phi(zl[i], mu) for i in range(n_snap)]          # (points_i, modes)
+    y_all = np.concatenate([yl[i] for i in early])
 
     def dH(Dc):
         """H_k(t_i) - H_k(t_reset) for the fitted snapshots: (n_early, modes)"""
@@ -4624,13 +4688,13 @@ def fit_perm_Dc(cfg, R, P, disp):
 
     def amps(Dc, D=None):
         D = dH(Dc) if D is None else D
-        X = np.vstack([modes * D[n][None, :] for n in range(len(early))])
+        X = np.vstack([modes_l[i] * D[n][None, :] for n, i in enumerate(early)])
         return np.linalg.lstsq(X, y_all, rcond=None)[0]
 
     def predict(Dc, A=None):
         D = dH(Dc)
         A = amps(Dc, D) if A is None else A
-        return np.concatenate([(modes * D[n][None, :]) @ A for n in range(len(early))]), A
+        return np.concatenate([(modes_l[i] * D[n][None, :]) @ A for n, i in enumerate(early)]), A
 
     def resid(Dc):
         p, _ = predict(Dc)
@@ -4649,13 +4713,13 @@ def fit_perm_Dc(cfg, R, P, disp):
     H_reset = _perm_H(mu, Dc, L0, t_reset_lj, forcing)[0]
 
     def u_model(zh, t, Wm=W):
-        """u_z/L_0 since the RESET at zeta = zh (array) and time t (LJ from the ramp start, scalar);
-        window-averaged like the data."""
+        """deformation (u_z - u_0)/L_0 since the RESET at zeta = zh (array) and time t (LJ from the
+        ramp start, scalar); window-averaged like the data."""
         zh = np.atleast_1d(np.asarray(zh, float))
         return _perm_phi(zh, mu) @ (A * (_perm_H(mu, Dc, L0, t, forcing, Wm)[0] - H_reset))
 
     def u_phys(zh, t):
-        """u_z/L_0 since the ramp start (instantaneous; = u_model + the fitted offset at the reset)."""
+        """deformation since the ramp start (instantaneous; = u_model + the fitted offset at the reset)."""
         zh = np.atleast_1d(np.asarray(zh, float))
         return _perm_phi(zh, mu) @ (A * _perm_H(mu, Dc, L0, t, forcing)[0])
 
@@ -4666,24 +4730,34 @@ def fit_perm_Dc(cfg, R, P, disp):
 
     tau1 = L0 ** 2 / (np.pi ** 2 * Dc)                         # first-mode time (mu_1 = pi: Dirichlet strain at both faces)
     T_prod = float(t_lj[-1])
-    F = dict(Dc=Dc, A=A, R2=R2, L0=L0, L0_ci=L0_ci, L0_source=L0_source, z_P=z_P, z_F=z_F, t_onset=t_on,
-             forcing=fz, t_reset=disp['t_reset'], t_reset_lj=t_reset_lj, reset_mode=disp['reset_mode'],
-             H_reset=H_reset, stride=disp['stride'], W=W, zeta=zeta, idx=idx, zf=zf, uhat=uhat,
+    F = dict(Dc=Dc, A=A, R2=R2, L0=L0, L0_ci=L0_ci, L0_source=L0_source, z_P=z_P, z_F=z_F, Z_P=Z_P, Z_F=Z_F,
+             u0=u0, u0_sd=u0_sd, u0_ss=u0_ss, rigid=cfg.PERM_RIGID, pin_nbins=nb, lagr=lagr, n_modes=n_modes,
+             t_onset=t_on, forcing=fz, t_reset=disp['t_reset'], t_reset_lj=t_reset_lj, reset_mode=disp['reset_mode'],
+             H_reset=H_reset, stride=disp['stride'], W=W, zeta=zeta, uhat=uhat, pop=pop, zl=zl, yl=yl, il=il,
+             zf_lo=float(min(zz[0] for zz in zl)), zf_hi=float(max(zz[-1] for zz in zl)),
+             n_pts=int(sum(len(zz) for zz in zl)), steady=steady,
              early=early, t_lj=t_lj, ts=ts, mu=mu, u_model=u_model, u_phys=u_phys, u_inf=u_inf, tau1=tau1,
              T_prod=T_prod, n_tau=T_prod / tau1, unrelaxed=float(8.0 / np.pi ** 2 * np.exp(-T_prod / tau1)))
 
-    # ---- steady profile: parabola c zeta (2 - zeta) per bin over the steady-window snapshots ----
-    steady = np.where(ts >= P['halt_ts'])[0]
-    if len(steady) == 0:
-        steady = np.array([len(ts) - 1])
-    F['steady'] = steady
-    shape = zf * (2.0 - zf)
-    c_bins = np.mean(uhat[steady][:, idx], axis=0) / shape
-    c, c_lo, c_hi = mean_ci(c_bins, cfg.ci_level)
-    u_ss = np.mean(uhat[steady][:, idx], axis=0)
-    ss_p = np.sum((u_ss - np.mean(u_ss)) ** 2)
-    F.update(c=float(c), c_lo=float(c_lo), c_hi=float(c_hi), c_nbins=len(c_bins), u_ss=u_ss,
-             parab_R2=float(1.0 - np.sum((u_ss - c * shape) ** 2) / ss_p) if ss_p > 1e-30 else np.nan)
+    # ---- steady profile: parabola c zeta (2 - zeta) by least squares over the steady snapshots'
+    #      points (the old per-bin mean of u/[zeta(2 - zeta)] let the small-zeta bins dominate) ----
+    def _c(zz, yy):
+        sh = zz * (2.0 - zz)
+        return float(np.sum(yy * sh) / np.sum(sh * sh))
+
+    c_snap = np.array([_c(zl[i], yl[i]) for i in steady])
+    zs_ = np.concatenate([zl[i] for i in steady])
+    ys_ = np.concatenate([yl[i] for i in steady])
+    c = _c(zs_, ys_)
+    sh_ = zs_ * (2.0 - zs_)
+    res_c = ys_ - c * sh_
+    se_lsq = float(np.sqrt(np.sum(res_c ** 2) / max(len(ys_) - 1, 1) / np.sum(sh_ * sh_)))
+    h = _Z95 * se_lsq
+    if len(steady) >= 2:
+        h = max(h, _Z95 * float(np.std(c_snap, ddof=1)) / np.sqrt(len(steady)))
+    ss_p = np.sum((ys_ - np.mean(ys_)) ** 2)
+    F.update(c=c, c_lo=c - h, c_hi=c + h, c_npts=int(len(ys_)), c_snap=c_snap, u_ss=ys_, zeta_ss=zs_,
+             parab_R2=float(1.0 - np.sum(res_c ** 2) / ss_p) if ss_p > 1e-30 else np.nan)
 
     # ---- feed-face thickness trace: exact zero-IC series, (u_F(inf), D_c) by least squares ----
     F['trace'] = None
@@ -4756,11 +4830,13 @@ def perm_M_estimates(cfg, P, F):
         hs = 0.5 * (F['L_ss_ci'][1] - F['L_ss_ci'][0]) if np.isfinite(F['L_ss_ci'][0]) else 0.0
         out['bb'] = _m(F['L_ss'] - L0, np.sqrt(h0 ** 2 + hs ** 2), 'bb', 'steady thickness change L_0 - L_ss (bounding box)')
     out['prof'] = _m(F['c'] * L0, 0.5 * (F['c_hi'] - F['c_lo']) * L0, 'prof',
-                     f"steady-profile parabola c zeta(2 - zeta), {F['c_nbins']} bins")
+                     f"steady-profile parabola c zeta(2 - zeta), least squares over {F['c_npts']} points of {len(F['steady'])} steady snapshot(s)")
     T = F.get('trace')
     if T is not None:
         out['trace'] = _m(T['u_inf'], T['u_inf_se'] * _Z95, 'trace', 'thickness-trace asymptote u_F(inf), zero-IC series')
     out = {k: v for k, v in out.items() if v is not None}
+    order = [cfg.PERM_M_PRIMARY] + [k for k in ('prof', 'bb', 'trace') if k != cfg.PERM_M_PRIMARY]
+    out['primary'] = next((k for k in order if k in out), None)
     return out
 
 
@@ -4784,8 +4860,14 @@ def add_perm_displacement(cfg, R, P, verbose=True):
     say(f"displacement: {len(d['ts'])} snapshots (windows of {int(d['stride'])} steps, first {int(d['ts'][0])});  "
         f"dP ramp: start step {int(fz['t0'])} -> full dP at {int(fz['t_end'])} ({fz['n']} increment(s); {fz['source']});  "
         f"displacement reference = {F['reset_mode']} (step {int(F['t_reset'])})\n"
-        f"  L_0 = {F['L0']:.2f} sigma ({F['L0_source']}), z^P = {F['z_P']:.2f}, z^F = {F['z_F']:.2f}; "
-        f"fit domain {len(F['idx'])} bins, zeta in [{F['zf'][0]:.3f}, {F['zf'][-1]:.3f}]")
+        f"  L_0 = {F['L0']:.2f} sigma ({F['L0_source']}), pinned face z^P = {F['z_P']:.2f} (contact plane), "
+        f"Z^P = {F['Z_P']:.2f} (reference position = z^P - u_0), z^F = {F['z_F']:.2f}; "
+        f"fit domain {F['n_pts']} points ({'material' if F['lagr'] else 'Eulerian'} zeta in [{F['zf_lo']:.3f}, {F['zf_hi']:.3f}]), "
+        f"{F['n_modes']} modes")
+    if F['rigid'] == 'contact':
+        say(f"  rigid shift u_0 (contact layer, {F['pin_nbins']} lowest bins): "
+            + ', '.join(f"{v:+.2f}" for v in F['u0']) + f" sigma (bin spread {np.max(F['u0_sd']):.2f}); "
+            f"steady u_0 = {F['u0_ss']:+.2f} sigma = the network's drop onto the plate -- subtracted before the fit")
     say(f"  D_c (profile fit, {len(F['early'])} snapshots{', window-averaged modes' if F['W'] > 0 else ''}) = "
         f"{F['Dc']:.4e} sigma^2/tau  (R^2 = {F['R2']:.3f});  tau_1 = L_0^2/(pi^2 D_c) = {F['tau1']:.0f} tau = "
         f"{F['tau1'] / cfg.dt_lj / 1e6:.2f}M steps;  production = {F['n_tau']:.2f} tau_1 "
@@ -4801,12 +4883,12 @@ def add_perm_displacement(cfg, R, P, verbose=True):
     P['M_perm'] = Mp
     if Mp:
         say(f"  M = dP_ext L_0/(2 |u_F|)  with dP_ext = {Mp['dP']:.4f} ({Mp['dP_src']}), L_0 = {Mp['L0']:.2f}:")
-        for key in ('bb', 'prof', 'trace'):
+        for key in ('prof', 'bb', 'trace'):
             v = Mp.get(key)
             if v:
-                say(f"    {key:5s} M = {v['M']:.4f} [{v['lo']:.4f}, {v['hi']:.4f}]  (u_F = {v['uF']:+.2f} sigma, eps_F = {v['eps']:.4f}"
+                say(f"    {key:5s}{' *' if key == Mp.get('primary') else '  '} M = {v['M']:.4f} [{v['lo']:.4f}, {v['hi']:.4f}]  (u_F = {v['uF']:+.2f} sigma, eps_F = {v['eps']:.4f}"
                     + (f"; x L_ss/L_0 -> {v['M_Lss']:.4f}" if 'M_Lss' in v else '') + f")  {v['how']}")
-        Mref = Mp.get('bb') or Mp.get('prof') or Mp.get('trace')
+        Mref = Mp.get(Mp['primary']) if Mp.get('primary') else None
         if Mref:
             K = {'profile': dict(k=F['Dc'] / Mref['M'], lo=F['Dc'] / Mref['hi'], hi=F['Dc'] / Mref['lo'])}
             if T is not None:
@@ -4814,50 +4896,58 @@ def add_perm_displacement(cfg, R, P, verbose=True):
                                   hi=(T['Dc'] + _Z95 * T['Dc_se']) / Mref['lo'])
             P['kappa_Dc'] = K
             kd = (P.get('flux') or {}).get('k', {}).get('N_measured')
-            say('  kappa = D_c/M (M from the thickness change):  '
+            say(f"  kappa = D_c/M (M = {Mp['primary']}, {Mref['M']:.4f}):  "
                 + '   '.join(f"{k}: {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" for k, v in K.items())
                 + (f"   |  Darcy kappa = Q L/(A dP) (fig 9): {kd['k']:.4e}  ->  D_c(Darcy) = kappa M = {kd['k'] * Mref['M']:.4e}" if kd else ''))
     return P
 
 
 def fig_perm_Dc(cfg, R, P):
-    """Figure 12: (a) u_z(zeta, t)/L_0 snapshots, (b) data + the one-sided consolidation
-    model (D_c), (c) the feed-face displacement u_F(t) from the thickness trace with the
-    exact zero-IC series and the profile fit's own u(1, t)."""
+    """Figure 12: (a) the deformation (u_z - u_0)(zeta, t)/L_0 of the snapshots, (b) data + the
+    one-sided consolidation model (D_c), (c) the feed-face displacement u_F(t) from the
+    thickness trace with the exact zero-IC series and the profile fit's own u(1, t)."""
     F = P.get('Dc')
     if F is None:
         print('D_c figure skipped (no fit)')
         return None
     zff = np.linspace(0.0, 1.0, 400)
-    fig, (axl, axr, axt) = plt.subplots(1, 3, figsize=(25, 7), constrained_layout=True,
-                                        gridspec_kw=dict(width_ratios=[1.0, 1.0, 1.15]))
+    fig = plt.figure(figsize=(20, 14), constrained_layout=True)
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 0.85])
+    axl, axr, axt = fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[1, :])
     norm = Normalize(vmin=F['ts'][F['early'][0]], vmax=F['ts'][F['early'][-1]])
     cmap = plt.cm.viridis
     for i in F['early']:
         c = cmap(norm(F['ts'][i]))
-        axl.plot(F['zf'], F['uhat'][i][F['idx']], 'o-', color=c, ms=3, alpha=0.6)
-        axr.plot(F['zf'], F['uhat'][i][F['idx']], 'o', color=c, ms=3, alpha=0.35)
+        axl.plot(F['zl'][i], F['yl'][i], 'o-', color=c, ms=3, alpha=0.6)
+        axr.plot(F['zl'][i], F['yl'][i], 'o', color=c, ms=3, alpha=0.35)
         axr.plot(zff, F['u_model'](zff, F['t_lj'][i]), '-', color=c, lw=2.0)
     u_end = float(F['u_inf'](1.0)[0])
+    contact = F['rigid'] == 'contact'
+    ylab = r'$(u_z-u_0)/L_0$' if contact else r'$u_z/L_0$'
+    xlab = (r'$\zeta=(z-u_z-Z^P)/L_0$  (material coordinate)' if F['lagr'] else r'$\zeta=(z-z^P)/L_0$')
     for ax in (axl, axr):
         ax._tri_has_colorbar = True
         ax.axhline(0.0, color='0.45', lw=1.6, label=(r'IC: $u_z(\zeta,0)=0$ at the ramp start' if F['reset_mode'] == 'ramp_start'
-                                                    else r'reference: $u_z=0$ at the ramp end (older deck)'))
+                                                    else r'reference: $u_z=0$ at the ramp end'))
         ax.plot(zff, F['u_inf'](zff), 'k:', lw=1.8, label=r'steady state ($t\to\infty$, fitted modes)')
         ax.plot(zff, F['c'] * zff * (2.0 - zff), '--', color='0.35', lw=1.4,
-                label=rf"steady-window parabola $c\,\zeta(2-\zeta)$, $c={sig(F['c'])}$  ($\to M$)")
-        ax.plot(0.0, 0.0, 's', color=WONG['blue'], ms=9, zorder=5, label=r'BC: $u_z(0,t)=0$ (support, pinned)')
+                label=(rf"steady-window parabola $c\,\zeta(2-\zeta)$, $c={sig(F['c'])}$  ($\to M$)" if ax is axl
+                       else 'steady-window parabola'))
+        ax.plot(0.0, 0.0, 's', color=WONG['blue'], ms=9, zorder=5, label=r'BC: $u_z(0,t)=u_0$ (support, pinned)')
         ax.plot([0.93, 1.0], [u_end, u_end], '-', color=WONG['vermillion'], lw=4, solid_capstyle='butt', zorder=5,
                 label=r'BC: $\partial u_z/\partial\zeta\,|_{\zeta=1}=0$ (free feed face)')
-        ax.set(xlabel=r'$\zeta=(z-z^P)/L_0$', ylabel=r'$u_z/L_0$', xlim=(0, 1))
+        if contact and ax is axl:
+            ax.plot([], [], ' ', label=rf"rigid drop $u_0={F['u0_ss']:+.2f}\,\sigma$ subtracted (contact layer)")
+        ax.set(xlabel=xlab, ylabel=ylab, xlim=(0, 1))
         ax.grid(alpha=0.3)
         smart_legend(ax, fontsize=10)
-    axl.set_title(r'(a) $u_z(\zeta,t)/L_0$ -- production snapshots (since the reset)', fontsize=13)
-    axr.set_title(rf"(b) consolidation fit: $D_c={sig(F['Dc'])}\ \sigma^2/\tau$, $R^2={sig(F['R2'])}$"
-                  + (r'  (window-averaged modes)' if F['W'] > 0 else ''), fontsize=13)
+    axl.set_title(r'(a) ' + ylab + r' -- production snapshots (since the reset)'
+                  + ('\n' + rf"face $Z^P={F['Z_P']:.1f}$ at zero flux $\to z^P={F['z_P']:.1f}$ under flow" if contact else ''), fontsize=13)
+    axr.set_title(rf"(b) consolidation fit: $D_c={sig(F['Dc'])}\ \sigma^2/\tau$, $R^2={sig(F['R2'])}$, {F['n_modes']} modes"
+                  + (r' (window-averaged)' if F['W'] > 0 else ''), fontsize=13)
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
-    fig.colorbar(sm, ax=[axl, axr], fraction=0.015, pad=0.04).set_label('timestep (window end)')
+    fig.colorbar(sm, ax=[axl, axr], fraction=0.015, pad=0.02).set_label('timestep')
     # ---- (c) feed-face displacement vs time ----
     T = F.get('trace')
     if T is not None:
@@ -4871,14 +4961,21 @@ def fig_perm_Dc(cfg, R, P):
                         rf"$R^2={sig(T['R2'])}$"))
         if T['fit'].sum() < len(T['fit']):
             axt.axvline(T['step'][T['fit']][-1], color=WONG['vermillion'], ls=':', lw=1.2, alpha=0.7)
+        if cfg.PERM_TRACE_SKIP > 0:
+            axt.axvline(F['t_onset'] + cfg.PERM_TRACE_SKIP, color=WONG['vermillion'], ls='-.', lw=1.2, alpha=0.7,
+                        label=f'trace fit starts (PERM_TRACE_SKIP = {cfg.PERM_TRACE_SKIP / 1e6:.1f}M steps)')
     tt = np.linspace(0.0, F['t_lj'][-1], 400)
     axt.plot(F['t_onset'] + tt / cfg.dt_lj, [float(F['u_phys'](1.0, t)[0]) for t in tt], '--',
              color=WONG['blue'], lw=2.0, label=rf"profile fit at $\zeta=1$ (instantaneous): $D_c={sig(F['Dc'])}$")
-    jt = F['idx'][-1]
-    off = float(F['u_phys'](F['zf'][-1], F['t_reset_lj'])[0])
-    axt.plot(F['ts'] - 0.5 * F['stride'], F['uhat'][:, jt] + off, 'o', color=WONG['blue'], ms=7, zorder=5,
-             label=rf"top fitted bin of the snapshots ($\zeta={F['zf'][-1]:.2f}$, at the window centre"
-                   + (rf"; $+{off:.4f}$ fitted offset at the reset)" if abs(off) > 1e-4 else ')'))
+    # the top fitted point of each snapshot: the deformation there (u_z - u_0), at the window centre,
+    # plus the fitted deformation already present at the reset (zero for a ramp-start reset)
+    ztop = np.array([F['zl'][i][-1] for i in range(len(F['ts']))])
+    ytop = np.array([F['yl'][i][-1] for i in range(len(F['ts']))])
+    off = np.array([float(F['u_phys'](zt, F['t_reset_lj'])[0]) for zt in ztop])
+    axt.plot(F['ts'] - 0.5 * F['stride'], ytop + off, 'o', color=WONG['blue'], ms=7, zorder=5,
+             label=(rf"top fitted point of each snapshot ($\zeta={ztop.min():.2f}$–${ztop.max():.2f}$, "
+                    + (r'$u_z-u_0$, ' if contact else '') + 'window centre'
+                    + (rf"; $+{np.max(np.abs(off)):.4f}$ fitted offset at the reset)" if np.max(np.abs(off)) > 1e-4 else ')')))
     fz = F['forcing']
     if fz['t_end'] - fz['t0'] > 0.02 * (float(F['ts'][-1]) - fz['t0']):
         axt.axvspan(fz['t0'], fz['t_end'], color='0.5', alpha=0.12, label=rf"$\Delta P$ ramp ({fz['n']} increments)")
@@ -4891,7 +4988,9 @@ def fig_perm_Dc(cfg, R, P):
     axt.grid(alpha=0.3)
     smart_legend(axt, fontsize=9)
     fig.suptitle(f'Cooperative diffusivity, permeation drive  |  {cfg.sim_name}  |  '
-                 rf"$L_0={sig(F['L0'])}\,\sigma$, $z^P={F['z_P']:.1f}$, ramp {(fz['t_end'] - fz['t0']) / 1e6:.2f}M steps, "
+                 rf"$L_0={sig(F['L0'])}\,\sigma$, $z^P={F['z_P']:.1f}$"
+                 + (rf" ($u_0={F['u0_ss']:+.2f}\,\sigma$)" if contact else '')
+                 + rf", ramp {(fz['t_end'] - fz['t0']) / 1e6:.2f}M steps, "
                  rf"drive $={F['n_tau']:.2f}\,\tau_1$ "
                  rf"($\tau_1=L_0^2/\pi^2 D_c={F['tau1']:.0f}\,\tau$, profile fit)", fontsize=12, fontweight='bold')
     return _save(fig, cfg, 'perm_Dc_consolidation_fit')
@@ -4899,26 +4998,30 @@ def fig_perm_Dc(cfg, R, P):
 
 def fig_perm_M(cfg, R, P):
     """Figure 13: M = dP_ext L_0/(2 |u_F|) -- one point per reading of the feed-face
-    displacement (thickness change, steady-profile parabola, trace asymptote), with CIs."""
+    displacement (steady-profile parabola, thickness change, trace asymptote), with CIs;
+    the primary (PERM_M_PRIMARY) is marked, and the caption below the axes says why the
+    bounding-box readings differ from the profile."""
     Mp = P.get('M_perm')
     if not Mp:
         print('M figure skipped (no displacement fit or no dP)')
         return None
-    order = (('bb', 'thickness change' + '\n' + r'$\Delta L = L_0 - L_{ss}$', WONG['blue'], 'o'),
-             ('prof', 'steady profile' + '\n' + r'parabola $c\,\zeta(2-\zeta)$', WONG['vermillion'], 's'),
-             ('trace', 'thickness trace' + '\n' + r'asymptote $u_F(\infty)$', WONG['green'], 'D'))
+    F = P.get('Dc') or {}
+    prim = Mp.get('primary')
+    order = (('prof', 'steady profile' + '\n' + r'parabola $c\,\zeta(2-\zeta)$', WONG['vermillion'], 's'),
+             ('bb', 'thickness change' + '\n' + r'$\Delta L = L_0 - L_{ss}$ (bounding box)', WONG['blue'], 'o'),
+             ('trace', 'thickness trace' + '\n' + r'asymptote $u_F(\infty)$ (bounding box)', WONG['green'], 'D'))
     show = [o for o in order if o[0] in Mp]
-    fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(10, 7.4), constrained_layout=True)
     ci = int(cfg.ci_level * 100)
     for k, (key, lab, col, mk) in enumerate(show):
         v = Mp[key]
         ax.errorbar([k], [v['M']], yerr=[[v['M'] - v['lo']], [v['hi'] - v['M']]], fmt=mk, ms=13, color=col,
-                    capsize=8, lw=2.5,
-                    label=f"{lab.splitlines()[0]}:  $M = {sig(v['M'])}$\n{ci}% CI [{sig(v['lo'])}, {sig(v['hi'])}]"
-                          rf"  ($\varepsilon_F = {v['eps']:.3f}$)")
+                    capsize=8, lw=2.5, mfc=(col if key == prim else 'white'), mew=2.5,
+                    label=(('PRIMARY  ' if key == prim else '') + f"{lab.splitlines()[0]}:  $M = {sig(v['M'])}$\n{ci}% CI [{sig(v['lo'])}, {sig(v['hi'])}]"
+                           rf"  ($u_F = {v['uF']:+.1f}\,\sigma$, $\varepsilon_F = {v['eps']:.3f}$)"))
         ax.axhline(v['M'], color=col, ls='--', lw=1.0, alpha=0.4)
     ax.set_xticks(range(len(show)))
-    ax.set_xticklabels([o[1] for o in show], fontsize=13)
+    ax.set_xticklabels([o[1] + ('\n(primary)' if o[0] == prim else '') for o in show], fontsize=12)
     ax.set_ylabel(r'$M$  (LJ units)')
     ax.set_xlim(-0.6, len(show) - 0.4)
     ax.grid(axis='y', alpha=0.3)
@@ -4928,6 +5031,20 @@ def fig_perm_M(cfg, R, P):
                  + '\n' + rf"$\Delta P_{{\mathrm{{ext}}}}={sig(Mp['dP'])}$ ({Mp['dP_src']}), "
                  rf"$L_0={sig(Mp['L0'])}\,\sigma$ (onset)" + lss + f'\n{cfg.sim_name}', fontsize=12)
     smart_legend(ax, fontsize=11)
+    # ---- caption: why the two families of u_F differ (so that the choice of primary is not forgotten) ----
+    if 'prof' in Mp and 'bb' in Mp:
+        up, ub = Mp['prof']['uF'], Mp['bb']['uF']
+        u0 = F.get('u0_ss', np.nan)
+        dM = 100 * (Mp['bb']['M'] / Mp['prof']['M'] - 1)
+        cap = (f"Two readings of u_F.  The parabola reads the deformation of the network alone: the binned displacement with the rigid drop\n"
+               f"u_0 = {u0:+.2f} \u03c3 subtracted (the network's fall onto the plate when the flow closes the zero-flux gap), in the material coordinate,\n"
+               f"pinned at the contact plane  ->  u_F = {up:+.1f} \u03c3.   The bounding-box thickness runs from the lowest to the highest polymer bead:\n"
+               f"its bottom end is a tail bead that drops with the network onto the plate and its top end the extreme bead a few \u03c3 above the\n"
+               f"face, so \u0394L_bb (u_F = {ub:+.1f} \u03c3) carries {abs(ub - up):.1f} \u03c3 of the drop / tail statistics into |u_F| and the bounding-box M "
+               f"({'bb and trace' if 'trace' in Mp else 'bb'}) come out\n"
+               f"{dM:+.0f}% relative to the parabola.   Primary = {prim} (PERM_M_PRIMARY): it feeds \u03ba = D_c/M and the q(t) check of figure 14.")
+        fig.text(0.01, -0.02, cap, ha='left', va='top', fontsize=10, family='serif',
+                 bbox=dict(boxstyle='round', fc='0.97', ec='0.75'))
     return _save(fig, cfg, 'perm_M')
 
 
@@ -4953,14 +5070,14 @@ def perm_flux_model(cfg, R, P):
     <u> the membrane-mean displacement.  The steady level A (D_c/M) dP/L_0 is figure 9's Darcy
     check in flux form (kappa = D_c/M); the transient is the solvent the compaction expels.
     Profile fit: <u> = L_0 sum_k a_k H_k(t) (int phi_k dzeta = 1); trace fit (zero-IC shape):
-    <u> = u_F sum_k 4/(k pi)^2 H_k(t).  dP(t) is the applied staircase; M the thickness-change M.
+    <u> = u_F sum_k 4/(k pi)^2 H_k(t).  dP(t) is the applied staircase; M the primary M (PERM_M_PRIMARY).
     Nothing here is fitted to the flux.  Returns a dict or None."""
     F, Mp = P.get('Dc'), P.get('M_perm')
-    if F is None or not Mp or 'bb' not in Mp:
+    if F is None or not Mp or not Mp.get('primary'):
         return None
     fz = F['forcing']
     forcing = (fz['tj'], fz['wj'])
-    L0, A, M = F['L0'], P['area'], Mp['bb']['M']
+    L0, A, M = F['L0'], P['area'], Mp[Mp['primary']]['M']
     dP_full = fz['full'] if np.isfinite(fz.get('full', np.nan)) else Mp['dP']
     T_end = max(float(F['t_lj'][-1]), float(F['trace']['t_lj'][-1]) if F.get('trace') else 0.0)
     tt = np.linspace(0.0, T_end, 1500)
@@ -5061,8 +5178,8 @@ def print_perm_summary(cfg, R, P):
         print(f"  D_c (profile fit) = {F2['Dc']:.4e} sigma^2/tau (R^2 {F2['R2']:.3f}; production {F2['n_tau']:.2f} tau_1)"
               + (f";  D_c (thickness trace) = {T['Dc']:.4e} +/- {T['Dc_se']:.1e} (R^2 {T['R2']:.3f})" if T else ''))
     if Mp:
-        print('  M = dP L_0/(2|u_F|): ' + '  '.join(f"{k}: {v['M']:.4f} [{v['lo']:.4f}, {v['hi']:.4f}]"
-                                                 for k, v in Mp.items() if isinstance(v, dict)))
+        print('  M = dP L_0/(2|u_F|): ' + '  '.join(f"{k}{'*' if k == Mp.get('primary') else ''}: {v['M']:.4f} [{v['lo']:.4f}, {v['hi']:.4f}]"
+                                                 for k, v in Mp.items() if isinstance(v, dict)) + '   (* = primary)')
     K = P.get('kappa_Dc')
     if K:
         kd = F.get('k', {}).get('N_measured')
