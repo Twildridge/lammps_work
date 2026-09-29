@@ -37,7 +37,10 @@ Physics conventions (see the Notes section at the end of either notebook):
   * M_network = (<sigma'_zz>_interior,plateau - sigma'_zz,ref) / eps_applied
     M_piston  = (<F_z/A>_plateau - P_ref) / eps_applied          (M_SUBTRACT_REF; each estimator
     subtracts its own eps = 0 reading -- the piston preload and the profile bias differ by ~0.002)
-  * D_c from the two-sided consolidation fit of the polymer displacement u_z(z,t)
+  * D_c from the consolidation fit of the polymer displacement u_z(z,t) during a hold between
+    two drained plates: modes sin(2 m pi zeta) and cos(2 m pi zeta) - 1 decaying as
+    exp(-4 m^2 pi^2 D_c t/L^2), tau_1 = L^2/(4 pi^2 D_c)  (2026-09-28; the earlier
+    (2 zeta - 1) + cos(k pi zeta) shapes at k^2 pi^2 D_c/L^2 overstated D_c ~5x)
   * kappa = D_c / M   (Darcy permeability over viscosity, k/eta, in LJ units)
 """
 from __future__ import annotations
@@ -180,10 +183,17 @@ class Config:
                                           # inside the zero-flux reference window)
     PERM_DC_WINDOW_AVG: bool = True       # the fitted modes are averaged over each ave/chunk window: the deck block-averages
                                           # u_z over the whole nfreq interval and tags the snapshot with the window END
-    PERM_DC_BOUNDS: tuple = (1e-6, 50.0)  # D_c search interval of the permeation fits (sigma^2/tau).  The one-sided
-                                          # problem relaxes 4x slower than the compression fit's two-sided one for the
-                                          # same D_c, and the first perm run's early transient (~0.6M steps for
-                                          # L_0 ~ 126) needs D_c ~ 2-3: the compression DC_BOUNDS cap of 1.0 would peg it
+    PERM_DISP_RESET: str = 'auto'         # where the deck reset displace/atom (u_z = 0): 'ramp_start' (decks since
+                                          # 2026-09-28: the profile fix is live through the dP ramp) | 'ramp_end' (older
+                                          # decks: reset at the production onset) | 'auto' (ramp_start when the first
+                                          # snapshot precedes the end of the ramp).  The applied-dP history itself
+                                          # (piston_pressure) drives the consolidation model either way.
+    PERM_TRACE_SKIP: int = 0              # steps after the ramp start left out of the thickness-trace fit (the zero-IC
+                                          # series still starts at the ramp start): use it to skip the piston ringing of
+                                          # a short-ramp run (perm_2: ~2M steps)
+    PERM_DC_BOUNDS: tuple = (1e-6, 50.0)  # D_c search interval of the permeation fits (sigma^2/tau); wide so that a
+                                          # fit driven by a fast non-consolidation transient (the piston ringing of a
+                                          # short ramp) shows up as a large D_c rather than pegging at DC_BOUNDS
     # ---- M and G as increments from the eps = 0 reference ------------------
     M_SUBTRACT_REF: bool = True           # M = (stress - its own eps = 0 reading) / eps for BOTH estimators
                                           # (2026-09-12: the seated piston carries a real preload ~+0.0014 and the
@@ -208,7 +218,8 @@ class Config:
     DC_TRIM_BINS: int = 2
     DC_FREE_AMPS: bool = True
     DC_BOUNDS: tuple = (1e-6, 1.0)
-    DC_SLOW_REF: float = 0.17             # sigma^2/tau, slow collective D_c (free-swelling equilibration)
+    DC_SLOW_REF: float = 0.17             # the deck's hold-sizing constant Dc_est, in the deck's tau_1 = L^2/(pi^2 Dc_est)
+                                          # convention (= 0.17/4 in the held-slab convention of fit_Dc, 2026-09-28)
     DC_TARGET_RESID: float = 0.01
     # ---- Expanse ---------------------------------------------------------
     EXPANSE_HOST: str = 'login.expanse.sdsc.edu'
@@ -1073,12 +1084,23 @@ def load_disp(cfg, R, lvl, halt_ts=None):
 
 
 def _w_modes(zh, kk):
-    return (2.0 * zh - 1.0)[:, None] + np.cos(np.pi * zh[:, None] * kk[None, :])
+    """Displacement modes of a slab HELD between two drained plates at the same bath pressure
+    (2026-09-28).  With both faces pinned (u''(0) = u''(1) = -q/D_c) and the pore pressure equal at
+    both faces (eps(0) = eps(1), uniform total stress) the strain modes are periodic, cos/sin(2 m pi
+    zeta), so u relaxes in sin(pi kk zeta) (antisymmetric) and cos(pi kk zeta) - 1 (symmetric) with
+    kk = 2 m, both zero at both plates, decaying as exp(-(pi kk)^2 D_c t/L^2).  Returns
+    (len(zh), 2 len(kk)): the sin block, then the cos block.  The previous shapes
+    (2 zeta - 1) + cos(k pi zeta), odd k, at k^2 pi^2 D_c/L^2 -- Terzaghi's constant-load series
+    bent to vanish at both plates -- are not solutions of the held-slab equation and returned ~5x
+    the true D_c on the exact relaxation (synthetic test, 2026-09-28)."""
+    zh = np.asarray(zh, float)[:, None]
+    return np.hstack([np.sin(np.pi * zh * kk[None, :]), np.cos(np.pi * zh * kk[None, :]) - 1.0])
 
 
 def fit_Dc(cfg, R, disp):
-    """Two-sided consolidation fit of D_c to u_z/L on the polymer domain
-    (see the D_c notes in the notebooks).  Returns a dict or None.
+    """Consolidation fit of D_c to u_z/L on the polymer domain during a hold between two
+    drained plates: modes sin(2 m pi zeta), cos(2 m pi zeta) - 1 at 4 m^2 pi^2 D_c/L^2, free
+    amplitudes (see _w_modes and the D_c notes in the notebooks).  Returns a dict or None.
 
     The domain is bounded by the HELD plate planes.  DL is the cumulative closure of
     the plate gap since the seated reference; f_sup is the share of it the support
@@ -1117,14 +1139,14 @@ def fit_Dc(cfg, R, disp):
         return None
     if np.nanmax(np.abs(disp['uz'][:, idx])) > 0.5 * DL:
         print('  WARNING: |u_dat| ~ DL -- the disp file does not look hold-referenced.')
-    kk = (2.0 * np.arange(1, cfg.DC_N_MODES + 1) - 1.0 if cfg.DC_FREE_AMPS
-          else np.arange(1, cfg.DC_KMAX_IC + 1, 2.0))
+    if not cfg.DC_FREE_AMPS:
+        print('  NOTE: DC_FREE_AMPS=False (Terzaghi load-control amplitudes) has no meaning for the held-slab '
+              'modes (2026-09-28); fitting free amplitudes')
+    kk = 2.0 * np.arange(1, cfg.DC_N_MODES + 1)            # even wavenumbers: m = 1..N, 2N amplitudes (sin + cos blocks)
 
     def design(Dc, t):
         dec = np.exp(-(np.pi * kk) ** 2 * Dc * t / L ** 2)
-        if cfg.DC_FREE_AMPS:
-            return _w_modes(zf, kk) * (dec - 1.0)[None, :]
-        return (_w_modes(zf, kk) @ (8.0 / (np.pi * kk) ** 2 * dec))[:, None]
+        return _w_modes(zf, kk) * (np.tile(dec, 2) - 1.0)[None, :]
 
     def amps(Dc):
         X = np.vstack([design(Dc, t_lj[i]) for i in early])
@@ -1144,16 +1166,14 @@ def fit_Dc(cfg, R, disp):
 
     def T(zh, t):
         dec = np.exp(-(np.pi * kk) ** 2 * Dc * t / L ** 2)
-        if cfg.DC_FREE_AMPS:
-            return _w_modes(zh, kk) @ (A * dec)
-        return A[0] * (_w_modes(zh, kk) @ (8.0 / (np.pi * kk) ** 2 * dec))
+        return _w_modes(zh, kk) @ (A * np.tile(dec, 2))
 
     # absolute u_z/L (referenced to the pre-drive state): affine end state
     # (DL/L)(f_sup - zeta) -- the support face moved UP by DL_sup, the piston face
     # DOWN by DL_pist -- plus the fitted transient
     u_model = lambda zh, t: (DL / L) * (f_sup - zh) + T(zh, t)
     u_IC = lambda zh: u_model(zh, 0.0)
-    beta = np.nan if cfg.DC_FREE_AMPS else float(A[0])
+    beta = np.nan
     hold_T = float(t_lj[-1])
     return dict(Dc=Dc, A=A, beta=beta, R2=R2, L=L, DL=DL, DL_pist=DL_pist, DL_sup=DL_sup, f_sup=f_sup,
                 gap=gap, z_perm=z_perm, z_feed=z_feed, z_sup=z_sup, z_pist=disp['z_pist_held'],
@@ -1176,11 +1196,15 @@ def n_tau_needed(tau1, target, f):
 
 
 def hold_adequacy(cfg, L, hold_T, Dc_fit):
-    """Was the hold long enough?  tau_1 = L^2/(pi^2 D_c) for the fitted and the
-    slow reference D_c; residual = mean excess stress over the last plateau_frac."""
+    """Was the hold long enough?  'fit': tau_1 = L^2/(4 pi^2 D_c) for the fitted D_c (held
+    slab, first mode sin(2 pi zeta); 2026-09-28).  'slow': the DECK's own sizing formula,
+    L^2/(pi^2 Dc_est) with Dc_est = DC_SLOW_REF -- the hold it actually prescribed (its
+    Dc_est = 0.17 in that convention is ~0.04 in the held-slab one: right at eps ~ 0.1, short
+    at higher strain where the fitted D_c drops faster than the deck's (1-eps)^2 sizing).
+    residual = mean excess stress over the last plateau_frac."""
     out = {}
-    for tag, Dx in (('fit', Dc_fit), ('slow', cfg.DC_SLOW_REF)):
-        tau1 = L * L / (np.pi ** 2 * Dx)
+    for tag, Dx, fac in (('fit', Dc_fit, 4.0), ('slow', cfg.DC_SLOW_REF, 1.0)):
+        tau1 = L * L / (fac * np.pi ** 2 * Dx)
         end, avg = hold_residual(hold_T, tau1, cfg.plateau_frac)
         out[tag] = dict(Dc=Dx, tau1=tau1, end=end, avg=avg,
                         need=n_tau_needed(tau1, cfg.DC_TARGET_RESID, cfg.plateau_frac),
@@ -3627,7 +3651,8 @@ def fig_Dc_sweep(cfg, R, levels):
                     xytext=(0, -12), ha='center', va='top', fontsize=10, color='0.35',
                     annotation_clip=True)
     ax.margins(x=0.12, y=0.15)
-    ax.axhline(cfg.DC_SLOW_REF, color='0.4', ls=':', lw=1.5, label=f'slow reference $D_c$ = {sig(cfg.DC_SLOW_REF)}')
+    ax.axhline(cfg.DC_SLOW_REF / 4.0, color='0.4', ls=':', lw=1.5,
+               label=f"deck hold-sizing $D_c$ = {sig(cfg.DC_SLOW_REF / 4)}  (= {sig(cfg.DC_SLOW_REF)} in the deck's $L^2/\\pi^2 D_c$ convention)")
     ax.set_xlabel(r'applied strain  $\varepsilon$')
     ax.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
     ax.set_title(r'(a) $D_c$ vs applied strain', fontsize=15)
@@ -3685,7 +3710,8 @@ def print_hold_check(cfg, levels):
     hd = [L for L in levels if L.get('Dc') is not None]
     if not hd:
         return
-    print(f'\nHOLD-ADEQUACY CHECK  (tau_1 = L^2/(pi^2 D_c); residual = mean excess stress over the last '
+    print(f'\nHOLD-ADEQUACY CHECK  (fit: tau_1 = L^2/(4 pi^2 D_c), held slab; slow: the deck\'s sizing formula '
+          f'L^2/(pi^2 Dc_est); residual = mean excess stress over the last '
           f'{cfg.plateau_frac:.0%} of the hold, i.e. the window M is read from)')
     for L in hd:
         F = L['Dc']
@@ -3703,8 +3729,10 @@ def print_hold_check(cfg, levels):
             print(f"     observed M_piston/M_network - 1 = {mp / mn - 1:+.1%}   vs   "
                   f"predicted unrelaxed excess (slow D_c) = {F['hold_check']['slow']['avg']:+.1%}"
                   + ('   [both ABSOLUTE here: no piston_force_avg_ref, so the increment ratio is not like-for-like]' if mixed else ''))
-    print(f'  (triaxial_compression.lmp sizes each hold as n_tau_hold * tau_1 from the live compressed '
-          f'BB thickness and Dc_est = {cfg.DC_SLOW_REF:.2f}; tau_1 ~ (1-eps)^2.)')
+    print(f'  (triaxial_compression.lmp sizes each hold as n_tau_hold * L^2/(pi^2 Dc_est) from the live compressed '
+          f'BB thickness and Dc_est = {cfg.DC_SLOW_REF:.2f}; in the held-slab convention that is D_c = {cfg.DC_SLOW_REF / 4:.3f} -- '
+          f'right at eps ~ 0.1, but the fitted D_c falls with strain faster than the (1-eps)^2 sizing assumes, so the '
+          f'higher levels are held too short: compare the observed piston/network excess above.)')
 
 
 def print_summary(cfg, levels):
@@ -4398,26 +4426,39 @@ def fig_perm_permeability(cfg, R, P):
 # ---------------------------------------------------------------------------
 #  permeation mode: D_c and M from the polymer displacement (2026-09-28)
 #
-#  Linear 1-D poroelasticity with the polymer at rest in the steady state,
-#      du_z/dt = q_s + D_c d2u_z/dz2,     q_s = phi_s v_s = Q_perm / A  (Darcy flux),
-#  on the membrane z^P <= z <= z^F with  u_z(z^P) = 0 (support: the polymer is pinned),
-#  du_z/dz|z^F = 0 (free feed face, sigma' = 0)  and  u_z(z, 0) = 0 (the deck resets
-#  displace/atom at the production onset; the 5 k-step feed-pressure ramp is negligible
-#  against the consolidation time).  With zeta = (z - z^P)/L and mu_k = (k - 1/2) pi:
-#      u_z(zeta, t) = u_ss(zeta) + sum_k a_k sin(mu_k zeta) exp(-mu_k^2 D_c t / L^2),
-#      u_ss(zeta)   = -(q_s L^2 / 2 D_c) [zeta^2 - 2 zeta] = -(dP L / 2 M) [zeta^2 - 2 zeta]
-#  (Darcy q_s = D_c dP/(L M)), so the feed face settles at u_F = u_ss(1) = -dP L/(2M):
+#  Linear 1-D poroelasticity of the membrane z^P <= z <= z^F between two reservoirs whose
+#  pressures the pistons PRESCRIBE (P_perm at the support, P_feed = P_perm + dP at the free feed
+#  face).  Mixture incompressibility + Darcy + quasi-static force balance give
+#      du_z/dt = q(t) + D_c d2u_z/dz2,   q(t) = phi_s v_s + phi_p v_p  (the TOTAL flux: uniform in z
+#  but a function of time -- the permeate flux that overshoots 25x in perm_2; = Q_perm/A only in
+#  the steady state).  The total stress is uniform, so the network stress at the support is -dP
+#  from t = 0+ while sigma' = 0 at the free face: the STRAIN eps = -du_z/dz obeys the diffusion
+#  equation with DIRICHLET ends, eps(z^P) = dP/M, eps(z^F) = 0, and relaxes with
+#      tau_1 = L^2 / (pi^2 D_c)     (the same first-mode time as the two-sided compression fit).
+#  With zeta = (z - z^P)/L and mu_k = k pi the displacement modes are phi_k = 1 - cos(mu_k zeta)
+#  (u(0) = 0 and u'(1) = 0 built in), decaying as exp(-mu_k^2 D_c t/L^2); the steady state is
+#      u_ss(zeta) = -(dP L / 2M) [zeta^2 - 2 zeta],   u_F = u_ss(1) = -dP L/(2M),
 #      M = dP L / (2 |u_F|) = dP / (2 |c|),   u_ss(zeta)/L = c zeta (2 - zeta).
-#  The zero IC fixes the modal amplitudes, a_k = -4 u_F (-1)^(k+1)/mu_k^3, so the feed-face
-#  trace is  u_F(t) = u_F [1 - sum_k b_k exp(-mu_k^2 D_c t/L^2)],  b_k = 4(-1)^(k+1)/mu_k^3.
+#  NOTE (2026-09-28, second pass): the first version took q constant and expanded u in
+#  sin((k - 1/2) pi zeta), the modes of a prescribed FLUX (tau_1 = 4 L^2/pi^2 D_c); with the
+#  pressure drop prescribed the decay is 4x faster for the same D_c, so that reading overstated
+#  D_c by 4 (1.37 instead of ~0.34 for perm_2).
+#  The drive is the applied-dP HISTORY (piston_pressure: increments w_j at t_j, sum w_j = 1;
+#  a 5 k-step ramp is one increment, the 1M-step ramp of decks since 2026-09-28 ~200).  Each
+#  mode responds with  H_k(t) = sum_j w_j [1 - exp(-mu_k^2 D_c (t - t_j)/L^2)]_(t > t_j),  so
+#      u_z(zeta, t) = sum_k a_k phi_k(zeta) H_k(t)   (a_k fixed by the zero IC: only odd k, and
+#      u_F(t) = u_F sum_k b_k H_k(t),  b_k = 8/(k pi)^2 for odd k, sum b_k = 1: the feed-face trace).
+#  The deck resets displace/atom at the ramp start (since 2026-09-28) or at the ramp end
+#  (older decks, PERM_DISP_RESET): the data are u(t) - u(t_reset), so the profile fit uses
+#  H_k(t) - H_k(t_reset) and the amplitudes stay free.
 #
-#  Three readings of the displacement data (all referenced to the onset):
+#  Three readings of the displacement data:
 #    * profile fit  (fig 12 a-b): u_z(zeta, t)/L of the disp_z_polymer snapshots with FREE
-#      amplitudes (the compression fit's idiom, DC_FREE_AMPS) -> D_c; the amplitudes are
-#      multiplied by [g_k(t) - 1] so u = 0 at t = 0 whatever they are.
+#      amplitudes (the compression fit's idiom, DC_FREE_AMPS) -> D_c; u = 0 at t_reset whatever
+#      the amplitudes.
 #    * thickness trace (fig 12 c): u_F(t) = L_bb(t) - L_0 (5 k-step cadence) against the
-#      exact zero-IC series -> (u_F(inf), D_c); this resolves the early transient that the
-#      stress-cadence snapshots (first window >= 1 nfreq after the onset) miss entirely.
+#      zero-IC series -> (u_F(inf), D_c); this resolves the early transient that the
+#      stress-cadence snapshots (first window >= 1 nfreq after the reset) missed in perm_2.
 #    * M (fig 13): from the steady thickness change L_0 - L_ss (the definition), from the
 #      steady-profile parabola c, and from the trace asymptote u_F(inf).
 # ---------------------------------------------------------------------------
@@ -4425,53 +4466,83 @@ _PERM_TRACE_MODES = 60        # terms of the exact zero-IC series (coefficients 
 
 
 def _perm_mu(n):
-    """eigenvalues of d2/dzeta2 on 0 < zeta < 1 with u(0) = 0, u'(1) = 0: modes sin(mu_k zeta)."""
-    return (np.arange(1, n + 1) - 0.5) * np.pi
+    """wavenumbers of the strain modes sin(mu_k zeta), mu_k = k pi (Dirichlet strain at both faces);
+    lam_k = mu_k^2 D_c/L^2.  The displacement modes are phi_k = 1 - cos(mu_k zeta)."""
+    return np.arange(1, n + 1) * np.pi
 
 
-def _perm_decay(mu, Dc, L, t, W=0.0):
-    """exp(-mu^2 Dc t/L^2), averaged over the ave/chunk window [t - W, t] when W > 0
-    (the deck block-averages u_z over the whole nfreq interval and tags it with the
-    window END; the mean of the exponential over the window is exp(-lam t)(e^{lam W}-1)/(lam W))."""
-    lam = (np.asarray(mu, float) / L) ** 2 * Dc
-    if W <= 0:
-        return np.exp(-lam * t)
-    # mean over [t - W, t] = exp(-lam (t - W)) (1 - e^{-lam W}) / (lam W): no overflow for any lam
-    x = lam * W
-    safe = np.where(x > 1e-12, x, 1.0)
-    return np.exp(-lam * max(t - W, 0.0)) * np.where(x > 1e-12, -np.expm1(-safe) / safe, 1.0)
+def _perm_phi(zh, mu):
+    """displacement modes phi_k(zeta) = 1 - cos(mu_k zeta): (len(zh), len(mu))"""
+    return 1.0 - np.cos(np.outer(np.atleast_1d(np.asarray(zh, float)), np.asarray(mu, float)))
 
 
-def _perm_trace_series(t_lj, Dc, L, n=_PERM_TRACE_MODES):
-    """1 - sum_k b_k exp(-mu_k^2 Dc t/L^2): the feed-face displacement over its asymptote
-    for the zero initial condition (b_k = 4 (-1)^(k+1)/mu_k^3, sum b_k = 1)."""
-    mu = _perm_mu(n)
-    b = 4.0 * (-1.0) ** np.arange(n) / mu ** 3
-    t = np.atleast_1d(np.asarray(t_lj, float))
-    return 1.0 - np.exp(-np.outer(t, (mu / L) ** 2 * Dc)) @ b
+def _perm_H(mu, Dc, L, t, forcing, W=0.0, nsub=12):
+    """Modal response to the applied-dP history: H_k(t) = sum_j w_j [1 - exp(-lam_k (t - t_j))]
+    over the increments already applied (t > t_j), lam_k = mu_k^2 Dc/L^2, sum_j w_j = 1 (so
+    H_k -> 1; one increment at t = 0 is the step response 1 - exp(-lam_k t)).  W > 0 averages
+    over the ave/chunk window [t - W, t] (nsub sub-samples; the deck block-averages u_z over
+    the whole nfreq interval and tags the snapshot with the window END).  t: LJ time from
+    the ramp start, scalar or array; returns (len(t), n_modes)."""
+    mu = np.atleast_1d(np.asarray(mu, float))
+    lam = (mu / L) ** 2 * Dc
+    t = np.atleast_1d(np.asarray(t, float))
+    tj, wj = forcing
+    tt = (t[:, None] - W * (np.arange(nsub) + 0.5)[None, :] / nsub).ravel() if W > 0 else t
+    dt = tt[:, None] - tj[None, :]
+    on = dt > 0
+    dtp = np.where(on, dt, 0.0)
+    out = np.empty((len(tt), len(lam)))
+    for k, lk in enumerate(lam):
+        out[:, k] = np.sum(wj[None, :] * on * (1.0 - np.exp(-lk * dtp)), axis=1)
+    if W > 0:
+        out = out.reshape(len(t), nsub, len(lam)).mean(axis=1)
+    return out
 
 
-def perm_onset_step(cfg):
-    """the production onset: the first step at which the APPLIED feed pressure reaches
-    P_target + dP (piston_pressure: the end of the n_ramp x ramp_steps ramp, after which
-    the deck resets displace/atom).  None when the file or the columns are missing."""
+def _perm_trace_series(t_lj, Dc, L, forcing, n=_PERM_TRACE_MODES):
+    """u_F(t)/u_F(inf) for the zero initial condition under the applied-dP history:
+    sum_k b_k H_k(t) over the odd modes, b_k = 8/(k pi)^2 (sum b_k = 1)."""
+    mu = (2.0 * np.arange(1, n + 1) - 1.0) * np.pi
+    b = 8.0 / mu ** 2
+    return _perm_H(mu, Dc, L, t_lj, forcing) @ b
+
+
+def perm_forcing(cfg):
+    """The applied-dP history from piston_pressure (P_feed_app - P_perm_app, one sample per
+    volume_freq) -> dict(t0 = ramp start step (the last zero sample), t_end = step at which the
+    full dP is first reached, full, n = number of increments, tj = increment times (LJ time from
+    t0; each increment sits mid-way through its sampling interval), wj = weights (sum 1), steps,
+    dp).  None when the file or the columns are missing."""
     names, tab = read_piston_table(cfg.path('piston_pressure'))
     if tab.size == 0 or names is None:
         return None
     fa, pa = table_col(names, tab, 'P_feed_app'), table_col(names, tab, 'P_perm_app')
     if fa is None or pa is None:
         return None
-    dp = fa - pa
-    dp_full = float(np.nanmax(dp))
-    if not dp_full > 0:
+    st, dp = tab[:, 0], fa - pa
+    full = float(np.nanmax(dp))
+    if not full > 0:
         return None
-    return float(tab[int(np.argmax(dp >= 0.999 * dp_full)), 0])
+    i0 = int(np.where(dp > 0.005 * full)[0][0])
+    t0 = float(st[i0 - 1]) if i0 > 0 else float(st[i0])
+    i_end = int(np.argmax(dp >= 0.999 * full))
+    dsamp = float(np.median(np.diff(st))) if len(st) > 1 else 0.0
+    a = max(i0 - 1, 0)
+    inc = np.diff(dp[a:i_end + 1])
+    tinc = st[a + 1:i_end + 1] - 0.5 * dsamp
+    keep = inc > 0
+    inc, tinc = inc[keep], tinc[keep]
+    if inc.size == 0:
+        inc, tinc = np.array([full]), np.array([t0])
+    return dict(t0=t0, t_end=float(st[i_end]), full=full, n=int(inc.size), steps=st, dp=dp,
+                tj=(tinc - t0) * cfg.dt_lj, wj=inc / inc.sum())
 
 
 def load_perm_disp(cfg, R, P):
-    """disp_z_polymer (fix ave/chunk of the per-atom z displacement since the production
-    onset, binned by CURRENT z) + the polymer bounding-box thickness trace + the onset
-    step -> dict, or None when the displacement file is missing / has < 2 snapshots."""
+    """disp_z_polymer (fix ave/chunk of the per-atom z displacement since the deck's reset,
+    binned by CURRENT z) + the applied-dP history + the reset convention + the polymer
+    bounding-box thickness trace -> dict, or None when the displacement file is missing /
+    has < 2 snapshots."""
     f = cfg.path('disp_z_polymer')
     if not f.exists():
         return None
@@ -4481,13 +4552,19 @@ def load_perm_disp(cfg, R, P):
     d = dict(ts=np.array([s[0] for s in snaps], float), z=snaps[0][1][:, 1],
              Nc=np.array([s[1][:, 2] for s in snaps]), uz=np.array([s[1][:, 3] for s in snaps]))
     d['stride'] = float(np.min(np.diff(d['ts'])))       # = the ave/chunk window (nfreq = nevery x nrepeat in the deck)
-    t_on = perm_onset_step(cfg)
-    d['onset_source'] = 'piston_pressure (applied dP reaches its full value)'
-    if t_on is None or t_on > d['ts'][0] - d['stride'] + 1e-6:
-        # the first window must lie entirely after the onset: assume it starts there
-        t_on = float(d['ts'][0] - d['stride'])
-        d['onset_source'] = 'assumed = first displacement window start (no usable piston_pressure)'
-    d['t_onset'] = t_on
+    fz = perm_forcing(cfg)
+    if fz is None:
+        t0 = float(d['ts'][0] - d['stride'])              # the first window must lie entirely after the reset
+        fz = dict(t0=t0, t_end=t0, full=np.nan, n=1, tj=np.array([0.0]), wj=np.array([1.0]),
+                  source='assumed: a step at the first displacement window start (no usable piston_pressure)')
+    else:
+        fz['source'] = 'piston_pressure (applied P_feed_app - P_perm_app)'
+    d['forcing'] = fz
+    mode = cfg.PERM_DISP_RESET
+    if mode == 'auto':
+        mode = 'ramp_start' if d['ts'][0] < fz['t_end'] else 'ramp_end'
+    d['reset_mode'] = mode
+    d['t_reset'] = fz['t0'] if mode == 'ramp_start' else fz['t_end']
     bb = load2c(cfg.path('gel_dimensions_bb'), 4)
     if bb is not None:
         d['bb_step'], d['bb_L'] = bb[:, 0], bb[:, 3]
@@ -4502,9 +4579,12 @@ def fit_perm_Dc(cfg, R, P, disp):
     if disp is None or not np.isfinite(R.get('z_support', np.nan)):
         return None
     ts, z, Nc, uz = disp['ts'], disp['z'], disp['Nc'], disp['uz']
-    t_on = disp['t_onset']
+    fz = disp['forcing']
+    forcing = (fz['tj'], fz['wj'])
+    t_on = fz['t0']                                        # the ramp start = t = 0 of the model
+    t_reset_lj = (disp['t_reset'] - t_on) * cfg.dt_lj
     z_P = float(R['z_support']) + cfg.PERM_GAP
-    # ---- L_0: bounding-box thickness over the PERM_L0_STEPS before the onset ----
+    # ---- L_0: bounding-box thickness over the PERM_L0_STEPS before the ramp start ----
     L0_ci = (np.nan, np.nan)
     if 'bb_L' in disp:
         w0 = (disp['bb_step'] >= t_on - cfg.PERM_L0_STEPS) & (disp['bb_step'] < t_on)
@@ -4534,42 +4614,63 @@ def fit_perm_Dc(cfg, R, P, disp):
     if len(early) < 2:
         return None
     mu = _perm_mu(cfg.DC_N_MODES)
-    modes = np.sin(np.outer(zf, mu))                       # (bins, modes)
+    modes = _perm_phi(zf, mu)                              # (bins, modes)
+    y_all = np.concatenate([uhat[i][idx] for i in early])
 
-    def design(Dc, t):
-        return modes * (_perm_decay(mu, Dc, L0, t, W) - 1.0)[None, :]
+    def dH(Dc):
+        """H_k(t_i) - H_k(t_reset) for the fitted snapshots: (n_early, modes)"""
+        H = _perm_H(mu, Dc, L0, t_lj[early], forcing, W)
+        return H - _perm_H(mu, Dc, L0, t_reset_lj, forcing)[0][None, :]
 
-    def amps(Dc):
-        X = np.vstack([design(Dc, t_lj[i]) for i in early])
-        y = np.concatenate([uhat[i][idx] for i in early])
-        return np.linalg.lstsq(X, y, rcond=None)[0]
+    def amps(Dc, D=None):
+        D = dH(Dc) if D is None else D
+        X = np.vstack([modes * D[n][None, :] for n in range(len(early))])
+        return np.linalg.lstsq(X, y_all, rcond=None)[0]
+
+    def predict(Dc, A=None):
+        D = dH(Dc)
+        A = amps(Dc, D) if A is None else A
+        return np.concatenate([(modes * D[n][None, :]) @ A for n in range(len(early))]), A
 
     def resid(Dc):
-        A = amps(Dc)
-        return float(sum(np.sum((design(Dc, t_lj[i]) @ A - uhat[i][idx]) ** 2) for i in early))
+        p, _ = predict(Dc)
+        return float(np.sum((p - y_all) ** 2))
 
-    Dc = float(minimize_scalar(resid, bounds=cfg.PERM_DC_BOUNDS, method='bounded').x)
-    A = amps(Dc)
-    y_all = np.concatenate([uhat[i][idx] for i in early])
-    p_all = np.concatenate([design(Dc, t_lj[i]) @ A for i in early])
+    # coarse log-spaced scan first: the residual has secondary minima once the transient is
+    # under-sampled (perm_2: 6 late snapshots), and bounded Brent alone landed on one at D_c ~ 30
+    grid = np.geomspace(cfg.PERM_DC_BOUNDS[0], cfg.PERM_DC_BOUNDS[1], 61)
+    rg = np.array([resid(g) for g in grid])
+    j = int(np.nanargmin(rg))
+    lo_b, hi_b = grid[max(j - 1, 0)], grid[min(j + 1, len(grid) - 1)]
+    Dc = float(minimize_scalar(resid, bounds=(lo_b, hi_b), method='bounded').x)
+    p_all, A = predict(Dc)
     ss_t = np.sum((y_all - np.mean(y_all)) ** 2)
     R2 = float(1.0 - np.sum((y_all - p_all) ** 2) / ss_t) if ss_t > 1e-30 else np.nan
+    H_reset = _perm_H(mu, Dc, L0, t_reset_lj, forcing)[0]
 
     def u_model(zh, t, Wm=W):
-        """u_z/L_0 since the onset at zeta = zh (array) and time t (LJ, scalar); window-averaged like the data."""
+        """u_z/L_0 since the RESET at zeta = zh (array) and time t (LJ from the ramp start, scalar);
+        window-averaged like the data."""
         zh = np.atleast_1d(np.asarray(zh, float))
-        return np.sin(np.outer(zh, mu)) @ (A * (_perm_decay(mu, Dc, L0, t, Wm) - 1.0))
+        return _perm_phi(zh, mu) @ (A * (_perm_H(mu, Dc, L0, t, forcing, Wm)[0] - H_reset))
+
+    def u_phys(zh, t):
+        """u_z/L_0 since the ramp start (instantaneous; = u_model + the fitted offset at the reset)."""
+        zh = np.atleast_1d(np.asarray(zh, float))
+        return _perm_phi(zh, mu) @ (A * _perm_H(mu, Dc, L0, t, forcing)[0])
 
     def u_inf(zh):
+        """the reset-referenced steady state the snapshots approach"""
         zh = np.atleast_1d(np.asarray(zh, float))
-        return -(np.sin(np.outer(zh, mu)) @ A)
+        return _perm_phi(zh, mu) @ (A * (1.0 - H_reset))
 
-    tau1 = 4.0 * L0 ** 2 / (np.pi ** 2 * Dc)                   # first-mode time, one-sided (mu_1 = pi/2)
+    tau1 = L0 ** 2 / (np.pi ** 2 * Dc)                         # first-mode time (mu_1 = pi: Dirichlet strain at both faces)
     T_prod = float(t_lj[-1])
     F = dict(Dc=Dc, A=A, R2=R2, L0=L0, L0_ci=L0_ci, L0_source=L0_source, z_P=z_P, z_F=z_F, t_onset=t_on,
-             onset_source=disp['onset_source'], stride=disp['stride'], W=W, zeta=zeta, idx=idx, zf=zf, uhat=uhat,
-             early=early, t_lj=t_lj, ts=ts, mu=mu, u_model=u_model, u_inf=u_inf, tau1=tau1, T_prod=T_prod,
-             n_tau=T_prod / tau1, unrelaxed=float(8.0 / np.pi ** 2 * np.exp(-T_prod / tau1)))
+             forcing=fz, t_reset=disp['t_reset'], t_reset_lj=t_reset_lj, reset_mode=disp['reset_mode'],
+             H_reset=H_reset, stride=disp['stride'], W=W, zeta=zeta, idx=idx, zf=zf, uhat=uhat,
+             early=early, t_lj=t_lj, ts=ts, mu=mu, u_model=u_model, u_phys=u_phys, u_inf=u_inf, tau1=tau1,
+             T_prod=T_prod, n_tau=T_prod / tau1, unrelaxed=float(8.0 / np.pi ** 2 * np.exp(-T_prod / tau1)))
 
     # ---- steady profile: parabola c zeta (2 - zeta) per bin over the steady-window snapshots ----
     steady = np.where(ts >= P['halt_ts'])[0]
@@ -4590,12 +4691,13 @@ def fit_perm_Dc(cfg, R, P, disp):
         wt = disp['bb_step'] >= t_on
         st, uF = disp['bb_step'][wt], disp['bb_L'][wt] - L0
         tt = (st - t_on) * cfg.dt_lj
-        fit = tt <= cfg.DC_FRAC_EARLY * tt[-1]
+        fit = (tt <= cfg.DC_FRAC_EARLY * tt[-1]) & (st >= t_on + cfg.PERM_TRACE_SKIP)
         if fit.sum() >= 8:
             def model(t, u_inf_, Dc_):
-                return u_inf_ * _perm_trace_series(t, Dc_, L0)
+                return u_inf_ * _perm_trace_series(t, Dc_, L0, forcing)
             try:
                 p0 = (float(np.mean(uF[-max(3, len(uF) // 10):])), float(cfg.DC_SLOW_REF))
+                p0 = (p0[0], float(np.clip(p0[1], *cfg.PERM_DC_BOUNDS)))
                 popt, pcov = curve_fit(model, tt[fit], uF[fit], p0=p0,
                                        bounds=((-np.inf, cfg.PERM_DC_BOUNDS[0]), (np.inf, cfg.PERM_DC_BOUNDS[1])))
                 res = uF[fit] - model(tt[fit], *popt)
@@ -4606,7 +4708,7 @@ def fit_perm_Dc(cfg, R, P, disp):
                                   Dc=float(popt[1]), Dc_se=float(se[1]), tau_ac=float(tau_ac),
                                   R2=float(1.0 - np.sum(res ** 2) / ss) if ss > 1e-30 else np.nan,
                                   model=lambda t, p=popt: model(t, *p),
-                                  tau1=4.0 * L0 ** 2 / (np.pi ** 2 * float(popt[1])))
+                                  tau1=L0 ** 2 / (np.pi ** 2 * float(popt[1])))
             except (RuntimeError, ValueError) as e:
                 print(f'  NOTE: thickness-trace fit failed ({e})')
         # steady thickness (the steady window of the stress snapshots) for M from dL
@@ -4678,12 +4780,14 @@ def add_perm_displacement(cfg, R, P, verbose=True):
         return P
     P['Dc'] = F
     d = P['disp']
-    say(f"displacement: {len(d['ts'])} snapshots (windows of {int(d['stride'])} steps, "
-        f"first {int(d['ts'][0])}), onset step {int(F['t_onset'])} [{F['onset_source']}];  "
-        f"L_0 = {F['L0']:.2f} sigma ({F['L0_source']}), z^P = {F['z_P']:.2f}, z^F = {F['z_F']:.2f}; "
+    fz = F['forcing']
+    say(f"displacement: {len(d['ts'])} snapshots (windows of {int(d['stride'])} steps, first {int(d['ts'][0])});  "
+        f"dP ramp: start step {int(fz['t0'])} -> full dP at {int(fz['t_end'])} ({fz['n']} increment(s); {fz['source']});  "
+        f"displacement reference = {F['reset_mode']} (step {int(F['t_reset'])})\n"
+        f"  L_0 = {F['L0']:.2f} sigma ({F['L0_source']}), z^P = {F['z_P']:.2f}, z^F = {F['z_F']:.2f}; "
         f"fit domain {len(F['idx'])} bins, zeta in [{F['zf'][0]:.3f}, {F['zf'][-1]:.3f}]")
     say(f"  D_c (profile fit, {len(F['early'])} snapshots{', window-averaged modes' if F['W'] > 0 else ''}) = "
-        f"{F['Dc']:.4e} sigma^2/tau  (R^2 = {F['R2']:.3f});  tau_1 = 4L_0^2/(pi^2 D_c) = {F['tau1']:.0f} tau = "
+        f"{F['Dc']:.4e} sigma^2/tau  (R^2 = {F['R2']:.3f});  tau_1 = L_0^2/(pi^2 D_c) = {F['tau1']:.0f} tau = "
         f"{F['tau1'] / cfg.dt_lj / 1e6:.2f}M steps;  production = {F['n_tau']:.2f} tau_1 "
         f"-> {100 * F['unrelaxed']:.1f}% of u_F still unrelaxed at the end (first mode)")
     T = F.get('trace')
@@ -4737,7 +4841,8 @@ def fig_perm_Dc(cfg, R, P):
     u_end = float(F['u_inf'](1.0)[0])
     for ax in (axl, axr):
         ax._tri_has_colorbar = True
-        ax.axhline(0.0, color='0.45', lw=1.6, label=r'IC: $u_z(\zeta,0)=0$ (production onset)')
+        ax.axhline(0.0, color='0.45', lw=1.6, label=(r'IC: $u_z(\zeta,0)=0$ at the ramp start' if F['reset_mode'] == 'ramp_start'
+                                                    else r'reference: $u_z=0$ at the ramp end (older deck)'))
         ax.plot(zff, F['u_inf'](zff), 'k:', lw=1.8, label=r'steady state ($t\to\infty$, fitted modes)')
         ax.plot(zff, F['c'] * zff * (2.0 - zff), '--', color='0.35', lw=1.4,
                 label=rf"steady-window parabola $c\,\zeta(2-\zeta)$, $c={sig(F['c'])}$  ($\to M$)")
@@ -4747,8 +4852,8 @@ def fig_perm_Dc(cfg, R, P):
         ax.set(xlabel=r'$\zeta=(z-z^P)/L_0$', ylabel=r'$u_z/L_0$', xlim=(0, 1))
         ax.grid(alpha=0.3)
         smart_legend(ax, fontsize=10)
-    axl.set_title(r'(a) $u_z(\zeta,t)/L_0$ -- production snapshots (displacement since the onset)', fontsize=13)
-    axr.set_title(rf"(b) one-sided consolidation fit: $D_c={sig(F['Dc'])}\ \sigma^2/\tau$, $R^2={sig(F['R2'])}$"
+    axl.set_title(r'(a) $u_z(\zeta,t)/L_0$ -- production snapshots (since the reset)', fontsize=13)
+    axr.set_title(rf"(b) consolidation fit: $D_c={sig(F['Dc'])}\ \sigma^2/\tau$, $R^2={sig(F['R2'])}$"
                   + (r'  (window-averaged modes)' if F['W'] > 0 else ''), fontsize=13)
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
@@ -4767,11 +4872,16 @@ def fig_perm_Dc(cfg, R, P):
         if T['fit'].sum() < len(T['fit']):
             axt.axvline(T['step'][T['fit']][-1], color=WONG['vermillion'], ls=':', lw=1.2, alpha=0.7)
     tt = np.linspace(0.0, F['t_lj'][-1], 400)
-    axt.plot(F['t_onset'] + tt / cfg.dt_lj, [float(F['u_model'](1.0, t, 0.0)[0]) for t in tt], '--',
+    axt.plot(F['t_onset'] + tt / cfg.dt_lj, [float(F['u_phys'](1.0, t)[0]) for t in tt], '--',
              color=WONG['blue'], lw=2.0, label=rf"profile fit at $\zeta=1$ (instantaneous): $D_c={sig(F['Dc'])}$")
     jt = F['idx'][-1]
-    axt.plot(F['ts'] - 0.5 * F['stride'], F['uhat'][:, jt], 'o', color=WONG['blue'], ms=7, zorder=5,
-             label=rf"top fitted bin of the snapshots ($\zeta={F['zf'][-1]:.2f}$, at the window centre)")
+    off = float(F['u_phys'](F['zf'][-1], F['t_reset_lj'])[0])
+    axt.plot(F['ts'] - 0.5 * F['stride'], F['uhat'][:, jt] + off, 'o', color=WONG['blue'], ms=7, zorder=5,
+             label=rf"top fitted bin of the snapshots ($\zeta={F['zf'][-1]:.2f}$, at the window centre"
+                   + (rf"; $+{off:.4f}$ fitted offset at the reset)" if abs(off) > 1e-4 else ')'))
+    fz = F['forcing']
+    if fz['t_end'] - fz['t0'] > 0.02 * (float(F['ts'][-1]) - fz['t0']):
+        axt.axvspan(fz['t0'], fz['t_end'], color='0.5', alpha=0.12, label=rf"$\Delta P$ ramp ({fz['n']} increments)")
     axt.axvspan(P['halt_ts'], float(F['ts'][-1]), color=WONG['green'], alpha=0.10, label='steady window')
     axt.axvline(F['t_onset'], color='k', ls=':', lw=1, alpha=0.6)
     axt.axhline(0.0, color='k', ls=':', lw=1, alpha=0.4)
@@ -4781,8 +4891,9 @@ def fig_perm_Dc(cfg, R, P):
     axt.grid(alpha=0.3)
     smart_legend(axt, fontsize=9)
     fig.suptitle(f'Cooperative diffusivity, permeation drive  |  {cfg.sim_name}  |  '
-                 rf"$L_0={sig(F['L0'])}\,\sigma$, $z^P={F['z_P']:.1f}$, production $={F['n_tau']:.2f}\,\tau_1$ "
-                 rf"($\tau_1=4L_0^2/\pi^2 D_c={F['tau1']:.0f}\,\tau$, profile fit)", fontsize=12, fontweight='bold')
+                 rf"$L_0={sig(F['L0'])}\,\sigma$, $z^P={F['z_P']:.1f}$, ramp {(fz['t_end'] - fz['t0']) / 1e6:.2f}M steps, "
+                 rf"drive $={F['n_tau']:.2f}\,\tau_1$ "
+                 rf"($\tau_1=L_0^2/\pi^2 D_c={F['tau1']:.0f}\,\tau$, profile fit)", fontsize=12, fontweight='bold')
     return _save(fig, cfg, 'perm_Dc_consolidation_fit')
 
 
@@ -4818,6 +4929,113 @@ def fig_perm_M(cfg, R, P):
                  rf"$L_0={sig(Mp['L0'])}\,\sigma$ (onset)" + lss + f'\n{cfg.sim_name}', fontsize=12)
     smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'perm_M')
+
+
+def _perm_Hdot(mu, Dc, L, t, forcing):
+    """dH_k/dt = sum_j w_j lam_k exp(-lam_k (t - t_j)) over the increments already applied: (len(t), n_modes)."""
+    mu = np.atleast_1d(np.asarray(mu, float))
+    lam = (mu / L) ** 2 * Dc
+    t = np.atleast_1d(np.asarray(t, float))
+    tj, wj = forcing
+    dt = t[:, None] - tj[None, :]
+    on = dt > 0
+    dtp = np.where(on, dt, 0.0)
+    out = np.empty((len(t), len(lam)))
+    for k, lk in enumerate(lam):
+        out[:, k] = lk * np.sum(wj[None, :] * on * np.exp(-lk * dtp), axis=1)
+    return out
+
+
+def perm_flux_model(cfg, R, P):
+    """The q(t) CHECK (2026-09-28): the permeate flux the displacement fits imply.  Integrating
+    du/dt = q + D_c u'' over the membrane with u'(z^F) = 0 and u'(z^P) = -dP(t)/M gives
+        q(t) L = d/dt int u dz - D_c dP(t)/M   ->   Q(t) = -A q = A [ (D_c/M) dP(t)/L_0 - d<u>/dt ],
+    <u> the membrane-mean displacement.  The steady level A (D_c/M) dP/L_0 is figure 9's Darcy
+    check in flux form (kappa = D_c/M); the transient is the solvent the compaction expels.
+    Profile fit: <u> = L_0 sum_k a_k H_k(t) (int phi_k dzeta = 1); trace fit (zero-IC shape):
+    <u> = u_F sum_k 4/(k pi)^2 H_k(t).  dP(t) is the applied staircase; M the thickness-change M.
+    Nothing here is fitted to the flux.  Returns a dict or None."""
+    F, Mp = P.get('Dc'), P.get('M_perm')
+    if F is None or not Mp or 'bb' not in Mp:
+        return None
+    fz = F['forcing']
+    forcing = (fz['tj'], fz['wj'])
+    L0, A, M = F['L0'], P['area'], Mp['bb']['M']
+    dP_full = fz['full'] if np.isfinite(fz.get('full', np.nan)) else Mp['dP']
+    T_end = max(float(F['t_lj'][-1]), float(F['trace']['t_lj'][-1]) if F.get('trace') else 0.0)
+    tt = np.linspace(0.0, T_end, 1500)
+    dP_t = dP_full * np.array([fz['wj'][fz['tj'] < t].sum() for t in tt])
+    out = dict(t_lj=tt, step=fz['t0'] + tt / cfg.dt_lj, dP=dP_t, M=M, L0=L0, A=A, dP_full=dP_full)
+    dudt = L0 * (_perm_Hdot(F['mu'], F['Dc'], L0, tt, forcing) @ F['A'])
+    out['Q_prof'] = A * ((F['Dc'] / M) * dP_t / L0 - dudt)
+    out['Q_prof_ss'] = float(A * (F['Dc'] / M) * dP_full / L0)
+    T = F.get('trace')
+    if T is not None:
+        mu_all = np.arange(1, _PERM_TRACE_MODES + 1) * np.pi
+        dudt = T['u_inf'] * (_perm_Hdot(mu_all, T['Dc'], L0, tt, forcing) @ (4.0 / mu_all ** 2))
+        out['Q_trace'] = A * ((T['Dc'] / M) * dP_t / L0 - dudt)
+        out['Q_trace_ss'] = float(A * (T['Dc'] / M) * dP_full / L0)
+    return out
+
+
+def fig_perm_flux_check(cfg, R, P):
+    """Figure 14 (check): (a) the model-implied Q(t) of perm_flux_model against the measured
+    piston-velocity trace and the N_perm-slope Q; (b) its time integral against the measured
+    permeate bead count."""
+    Q = perm_flux_model(cfg, R, P)
+    Fx = P.get('flux') or {}
+    if Q is None or Fx.get('Q') is None and Fx.get('N') is None and Fx.get('count') is None:
+        print('flux-check figure skipped (no displacement fit or no flux data)')
+        return None
+    fig, (axQ, axN) = plt.subplots(1, 2, figsize=(18, 6), constrained_layout=True)
+    st = Fx.get('step')
+    if Fx.get('Q') is not None:
+        axQ.plot(st, Fx['Q'], '-', color=WONG['green'], lw=0.9, alpha=0.3, label=r'measured: $A\,dz_{\rm perm}/dt$ (block-averaged)')
+        axQ.plot(st, rolling_mean(Fx['Q'], cfg.roll_win), '-', color=WONG['green'], lw=2.2, label=f'measured: rolling mean ({cfg.roll_win})')
+    if 'Q_N' in Fx:
+        NS = Fx['Q_N']
+        axQ.axhline(NS['mean'], color='k', ls='--', lw=1.8, label=rf"measured steady $Q$ ($N_{{\rm perm}}$ slope) = {fmt_val_unc(NS['mean'], NS['se'])}")
+        axQ.axhspan(NS['lo'], NS['hi'], color='k', alpha=0.08)
+    for key, col, lab in (('Q_prof', WONG['blue'], 'profile fit'), ('Q_trace', WONG['vermillion'], 'trace fit')):
+        if key in Q:
+            axQ.plot(Q['step'], Q[key], '-', color=col, lw=2.2,
+                     label=rf"model, {lab}: $A[(D_c/M)\,\Delta P(t)/L_0 - d\langle u_z\rangle/dt]$;  steady $= {sig(Q[key + '_ss'])}$")
+            axQ.axhline(Q[key + '_ss'], color=col, ls=':', lw=1.2, alpha=0.7)
+    qref = abs(Fx['Q_N']['mean']) if 'Q_N' in Fx else abs(Q['Q_prof_ss'])
+    axQ.set_ylim(-1.0 * qref, 4.0 * qref)                  # the model's 1/sqrt(t) onset spike is clipped on purpose
+    axQ.axvline(Q['step'][0], color='k', ls=':', lw=1, alpha=0.6)
+    axQ.set_xlabel('time step')
+    axQ.set_ylabel(r'$Q_{\rm perm}$  ($\sigma^3/\tau$)')
+    axQ.set_title(r'(a) permeate flux implied by the displacement fits vs measured (nothing fitted to the flux)', fontsize=12)
+    axQ.grid(alpha=0.3)
+    smart_legend(axQ, fontsize=9)
+    # ---- (b) cumulative beads ----
+    cnt = Fx.get('count')
+    if cnt is not None:
+        n_st, n_val = cnt[:, 0], cnt[:, 1]
+    elif Fx.get('N') is not None:
+        n_st, n_val = st, Fx['N']
+    else:
+        n_st = n_val = None
+    rho0 = R.get('rho_s0', np.nan)
+    if n_st is not None:
+        axN.plot(n_st, n_val - n_val[0], '-', color='0.3', lw=1.8, label=r'measured $\Delta N_{\rm perm}$')
+    if np.isfinite(rho0):
+        from scipy.integrate import cumulative_trapezoid
+        for key, col, lab in (('Q_prof', WONG['blue'], 'profile fit'), ('Q_trace', WONG['vermillion'], 'trace fit')):
+            if key in Q:
+                Nm = rho0 * cumulative_trapezoid(Q[key], Q['t_lj'], initial=0.0)
+                if n_st is not None:                        # both start at zero at the first count sample
+                    Nm = Nm - np.interp(n_st[0], Q['step'], Nm)
+                axN.plot(Q['step'], Nm, '-', color=col, lw=2.2, label=rf'model, {lab}: $\rho_{{s,0}}\int Q\,dt$')
+    axN.set_xlabel('time step')
+    axN.set_ylabel(r'$\Delta N_{\rm perm}$  (beads)')
+    axN.set_title(r'(b) cumulative permeate: measured bead count vs the integrated model flux', fontsize=12)
+    axN.grid(alpha=0.3)
+    smart_legend(axN, fontsize=10)
+    fig.suptitle(f"$q(t)$ check  |  {cfg.sim_name}  |  $M = {sig(Q['M'])}$ (thickness change), "
+                 rf"$L_0 = {sig(Q['L0'])}\,\sigma$, $\Delta P = {sig(Q['dP_full'])}$", fontsize=12, fontweight='bold')
+    return _save(fig, cfg, 'perm_flux_check')
 
 
 def print_perm_summary(cfg, R, P):

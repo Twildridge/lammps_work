@@ -65,7 +65,12 @@
 #                convergence halt (settle_halt=1).
 #   - Phase 1.5: zero-flux REFERENCE window (_ref files) with both wet pistons live.
 #   - Phase 2:   PRODUCTION: P_feed ramped from P_target to P_target + dP in n_ramp
-#                stages, then held for nsteps (NO SWEEP -- one continuous constant-
+#                stages of ramp_steps (100 x 10k = 1M steps since 2026-09-28: the old
+#                5 x 1k step rang the undamped sheets for ~2M steps -- Q overshot 25x
+#                and the network compressed 7% in 300k steps before rebounding; the
+#                displacement reference is reset at the RAMP START and the profile fix
+#                is live through the ramp, the notebook models the applied-dP history),
+#                then held for nsteps (NO SWEEP -- one continuous constant-
 #                pressure drive at ONE dP, exactly like triaxial_permeation.lmp; files
 #                are tagged <name>_${dataname}_${interaction}_${nsteps}).  Halts if the
 #                feed reservoir thins to feed_halt_thick or a piston nears a box face.
@@ -130,8 +135,8 @@ variable settle_min_steps equal 200000     # never halt before this many settle 
 variable phase0_steps index 50000          # Langevin NVT with all pistons frozen   # index: -var override for smoke tests
 
 # ----- Phase 2 (production) -----
-variable n_ramp          equal 5           # equal dP stages
-variable ramp_steps      index 1000        # steps held at each stage
+variable n_ramp          index 100         # equal dP stages (-var n_ramp N)         (was 5 x 1000 = 5k steps
+variable ramp_steps      index 10000       # steps held at each stage (-var ramp_steps)  before 2026-09-28)
 variable feed_halt_thick equal 2.0         # halt when feed reservoir <= this (sigma)
 variable flux_freq       index 1000        # permeate bead-count interval (steps)
 variable box_guard_gap   equal 2.0         # halt if a piston face comes this close to a box face
@@ -161,8 +166,8 @@ variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 print ">>> Stress: nevery=${nevery_stress} nrepeat=${nrepeat_stress} nfreq=${nfreq_stress}"
 
 # ----- Polymer displacement profile cadence (2026-09-28) -----
-# The one-sided consolidation transient after the dP step (tau_1 = 4 L^2/(pi^2 D_c),
-# ~1M steps for L ~ 125 sigma, D_c ~ 1.3) needs far more snapshots than the stress
+# The consolidation transient after the dP step (strain Dirichlet at both faces,
+# tau_1 = L^2/(pi^2 D_c) ~ 1-2M steps for L ~ 125 sigma, D_c ~ 0.2-0.5) needs far more snapshots than the stress
 # cadence (nsteps/10; its first window even starts one interval after the onset, so
 # the first perm run recorded nothing of the transient).  u_z(z) is block-averaged
 # over every disp_nfreq steps (nevery x nrepeat = nfreq: each snapshot is the window
@@ -413,7 +418,7 @@ variable box_lx equal lx
 variable box_ly equal ly
 variable box_lz equal lz
 
-# Polymer z-displacement reference (reset at production onset; profile written every
+# Polymer z-displacement reference (reset at the ramp start; profile written every
 # disp_nfreq steps -> D_c and M in triaxial_permeation_single_two_pist.ipynb, 2026-09-28)
 compute displace_poly polymer displace/atom
 
@@ -733,6 +738,18 @@ if "${damp_prod} == 0" then &
 else &
     "print '>>> Phase 2: piston damper KEPT (damp_prod=1): C_pist_feed=$(v_C_pist_feed:%.3f) C_pist_perm=$(v_C_pist_perm:%.3f) per bead'"
 
+# ----- Displacement reference = RAMP START (u_z(z,0)=0); profile fix live through the ramp -----
+# 2026-09-28: the reset used to follow the ramp.  With a 1M-step ramp the network
+# compresses during it, so the profile now spans the ramp and the notebook drives its
+# consolidation model with the applied-dP history read from piston_pressure.
+uncompute displace_poly
+compute displace_poly polymer displace/atom
+variable uz_poly atom c_displace_poly[3]
+compute chunk_z_polymer polymer chunk/atom bin/1d z lower ${binWidth}
+fix avg_disp_z_poly all ave/chunk ${disp_nevery} ${disp_nrepeat} ${disp_nfreq_eff} &
+    chunk_z_polymer v_uz_poly &
+    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat
+
 # ----- P_feed ramp (permeate stays at P_target) -----
 variable ramp_stage loop ${n_ramp}
 label ramp_loop
@@ -745,11 +762,6 @@ jump SELF ramp_loop
 variable dP_now delete
 variable dP_now equal ${dP_piston}
 print ">>> Production: P_feed_app=$(v_P_feed_app)  P_perm_app=$(v_P_perm_app)  (dP=${dP_piston})"
-
-# ----- Reset displacement reference to production onset (u_z(z,0)=0) -----
-uncompute displace_poly
-compute displace_poly polymer displace/atom
-variable uz_poly atom c_displace_poly[3]
 
 # ----- Hand off the setup trajectory to the production trajectory -----
 undump traj_setup
@@ -783,7 +795,6 @@ compute chunk_z_poly_p   polymer chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_poly_zz  polymer chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_poly_xx  polymer chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_poly_yy  polymer chunk/atom bin/1d z lower ${binWidth}
-compute chunk_z_polymer  polymer chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_solv_p   solvent chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_solv_zz  solvent chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_solv_xx  solvent chunk/atom bin/1d z lower ${binWidth}
@@ -946,10 +957,6 @@ dump pairlocal_dump solvent local ${nfreq_stress} &
 dump traj_stress_sync gel_system custom ${nfreq_stress} &
     traj_files/traj_stress_${dataname}_${interaction}_${nsteps}.lammpstrj &
     id type mol x y z
-
-fix avg_disp_z_poly all ave/chunk ${disp_nevery} ${disp_nrepeat} ${disp_nfreq_eff} &
-    chunk_z_polymer v_uz_poly &
-    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${nsteps}.dat
 
 # reservoir virial pressures + densities at the PISTON-FORCE cadence (pf_*: one
 # block mean per volume_freq window, ~1000 points per run), not the stress cadence

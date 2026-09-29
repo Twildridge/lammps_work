@@ -66,7 +66,8 @@ export C_PIST_FRAC=1.0        # damping / critical damping (the .lmp prints C_cr
 export NPT_PISTON_STEPS=1000000   # Phase-1 settle; check the printed piston period (aim >= 3-5 periods)
 export SETTLE_HALT=0          # 1 = end the settle early once both pistons are at rest
 
-# >>> WALL TIME <<<  setup ~ 50k + NPT_PISTON_STEPS + 150k (reference) + 5k (ramp)
+# >>> WALL TIME <<<  setup ~ 50k + NPT_PISTON_STEPS + 150k (reference) + 1M (ramp:
+# n_ramp x ramp_steps in the .lmp, 100 x 10k since 2026-09-28; was 5k)
 # before the NSTEPS production; ~290k atoms (the converter adds ~55k sheet/pad
 # beads to the 239k slab).  Size --time as for triaxial_permeation plus the settle.
 
