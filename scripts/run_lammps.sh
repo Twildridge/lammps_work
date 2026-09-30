@@ -26,9 +26,10 @@ if [ $# -lt 4 ]; then
     echo "  to continue a finished run, use continue_sim.sh instead of resubmitting this script"
     echo "  press_target: optional, overrides press_target in .lmp file (default: 1.5)"
     echo "  vel_seed: optional, RNG seed for create_velocity and fix langevin (default: 12345)"
-    echo "  env knobs: PISTON_TRANSPARENT (slab_with_support); STRAINS / COMPRESSIONS / COMPRESS_STAGES (sweeps);"
+    echo "  env knobs: PISTON_TRANSPARENT BARO_MODE (slab_with_support); STRAINS / COMPRESSIONS (sweeps);"
     echo "             DP_PISTON PISTON_MASS C_PIST_FRAC NPT_PISTON_STEPS SETTLE_HALT (triaxial_*_two_pist)"
     echo "             DRIVE_SPLIT (triaxial_compression*: piston share of the gap closure, 0.5 = symmetric)"
+    echo "             compress_slab reads the two-piston knobs too, plus SEAT_MODE (rg|bb) and HOLD_AUTO (1|0)"
     exit 1
 fi
 
@@ -85,17 +86,19 @@ if [ -z "${COMPRESSIONS:-}" ]; then
 fi
 COMPRESSIONS=${COMPRESSIONS:-0.1}
 
-# COMPRESS_STAGES: space-separated CUMULATIVE volumetric-strain ladder
-# (compress_slab only) — one value per compression stage, passed as a LAMMPS
-# index variable exactly like STRAINS/COMPRESSIONS. Set in compress_slab*.batch
-# via COMPRESSION_1, COMPRESSION_2, ... -> STAGE_TARGETS -> COMPRESS_STAGES.
-# The number of stages is just the length of this list. Default reproduces
-# compress_slab.lmp's original fixed 3-stage ladder. Same stale-batch caveat
-# as STRAINS/COMPRESSIONS: the batch must self-sync BEFORE exporting this.
-if [ -z "${COMPRESS_STAGES:-}" ]; then
-    echo ">>> NOTE: COMPRESS_STAGES unset — compress_slab falls back to the default 0.015 0.030 0.045 ladder."
-fi
-COMPRESS_STAGES=${COMPRESS_STAGES:-"0.015 0.030 0.045"}
+# compress_slab knobs (2026-09-29; the deck is the bulk-modulus counterpart of
+# triaxial_compression_two_pist and reads the SAME variables: COMPRESSIONS is its list of
+# cumulative VOLUMETRIC strain targets, and PRESS_TARGET / PISTON_MASS / C_PIST_FRAC /
+# NPT_PISTON_STEPS / SETTLE_HALT / DRIVE_SPLIT mean what they mean there).  Two more:
+#   SEAT_MODE  rg (default) | bb : the gel face the six plates seat on (compress_slab.lmp)
+#   HOLD_AUTO  1 (default) = size every hold from tau_1 = L^2/(pi^2 D_c); 0 = NSTEPS flat
+# BARO_MODE (slab_with_support only): aniso (default) | iso | z -- barostat coupling (see
+#   slab_with_support.lmp).  PIN_GEL=1 (slab_with_support, isolated gel): zero the polymer's
+#   linear + angular momentum so the block neither drifts nor turns away from the box axes.
+SEAT_MODE=${SEAT_MODE:-rg}
+HOLD_AUTO=${HOLD_AUTO:-1}
+BARO_MODE=${BARO_MODE:-aniso}
+PIN_GEL=${PIN_GEL:-0}                # slab_with_support: 1 = zero the gel's linear + angular momentum (isolated gel)
 
 # P-sweep parameters (only used for pure_solvent; ignored by other scripts)
 NSTEPS_EQ=200000    # equilibration steps per state point
@@ -260,8 +263,10 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var strains_list "$STRAINS" \
     -var compressions $COMPRESSIONS \
     -var compressions_list "$COMPRESSIONS" \
-    -var stage_targets $COMPRESS_STAGES \
-    -var stage_targets_list "$COMPRESS_STAGES" \
+    -var seat_mode "$SEAT_MODE" \
+    -var hold_auto "$HOLD_AUTO" \
+    -var baro_mode "$BARO_MODE" \
+    -var pin_gel "$PIN_GEL" \
     -var piston_transparent "${PISTON_TRANSPARENT:-0}" \
     -var dp_piston "$DP_PISTON" \
     -var piston_mass "$PISTON_MASS" \

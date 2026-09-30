@@ -11,7 +11,7 @@ lammps_work/                    ← This git repository
 │   ├── triaxial_permeation_two_pist/   ← STANDARD permeation workflow (two-piston): feed/permeate NPT-pistons, one constant-dP drive (no sweep)
 │   │                              (the one-piston triaxial_compression/ and triaxial_permeation/ moved to archive/simulations/ on 2026-09-22)
 │   ├── shear_slab/             ← Shear modulus measurement (plate-driven xz shear; current G workflow; deck laid out like the triaxial decks since 2026-09-22)
-│   ├── compress_slab/          ← Bulk modulus K measurement (plate-driven isotropic six-face compression; undergrad project, in development)
+│   ├── compress_slab/          ← Bulk modulus K: six plates + two wet pistons, on the template of triaxial_compression_two_pist (2026-09-29)
 │   ├── solvent_phase/          ← Pure solvent equation of state sweep
 │   ├── solvent_pure/           ← Single-state pure solvent run
 │   ├── polymer_phase/          ← Pure polymer equation of state sweep
@@ -36,7 +36,7 @@ lammps_work/                    ← This git repository
 │   ├── split_gel_slab.ipynb            ← Split a gel slab into pieces
 │   ├── add_plates_to_gel.ipynb / .py   ← Attach shear plates to a gel's faces (axis 'x' = isolated cube, 'z' = periodic slab; module extracted 2026-09-22)
 │   ├── slab_shear_plates.py            ← CONVERTER (2026-09-22): periodic slab → isolate + z-normal plates on its faces = shear_slab input
-│   ├── add_more_plates_to_gel.ipynb    ← Variant: plates on all six faces — input for compress_slab
+│   ├── add_more_plates_to_gel.ipynb    ← Converter notebook (code in add_more_plates_to_gel.py) — input for compress_slab
 │   ├── pure_polymer.ipynb              ← Build pure polymer data file
 │   ├── pure_solvent_1.ipynb            ← Build pure solvent data file
 │   ├── triaxial_compression_single.ipynb    ← one-piston runs (deck archived 2026-09-22): one strain level — φ_s, σ/σ′ evolution (zz,xx,yy), piston P, M, G, D_c, κ
@@ -50,7 +50,7 @@ lammps_work/                    ← This git repository
 │   ├── triaxial_compression_sweep_two_pist.ipynb  ← STANDARD: two-piston compression, all levels (M, G, D_c, κ vs strain) + per-level bath check
 │   ├── triaxial_permeation_single_two_pist.ipynb  ← STANDARD: two-piston permeation: profile evolutions, P_feed/P_perm measured vs applied, Q_perm(t), permeability k (no sweep)
 │   ├── tests/                           ← lint_lmp.py (deck linter), make_fixtures.py + run_plot_tests.sh + run_notebook_tests.sh + lib_headless_test.py
-│   ├── bulk_modulus_analysis.ipynb          ← Drained vs osmotic bulk modulus K
+│   ├── bulk_modulus_analysis_{single,sweep}.ipynb ← Bulk modulus K (code in lib/bulk.py, on top of lib/triaxial.py)
 │   ├── shear_analysis_single.ipynb          ← one shear level: G (network + series estimators, increments from γ = 0), N1/N2, D_c, κ, P_th (shear_slab output)
 │   ├── shear_analysis_sweep.ipynb           ← every level of a shear sweep: G vs γ, stress–strain slope, D_c, κ
 │   ├── lib/shear.py                          ← all shear analysis code (mirrors lib/triaxial.py and imports its machinery)

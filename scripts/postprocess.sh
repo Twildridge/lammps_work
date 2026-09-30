@@ -21,7 +21,8 @@
 #   SKIP_WIDOM=1        minimize/skip cavity_widom.py (slab_with_flow only)
 #   STRAINS="..."       space-separated shear-strain list (shear_slab only)
 #   COMPRESSIONS="..."  space-separated compression-strain list (triaxial_compression_two_pist
-#                       sweep, or the archived one-piston triaxial_compression); the consolidated plotter overlays all _c<level>
+#                       sweep, compress_slab [volumetric strain], or the archived one-piston
+#                       triaxial_compression); the consolidated plotter overlays all _c<level>
 #                       stems onto one figure per quantity (one curve per level)
 # ==============================================================================
 set -u
@@ -141,7 +142,7 @@ fi
 if [ "$FOLDER" = "shear_slab" ]; then
     echo "Generating shear stress-strain sweep plots (per strain: $STRAINS)..."
     python "$SCRIPT_DIR/plot_shear_strain_sweep.py" "." "$STEM" "$STRAINS"
-elif { [ "$FOLDER" = "triaxial_compression" ] || [ "$FOLDER" = "triaxial_compression_two_pist" ]; } && [ -n "$COMPRESSIONS" ]; then
+elif { [ "$FOLDER" = "triaxial_compression" ] || [ "$FOLDER" = "triaxial_compression_two_pist" ] || [ "$FOLDER" = "compress_slab" ]; } && [ -n "$COMPRESSIONS" ]; then
     # Compression sweep: every level's output files are tagged _c<level>. Rather
     # than emit one plot PER LEVEL, the consolidated plotter overlays every
     # level's curves onto a single figure per quantity (one color per level) --
@@ -151,7 +152,9 @@ elif { [ "$FOLDER" = "triaxial_compression" ] || [ "$FOLDER" = "triaxial_compres
     echo "Generating consolidated compression sweep plots (levels: $COMPRESSIONS)..."
     python "$SCRIPT_DIR/plot_compression_strain_sweep.py" "." "$STEM" "$COMPRESSIONS" "$OLDSTEPS" \
         || echo "  WARNING: plot_compression_strain_sweep.py failed (skipping)"
-    if [ "$FOLDER" = "triaxial_compression_two_pist" ]; then
+    # compress_slab (2026-09-29) writes the two-piston file set for its z axis (the z-hi plate
+    # is the "load piston", the z-lo plate the "support"), so the same plotters apply.
+    if [ "$FOLDER" = "triaxial_compression_two_pist" ] || [ "$FOLDER" = "compress_slab" ]; then
         # Two-piston (2026-09-16): the wet-piston bath-pressure check spans the whole
         # run in the stem-tagged piston_pressure file; plot_piston_data.py draws it
         # (multi-piston aware) alongside the per-level files.

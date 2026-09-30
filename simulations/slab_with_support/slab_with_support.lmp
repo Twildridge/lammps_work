@@ -45,6 +45,37 @@ variable cont       index 0
 # PISTON_TRANSPARENT=1 in the batch file (run_lammps.sh passes it as -var).
 variable piston_transparent index 0
 
+# ----- Barostat coupling (2026-09-29) -----
+# aniso (default) = x, y, z barostatted INDEPENDENTLY: right for a gel that is
+#   PERIODIC in x and y, whose network elasticity fixes lx and ly.
+# iso | z = for an ISOLATED gel (a finite network floating in its bath, e.g. the
+#   cube of slab_support_5beads_tall_rho04_new_03).  Nothing elastic spans the box
+#   there, so the box SHAPE is a neutral mode of the aniso barostat and any small
+#   stress anisotropy (the wall tension of the support / piston sheets) drives it
+#   without limit: run new_02 (1.0_1.2, 500k steps) went from 99.6 x 99.6 x 86.6 to
+#   71.4 x 71.3 x 238.2 at CONSTANT VOLUME while the gel stayed ~62-66 sigma (Rg),
+#   i.e. the box collapsed laterally onto the gel -- the gel did not swell into it.
+#   iso scales the three edges together (aspect ratio of the data file kept);
+#   z moves lz only (lx, ly of the data file kept).  Use PISTON_TRANSPARENT=1 with
+#   iso so the sheets carry no solvent wall tension into the mean pressure.
+#   A data file WITHOUT sheets (slab_with_support.ipynb, includeWalls = False) has no
+#   wall tension, so `aniso` no longer runs away; the box shape then only random-walks
+#   under the pressure noise (no restoring force) -- watch box_dimensions.
+# Set via BARO_MODE in the batch file (run_lammps.sh passes it as -var).
+variable baro_mode index aniso
+
+# ----- Pin the gel (2026-09-30, isolated gel only) -----
+# 1 = zero the POLYMER group's linear and angular momentum every pin_gel_every steps
+# (velocity reset only; the thermostat replaces the removed kinetic energy).  A free
+# ~60-sigma block diffuses ~8 sigma and TURNS ~0.25 rad (~14 deg) in 10M steps; a
+# turned cube no longer has its faces along the box axes, and add_more_plates_to_gel
+# parks the plates along the box axes.  fix remove_drift below zeroes the momentum of
+# ALL mobile atoms (gel + bath), which does not stop the gel moving relative to the
+# bath.  Off by default: the angular momentum of a network that spans the periodic
+# box (the slab) is not a meaningful quantity.  Set via PIN_GEL in the batch file.
+variable pin_gel       index 0
+variable pin_gel_every index 100
+
 # Equilibration parameters
 variable temp_target equal 1.0
 variable press_target index 1.5 # APPROPRIATE VALUE IMPORTANT — overridden by -var on command line
@@ -299,7 +330,13 @@ variable box_lz equal lz
 # above); Langevin supplies the temperature, nph the pressure.  Both are unfixed
 # together in Cleanup.
 fix lang_prod mobile langevin ${temp_target} ${temp_target} ${tdamp} 480279
-fix 1 mobile nph aniso ${press_target} ${press_target} ${pdamp} # dilate mobile fixedpoint $(lx/2) $(ly/2) 0
+if "${baro_mode} == iso" then &
+    "fix 1 mobile nph iso ${press_target} ${press_target} ${pdamp}" &
+elif "${baro_mode} == z" &
+    "fix 1 mobile nph z ${press_target} ${press_target} ${pdamp}" &
+else &
+    "fix 1 mobile nph aniso ${press_target} ${press_target} ${pdamp}"
+print ">>> barostat coupling: baro_mode = ${baro_mode}"
 timestep ${timestep_prod}
 if "${is_restart} == 0 && ${cont} == 0" then "run ${nsteps_gentle}"
 
@@ -365,6 +402,9 @@ variable steps_per_snap equal round(${nsteps}/${n_snaps})
 
 if "${cont} == 1" then "print '>>> Continuing after ${oldsteps} timesteps'"
 fix remove_drift mobile momentum 1000 linear 1 1 1 angular
+if "${pin_gel} == 1" then &
+    "fix pin_gel polymer momentum ${pin_gel_every} linear 1 1 1 angular" &
+    "print '>>> gel pinned: polymer linear + angular momentum zeroed every ${pin_gel_every} steps'"
 
 variable snap_i loop ${n_snaps}
 label snap_loop
@@ -381,6 +421,7 @@ label snap_loop
 unfix 1
 unfix lang_prod
 unfix remove_drift
+if "${pin_gel} == 1" then "unfix pin_gel"
 unfix stress_aniso_output
 undump poly_traj
 

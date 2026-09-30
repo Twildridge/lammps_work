@@ -16,7 +16,7 @@ Before running a gel simulation you need a `.data` file — a text file describi
 | `slab_with_support_angled.ipynb` | Angled-chain slab geometry | Angled geometry variants |
 | `isolate_gel.ipynb` | Extracts the swollen polymer (+solvent) from a finished slab run | Pre-step for `shear_slab`; modulus analysis |
 | `add_plates_to_gel.ipynb` (+ `.py`) | Attaches rigid shear plates (atom type 4, harmonic-bonded to surface polymer) on the faces normal to `axis` (`'x'` = the isolated-cube geometry, `'z'` = the periodic slab; `slab_shear_plates.py` calls it with `'z'`) | Plate builder behind the shear input |
-| `add_more_plates_to_gel.ipynb` | Variant that adds plates on all six faces | **Required input for `compress_slab.lmp`** (bulk modulus K) |
+| `add_more_plates_to_gel.ipynb` (+ `add_more_plates_to_gel.py`) | Converter (2026-09-29): equilibrated **isolated-gel** snapshot → gel made whole, free beads removed, bath cropped, six plates parked outside the gel faces, two wet pistons closing z | **Required input for `compress_slab.lmp`** (bulk modulus K). Input must come from a `slab_with_support` run with `BARO_MODE=iso`, `PISTON_TRANSPARENT=1` (`slab_with_support_isolated.batch`) |
 | `split_gel_slab.ipynb` | Splits a slab into polymer-only and solvent-only files | Isolated component analysis |
 | `pure_polymer.ipynb` | Pure polymer box (no solvent) | EOS and baseline runs |
 | `pure_solvent_1.ipynb` | Pure solvent box | EOS and solvent calibration |

@@ -9,8 +9,11 @@ output trees:
                             piston_pressure, permeation_data/permeation)
   <root>/two_piston_comp/   a triaxial_compression_two_pist run, levels c0.05 c0.10
                             (load | feed | perm columns, _ref files, disp_z_polymer, ...)
-  <root>/flow_data_local/{compression,permeation}/<RUN_ID>/  +  traj_files.nosync/
-                            the same two-piston files laid out as the notebooks expect
+  <root>/six_plate_bulk/    a compress_slab run (2026-09-29), levels c0.05 c0.10: six plates +
+                            two wet pistons, profiles along z, x and y, with a KNOWN bulk
+                            modulus K_TRUE so the analysis can be checked against it
+  <root>/flow_data_local/{compression,permeation,bulk}/<RUN_ID>/  +  traj_files.nosync/
+                            the same files laid out as the notebooks expect
                             (flat, plus a 2-frame traj_ref / traj_stress for the box header)
 
 Every file uses the exact header/column layout the decks write, so a reader that
@@ -319,6 +322,206 @@ def two_piston_comp(root, levels=('0.05', '0.10')):
     return rst
 
 
+# ---------------------------------------------------------------------------
+#  compress_slab (bulk modulus): six plates + two wet pistons, 2026-09-29
+# ---------------------------------------------------------------------------
+B_DATANAME = 'fixture_cube'
+B_BOX = (60.0, 60.0, 90.0)                 # x, y periodic bath; z closed by the wet pistons
+B_GEL = ((10.0, 50.0), (10.0, 50.0), (25.0, 65.0))   # gel faces per axis (edge 40)
+B_CONTACT = 1.12
+B_ZPERM, B_ZFEED = 5.0, 85.0
+K_TRUE = 0.25                              # the bulk modulus the synthetic stresses are built from
+B_DC, B_DT = 0.04, 0.5                     # D_c of the synthetic consolidation and the LJ time per step it assumes
+                                           # (a 6000-step hold must span a few tau_1 = L^2/(4 pi^2 D_c): pass dt_lj=B_DT)
+B_PI_REF, B_P_REF = 0.005, 0.010           # eps_vol = 0 readings of the profiles and of the plates
+B_FACES = ('zlo', 'zhi', 'xlo', 'xhi', 'ylo', 'yhi')
+B_AX = {'x': 0, 'y': 1, 'z': 2}
+
+
+def _b_stem(nsteps, lvl=None):
+    return f'{B_DATANAME}_{INTER}_{nsteps}' + (f'_c{lvl}' if lvl else '')
+
+
+def _b_name(kind, axis, ref=False, comp=None, species=None):
+    r = '_ref' if ref else ''
+    if kind == 'sigma':
+        return f'sigma{comp}_{species}' + ('' if axis == 'z' else f'_along{axis}') + r
+    if kind == 'density':
+        return ('solvent_density_z' if axis == 'z' else f'solvent_density_along{axis}') + r
+    return 'disp_z_polymer' if axis == 'z' else f'disp_along{axis}_polymer'
+
+
+def _b_chunk(path, fixname, steps, zc, cols, names):
+    with open(path, 'w') as f:
+        f.write(f'# Chunk-averaged data for fix {fixname} and group all\n# Timestep Number-of-chunks Total-count\n'
+                f'# Chunk Coord1 Ncount {" ".join(names)}\n')
+        for t, C in zip(steps, cols):
+            f.write(f'{int(t)} {len(zc)} {C[:, 0].sum():.6g}\n')
+            for i in range(len(zc)):
+                f.write(f'  {i + 1} {zc[i]:.4f} ' + ' '.join(f'{v:.6g}' for v in C[i]) + '\n')
+
+
+def _b_planes(e_lin):
+    """plate planes {face: coordinate} for a linear strain e_lin of every reference edge
+    (symmetric drive); the reference edge is the seated gap - 2 contact_gap = the gel edge."""
+    out = {}
+    for a, k in B_AX.items():
+        lo, hi = B_GEL[k]
+        c = 0.5 * e_lin * (hi - lo)
+        out[a + 'lo'], out[a + 'hi'] = lo - B_CONTACT + c, hi + B_CONTACT - c
+    return out
+
+
+def _b_profiles(axis, steps, dPi, ref=False):
+    """polymer + solvent sigma_{zz,xx,yy} along `axis`: bath at 1.5, gel total = 1.5 + Pi
+    (polymer partial 0.42 + Pi, solvent partial 1.08); vacuum beyond the wet pistons (z)."""
+    k = B_AX[axis]
+    nb = int(np.ceil(B_BOX[k] / BW))
+    zc = (np.arange(nb) + 0.5) * BW
+    g = (zc > B_GEL[k][0]) & (zc < B_GEL[k][1])
+    vac = ((zc < B_ZPERM) | (zc > B_ZFEED)) if axis == 'z' else np.zeros(nb, bool)
+    out = {}
+    for comp in ('zz', 'xx', 'yy'):
+        P, S = [], []
+        for j in range(len(steps)):
+            relax = 1.0 if ref else (1.0 + 0.5 * np.exp(-j / 3.0))
+            pi = B_PI_REF + dPi * relax
+            pp = np.where(g, 0.42 + pi, 0.0) + np.where(g, rng.normal(0, 0.002, nb), 0.0)
+            sv = np.where(g, 1.08, 1.5) + rng.normal(0, 0.002, nb)
+            pp[vac], sv[vac] = 0.0, 0.0
+            P.append(pp)
+            S.append(sv)
+        out[comp] = (np.array(P), np.array(S))
+    dens = []
+    for j in range(len(steps)):
+        n = np.where(g, 0.20, 0.45) + rng.normal(0, 0.003, nb)
+        n[vac] = 0.0
+        dens.append(np.column_stack([n * 28.0 * 28.0 * BW, n, n]))
+    return zc, g, out, dens
+
+
+def six_plate_bulk(root, levels=('0.05', '0.10')):
+    """compress_slab.lmp output tree.  Every stress is built from K_TRUE, so
+    lib_headless_test.py can assert that lib/bulk.py returns it."""
+    r = mk(root)
+    hold = 6000
+    sd, pd_, vd, pm, cp, dd = (r / 'output_files' / s for s in ('stress_data', 'piston_data', 'volume_data', 'permeation_data',
+                                                                'chemical_potential', 'displacement_data'))
+    A_box = B_BOX[0] * B_BOX[1]
+    L0 = [hi - lo for lo, hi in B_GEL]
+    V0 = float(np.prod(L0))
+    V0_rg, V0_bb = 0.90 * V0, 1.05 * V0
+    rst = _b_stem(hold)
+    rsteps = np.arange(0, 8) * 250
+    nr = len(rsteps)
+    pl0 = _b_planes(0.0)
+
+    def areas(planes):
+        e = {a: planes[a + 'hi'] - planes[a + 'lo'] - 2 * B_CONTACT for a in 'xyz'}
+        return {'x': e['y'] * e['z'], 'y': e['x'] * e['z'], 'z': e['x'] * e['y']}
+
+    def plate_rows(steps, planes_t, press_t):
+        rows = []
+        for j, t in enumerate(steps):
+            A = areas(planes_t[j])
+            N = [(press_t[j] + rng.normal(0, 0.002)) * A[f[0]] for f in B_FACES]
+            rows.append([t] + N + [A['x'] * 1.05, A['y'] * 1.05, A['z'] * 1.05])
+        return np.array(rows)
+
+    # ---- reference window ----------------------------------------------------------
+    for a in 'zxy':
+        zc, g, pro, dens = _b_profiles(a, rsteps, 0.0, ref=True)
+        for comp in ('zz', 'xx', 'yy'):
+            write_ave_time_vector(sd / f'{_b_name("sigma", a, True, comp, "polymer")}_{rst}.dat', 'ref', 'c_prof_p', rsteps, pro[comp][0])
+            write_ave_time_vector(sd / f'{_b_name("sigma", a, True, comp, "solvent")}_{rst}.dat', 'ref', 'c_prof_s', rsteps, pro[comp][1])
+        _b_chunk(cp / f'{_b_name("density", a, True)}_{rst}.dat', 'ref_dens', rsteps, zc, dens, ['v_nd', 'v_nd'])
+    hdr_pos = '# step zlo zhi xlo xhi ylo yhi'
+    hdr_F = '# TimeStep N_zlo N_zhi N_xlo N_xhi N_ylo N_yhi A_x A_y A_z   (compressive plate loads + BB face areas; block-averaged)'
+    write_print(pd_ / f'plate_position_ref_{rst}.dat', hdr_pos, np.column_stack([rsteps] + [np.full(nr, pl0[f]) for f in B_FACES]))
+    write_print(pd_ / f'plate_force_avg_ref_{rst}.dat', '# Time-averaged data for fix ref_plate_force_avg\n' + hdr_F,
+                plate_rows(rsteps, [pl0] * nr, np.full(nr, B_P_REF)))
+    write_print(sd / f'strain_vol_ref_{rst}.dat', '# step eps_vol_plate eps_vol_bb eps_vol_rg eps_x eps_y eps_z V_bb V_rg',
+                np.column_stack([rsteps, np.zeros(nr), rng.normal(0, 0.002, nr), rng.normal(0, 0.0005, nr), np.zeros(nr), np.zeros(nr),
+                                 np.zeros(nr), V0_bb * (1 + rng.normal(0, 0.002, nr)), V0_rg * (1 + rng.normal(0, 0.0005, nr))]))
+    write_print(vd / f'gel_dimensions_bb_ref_{rst}.dat', None, np.column_stack([rsteps] + [np.full(nr, l + 1.0) for l in L0]))
+    write_print(pd_ / f'piston_position_ref_{rst}.dat', '# step z_load z_feed z_perm',
+                np.column_stack([rsteps, np.full(nr, pl0['zhi']), np.full(nr, B_ZFEED), np.full(nr, B_ZPERM)]))
+    write_print(pd_ / f'piston_force_avg_ref_{rst}.dat', '# Time-averaged data for fix ref_piston_force_avg\n# TimeStep F_load F_fluid_feed F_fluid_perm',
+                np.column_stack([rsteps, B_P_REF * areas(pl0)['z'] + rng.normal(0, 2, nr), 1.5 * A_box + rng.normal(0, 30, nr),
+                                 -1.5 * A_box + rng.normal(0, 30, nr)]))
+    write_traj(r / 'traj_files' / f'traj_ref_{rst}.lammpstrj', rsteps[:2], {4: pl0['zlo'], 5: B_ZFEED, 6: B_ZPERM, 7: pl0['zhi']})
+
+    # ---- levels ------------------------------------------------------------------
+    t_start = 3000
+    for lvl in levels:
+        eps = float(lvl)
+        e_lin = 1.0 - (1.0 - eps) ** (1.0 / 3.0)
+        st = _b_stem(hold, lvl)
+        steps = np.arange(t_start, t_start + hold + 1, 100)
+        n = len(steps)
+        drive = np.minimum(1.0, (steps - t_start) / 600.0)
+        planes_t = [_b_planes(e_lin * d) for d in drive]
+        eps_t = 1.0 - (1.0 - e_lin * drive) ** 3
+        relax = 1.0 + 0.5 * np.exp(-(steps - t_start) / 900.0)
+        write_print(pd_ / f'plate_position_{st}.dat', hdr_pos, np.column_stack([steps] + [[p[f] for p in planes_t] for f in B_FACES]))
+        press = B_P_REF + K_TRUE * eps_t * relax
+        F = plate_rows(steps, planes_t, press)
+        write_print(pd_ / f'plate_force_{st}.dat', hdr_F.replace('TimeStep', 'step'), F)
+        write_print(pd_ / f'plate_force_avg_{st}.dat', '# Time-averaged data for fix out_plate_force_avg\n' + hdr_F, F)
+        write_print(sd / f'strain_vol_{st}.dat', '# step eps_vol_plate eps_vol_bb eps_vol_rg eps_x eps_y eps_z V_bb V_rg',
+                    np.column_stack([steps, eps_t, eps_t + rng.normal(0, 0.002, n), 0.95 * eps_t, e_lin * drive, e_lin * drive, e_lin * drive,
+                                     V0_bb * (1 - eps_t) * (1 + rng.normal(0, 0.002, n)), V0_rg * (1 - 0.95 * eps_t)]))
+        zhi, zlo = np.array([p['zhi'] for p in planes_t]), np.array([p['zlo'] for p in planes_t])
+        dV = eps_t * V0 * (1 - np.exp(-(steps - t_start) / 1200.0))
+        zfeed, zperm = B_ZFEED + 0.5 * dV / A_box, B_ZPERM - 0.5 * dV / A_box
+        write_print(pd_ / f'piston_position_{st}.dat', '# step z_load z_feed z_perm', np.column_stack([steps, zhi, zfeed, zperm]))
+        write_print(pd_ / f'support_position_{st}.dat', '# step z_support', np.column_stack([steps, zlo]))
+        write_print(pd_ / f'piston_velocity_{st}.dat', '# step vz_load vz_feed vz_perm', np.column_stack([steps, -0.02 * (drive < 1), 0 * steps, 0 * steps]))
+        Ff, Fp = 1.5 * A_box + rng.normal(0, 30, n), -1.5 * A_box + rng.normal(0, 30, n)
+        write_print(pd_ / f'piston_force_{st}.dat', '# step F_load F_fluid_feed F_fluid_perm', np.column_stack([steps, F[:, 2], Ff, Fp]))
+        write_print(pd_ / f'piston_force_avg_{st}.dat', '# Time-averaged data for fix out_piston_force_avg\n# TimeStep F_load F_fluid_feed F_fluid_perm',
+                    np.column_stack([steps, F[:, 2], Ff, Fp]))
+        write_print(pd_ / f'piston_pressure_{st}.dat', '# step P_load_meas P_feed_meas P_feed_app P_perm_meas P_perm_app',
+                    np.column_stack([steps, press, Ff / A_box, 1.5 + 0 * steps, -Fp / A_box, 1.5 + 0 * steps]))
+        write_print(pm / f'permeation_{st}.dat', '# step z_feed z_perm dV_feed dV_perm dV_total   (solvent expelled since seating, sigma^3; A*dz)',
+                    np.column_stack([steps, zfeed, zperm, 0.5 * dV, 0.5 * dV, dV]))
+        write_print(sd / f'pressure_reservoirs_{st}.dat', '# Time-averaged data for fix avg_P_res\n# TimeStep P_res_feed rho_feed P_res_perm rho_perm',
+                    np.column_stack([steps, 1.5 + rng.normal(0, 0.005, n), 0.45 + 0 * steps, 1.5 + rng.normal(0, 0.005, n), 0.45 + 0 * steps]))
+        write_print(vd / f'box_dimensions_{st}.dat', None, np.column_stack([steps] + [np.full(n, b) for b in B_BOX]))
+        write_print(vd / f'gel_dimensions_bb_{st}.dat', None, np.column_stack([steps] + [(l + 1.0) * (1 - e_lin * drive) for l in L0]))
+        write_print(vd / f'gel_dimensions_rg_{st}.dat', None, np.column_stack([steps] + [0.97 * l * (1 - e_lin * drive) for l in L0]))
+        write_print(sd / f'strain_zz_{st}.dat', None, np.column_stack([steps, np.full(n, 0.97 * L0[2]), 0.97 * L0[2] * (1 - e_lin * drive)]))
+        write_print(sd / f'strain_piston_{st}.dat', None, np.column_stack([steps, np.full(n, L0[2] + 2 * B_CONTACT), zhi - zlo,
+                                                                          1 - (zhi - zlo) / (L0[2] + 2 * B_CONTACT)]))
+        hs = steps[drive >= 1.0][::3]                       # hold snapshots (the averaging fixes live in the hold only)
+        t_hold = steps[drive >= 1.0][0]                     # the plates stop here: u = 0 of the hold-referenced displacement
+        for a in 'zxy':
+            zc, g, pro, dens = _b_profiles(a, hs, K_TRUE * eps)
+            for comp in ('zz', 'xx', 'yy'):
+                write_ave_time_vector(sd / f'{_b_name("sigma", a, False, comp, "polymer")}_{st}.dat', 'avg', 'c_prof_p', hs, pro[comp][0])
+                write_ave_time_vector(sd / f'{_b_name("sigma", a, False, comp, "solvent")}_{st}.dat', 'avg', 'c_prof_s', hs, pro[comp][1])
+            _b_chunk(cp / f'{_b_name("density", a)}_{st}.dat', 'avg_dens', hs, zc, dens, ['v_nd', 'v_nd'])
+            k = B_AX[a]
+            lo = planes_t[-1][a + 'lo'] + B_CONTACT
+            Lh = planes_t[-1][a + 'hi'] - planes_t[-1][a + 'lo'] - 2 * B_CONTACT
+            zeta = (zc - lo) / Lh
+            disp = []
+            for j in range(len(hs)):
+                u = np.where(g, 0.15 * np.sin(2 * np.pi * zeta) * (np.exp(-4 * np.pi ** 2 * B_DC * (hs[j] - t_hold) * B_DT / Lh ** 2) - 1.0), 0.0)
+                disp.append(np.column_stack([np.where(g, 1500, 0), u + np.where(g, rng.normal(0, 0.001, len(zc)), 0.0)]))
+            _b_chunk(dd / f'{_b_name("disp", a)}_{st}.dat', 'avg_disp', hs, zc, disp, [f'v_u{a}_poly'])
+        write_traj(r / 'traj_files' / f'traj_stress_{st}.lammpstrj', hs[:2], {4: zlo[-1], 5: B_ZFEED, 6: B_ZPERM, 7: zhi[-1]})
+        t_start += hold + 1000
+    # whole-run polymer partial-stress anisotropy (stem tagged with NSTEPS = hold here), as slab_with_support writes it
+    asteps = np.arange(0, t_start, 500)
+    write_print(sd / f'stress_aniso_{rst}.dat', '# Time-averaged data for fix stress_aniso_output\n# TimeStep sig_p_xx sig_p_yy sig_p_zz P_xx P_yy P_zz',
+                np.column_stack([asteps] + [0.42 + rng.normal(0, 0.004, len(asteps)) for _ in range(3)] + [1.5 + 0 * asteps] * 3))
+    with open(r / f'final_compress_{rst}.data', 'w') as f:
+        f.write(f'fixture\n\n10 atoms\n11 atom types\n\n0.0 {B_BOX[0]} xlo xhi\n0.0 {B_BOX[1]} ylo yhi\n0.0 {B_BOX[2]} zlo zhi\n')
+    (r / 'log.lammps').write_text(_log(np.arange(0, 20000, 1000)))
+    return rst
+
+
 def flatten_to_flow_data(run_root, dest, traj_dest):
     """Copy every .dat under output_files/ flat into dest (the notebooks' layout) and
     the trajectories into traj_dest."""
@@ -337,7 +540,10 @@ if __name__ == '__main__':
     s1 = one_piston(root / 'one_piston')
     s2 = two_piston_perm(root / 'two_piston_perm')
     s3 = two_piston_comp(root / 'two_piston_comp')
+    s4 = six_plate_bulk(root / 'six_plate_bulk')
     fdl = root / 'flow_data_local'
     flatten_to_flow_data(root / 'two_piston_perm', fdl / 'permeation' / 'fixture_perm', fdl / 'traj_files.nosync')
     flatten_to_flow_data(root / 'two_piston_comp', fdl / 'compression' / 'fixture_comp', fdl / 'traj_files.nosync')
-    print(f'fixtures written under {root}\n  one_piston stem      {s1}\n  two_piston_perm stem {s2}\n  two_piston_comp stem {s3}')
+    flatten_to_flow_data(root / 'six_plate_bulk', fdl / 'bulk' / 'fixture_bulk', fdl / 'traj_files.nosync')
+    print(f'fixtures written under {root}\n  one_piston stem      {s1}\n  two_piston_perm stem {s2}\n  two_piston_comp stem {s3}\n'
+          f'  six_plate_bulk stem  {s4}   (built from K_TRUE = {K_TRUE})')

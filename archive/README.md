@@ -56,3 +56,22 @@ calibrated against the notebook Voronoi estimator (see
 Run with `SKIP_WIDOM=0` (or `-var skip_widom 0` for direct LAMMPS invocation)
 and copy `cavity_widom.py` back to `scripts/` — `postprocess.sh`,
 `continue_sim.sh`, and `plot_lammps_log.py` still look for it there.
+
+## Archived (2026-09-29): the fixed-volume compress_slab workflow
+
+`compress_slab` was rebuilt on 2026-09-29 on the template of
+`triaxial_compression_two_pist` (wet pistons hold the bath at P*, six
+solvent-transparent plates seated onto the gel, eps_vol = 0 reference window,
+one file set per level tagged `_<hold>_c<level>`, analysis in `scripts/lib/bulk.py`).
+The versions it replaced are kept here as they were at commit `a98f53e`.
+
+| File | Came from | Why it is here |
+|---|---|---|
+| `simulations/compress_slab/` | `simulations/compress_slab/` | The 2026-08 deck and its Expanse / Pod / Bridges batch files: six plates ON the faces of a fully periodic fixed-volume box (Langevin+NPH to P* first), `fix move` ramps to a ladder of `stage_targets`, stage stresses appended into one file over a static `poly_bulk`/`solv_bulk` group and a fixed `bulk_vol`. Reads `-var stage_targets` (`COMPRESS_STAGES`), which the run scripts no longer pass. |
+| `bulk_modulus_analysis.ipynb` | `scripts/` | Its notebook: the osmotic path K(t) = -V dPi/dV over the whole run (Rg volume) and the drained K from a fit over step-gap-clustered stages. Replaced by `scripts/bulk_modulus_analysis_{single,sweep}.ipynb`. |
+| `add_more_plates_to_gel.ipynb` | `scripts/` | The notebook-only converter that put the plates on the box faces and deleted the polymer within 1 sigma of them. Replaced by `scripts/add_more_plates_to_gel.py` + the notebook of the same name. |
+
+* **To analyse a run the old deck produced**, open the archived notebook from
+  `scripts/` (its paths are relative to that folder).
+* `plot_lammps_log.py` still draws its normal-stress panel when a run directory
+  holds `bulk_modulus_plot_data_*.dat`; the new deck does not write that file.

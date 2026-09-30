@@ -1,5 +1,6 @@
-"""Drive lib/triaxial.py on the synthetic flow_data_local tree exactly as the three
-two-piston notebooks do (SYNC off).  Usage: python lib_headless_test.py <fixture_root>"""
+"""Drive lib/triaxial.py and lib/bulk.py on the synthetic flow_data_local tree exactly as the
+two-piston and the bulk-modulus notebooks do (SYNC off).
+Usage: python lib_headless_test.py <fixture_root>"""
 import sys, importlib
 from pathlib import Path
 import numpy as np
@@ -72,4 +73,65 @@ if Rp.get('CALIB') is not None:
         tri.add_perm_volume_fractions(cfgp, Rp, P2)
         assert P2['phi_cal'] is not None, mode
         plt.close('all')
+
+print('\n################ bulk modulus single / sweep (six-plate fixture) ################')
+import bulk
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from make_fixtures import K_TRUE, B_PI_REF, B_P_REF, B_DC, B_DT
+cfgb = bulk.Config(DATANAME='fixture_cube', INTERACTION='1.0_1.0', RUN_ID='fixture_bulk', COMP_LEVELS=['0.05', '0.10'],
+                   base_dir=base, M_REF=0.30, G_REF=0.04, dt_lj=B_DT, VOR_ENABLE=False)
+Rb = bulk.load_reference(cfgb)
+LB = [L for L in (bulk.load_level(cfgb, Rb, l) for l in cfgb.COMP_LEVELS) if L is not None]
+assert len(LB) == 2, 'bulk levels not loaded'
+assert set(Rb['ax']) == {'x', 'y', 'z'}, 'a profile axis is missing'
+bulk.add_volume_fractions(cfgb, Rb, LB)        # VOR_ENABLE False -> prints the skip note only
+bulk.print_summary(cfgb, LB)
+assert abs(Rb['Pi_ref'] - B_PI_REF) < 0.003 and abs(Rb['P_ref'] - B_P_REF) < 0.003, 'zero-strain readings not recovered'
+for L in LB:
+    assert abs(L['strain']['plate'] - float(L['lvl'])) < 1e-3 * float(L['lvl']) + 1e-6, 'plate strain not recovered'
+    assert abs(L['strain']['plate'] - L['strain']['plate_geo']) < 1e-4, "deck and geometric plate strains disagree"
+    for key in ('K_net', 'K_pl'):
+        assert abs(L[key] - K_TRUE) < 0.06 * K_TRUE, f"{key} = {L[key]:.4f} at eps_vol {L['lvl']}, built from {K_TRUE}"
+        assert L[key + '_lo'] <= L[key] <= L[key + '_hi']
+    for a in cfgb.AXES:
+        assert abs(L['ax'][a]['K'] - K_TRUE) < 0.10 * K_TRUE, f"K along {a} = {L['ax'][a]['K']:.4f}"
+    assert L['dev_rel'] < 0.2, 'isotropic synthetic stress reads as anisotropic'
+    assert L['wet'] is not None and abs(L['wet']['plat']['P_feed_meas'] - 1.5) < 0.02
+    assert abs(L['eps_expelled'] - float(L['lvl'])) < 0.2 * float(L['lvl'])
+    assert L['Dc'] is not None and set(L['Dc']['ax']) == {'x', 'y', 'z'}, 'the held-cube D_c fit is missing an axis'
+    assert abs(L['Dc']['Dc'] - B_DC) < 0.15 * B_DC and L['Dc']['R2'] > 0.9, f"cube D_c = {L['Dc']['Dc']:.4f} (R^2 {L['Dc']['R2']:.3f}), built from {B_DC}"
+    for a, F in L['Dc_axis'].items():
+        assert abs(F['Dc'] - B_DC) < 0.15 * B_DC, f"1-D D_c along {a} = {F['Dc']:.4f}"
+    assert abs(L['G_from_MK'] - 0.75 * (0.30 - L['K_net'])) < 1e-12
+Lb = LB[1]
+bulk.fig_strain(cfgb, Rb, [Lb])
+for f in (bulk.fig_volfrac, bulk.fig_total_stress, bulk.fig_partial_stress, bulk.fig_network_stress, bulk.fig_thermo_pressure,
+          bulk.fig_osmotic_pressure):
+    f(cfgb, Rb, Lb, axes=cfgb.AXES)
+    plt.close('all')
+for f in (bulk.fig_plates, bulk.fig_K, bulk.fig_isotropy, bulk.fig_Dc, bulk.fig_closure, bulk.fig_wet_pistons, bulk.fig_solvent_expelled, bulk.fig_ratio):
+    assert f(cfgb, Rb, Lb) is not None, f.__name__
+    plt.close('all')
+bulk.fig_strain(cfgb, Rb, LB, stem='sweep_strain_diagnostic')
+assert bulk.fig_anisotropy_run(cfgb, Rb, LB) is not None, 'stress_aniso whole-run figure'
+assert bulk.fig_volfrac_evolution(cfgb, Rb, Lb, key='phi_mf') is not None
+assert bulk.fig_volfrac_evolution(cfgb, Rb, Lb, key='phi_cal') is None      # VOR_ENABLE False here: skipped, not an error
+assert bulk.fig_ratio_sweep(cfgb, Rb, LB) is not None
+plt.close('all')
+for f in (bulk.fig_volfrac_sweep, bulk.fig_total_stress_sweep, bulk.fig_partial_stress_sweep, bulk.fig_network_stress_sweep,
+          bulk.fig_thermo_pressure_sweep, bulk.fig_osmotic_pressure_sweep):
+    f(cfgb, Rb, LB, axes=cfgb.AXES)
+    plt.close('all')
+for f in (bulk.fig_plates_sweep, bulk.fig_K_sweep, bulk.fig_stress_strain_sweep, bulk.fig_isotropy_sweep, bulk.fig_Dc_sweep,
+          bulk.fig_closure_sweep, bulk.fig_wet_pistons_sweep):
+    assert f(cfgb, Rb, LB) is not None, f.__name__
+    plt.close('all')
+assert abs(Rb['K_small_net'] - K_TRUE) < 0.06 * K_TRUE and abs(Rb['K_small_pl'] - K_TRUE) < 0.06 * K_TRUE, 'small-strain slopes'
+pngs = {q.name for q in cfgb.PLOT_DIR.glob('*.png')}
+assert any('_alongx_' in q for q in pngs) and any('_alongy_' in q for q in pngs), 'per-axis figures were not tagged'
+assert tri._save.__module__ == 'triaxial', 'the axis context did not restore triaxial._save'
+# K_STRAIN = 'rg': the same stress over the network's own strain
+cfgb.K_STRAIN = 'rg'
+L2 = bulk.load_level(cfgb, Rb, '0.10', verbose=False)
+assert abs(L2['eps'] - 0.095) < 0.002 and abs(L2['K_net'] - K_TRUE * 0.10 / 0.095) < 0.06 * K_TRUE
 print('\nLIB HEADLESS TEST: OK')
