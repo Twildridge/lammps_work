@@ -184,6 +184,19 @@ All the same output files are produced (stress profiles, chemical potential, pis
 6. Creates `continuation_{timestamp}/` inside the original folder and symlinks the data file in.
 7. Passes `-var cont 1` (plus the sweep variable, if applicable) to LAMMPS, which triggers the `jump`/`if` logic in each `.lmp` script that bypasses setup — and, for the driven sims, bypasses the drive/ramp itself too, so continuation always means "keep going," never "add an artificial hold."
 
+#### Runs longer than the wall limit: automatic chaining (2026-09-30)
+
+Expanse's `compute` partition allows 48 h per job, and a 14 M-step `slab_with_support` run of the 1.13 M-atom `_nowalls` file needs ~55–60 h on 4 nodes (the 238 k-atom periodic slab ran at 78 Matom-step/s there). Instead of splitting the run by hand, such a job **chains**:
+
+1. `run_lammps.sh` passes the deck a wall-clock budget, `-var wall_timeout` = seconds left in the SLURM job minus `WALL_MARGIN` (default 2400 s; both are env knobs set in the `.batch`). `slab_with_support.lmp` arms it with `timer timeout … every 1000` right at start-up, so setup time counts too.
+2. When the budget runs out, the production block in flight returns early (`WARNING: Wall time limit reached`), its snapshot `final_config_*_snap<N>.data` is written as usual, the loop exits, and the deck logs one bookkeeping line — `>>> PRODUCTION_STEPS_DONE <done> OF <nsteps> OLDSTEPS <o> TOTSTEPS <t> STATUS INCOMPLETE` — **without** writing the un-suffixed `final_config_*.data`, which stays the completion marker.
+3. With `CHAIN=1` exported by the `.batch`, `run_lammps.sh` then runs `continue_sim.sh --chain <job_id>` *before* post-processing. That reads the bookkeeping line, resumes from the newest snapshot with `cont=1` (no push-off/minimize/warm-up), asks for exactly `totsteps − (oldsteps + done)` more steps and keeps the original `totsteps` tag on every output file. The new job (`cont_<job_id>`, borrowing the `#SBATCH` lines and `export`s of the `.batch` whose `--job-name` matches the output file) chains again if it, too, runs out of time.
+4. The final `final_config_<dataname>_<interaction>_<totsteps>.data` is in the **last** `continuation_<timestamp>/` directory under the original run directory (continuations of continuations are siblings there, never nested). Each job's own `continuation_*/log.lammps` and `output_files/` cover its share of the steps.
+
+The margin covers the final `write_data` of a ~1 M-atom system, the MPI teardown grace, the chain submission and the plots. If the chain breaks (node failure, `sbatch` refused), re-launch it from the simulation folder with `continue_sim.sh --chain <last job id>`; `--dry-run` prints the batch script it would submit, `--batch <file>` picks another `.batch` to borrow SLURM settings from. `--chain` on a job whose log says `STATUS COMPLETE` submits nothing. Decks without `wall_timeout` (every other folder) run exactly as before: they ignore the variable, and without the bookkeeping line nothing is chained.
+
+Note the classic `continue_sim.sh <job_id> <nsteps>` *adds* `<nsteps>` on top of a finished run (outputs tagged `<nsteps>`, `oldsteps = 0`); when it finds no final file it falls back to the newest snapshot and says so. Also fixed the same day: `slab_with_support.lmp` now declares `pair_style`/`bond_style` before `read_data` when `cont = 1` (a `write_data` snapshot carries `Pair Coeffs`/`Bond Coeffs` sections, which `read_data` refuses otherwise — the continuation path had never actually run for this deck), and the continuation job now forwards `BARO_MODE`, `PIN_GEL`, `PISTON_TRANSPARENT` and `PRESS_TARGET` to LAMMPS and post-processes through `postprocess.sh` like `run_lammps.sh`.
+
 ### 5f. SLURM resource guidelines
 
 | Cluster | Partition (CPU) | Cores/node | Optimal ntasks/node | Max walltime |

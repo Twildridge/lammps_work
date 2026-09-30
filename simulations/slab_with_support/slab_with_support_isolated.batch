@@ -53,14 +53,25 @@ module load python/3.8.12
 # bulk_modulus_analysis_*.ipynb (SWELL_ANISO).
 #
 # The file holds NO crosslink bead without a chain (the generator wrote 4 per cube
-# until 2026-09-29).  COST: 1.13 M atoms (1.03 M solvent at rhoSolv = 1).  n_snaps = 3
-# snapshots are written, so a job that reaches the wall limit still leaves a usable
-# configuration; continue with scripts/continue_sim.sh.
+# until 2026-09-29).  COST: 1.13 M atoms (1.03 M solvent at rhoSolv = 1).
+#
+# WALL LIMIT (2026-09-30): at the 78 Matom-step/s the 238k-atom periodic slab got on
+# 4 Expanse nodes, 14 M steps of 1.13 M atoms is ~55-60 h of MD -- more than the 48 h
+# compute limit.  So this job is a CHAIN: run_lammps.sh hands the deck a wall-clock
+# budget (SLURM end - WALL_MARGIN), the deck stops its production loop ~40 min before
+# the limit, writes the snapshot it is in and logs PRODUCTION_STEPS_DONE ...
+# INCOMPLETE; with CHAIN=1 run_lammps.sh then calls `continue_sim.sh --chain` which
+# submits a job (cont_<jobid>) for the REMAINING steps from that snapshot (cont=1:
+# no push-off/minimize/warm-up), keeping the 14000000 tag on every file.  That job
+# chains again if needed.  The final final_config_*_14000000.data lands in the LAST
+# continuation_<timestamp>/ dir under this run's directory.  Chain broken (node
+# failure, sbatch refused)?  From this folder: continue_sim.sh --chain <last job id>.
+# docs/running_simulations.md 5e.
 # =======================================================================
 FOLDER="slab_with_support"
 DATANAME="slab_support_5beads_tall_rho04_new_03_nowalls"
 INTERACTION="1.0_1.0"   # the interaction of the triaxial runs, so that K, M and G belong to the same gel
-NSTEPS=14000000
+NSTEPS=8000000
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
 SEED=12345          # RNG seed for create_velocity / langevin
@@ -70,6 +81,9 @@ export PIN_GEL=1              # zero the gel's linear + angular momentum every 1
                               # would turn ~14 deg in 10M steps, and the plates of compress_slab are parked along
                               # the box axes (see slab_with_support.lmp)
 export PISTON_TRANSPARENT=1   # no piston in this file: irrelevant, kept so a file WITH a piston is safe too
+export CHAIN=1                # chain continuation jobs until all NSTEPS are done (see WALL LIMIT above)
+export WALL_MARGIN=2400       # seconds before the SLURM limit at which the deck stops (final write_data,
+                              # teardown, chain submission and post-processing all fit in 40 min)
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

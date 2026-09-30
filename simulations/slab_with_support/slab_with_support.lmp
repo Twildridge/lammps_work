@@ -33,6 +33,17 @@ variable volume_freq equal 10000
 # warm-up are all skipped — the data file already holds an equilibrated config.
 variable cont       index 0
 
+# ----- Wall-clock budget (2026-09-30) -----
+# wall_timeout = seconds LAMMPS may run (counted from the `timer timeout` command
+# below, i.e. from start-up) before it ends the production loop on its own;
+# 0 = unlimited.  run_lammps.sh / continue_sim.sh set it from the SLURM job's
+# remaining time minus a margin.  When it fires, the production block in flight
+# returns early ("WARNING: Wall time limit reached"), its snapshot is written as
+# usual, the loop exits and the deck reports PRODUCTION_STEPS_DONE ... INCOMPLETE,
+# which is what `continue_sim.sh --chain` (CHAIN=1 in the .batch) turns into a
+# continuation job for the remaining steps.  docs/running_simulations.md 5e.
+variable wall_timeout index 0
+
 # ----- Piston transparency (trial, 2026-09-07) -----
 # 0 = piston sheet is a WCA wall to solvent (default).  1 = solvent-piston pair
 # zeroed, so the sheet is invisible to solvent (it still repels polymer and is
@@ -95,6 +106,10 @@ boundary p p p
 atom_style molecular
 atom_modify map array
 
+# Arm the wall-clock budget here (not at the production loop) so the ~1 h of
+# push-off/minimize/warm-up of a 1 M-atom system is charged against it.
+if "${wall_timeout} > 0" then "timer timeout ${wall_timeout} every 1000"
+
 # Read initial data or restart
 variable is_restart equal is_file(restart_${dataname}_${interaction}_${oldsteps}.restart)
 variable restartFlag string file
@@ -102,6 +117,14 @@ variable restartFlag string file
 # Force fresh start if oldsteps is 0
 if "${oldsteps} == 0" then &
     "variable is_restart equal 0"
+
+# A continuation reads a write_data snapshot, which carries "Pair Coeffs # lj/cut"
+# and "Bond Coeffs # fene" sections that read_data refuses unless the styles are
+# already declared (2026-09-30: the cont=1 path had never run for this deck).
+# Phase 1 re-declares both and sets every coefficient, so nothing else changes.
+if "${cont} == 1" then &
+    "pair_style lj/cut 1.122" &
+    "bond_style fene"
 
 if "${is_restart} == 1" then &
     "read_restart restart_${dataname}_${interaction}_${oldsteps}.restart" &
@@ -406,14 +429,23 @@ if "${pin_gel} == 1" then &
     "fix pin_gel polymer momentum ${pin_gel_every} linear 1 1 1 angular" &
     "print '>>> gel pinned: polymer linear + angular momentum zeroed every ${pin_gel_every} steps'"
 
+variable prod_start  equal $(step)             # absolute step at which production starts
+variable prod_done   equal step-v_prod_start    # production steps completed so far
+variable prod_target equal ${nsteps}-${n_snaps}   # "all of nsteps" up to the steps_per_snap rounding
+
 variable snap_i loop ${n_snaps}
 label snap_loop
     run ${steps_per_snap}
     variable snap_outfile string "final_config_${dataname}_${interaction}_${totsteps}_snap${snap_i}"
     write_data ${snap_outfile}.data
     print ">>> Wrote snapshot ${snap_i}/${n_snaps} at step $(step)"
+    # Wall-clock budget spent (timeremain = seconds left on `timer timeout`, 0 once it
+    # fired): the run above returned early and the snapshot just written is the resume
+    # point, so leave the loop instead of starting the next block.
+    if "${wall_timeout} > 0 && $(timeremain) <= 0.0" then "jump SELF snap_done"
     next snap_i
     jump SELF snap_loop
+label snap_done
 
 
 
@@ -427,8 +459,19 @@ undump poly_traj
 
 
 
-# ========== Save Final Configuration ==========
+# ========== Production bookkeeping + Save Final Configuration ==========
+# One machine-readable line for run_lammps.sh / continue_sim.sh --chain: production
+# steps done in THIS job, the nsteps it was asked for, and the oldsteps/totsteps it
+# ran under (the chain adds done to oldsteps and asks the next job for the rest).
+# The un-suffixed final_config file is written ONLY when production completed, so
+# its presence remains the completion marker; continue_sim.sh resumes from the
+# newest final_config_*_snap<N>.data when it is missing.
 variable outfile string "final_config_${dataname}_${interaction}_${totsteps}"
-write_restart ${outfile}.restart
-write_data ${outfile}.data
-# (identical to snap${n_snaps}; retained for backward compatibility)
+if "${prod_done} >= ${prod_target}" then &
+    "print '>>> PRODUCTION_STEPS_DONE ${prod_done} OF ${nsteps} OLDSTEPS ${oldsteps} TOTSTEPS ${totsteps} STATUS COMPLETE'" &
+    "write_restart ${outfile}.restart" &
+    "write_data ${outfile}.data" &
+else &
+    "print '>>> PRODUCTION_STEPS_DONE ${prod_done} OF ${nsteps} OLDSTEPS ${oldsteps} TOTSTEPS ${totsteps} STATUS INCOMPLETE'" &
+    "print '>>> Wall-clock budget reached: no final_config written; resume from the newest final_config_*_snap<N>.data'"
+# (the final file is identical to snap${n_snaps}; retained for backward compatibility)

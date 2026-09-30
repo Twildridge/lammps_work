@@ -232,6 +232,23 @@ if [ -n "${SLURM_JOB_END_TIME:-}" ]; then
     fi
 fi
 
+# ── Wall-clock budget for the deck (2026-09-30) ──────────────────────────────
+# A deck that honours `-var wall_timeout` (slab_with_support) ends its production
+# loop on its own this many seconds after LAMMPS starts, writes the snapshot it
+# was in and reports `PRODUCTION_STEPS_DONE ... STATUS INCOMPLETE` in its log.
+# Budget = time left in the SLURM job minus WALL_MARGIN: the final write_data of
+# a ~1 M-atom system, the MPI teardown grace above, the continuation submission
+# and post-processing all fit comfortably in 40 min.  0 = unlimited (no SLURM).
+# Decks without the variable ignore it.  With CHAIN=1 (env, set by the .batch)
+# the INCOMPLETE line makes this script submit the continuation (see below).
+WALL_MARGIN=${WALL_MARGIN:-2400}
+WALL_TIMEOUT=0
+if [ -n "${SLURM_JOB_END_TIME:-}" ]; then
+    WALL_TIMEOUT=$(( SLURM_JOB_END_TIME - $(date +%s) - WALL_MARGIN ))
+    [ "$WALL_TIMEOUT" -gt 0 ] || WALL_TIMEOUT=0
+    echo "LAMMPS wall-clock budget: ${WALL_TIMEOUT}s (-var wall_timeout = SLURM end - ${WALL_MARGIN}s; CHAIN=${CHAIN:-0})"
+fi
+
 # ── Launch LAMMPS in the background and watch the log ─────────────────────────
 # See the teardown-hang note above. Rather than blocking on mpirun's return (which
 # can hang for hours in MPI_Finalize/UCX cleanup AFTER the science is complete),
@@ -274,6 +291,7 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var npt_piston_steps "$NPT_PISTON_STEPS" \
     -var settle_halt "$SETTLE_HALT" \
     -var drive_split "$DRIVE_SPLIT" \
+    -var wall_timeout "$WALL_TIMEOUT" \
     \
     -in $LAMMPS_FILE &
 MPIRUN_PID=$!
@@ -324,6 +342,24 @@ else
         exit 1
     fi
     exit "${LAMMPS_RC}"
+fi
+
+# ── Chain a continuation when the deck ran out of wall-clock (2026-09-30) ─────
+# CHAIN=1 in the environment (exported by the .batch) plus the deck's
+# `PRODUCTION_STEPS_DONE ... STATUS INCOMPLETE` line: continue_sim.sh --chain reads
+# that line, resumes from the newest snapshot and submits the job for the
+# remaining steps NOW, before post-processing, so the submission never competes
+# with the wall limit.  The new job chains again if it, too, runs out of time.
+# Run from the submit directory: --chain keys on this job's SLURM output file.
+if [ "${CHAIN:-0}" = "1" ]; then
+    if grep -qE '^>>> PRODUCTION_STEPS_DONE [0-9]+ .*STATUS INCOMPLETE' "$LAMMPS_LOG"; then
+        echo ">>> Production incomplete (wall-clock budget reached) — submitting the continuation job..."
+        ( cd "${SLURM_SUBMIT_DIR:-$SIM_DIR}" && \
+          PRESS_TARGET="$PRESS_TARGET" bash "$SCRIPT_DIR/continue_sim.sh" --chain "$SLURM_JOB_ID" ) \
+        || echo ">>> WARNING: continuation submission FAILED — submit it by hand from $SIM_DIR: continue_sim.sh --chain $SLURM_JOB_ID"
+    else
+        echo ">>> CHAIN=1: production complete (or the deck has no wall-clock budget) — nothing to chain."
+    fi
 fi
 
 # ── Post-processing ───────────────────────────────────────────────────────────
