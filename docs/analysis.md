@@ -38,14 +38,14 @@ cd ~/Documents/lammps_runs/<run_dir>
 
 For `triaxial_*_two_pist`, `slab_with_support`, the archived one-piston triaxial runs, etc.:
 ```bash
-python ~/Documents/lammps_work/scripts/plot_lammps_log.py \
+python ~/Documents/lammps_work/scripts/lib/plot_lammps_log.py \
     . \
     isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000
 ```
 
 For `shear_slab` — pass only the base `DATANAME` as the title, and the full run_id via `--run-id` for file lookups:
 ```bash
-python ~/Documents/lammps_work/scripts/plot_lammps_log.py \
+python ~/Documents/lammps_work/scripts/lib/plot_lammps_log.py \
     . \
     isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000 \
     --run-id isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000
@@ -53,7 +53,7 @@ python ~/Documents/lammps_work/scripts/plot_lammps_log.py \
 
 Or equivalently (same result as the auto-run call from `run_lammps.sh`):
 ```bash
-python ~/Documents/lammps_work/scripts/plot_lammps_log.py \
+python ~/Documents/lammps_work/scripts/lib/plot_lammps_log.py \
     . \
     isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000
 ```
@@ -64,7 +64,7 @@ Output plots are saved to `./output_plots/convergence_plots/`.
 
 **`plot_stress_profiles.py`** — partial stress and volume fraction profiles (`slab_with_support`, `triaxial_compression` single-level runs, `triaxial_permeation`, etc.)
 ```bash
-python ~/Documents/lammps_work/scripts/plot_stress_profiles.py \
+python ~/Documents/lammps_work/scripts/lib/plot_stress_profiles.py \
     . \
     isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000 \
     0
@@ -75,7 +75,7 @@ python ~/Documents/lammps_work/scripts/plot_stress_profiles.py \
 
 **`plot_piston_data.py`** — piston position and velocity (`triaxial_compression` single-level runs, `triaxial_permeation`, etc. — compression *sweeps* and `shear_slab` use their own consolidated plotters instead, see [§5b, simulation types](running_simulations.md#5b-simulation-types)). Multi-piston aware since 2026-09-16: the two-piston files (`# step z_feed z_perm` headers) get one line per piston plus a measured-vs-applied pressure panel and a `Q_perm` / solvent-expelled panel; one-piston files plot exactly as before. `plot_stress_profiles.py` overlays every `stress_z_piston_<sheet>` file in the Piston column and `plot_lammps_log.py` adds the bath-check and `Q_perm` panels to the flow diagnostics.
 ```bash
-python ~/Documents/lammps_work/scripts/plot_piston_data.py \
+python ~/Documents/lammps_work/scripts/lib/plot_piston_data.py \
     . \
     isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_1.0_1.0_500000 \
     0
@@ -204,7 +204,7 @@ INTERACTION="1.0_1.0"
 TOTSTEPS=3000000
 EPSSS="${INTERACTION%%_*}"   # first part:  e.g. 1.0
 EPSSP="${INTERACTION##*_}"   # second part: e.g. 1.0
-SCRIPTS=~/Documents/lammps_work/scripts
+SCRIPTS=~/Documents/lammps_work/scripts      # the plotters live in $SCRIPTS/lib/ (since 2026-10-01)
 ```
 
 #### Load Python — Expanse
@@ -260,7 +260,7 @@ The trajectory file is in `traj_files/` (symlink to scratch). If scratch has bee
 #### `plot_lammps_log.py` — T, P, volume convergence + μ_ex diagnostics
 
 ```bash
-python "$SCRIPTS/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
+python "$SCRIPTS/lib/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
 ```
 No `--p-ext` flag needed for any current folder — it was a `slab_with_flow`-only option (now removed).
 
@@ -271,7 +271,7 @@ Output saved to `./output_plots/`.
 #### `plot_stress_profiles.py` — partial stress and volume fraction profiles
 
 ```bash
-python "$SCRIPTS/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
+python "$SCRIPTS/lib/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
 ```
 
 ---
@@ -279,7 +279,7 @@ python "$SCRIPTS/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTS
 #### `plot_piston_data.py` — piston position, velocity, force (`triaxial_compression` single-level runs, `triaxial_permeation`, etc.)
 
 ```bash
-python "$SCRIPTS/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
+python "$SCRIPTS/lib/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
 ```
 
 ---

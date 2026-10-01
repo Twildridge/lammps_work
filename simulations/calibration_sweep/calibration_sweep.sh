@@ -315,7 +315,7 @@ fi
 if [ -f "\$ISOLATED_OUT" ]; then
     echo "isolated file exists, skipping: \$ISOLATED_OUT"
 else
-    python3 "${SCRIPTS_DIR}/isolate_gel.py" --input "\$SNAP_FILE" --output "\$ISOLATED_OUT"
+    python3 "${SCRIPTS_DIR}/lib/isolate_gel.py" --input "\$SNAP_FILE" --output "\$ISOLATED_OUT"
 fi
 echo "\$ISOLATED_OUT" > "${MANIFEST_DIR}/prep_isolated.path"
 
@@ -325,13 +325,13 @@ for NF in ${NF_GRID[*]}; do
     if [ -f "\$NF_OUT" ]; then
         echo "nf\${NF}: exists, skipping adjust"
     else
-        python3 "${SCRIPTS_DIR}/adjust_solvent.py" \
+        python3 "${SCRIPTS_DIR}/lib/adjust_solvent.py" \
             --input "\$ISOLATED_OUT" --target-nf "\$NF" --output "\$NF_OUT" --seed 12345
     fi
     if [ -f "${INPUT_DATA_DIR}/${ISOLATED_STEM}_nf\${NF}_solvent_only.data" ]; then
         echo "nf\${NF}: solvent_only exists, skipping split"
     else
-        python3 "${SCRIPTS_DIR}/split_gel.py" "\$NF_OUT" --output-dir "${INPUT_DATA_DIR}"
+        python3 "${SCRIPTS_DIR}/lib/split_gel.py" "\$NF_OUT" --output-dir "${INPUT_DATA_DIR}"
     fi
     echo "\$NF_OUT" > "${MANIFEST_DIR}/prep_nf\${NF}.path"
 done

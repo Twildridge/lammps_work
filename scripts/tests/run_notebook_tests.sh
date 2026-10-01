@@ -22,10 +22,9 @@ for c in nb['cells']:
         continue
     s = ''.join(c['source'])
     s = s.replace('SYNC, FORCE_SYNC = True, False', 'SYNC, FORCE_SYNC = False, False')
-    # nbconvert starts the kernel in the copy's directory: make the scripts/ paths absolute
+    # nbconvert starts the kernel in the copy's directory: make the scripts/lib path absolute (analysis + converter notebooks)
     scripts = str(__import__('pathlib').Path(src).resolve().parent)
     s = s.replace("LIB = Path('lib').resolve()", 'LIB = Path(r"' + scripts + '/lib")')
-    s = s.replace('import slab_two_pistons as s2p', 'sys.path.insert(0, r"' + scripts + '"); import slab_two_pistons as s2p')
     s = s.replace("input_file = s2p.DEFAULT_INPUT", 'input_file = r"' + scripts + '/" + s2p.DEFAULT_INPUT')
     s = s.replace("input_file = s2p.SMOKE_INPUT", 'input_file = r"' + scripts + '/" + s2p.SMOKE_INPUT')
     $rewrite
@@ -55,7 +54,7 @@ with contextlib.redirect_stdout(io.StringIO()):
     ns['generate_gel_slab'](5, 3, 3, 3, 0.45, 9.0, 3.0, 9.0, 3.0, 0.5, 0.0, 0.1, 0.8, root + '/cube_input.data', pre_swell=1.0)
 print('  generated', root + '/cube_input.data')
 PYEOF
-run_nb add_more_plates_to_gel.ipynb "s = s.replace('import add_more_plates_to_gel as amp', 'sys.path.insert(0, r\"' + scripts + '\"); import add_more_plates_to_gel as amp').replace('input_file = \"../../lammps_data_files_local/final_config_slab_support_5beads_tall_rho04_new_03_nowalls_1.0_1.0_14000000.data\"', 'input_file = \"' + root + '/cube_input.data\"').replace('log_info       = True,', 'log_info       = False,').replace('bath_margin_xy = 12.0,', 'bath_margin_xy = 5.0,').replace('reservoir_z    = 15.0,', 'reservoir_z    = 5.0,').replace('plate_overhang = 6.0,', 'plate_overhang = 3.0,')"
+run_nb add_more_plates_to_gel.ipynb "s = s.replace('input_file = \"../../lammps_data_files_local/final_config_slab_support_5beads_tall_rho04_new_03_nowalls_1.0_1.0_14000000.data\"', 'input_file = \"' + root + '/cube_input.data\"').replace('log_info       = True,', 'log_info       = False,').replace('bath_margin_xy = 12.0,', 'bath_margin_xy = 5.0,').replace('reservoir_z    = 15.0,', 'reservoir_z    = 5.0,').replace('plate_overhang = 6.0,', 'plate_overhang = 3.0,')"
 # the converter notebook runs the real converter (needs a slab file); skipped when absent
 if [ -f "$SCRIPTS/../../lammps_data_files_local/final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000.data" ]; then
     run_nb slab_two_pistons.ipynb "s = s.replace('log_info           = True,', 'log_info           = False,').replace('output_file        = None,', 'output_file        = \"' + root + '/converter_test.data\",')"

@@ -17,7 +17,7 @@
 # keep the velocities written by the original run.
 #
 # Input: the equilibrated PERIODIC slab with shear plates on its two free faces
-#   (slab_with_support run -> scripts/slab_shear_plates.py -> <stem>_with_plates.data
+#   (slab_with_support run -> scripts/lib/slab_shear_plates.py -> <stem>_with_plates.data
 #    in ~/Documents/lammps_data/input_data/).  Plates are NORMAL TO z and driven
 #   +/-x, so z = gap, x = shear, y = neutral -- the compression decks' axes.  The
 #   2026-04-28 isolated-cube input (isolate_gel -> add_plates_to_gel, plates on the

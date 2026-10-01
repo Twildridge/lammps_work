@@ -84,7 +84,7 @@ bash calibration_sweep.sh --from 3 --skip-prep
 ```
 
 The one-time `[prep]` job runs `isolate_gel.py` → `adjust_solvent.py` (per
-N_f) → `split_gel.py` (per N_f), all with skip-if-present logic, then the
+N_f) → `split_gel.py` (per N_f; all three in `scripts/lib/`), all with skip-if-present logic, then the
 per-pressure batches run the mixed NPT + solvent companion per (N_f, rep) and
 one polymer companion per P. Chained batches auto-pass `--skip-prep`.
 

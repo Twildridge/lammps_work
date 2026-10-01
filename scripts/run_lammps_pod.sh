@@ -178,22 +178,22 @@ source $(conda info --base)/etc/profile.d/conda.sh # loads Conda's shell functio
 conda activate lammps_analysis
 
 echo "Generating convergence plot..."
-python "$SCRIPT_DIR/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
+python "$SCRIPT_DIR/lib/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
 
 if [ "$FOLDER" = "compress_slab" ]; then
     # compress_slab writes one file set per level, tagged _<hold>_c<level>, in the layout of
     # triaxial_compression_two_pist: the consolidated sweep plotter overlays the levels.
     echo "Generating consolidated compression sweep plots (levels: $COMPRESSIONS)..."
-    python "$SCRIPT_DIR/plot_compression_strain_sweep.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$COMPRESSIONS" 0 \
+    python "$SCRIPT_DIR/lib/plot_compression_strain_sweep.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$COMPRESSIONS" 0 \
         || echo "  WARNING: plot_compression_strain_sweep.py failed (skipping)"
-    python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0 \
+    python "$SCRIPT_DIR/lib/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0 \
         || echo "  WARNING: plot_piston_data.py failed (skipping)"
 else
     echo "Generating stress profiles..."
-    python "$SCRIPT_DIR/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
+    python "$SCRIPT_DIR/lib/plot_stress_profiles.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
 
     echo "Generating piston plots..."
-    python "$SCRIPT_DIR/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
+    python "$SCRIPT_DIR/lib/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0
 fi
 
 

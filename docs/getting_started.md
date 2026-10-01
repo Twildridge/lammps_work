@@ -169,7 +169,7 @@ rsync -avP <your-username>@login.expanse.sdsc.edu:\
 Plots are actually generated automatically at the end of every job (no extra step needed) — but here's how to regenerate or inspect them yourself:
 ```bash
 cd ~/Documents/lammps_runs/solvent_pure/solvent_pure_solvent_box_rho04_02_1.0_0.0_<timestamp>
-python ~/Documents/lammps_work/scripts/plot_lammps_log.py . solvent_box_rho04_02_1.0_0.0_100000
+python ~/Documents/lammps_work/scripts/lib/plot_lammps_log.py . solvent_box_rho04_02_1.0_0.0_100000
 ```
 This writes convergence plots (temperature, pressure, volume vs. time) to `./output_plots/`. Open them and confirm temperature and pressure look flat/stable by the end — that's what "the simulation worked" looks like. Full details on every analysis script and notebook: [analysis.md](analysis.md).
 

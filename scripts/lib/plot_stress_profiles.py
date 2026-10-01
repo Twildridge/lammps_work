@@ -11,7 +11,7 @@ import glob
 # HOW TO RUN BY ITSELF
 # cd ~/Documents/lammps_runs/slab_with_flow_walled.....
 #
-# python ~/Documents/lammps_work/scripts/plot_stress_profiles.py . \
+# python ~/Documents/lammps_work/scripts/lib/plot_stress_profiles.py . \
 # walled_slab_support_5beads_tall_4_1.0_1.05_15000000_1.0_1.05_1000000 0
 
 

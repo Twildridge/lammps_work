@@ -80,9 +80,9 @@ python -c "import numpy; print(numpy.__version__)"
 echo "Generating convergence plot..."
 # Pass --p-ext for slab_with_flow so the pore-pressure panel uses the barostat target
 if [ "$FOLDER" = "slab_with_flow" ]; then
-    python "$SCRIPT_DIR/plot_lammps_log.py" "." "$STEM" --p-ext 1.8
+    python "$SCRIPT_DIR/lib/plot_lammps_log.py" "." "$STEM" --p-ext 1.8
 else
-    python "$SCRIPT_DIR/plot_lammps_log.py" "." "$STEM"
+    python "$SCRIPT_DIR/lib/plot_lammps_log.py" "." "$STEM"
 fi
 
 # ── Cavity-biased Widom insertion (slab_with_flow only) ───────────────────────
@@ -122,7 +122,7 @@ else
             "${WIDOM_EXCL_ARGS[@]}"
 
         echo "Re-generating convergence plot with cavity Widom panel..."
-        python "$SCRIPT_DIR/plot_lammps_log.py" "." "$STEM" --p-ext "$WIDOM_PEXT"
+        python "$SCRIPT_DIR/lib/plot_lammps_log.py" "." "$STEM" --p-ext "$WIDOM_PEXT"
     else
         echo "WARNING: Widom trajectory not found — skipping cavity_widom.py"
         echo "  Expected path: $WIDOM_TRAJ"
@@ -132,7 +132,7 @@ fi
 # Pure solvent / polymer P-sweep: EOS plot instead of stress/piston scripts.
 if [ "$FOLDER" = "solvent_phase" ] || [ "$FOLDER" = "polymer_phase" ]; then
     echo "${FOLDER} phase-sweep run detected — generating EOS plot..."
-    python "$SCRIPT_DIR/plot_eos.py" "." "$DATANAME" "$INTERACTION"
+    python "$SCRIPT_DIR/lib/plot_eos.py" "." "$DATANAME" "$INTERACTION"
     echo "======================================"
     echo "Done! Results are in: $RUN_DIR"
     echo "======================================"
@@ -141,7 +141,7 @@ fi
 
 if [ "$FOLDER" = "shear_slab" ]; then
     echo "Generating shear stress-strain sweep plots (per strain: $STRAINS)..."
-    python "$SCRIPT_DIR/plot_shear_strain_sweep.py" "." "$STEM" "$STRAINS"
+    python "$SCRIPT_DIR/lib/plot_shear_strain_sweep.py" "." "$STEM" "$STRAINS"
 elif { [ "$FOLDER" = "triaxial_compression" ] || [ "$FOLDER" = "triaxial_compression_two_pist" ] || [ "$FOLDER" = "compress_slab" ]; } && [ -n "$COMPRESSIONS" ]; then
     # Compression sweep: every level's output files are tagged _c<level>. Rather
     # than emit one plot PER LEVEL, the consolidated plotter overlays every
@@ -150,7 +150,7 @@ elif { [ "$FOLDER" = "triaxial_compression" ] || [ "$FOLDER" = "triaxial_compres
     # plot for the whole sweep instead of a pair per level. Non-fatal so a bad
     # level cannot abort the chain.
     echo "Generating consolidated compression sweep plots (levels: $COMPRESSIONS)..."
-    python "$SCRIPT_DIR/plot_compression_strain_sweep.py" "." "$STEM" "$COMPRESSIONS" "$OLDSTEPS" \
+    python "$SCRIPT_DIR/lib/plot_compression_strain_sweep.py" "." "$STEM" "$COMPRESSIONS" "$OLDSTEPS" \
         || echo "  WARNING: plot_compression_strain_sweep.py failed (skipping)"
     # compress_slab (2026-09-29) writes the two-piston file set for its z axis (the z-hi plate
     # is the "load piston", the z-lo plate the "support"), so the same plotters apply.
@@ -159,7 +159,7 @@ elif { [ "$FOLDER" = "triaxial_compression" ] || [ "$FOLDER" = "triaxial_compres
         # run in the stem-tagged piston_pressure file; plot_piston_data.py draws it
         # (multi-piston aware) alongside the per-level files.
         echo "Generating two-piston bath-pressure plots..."
-        python "$SCRIPT_DIR/plot_piston_data.py" "." "$STEM" "$OLDSTEPS" \
+        python "$SCRIPT_DIR/lib/plot_piston_data.py" "." "$STEM" "$OLDSTEPS" \
             || echo "  WARNING: plot_piston_data.py failed (skipping)"
     fi
 elif [ "$FOLDER" = "triaxial_permeation_two_pist" ]; then
@@ -168,16 +168,16 @@ elif [ "$FOLDER" = "triaxial_permeation_two_pist" ]; then
     # plot_lammps_log.py detect the multi-piston column headers and add the
     # per-piston panels (P_feed / P_perm measured vs applied, Q_perm vs time).
     echo "Generating stress profiles (two-piston)..."
-    python "$SCRIPT_DIR/plot_stress_profiles.py" "." "$STEM" "$OLDSTEPS"
+    python "$SCRIPT_DIR/lib/plot_stress_profiles.py" "." "$STEM" "$OLDSTEPS"
 
     echo "Generating piston / permeation plots (two-piston)..."
-    python "$SCRIPT_DIR/plot_piston_data.py" "." "$STEM" "$OLDSTEPS"
+    python "$SCRIPT_DIR/lib/plot_piston_data.py" "." "$STEM" "$OLDSTEPS"
 else
     echo "Generating stress profiles..."
-    python "$SCRIPT_DIR/plot_stress_profiles.py" "." "$STEM" "$OLDSTEPS"
+    python "$SCRIPT_DIR/lib/plot_stress_profiles.py" "." "$STEM" "$OLDSTEPS"
 
     echo "Generating piston plots..."
-    python "$SCRIPT_DIR/plot_piston_data.py" "." "$STEM" "$OLDSTEPS"
+    python "$SCRIPT_DIR/lib/plot_piston_data.py" "." "$STEM" "$OLDSTEPS"
 fi
 
 echo "======================================"

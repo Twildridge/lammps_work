@@ -61,7 +61,7 @@ sys.path.insert(0, str(HERE))
 import isolate_gel as ig            # noqa: E402
 import add_plates_to_gel as apg     # noqa: E402
 
-DATA_DIR = HERE.parent.parent / 'lammps_data_files_local'
+DATA_DIR = HERE.parent.parent.parent / 'lammps_data_files_local'   # scripts/lib -> lammps/
 DEFAULT_CLEARANCE = 4.0    # sigma of bath solvent kept beyond the polymer span per face -> ~7 sigma film behind each
                            # plate (2026-09-25; was 0.5 -> ~3.5 sigma film).  The film is bath solvent at bath density.
 DEFAULT_SOLVENT_DELETE = 0.87  # sigma; CALIBRATED 2026-09-22 on the 14000002 slab: bulk gel P in the shear hold =
@@ -69,7 +69,7 @@ DEFAULT_SOLVENT_DELETE = 0.87  # sigma; CALIBRATED 2026-09-22 on the 14000002 sl
                                # 0.87 sigma deletes ~1350 beads -> 1.500.  Re-calibrate for a different slab or plate lattice.
 DEFAULT_INPUT  = str(DATA_DIR / 'final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002.data')
 DEFAULT_OUTPUT = str(DATA_DIR / 'isolated_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_with_plates_film7.data')
-INFO_MD = HERE.parent / 'slab_data_file_info.md'
+INFO_MD = HERE.parent.parent / 'slab_data_file_info.md'   # repo root
 
 
 def isolate(input_file, clearance):

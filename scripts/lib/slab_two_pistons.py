@@ -852,7 +852,7 @@ def info_log_entry(info):
 
 
 def append_info_log(entry, path=None):
-    path = Path(path) if path else _HERE.parent / 'slab_data_file_info.md'
+    path = Path(path) if path else _HERE.parent.parent / 'slab_data_file_info.md'   # scripts/lib -> repo root
     with open(path, 'a') as f:
         f.write('\n' + entry)
     print(f'  appended to {path}')
