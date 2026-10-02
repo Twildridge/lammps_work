@@ -2920,11 +2920,16 @@ def fig_thermo_pressure(cfg, R, L):
     ax.axhline(cfg.P_BARO, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
     robust_ylim(ax, list(ev) + ([ref[0]] if ref is not None else []), zmask=_scale_mask(cfg, R, L), pad=0.45, qlo=2, qhi=100, include_zero=False)
     lo, hi = ax.get_ylim()
-    ax.set_ylim(min(lo, cfg.P_BARO - 0.3 * (hi - lo)), max(hi, cfg.P_BARO + 0.3 * (hi - lo)))
     h, lab = ax.get_legend_handles_labels()
     if _is_perm(L):
-        note = f'$P_{{th}}$ in gel interior: $\\approx$ {sig(np.nanmean(np.nanmean(Pt[L["plat"]], axis=0)[L["interior"]]))}'
+        # PERMEATION (2026-10-02): the profile is not a plateau in general (it slopes as G grows), so no
+        # interior mean is quoted and the bold final curve is just 'final'; the y-axis starts at the bath
+        # pressure P_BARO so the P_th(z) structure above it is readable.
+        ax.set_ylim(cfg.P_BARO, max(hi, cfg.P_BARO + 0.3 * (hi - lo)))
+        lab = ['final' if s == 'final (plateau)' else s for s in lab]
+        note = f'dotted: $P_{{\\rm bath}}={sig(cfg.P_BARO)}$'
     else:
+        ax.set_ylim(min(lo, cfg.P_BARO - 0.3 * (hi - lo)), max(hi, cfg.P_BARO + 0.3 * (hi - lo)))
         note = f'plateau mean in gel interior = {fmt_mu(np.nanmean(Pt[L["plat"]], axis=0)[L["interior"]])}   (dotted: $P_{{\\rm bath}}={sig(cfg.P_BARO)}$)'
     h.append(Patch(alpha=0, label=note))
     lab.append(note)
@@ -4484,7 +4489,8 @@ def fig_perm_permeability(cfg, R, P):
 #    * thickness trace (fig 12 c): u_F(t) = L_bb(t) - L_0 (5 k-step cadence) against the
 #      zero-IC series -> (u_F(inf), D_c); this resolves the early transient that the
 #      stress-cadence snapshots (first window >= 1 nfreq after the reset) missed in perm_2.
-#    * M (fig 13): from the steady thickness change L_0 - L_ss (the definition), from the
+#    * M (fig 13): M = dP L_ss/(2|u_F|) (L_ss the steady thickness; 2026-10-02, was L_0) from the
+#      steady thickness change L_0 - L_ss (the definition), from the
 #      steady-profile parabola c, and from the trace asymptote u_F(inf).
 # ---------------------------------------------------------------------------
 _PERM_TRACE_MODES = 60        # terms of the exact zero-IC series (coefficients fall as 1/mu^3)
@@ -4796,11 +4802,12 @@ def fit_perm_Dc(cfg, R, P, disp):
 
 
 def perm_M_estimates(cfg, P, F):
-    """M = dP_ext L_0/(2 |u_F|) from (bb) the steady thickness change L_0 - L_ss, (prof) the
+    """M = dP_ext L_ss/(2 |u_F|) from (bb) the steady thickness change L_0 - L_ss, (prof) the
     steady-profile parabola c = u_F/L_0 and (trace) the fitted asymptote u_F(inf).  dP_ext is
     the MEASURED piston difference (block-bootstrap CI) when the flux loader has it, else the
-    applied one; every CI combines the relative half-widths in quadrature.  L_0 (the thickness
-    at the onset, the linearisation state) is the primary L; the L_ss variants are stored."""
+    applied one; every CI combines the relative half-widths in quadrature.  L_ss (the steady
+    compressed thickness, the state the modulus describes) is the primary L (2026-10-02; L_0
+    before); the L_0 variants are stored as M_L0.  Falls back to L_0 when L_ss is missing."""
     flux = P.get('flux') or {}
     if 'dP_meas' in flux:
         dP, dP_h, dP_src = flux['dP_meas'], 0.5 * (flux['dP_meas_hi'] - flux['dP_meas_lo']), 'measured'
@@ -4811,18 +4818,21 @@ def perm_M_estimates(cfg, P, F):
     if not dP > 0:
         return None
     L0 = F['L0']
-    out = dict(dP=float(dP), dP_h=float(dP_h), dP_src=dP_src, L0=L0, L_ss=F.get('L_ss', np.nan))
+    L_ss = F.get('L_ss', np.nan)
+    Lm = float(L_ss) if np.isfinite(L_ss) else float(L0)              # the L in M = dP L/(2|u_F|)
+    out = dict(dP=float(dP), dP_h=float(dP_h), dP_src=dP_src, L0=L0, L_ss=L_ss, L=Lm,
+               L_src=('L_ss' if np.isfinite(L_ss) else 'L_0'))
     rdp = dP_h / dP
 
     def _m(uF, uF_h, tag, how):
         if not (np.isfinite(uF) and uF != 0):
             return None
-        M = dP * L0 / (2.0 * abs(uF))
+        M = dP * Lm / (2.0 * abs(uF))
         rel = np.sqrt((uF_h / abs(uF)) ** 2 + rdp ** 2) if np.isfinite(uF_h) else rdp
         d = dict(M=float(M), lo=float(M * (1 - rel)), hi=float(M * (1 + rel)), uF=float(uF), uF_h=float(uF_h),
                  eps=float(abs(uF) / L0), how=how)
-        if np.isfinite(out['L_ss']):
-            d['M_Lss'] = float(M * out['L_ss'] / L0)
+        if np.isfinite(L_ss):
+            d['M_L0'] = float(M * L0 / Lm)
         return d
 
     if np.isfinite(F.get('L_ss', np.nan)):
@@ -4882,12 +4892,12 @@ def add_perm_displacement(cfg, R, P, verbose=True):
     Mp = perm_M_estimates(cfg, P, F)
     P['M_perm'] = Mp
     if Mp:
-        say(f"  M = dP_ext L_0/(2 |u_F|)  with dP_ext = {Mp['dP']:.4f} ({Mp['dP_src']}), L_0 = {Mp['L0']:.2f}:")
+        say(f"  M = dP_ext L_ss/(2 |u_F|)  with dP_ext = {Mp['dP']:.4f} ({Mp['dP_src']}), L_ss = {Mp['L']:.2f} ({Mp['L_src']}; L_0 = {Mp['L0']:.2f}):")
         for key in ('prof', 'bb', 'trace'):
             v = Mp.get(key)
             if v:
                 say(f"    {key:5s}{' *' if key == Mp.get('primary') else '  '} M = {v['M']:.4f} [{v['lo']:.4f}, {v['hi']:.4f}]  (u_F = {v['uF']:+.2f} sigma, eps_F = {v['eps']:.4f}"
-                    + (f"; x L_ss/L_0 -> {v['M_Lss']:.4f}" if 'M_Lss' in v else '') + f")  {v['how']}")
+                    + (f"; with L_0 instead -> {v['M_L0']:.4f}" if 'M_L0' in v else '') + f")  {v['how']}")
         Mref = Mp.get(Mp['primary']) if Mp.get('primary') else None
         if Mref:
             K = {'profile': dict(k=F['Dc'] / Mref['M'], lo=F['Dc'] / Mref['hi'], hi=F['Dc'] / Mref['lo'])}
@@ -4997,7 +5007,7 @@ def fig_perm_Dc(cfg, R, P):
 
 
 def fig_perm_M(cfg, R, P):
-    """Figure 13: M = dP_ext L_0/(2 |u_F|) -- one point per reading of the feed-face
+    """Figure 13: M = dP_ext L_ss/(2 |u_F|) -- one point per reading of the feed-face
     displacement (steady-profile parabola, thickness change, trace asymptote), with CIs;
     the primary (PERM_M_PRIMARY) is marked, and the caption below the axes says why the
     bounding-box readings differ from the profile."""
@@ -5025,11 +5035,13 @@ def fig_perm_M(cfg, R, P):
     ax.set_ylabel(r'$M$  (LJ units)')
     ax.set_xlim(-0.6, len(show) - 0.4)
     ax.grid(axis='y', alpha=0.3)
-    lss = (rf", $L_{{ss}}={sig(Mp['L_ss'])}\,\sigma$ (steady; with it every $M$ is $\times{Mp['L_ss'] / Mp['L0']:.3f}$)"
-           if np.isfinite(Mp.get('L_ss', np.nan)) else '')
-    ax.set_title(r'Longitudinal modulus from the permeation drive:  $M = \Delta P_{\mathrm{ext}}\,L_0\,/\,(2\,|u_F|)$'
-                 + '\n' + rf"$\Delta P_{{\mathrm{{ext}}}}={sig(Mp['dP'])}$ ({Mp['dP_src']}), "
-                 rf"$L_0={sig(Mp['L0'])}\,\sigma$ (onset)" + lss + f'\n{cfg.sim_name}', fontsize=12)
+    if np.isfinite(Mp.get('L_ss', np.nan)):
+        lline = (rf"$L_{{ss}}={sig(Mp['L_ss'])}\,\sigma$ (steady), $L_0={sig(Mp['L0'])}\,\sigma$ (onset; "
+                 rf"with $L_0$ instead every $M$ is $\times{Mp['L0'] / Mp['L_ss']:.3f}$)")
+    else:
+        lline = rf"$L_0={sig(Mp['L0'])}\,\sigma$ (onset; no steady window, used in place of $L_{{ss}}$)"
+    ax.set_title(r'Longitudinal modulus from the permeation drive:  $M = \Delta P_{\mathrm{ext}}\,L_{ss}\,/\,(2\,|u_F|)$'
+                 + '\n' + rf"$\Delta P_{{\mathrm{{ext}}}}={sig(Mp['dP'])}$ ({Mp['dP_src']}), " + lline + f'\n{cfg.sim_name}', fontsize=12)
     smart_legend(ax, fontsize=11)
     # ---- caption: why the two families of u_F differ (so that the choice of primary is not forgotten) ----
     if 'prof' in Mp and 'bb' in Mp:
@@ -5178,7 +5190,7 @@ def print_perm_summary(cfg, R, P):
         print(f"  D_c (profile fit) = {F2['Dc']:.4e} sigma^2/tau (R^2 {F2['R2']:.3f}; production {F2['n_tau']:.2f} tau_1)"
               + (f";  D_c (thickness trace) = {T['Dc']:.4e} +/- {T['Dc_se']:.1e} (R^2 {T['R2']:.3f})" if T else ''))
     if Mp:
-        print('  M = dP L_0/(2|u_F|): ' + '  '.join(f"{k}{'*' if k == Mp.get('primary') else ''}: {v['M']:.4f} [{v['lo']:.4f}, {v['hi']:.4f}]"
+        print('  M = dP L_ss/(2|u_F|): ' + '  '.join(f"{k}{'*' if k == Mp.get('primary') else ''}: {v['M']:.4f} [{v['lo']:.4f}, {v['hi']:.4f}]"
                                                  for k, v in Mp.items() if isinstance(v, dict)) + '   (* = primary)')
     K = P.get('kappa_Dc')
     if K:
