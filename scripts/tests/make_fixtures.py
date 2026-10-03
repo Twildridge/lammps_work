@@ -506,8 +506,11 @@ def six_plate_bulk(root, levels=('0.05', '0.10')):
             Lh = planes_t[-1][a + 'hi'] - planes_t[-1][a + 'lo'] - 2 * B_CONTACT
             zeta = (zc - lo) / Lh
             disp = []
+            lam = 4 * np.pi ** 2 * B_DC / Lh ** 2
             for j in range(len(hs)):
-                u = np.where(g, 0.15 * np.sin(2 * np.pi * zeta) * (np.exp(-4 * np.pi ** 2 * B_DC * (hs[j] - t_hold) * B_DT / Lh ** 2) - 1.0), 0.0)
+                # block average over the output interval ending at hs[j], as the deck's ave/chunk writes it
+                tw = (np.linspace(max(hs[j] - (hs[1] - hs[0]), t_hold), hs[j], 41) - t_hold) * B_DT
+                u = np.where(g, 0.15 * np.sin(2 * np.pi * zeta) * (np.mean(np.exp(-lam * tw)) - 1.0), 0.0)
                 disp.append(np.column_stack([np.where(g, 1500, 0), u + np.where(g, rng.normal(0, 0.001, len(zc)), 0.0)]))
             _b_chunk(dd / f'{_b_name("disp", a)}_{st}.dat', 'avg_disp', hs, zc, disp, [f'v_u{a}_poly'])
         write_traj(r / 'traj_files' / f'traj_stress_{st}.lammpstrj', hs[:2], {4: zlo[-1], 5: B_ZFEED, 6: B_ZPERM, 7: zhi[-1]})

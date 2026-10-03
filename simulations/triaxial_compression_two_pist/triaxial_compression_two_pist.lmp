@@ -110,6 +110,10 @@ variable compressions_list index "STALE-run_lammps.sh--no-list-passed--running-s
 variable nsteps_comp equal 500000         # drive safety cap
 
 # ---- AUTO-SIZED measurement HOLD (copied from triaxial_compression.lmp) ----
+# hold = n_tau_hold * L^2/(pi^2 Dc_est).  The held slab drains to BOTH plates and relaxes as
+# tau_1 = L^2/(4 pi^2 D_c), so Dc_est = 0.17 in this formula sizes the hold for D_c = 0.0425.
+# Fitted D_c (run 7, 2026-10-03): 0.053 / 0.046 / 0.044 / 0.030 / 0.016 / 0.004 at
+# eps = 0.10 / 0.15 / 0.20 / 0.3 / 0.4 / 0.5 -> 5.5 tau_1 or more up to 0.20, short from 0.3 up.
 variable Dc_est      equal 0.17
 variable n_tau_hold  equal 5.5
 variable hold_min    equal 500000

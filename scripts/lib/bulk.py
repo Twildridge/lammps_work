@@ -1493,15 +1493,16 @@ def _cube_design(cfg, Fa, Dc, t, zh=None, decay_only=False):
     the longitudinal mode sin(2 l pi zeta) and s a distinct transverse rate m^2/L_b^2 + n^2/L_c^2
     (m, n <= DC_N_T); lambda = 4 pi^2 D_c (l^2/L_a^2 + s).  Hold-referenced (u = 0 at the hold
     onset), the time factor is exp(-lambda t) - 1; decay_only gives exp(-lambda t) (the
-    transient itself).  The transverse cos modes average over the core column to constants,
-    so every (l, s) pair is one free amplitude."""
+    transient itself).  The exponential is averaged over the ave/chunk window Fa['W'] like the
+    block-averaged snapshots (tri.window_decay, 2026-10-03).  The transverse cos modes average
+    over the core column to constants, so every (l, s) pair is one free amplitude."""
     zf = (Fa['zf'] if zh is None else np.asarray(zh, float))[:, None]
     cols = []
     for l in range(1, cfg.DC_N_MODES + 1):
         shape = np.sin(2.0 * np.pi * l * zf)
         for sv in Fa['s_vals']:
             lam = 4.0 * np.pi ** 2 * Dc * (l ** 2 / Fa['L'] ** 2 + sv)
-            dec = np.exp(-lam * t)
+            dec = float(tri.window_decay(lam, t, Fa.get('W', 0.0)))
             cols.append(shape * (dec if decay_only else dec - 1.0))
     return np.hstack(cols)
 
@@ -1534,7 +1535,8 @@ def fit_Dc_cube(cfg, R, L):
         Lhat[a] = Lg
         F_ax[a] = dict(L=Lg, DL=DL, DL_pist=DL_pist, DL_sup=DL_sup, f_sup=float(DL_sup / DL), gap=gap, z_sup=z_sup,
                        z_pist=z_pist, zeta=(d['z'] - (z_sup + gap)) / Lg, uhat=d['uz'] / Lg, ts=d['ts'],
-                       t_lj=(d['ts'] - d['t_hold']) * cfg.dt_lj, Nc=d['Nc'])
+                       t_lj=(d['ts'] - d['t_hold']) * cfg.dt_lj, Nc=d['Nc'],
+                       W=float(np.min(np.diff(d['ts']))) * cfg.dt_lj if (cfg.DC_WINDOW_AVG and len(d['ts']) > 1) else 0.0)
     if not F_ax:
         return None
     for a, Fa in F_ax.items():

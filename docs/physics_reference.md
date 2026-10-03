@@ -77,6 +77,16 @@ load-control shapes bent to vanish at both plates, ~5× too high a D_c; permeati
 With the corrected modes, comp_1 at ε = 0.1 gives D_c = 0.043 and κ = D_c/M = 0.13; perm_2 gives D_c ≈ 0.2, M ≈ 0.48
 and κ = D_c/M ≈ 0.4 against the Darcy κ = Q L/(A ΔP) = 0.29 — the two-piston consistency test now agrees to a factor 2–3.
 
+**The two fits share one convention (checked 2026-10-03).** L is the full thickness in both and D_c = κM in both; the
+4 between τ₁ = L²/(4π²D_c) (held slab) and τ₁ = L²/(π²D_c) (permeation) is the drainage path, L/2 against L.
+`scripts/tests/dc_convention_test.py` integrates the equation above by finite differences with each experiment's
+physical boundary conditions (no mode series) at one D_c and runs both fitters: `fit_Dc` 1.04×, `fit_perm_Dc` 0.99–1.04×
+(profile) and 1.01× (trace) the true value. The compression fit had been ~15 % low because the deck's block-averaged
+snapshots were read as instantaneous (`DC_WINDOW_AVG`, now on). Current numbers: run 7 at ε = 0.10 D_c = 0.053,
+κ = D_c/M = 0.134; perm_3 D_c = 0.151 (profile) / 0.167 (trace), M = 0.416, κ = D_c/M = 0.36 / 0.40; Darcy κ = 0.231
+[0.196, 0.266], i.e. κ_Darcy·M = 0.096. The two transients bracket the Darcy value (0.55× and 1.6–1.7×); that gap is
+not a convention factor.
+
 
 ## NPT-piston reservoirs (two-piston sequence)
 

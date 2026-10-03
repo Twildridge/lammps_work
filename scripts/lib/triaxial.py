@@ -257,9 +257,16 @@ class Config:
     DC_FRAC_EARLY: float = 1.0
     DC_TRIM_BINS: int = 2
     DC_FREE_AMPS: bool = True
+    DC_WINDOW_AVG: bool = True            # fit_Dc averages each mode's decay over the ave/chunk window, as the permeation fit
+                                          # does (PERM_DC_WINDOW_AVG): the deck block-averages u_z over the whole nfreq
+                                          # interval (~1/20 of the hold) and tags the snapshot with the window END.  Read as
+                                          # instantaneous, the snapshots returned 0.85x (window = 0.3 tau_1) to 0.74x
+                                          # (0.6 tau_1) the true D_c (tests/dc_convention_test.py, 2026-10-03)
     DC_BOUNDS: tuple = (1e-6, 1.0)
     DC_SLOW_REF: float = 0.17             # the deck's hold-sizing constant Dc_est, in the deck's tau_1 = L^2/(pi^2 Dc_est)
-                                          # convention (= 0.17/4 in the held-slab convention of fit_Dc, 2026-09-28)
+                                          # formula.  The held slab relaxes as L^2/(4 pi^2 D_c), so the hold the deck
+                                          # prescribes is that of D_c = 0.17/4 = 0.0425 (2026-09-28; the factor 4 is the
+                                          # held slab's L/2 drainage path, not a second D_c convention -- 2026-10-03)
     DC_TARGET_RESID: float = 0.01
     # ---- Expanse ---------------------------------------------------------
     EXPANSE_HOST: str = 'login.expanse.sdsc.edu'
@@ -1313,6 +1320,26 @@ def eps_axis_label(levels):
     return EPS_LABEL[srcs.pop()] if len(srcs) == 1 else r'strain  $\varepsilon$  (mixed sources: ' + ', '.join(sorted(srcs)) + ')'
 
 
+# ---------------------------------------------------------------------------
+#  D_c: one equation, two boundary-value problems (2026-10-03)
+#
+#  Both consolidation fits -- fit_Dc here (compression hold) and fit_perm_Dc (permeation,
+#  section 12) -- solve  du_z/dt = q(t) + D_c d2u_z/dz2,  D_c = kappa M, with L the FULL
+#  thickness between the two faces (never a half-thickness).  The strain eps = -du_z/dz
+#  diffuses with D_c in both; only its boundary conditions differ:
+#    held slab   (both faces pinned, same bath pressure): eps(0) = eps(L), eps'(0) = eps'(L)
+#                -> cos/sin(2 m pi z/L) at 4 m^2 pi^2 D_c/L^2,  tau_1 = L^2/(4 pi^2 D_c)
+#    permeation  (support carries dP, feed face free):    eps(0) = dP/M,  eps(L) = 0
+#                -> sin(k pi z/L)       at   k^2 pi^2 D_c/L^2,  tau_1 = L^2/(  pi^2 D_c)
+#  The 4 between the two tau_1 is the drainage path (L/2 to the nearer plate against L
+#  across the membrane), so equal D_c means the hold relaxes 4x FASTER than the permeation
+#  transient of the same slab.  A prescribed-FLUX membrane (eps'(0) fixed instead of eps(0))
+#  would have tau_1 = 4 L^2/(pi^2 D_c); the pistons prescribe the pressure, not the flux.
+#  tests/dc_convention_test.py integrates the equation by finite differences with each
+#  problem's physical boundary conditions (no mode series) and runs BOTH fitters on the
+#  result: each returns the solver's D_c within 4 % (the residue is the Eulerian binning).
+#  So a difference between the two fitted D_c on real runs is not a convention factor.
+# ---------------------------------------------------------------------------
 def _w_modes(zh, kk):
     """Displacement modes of a slab HELD between two drained plates at the same bath pressure
     (2026-09-28).  With both faces pinned (u''(0) = u''(1) = -q/D_c) and the pore pressure equal at
@@ -1327,6 +1354,17 @@ def _w_modes(zh, kk):
     return np.hstack([np.sin(np.pi * zh * kk[None, :]), np.cos(np.pi * zh * kk[None, :]) - 1.0])
 
 
+def window_decay(lam, t, W):
+    """exp(-lam t) averaged over the ave/chunk window [t - W, t] (clipped at t = 0, the hold
+    onset) -- what a block-averaged snapshot tagged with its window END holds; W = 0 (or t = 0):
+    the instantaneous value.  lam: array of rates, t: scalar."""
+    lam = np.asarray(lam, float)
+    w = min(W, t)
+    if not w > 0:
+        return np.exp(-lam * t)
+    return (np.exp(-lam * (t - w)) - np.exp(-lam * t)) / (lam * w)
+
+
 def fit_Dc(cfg, R, disp):
     """Consolidation fit of D_c to u_z/L on the polymer domain during a hold between two
     drained plates: modes sin(2 m pi zeta), cos(2 m pi zeta) - 1 at 4 m^2 pi^2 D_c/L^2, free
@@ -1338,7 +1376,11 @@ def fit_Dc(cfg, R, disp):
     drive since).  Only the affine end state / plotted IC depend on f_sup: the fit
     itself models the hold-referenced u_dat with both faces pinned, so the odd-mode
     (centre-symmetric) expansion is the same in both cases -- the symmetric drive
-    just makes the hold-onset state actually symmetric about the gel centre."""
+    just makes the hold-onset state actually symmetric about the gel centre.
+
+    The snapshots are ave/chunk block averages over the whole output interval, so each
+    mode's decay is averaged over that window (DC_WINDOW_AVG, 2026-10-03); F['W'] is the
+    window in LJ time and the model curves (F['T'], F['u_model']) are averaged the same way."""
     if disp is None or not np.isfinite(R['z_support']):
         return None
     ts, z, Nc = disp['ts'], disp['z'], disp['Nc']
@@ -1373,10 +1415,13 @@ def fit_Dc(cfg, R, disp):
         print('  NOTE: DC_FREE_AMPS=False (Terzaghi load-control amplitudes) has no meaning for the held-slab '
               'modes (2026-09-28); fitting free amplitudes')
     kk = 2.0 * np.arange(1, cfg.DC_N_MODES + 1)            # even wavenumbers: m = 1..N, 2N amplitudes (sin + cos blocks)
+    W = float(np.min(np.diff(ts))) * cfg.dt_lj if (cfg.DC_WINDOW_AVG and len(ts) > 1) else 0.0
+
+    def decay(Dc, t):                                      # per mode, window-averaged like the data
+        return window_decay((np.pi * kk) ** 2 * Dc / L ** 2, t, W)
 
     def design(Dc, t):
-        dec = np.exp(-(np.pi * kk) ** 2 * Dc * t / L ** 2)
-        return _w_modes(zf, kk) * (np.tile(dec, 2) - 1.0)[None, :]
+        return _w_modes(zf, kk) * (np.tile(decay(Dc, t), 2) - 1.0)[None, :]
 
     def amps(Dc):
         X = np.vstack([design(Dc, t_lj[i]) for i in early])
@@ -1394,9 +1439,8 @@ def fit_Dc(cfg, R, disp):
     ss_t = np.sum((y_all - np.mean(y_all)) ** 2)
     R2 = float(1.0 - np.sum((y_all - p_all) ** 2) / ss_t) if ss_t > 1e-30 else np.nan
 
-    def T(zh, t):
-        dec = np.exp(-(np.pi * kk) ** 2 * Dc * t / L ** 2)
-        return _w_modes(zh, kk) @ (A * np.tile(dec, 2))
+    def T(zh, t):                                          # window-averaged like the snapshots; instantaneous at t = 0 (the IC)
+        return _w_modes(zh, kk) @ (A * np.tile(decay(Dc, t), 2))
 
     # absolute u_z/L (referenced to the pre-drive state): affine end state
     # (DL/L)(f_sup - zeta) -- the support face moved UP by DL_sup, the piston face
@@ -1408,7 +1452,7 @@ def fit_Dc(cfg, R, disp):
     return dict(Dc=Dc, A=A, beta=beta, R2=R2, L=L, DL=DL, DL_pist=DL_pist, DL_sup=DL_sup, f_sup=f_sup,
                 gap=gap, z_perm=z_perm, z_feed=z_feed, z_sup=z_sup, z_pist=disp['z_pist_held'],
                 zeta=zeta, idx=idx, zf=zf, uhat=uhat, early=early, t_lj=t_lj, ts=ts,
-                T=T, u_model=u_model, u_IC=u_IC, kk=kk, hold_T=hold_T,
+                T=T, u_model=u_model, u_IC=u_IC, kk=kk, hold_T=hold_T, W=W,
                 hold_check=hold_adequacy(cfg, L, hold_T, Dc))
 
 
@@ -1429,8 +1473,8 @@ def hold_adequacy(cfg, L, hold_T, Dc_fit):
     """Was the hold long enough?  'fit': tau_1 = L^2/(4 pi^2 D_c) for the fitted D_c (held
     slab, first mode sin(2 pi zeta); 2026-09-28).  'slow': the DECK's own sizing formula,
     L^2/(pi^2 Dc_est) with Dc_est = DC_SLOW_REF -- the hold it actually prescribed (its
-    Dc_est = 0.17 in that convention is ~0.04 in the held-slab one: right at eps ~ 0.1, short
-    at higher strain where the fitted D_c drops faster than the deck's (1-eps)^2 sizing).
+    Dc_est = 0.17 in that formula is the hold of D_c = 0.0425 in the held slab: adequate up to
+    eps ~ 0.2, short at higher strain where the fitted D_c drops faster than the deck's (1-eps)^2 sizing).
     residual = mean excess stress over the last plateau_frac."""
     out = {}
     for tag, Dx, fac in (('fit', Dc_fit, 4.0), ('slow', cfg.DC_SLOW_REF, 1.0)):
@@ -3900,7 +3944,7 @@ def fig_Dc_sweep(cfg, R, levels):
                     annotation_clip=True)
     ax.margins(x=0.12, y=0.15)
     ax.axhline(cfg.DC_SLOW_REF / 4.0, color='0.4', ls=':', lw=1.5,
-               label=f"deck hold-sizing $D_c$ = {sig(cfg.DC_SLOW_REF / 4)}  (= {sig(cfg.DC_SLOW_REF)} in the deck's $L^2/\\pi^2 D_c$ convention)")
+               label=f"deck hold-sizing $D_c$ = {sig(cfg.DC_SLOW_REF / 4)}  ($Dc_{{est}}$ = {sig(cfg.DC_SLOW_REF)} in the deck's $L^2/\\pi^2 D_c$ formula)")
     ax.set_xlabel(r'applied strain  $\varepsilon$')
     ax.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
     ax.set_title(r'(a) $D_c$ vs applied strain', fontsize=15)
@@ -3978,9 +4022,10 @@ def print_hold_check(cfg, levels):
                   f"predicted unrelaxed excess (slow D_c) = {F['hold_check']['slow']['avg']:+.1%}"
                   + ('   [both ABSOLUTE here: no piston_force_avg_ref, so the increment ratio is not like-for-like]' if mixed else ''))
     print(f'  (triaxial_compression.lmp sizes each hold as n_tau_hold * L^2/(pi^2 Dc_est) from the live compressed '
-          f'BB thickness and Dc_est = {cfg.DC_SLOW_REF:.2f}; in the held-slab convention that is D_c = {cfg.DC_SLOW_REF / 4:.3f} -- '
-          f'right at eps ~ 0.1, but the fitted D_c falls with strain faster than the (1-eps)^2 sizing assumes, so the '
-          f'higher levels are held too short: compare the observed piston/network excess above.)')
+          f'BB thickness and Dc_est = {cfg.DC_SLOW_REF:.2f}; the held slab relaxes as L^2/(4 pi^2 D_c), so that is the hold of '
+          f'D_c = {cfg.DC_SLOW_REF / 4:.4f} -- adequate while the fitted D_c stays above it, but the fitted D_c falls with strain '
+          f'faster than the (1-eps)^2 sizing assumes, so the higher levels are held too short: compare the observed '
+          f'piston/network excess above.)')
 
 
 def _ref_thickness(R):
@@ -5114,7 +5159,8 @@ def fig_perm_permeability(cfg, R, P):
 #  the steady state).  The total stress is uniform, so the network stress at the support is -dP
 #  from t = 0+ while sigma' = 0 at the free face: the STRAIN eps = -du_z/dz obeys the diffusion
 #  equation with DIRICHLET ends, eps(z^P) = dP/M, eps(z^F) = 0, and relaxes with
-#      tau_1 = L^2 / (pi^2 D_c)     (the same first-mode time as the two-sided compression fit).
+#      tau_1 = L^2 / (pi^2 D_c)     (4x the held slab's L^2/(4 pi^2 D_c) of the compression fit for the
+#                                    same D_c: see "D_c: one equation, two boundary-value problems" above fit_Dc).
 #  With zeta = (z - z^P)/L and mu_k = k pi the displacement modes are phi_k = 1 - cos(mu_k zeta)
 #  (u(0) = 0 and u'(1) = 0 built in), decaying as exp(-mu_k^2 D_c t/L^2); the steady state is
 #      u_ss(zeta) = -(dP L / 2M) [zeta^2 - 2 zeta],   u_F = u_ss(1) = -dP L/(2M),
