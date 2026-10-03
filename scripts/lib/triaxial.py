@@ -800,7 +800,7 @@ def _component_stacks(cfg, comp, lvl=None, ref=False):
     return dict(ts=np.array([x[0] for x in sp[:n]], float), bins=sp[0][1], p=P, s=S, t=P + S)
 
 
-def reservoir_mask(z, cfg, side, z_pist, z_gel, relax=True):
+def reservoir_mask(z, cfg, side, z_pist, z_gel, relax=True, gap_bins=None):
     """Bins of ONE solvent reservoir usable as a pore-pressure baseline at ONE instant
     (two-piston runs).  side='feed': between the gel top z_gel (+ res_gel_gap_bins
     bins) and the feed-piston plane z_pist; side='perm': between the permeate-piston
@@ -812,7 +812,7 @@ def reservoir_mask(z, cfg, side, z_pist, z_gel, relax=True):
     reservoir late in a permeation run); an empty result means 'no usable bin'."""
     z = np.asarray(z, float)
     h = 0.5 * cfg.binWidth
-    gap = cfg.res_gel_gap_bins * cfg.binWidth
+    gap = (cfg.res_gel_gap_bins if gap_bins is None else gap_bins) * cfg.binWidth
     margins = (cfg.res_wall_margin, 0.5 * cfg.res_wall_margin) if relax else (cfg.res_wall_margin,)
     for margin in margins:
         if side == 'feed':
@@ -844,14 +844,30 @@ def baseline_masks_at(z, cfg, R, ts, z_feed_at=None, z_gel_hi=None):
     rebuild the feed-reservoir window at every snapshot from the MEASURED feed-piston
     plane z_feed_at(t) (the wet pistons drift as solvent is expelled during a
     compression hold, and travel during a permeation run); the gel top is the larger
-    of the reference and the level's own.  One-piston runs tile the fixed window.
-    A snapshot whose window would be empty falls back to the reference window."""
+    of the reference and the level's own (scalar z_gel_hi), or the snapshot's OWN gel top
+    (z_gel_hi an array, one per snapshot: a permeation run, where the feed face and the
+    feed piston both come down below the reference gel top -- with the larger-of rule the
+    window was empty and fell back to the reference window, by then in the vacuum above
+    the piston: perm_3 read a feed baseline of 0; 2026-10-03).  One-piston runs tile the
+    fixed window.  A snapshot whose window would be empty falls back to the reference window."""
     z = np.asarray(z, float)
     ts = np.asarray(ts, float)
     if np.isfinite(R.get('z_feed', np.nan)):
-        zg = R['z_gel_hi'] if z_gel_hi is None else max(float(z_gel_hi), R['z_gel_hi'])
+        if z_gel_hi is None:
+            zg = np.full(len(ts), R['z_gel_hi'])
+        elif np.ndim(z_gel_hi) == 0:
+            zg = np.full(len(ts), max(float(z_gel_hi), R['z_gel_hi']))
+        else:
+            zg = np.asarray(z_gel_hi, float)
         zf = (lambda t: R['z_feed']) if z_feed_at is None else z_feed_at
-        rows = [reservoir_mask(z, cfg, 'feed', zf(t), zg) for t in ts]
+        rows = [reservoir_mask(z, cfg, 'feed', zf(t), zg[i]) for i, t in enumerate(ts)]
+        if z_gel_hi is not None and np.ndim(z_gel_hi) > 0:
+            # a nearly drained feed reservoir (late in a permeation run): close the gel-edge gap bin by bin
+            for i, t in enumerate(ts):
+                for gb in range(cfg.res_gel_gap_bins - 1, -1, -1):
+                    if rows[i].any():
+                        break
+                    rows[i] = reservoir_mask(z, cfg, 'feed', zf(t), zg[i], gap_bins=gb)
         return np.array([r if r.any() else R['bw'] for r in rows], bool)
     return np.tile(np.asarray(R['bw'], bool), (len(ts), 1))
 
@@ -4727,8 +4743,13 @@ def load_permeation(cfg, R, verbose=True):
     P['plates'].update({k: v for k, v in plate_tracks(R, dict(wetz=P['wetz'], piston_pos=None, support_pos=None)).items()
                         if k in ('feed piston', 'permeate piston')})
     say('plates over the run (start -> end): ' + fmt_plates(P['plates']))
-    bw = baseline_masks_at(z, cfg, R, ts, P['wetz']['feed_at'], P['z_mem_hi'])
+    # the feed face comes down with the piston: each snapshot's own gel top (its polymer-stress edge)
+    top = np.array([float(z[np.abs(q) > cfg.gel_thresh * float(np.nanmax(np.abs(q)))].max()) for q in zz['p']])
+    bw = baseline_masks_at(z, cfg, R, ts, P['wetz']['feed_at'], top)
     P['bw'] = bw
+    off = [int(t) for i, t in enumerate(ts) if z[bw[i]].max() + 0.5 * cfg.binWidth > P['wetz']['feed_at'](t)]
+    if off:
+        say(f'  WARNING: no usable feed-reservoir bin at step(s) {off} -- the pore baseline window there lies beyond the feed piston')
     bw_perm = None
     if np.isfinite(R.get('z_perm', np.nan)):
         z_bot = min(P['z_mem_lo'], R['z_gel_lo'])

@@ -185,6 +185,12 @@ The shear counterparts of `triaxial_compression_{single,sweep}.ipynb`, same **Co
 
 ---
 
+**`cross_deck_comparison.ipynb`** + **`lib/compare.py`** (2026-10-03)
+
+Figures built from **more than one deck's run**. One Config per deck (copied from that deck's own notebook) goes into `CFG`; `cmp.load_deck` loads each run with its own library (`lib/triaxial.py` for the two-piston compression and permeation decks, `lib/shear.py` for `shear_slab`) into `DECKS[name] = dict(kind, cfg, R, levels | P)`; comparison functions live in `lib/compare.py` and take the decks they need. Plots go to `flow_data_local/plots/comparison/<NAME>`.
+
+First comparison, `cmp.phi_dependence`: **D_c(φ_s) and κ(φ_s)**. The compression levels are uniform states: they give σ′(φ_s), the current-frame tangent modulus `M_cur = φ_p dσ′/dφ_p`, and per level `κ = D_c/M_cur`. The steady permeation membrane spans a range of φ_s at one flux: locally `D_c = q φ_p/(dφ_s/dz)` (flux and profile slope only) and `κ = D_c/M_cur`. `PHI_KIND` picks the volume fraction (`'cal'` λ-calibrated Voronoi, `'vor'`, `'mf'`). Run 7 + perm_3: the two decks agree on σ′(φ_s) to ~6 %, but at the same φ_s the steady permeation D_c (≈ 0.09) is ~2× the hold-relaxation D_c (≈ 0.05).
+
 ### 7c. Running Python scripts manually on a cluster
 
 You may want to rerun post-processing after a job without relaunching LAMMPS — for example, after updating an analysis script, or to run `cavity_widom.py` which is not called automatically on Bridges-2. **Note:** `cavity_widom.py`'s excess-chemical-potential workflow (including the `--p-ext`/`--exclusion-buffer`/`--piston-eps` flags below) was built specifically for the now-removed `slab_with_flow`; it hasn't been ported to the triaxial decks (two-piston, or the archived one-piston ones), which have no equivalent postprocess.sh hook for it yet. `plot_stress_profiles.py` and `plot_piston_data.py` further down are unaffected — those work for the current folders.
