@@ -206,7 +206,12 @@ class Config:
                                           # the top bins, which empty as the face comes down, then reach zeta -> 1.
                                           # 'eulerian': the bin centre, zeta = (z - z^P)/L_0 (old behaviour)
     PERM_DC_N_MODES: int = 0              # modes of the permeation profile fit (0 -> DC_N_MODES)
-    PERM_M_PRIMARY: str = 'prof'          # the M that feeds kappa = D_c/M and the q(t) check: 'prof' (steady-profile
+    PERM_M_PRIMARY: str = 'lag'           # the M that feeds kappa = D_c/M and the q(t) check: 'lag' (default since
+                                          # 2026-10-03: the steady frames paired per atom with the zero-flux reference,
+                                          # u_F = u(top material bin) - u(bottom material bin) -- the rigid drop cancels
+                                          # and the contact layer's compaction counts; it agrees with the compression sweep
+                                          # to 8 % on perm_3 where the parabola was 20 % stiff; needs local traj_ref +
+                                          # traj_stress, else falls back to 'prof') | 'prof' (steady-profile
                                           # parabola, the default since 2026-09-28 pm: it reads the deformation of the
                                           # network alone) | 'bb' (bounding-box thickness change: its ends are the extreme
                                           # beads, which carry ~2 sigma of the rigid drop / tail into |u_F| in perm_2) | 'trace'
@@ -4247,7 +4252,7 @@ def perm_vs_compression(cfg, R, P, verbose=True):
         return None
     rec = load_M_record(cfg)
     out = dict(rec=rec, dP=Mp['dP'], L0=F['L0'], z_P=F['z_P'], Z_P=F['Z_P'], Z_F=F['Z_F'], M_perm=Mp)
-    lag = perm_lagrangian_profile(cfg, R, P)
+    lag = P.get('lag') if P.get('lag') is not None else perm_lagrangian_profile(cfg, R, P)
     out['lag'] = lag
     # ---- measured deformation of the network, rigid drop excluded ----
     #   (i) the fig-12 parabola: c L_0 (contact-layer u_0 subtracted, Eulerian bins)
@@ -4383,14 +4388,10 @@ def fig_perm_vs_compression(cfg, R, P):
     smart_legend(axB, fontsize=10)
     # ---- (c) ----
     bars = []
-    for k in ('prof', 'bb', 'trace'):
+    for k in ('lag', 'prof', 'bb', 'trace'):
         if k in Mp:
-            bars.append((f"permeation\n{k}" + (' (primary)' if k == Mp['primary'] else ''), Mp[k]['M'], Mp[k]['lo'], Mp[k]['hi'], WONG['blue']))
-    if np.isfinite(C.get('uF_lag', np.nan)):
-        Ml = Mp['dP'] * Mp['L'] / (2 * abs(C['uF_lag']))
-        h = C.get('uF_lag_half', np.nan)
-        rel = h / abs(C['uF_lag']) if np.isfinite(h) else 0.0
-        bars.append(('permeation\nLagrangian', Ml, Ml * (1 - rel), Ml * (1 + rel), WONG['skyblue']))
+            bars.append((f"permeation\n{k}" + (' (primary)' if k == Mp['primary'] else ''), Mp[k]['M'], Mp[k]['lo'], Mp[k]['hi'],
+                         WONG['skyblue'] if k == 'lag' else WONG['blue']))
     if C.get('rec'):
         rec = C['rec']
         bars.append(('compression\nsmall-strain (net)', rec['M_small_net'], np.nan, np.nan, WONG['vermillion']))
@@ -5502,8 +5503,16 @@ def perm_M_estimates(cfg, P, F):
     T = F.get('trace')
     if T is not None:
         out['trace'] = _m(T['u_inf'], T['u_inf_se'] * _Z95, 'trace', 'thickness-trace asymptote u_F(inf), zero-IC series')
+    lag = P.get('lag')
+    if lag is not None and len(lag['idx']) >= 4:
+        i0, i1 = lag['idx'][0], lag['idx'][-1]
+        pf = lag['per_frame'][:, i1] - lag['per_frame'][:, i0]
+        h = float(stats.t.ppf(0.5 + cfg.ci_level / 2, len(pf) - 1) * pf.std(ddof=1) / np.sqrt(len(pf))) if len(pf) >= 2 else np.nan
+        out['lag'] = _m(float(lag['u'][i1] - lag['u'][i0]), h, 'lag',
+                        f"per-atom pairing of {lag['n_frames']} steady frame(s) with the zero-flux reference, binned by the reference Z: "
+                        f"u(Z = {lag['zc'][i1]:.0f}) - u(Z = {lag['zc'][i0]:.0f}) (rigid drop cancels, contact layer included)")
     out = {k: v for k, v in out.items() if v is not None}
-    order = [cfg.PERM_M_PRIMARY] + [k for k in ('prof', 'bb', 'trace') if k != cfg.PERM_M_PRIMARY]
+    order = [cfg.PERM_M_PRIMARY] + [k for k in ('lag', 'prof', 'bb', 'trace') if k != cfg.PERM_M_PRIMARY]
     out['primary'] = next((k for k in order if k in out), None)
     return out
 
@@ -5547,11 +5556,14 @@ def add_perm_displacement(cfg, R, P, verbose=True):
             f"tau_1 = {T['tau1']:.0f} tau = {T['tau1'] / cfg.dt_lj / 1e6:.2f}M steps")
     say(f"  steady profile: c = u_F/L_0 = {F['c']:.4f} [{F['c_lo']:.4f}, {F['c_hi']:.4f}] (parabola R^2 = {F['parab_R2']:.3f})"
         + (f";  L_ss = {F['L_ss']:.2f} sigma (dL = {F['L0'] - F['L_ss']:.2f}, eps_F = {(F['L0'] - F['L_ss']) / F['L0']:.4f})" if 'L_ss' in F else ''))
+    P['lag'] = perm_lagrangian_profile(cfg, R, P)             # per-atom steady profile (None without local trajectories)
+    if P['lag'] is None:
+        say('  NOTE: no local traj_ref / traj_stress -> no Lagrangian u_F; the parabola is the primary M')
     Mp = perm_M_estimates(cfg, P, F)
     P['M_perm'] = Mp
     if Mp:
         say(f"  M = dP_ext L_ss/(2 |u_F|)  with dP_ext = {Mp['dP']:.4f} ({Mp['dP_src']}), L_ss = {Mp['L']:.2f} ({Mp['L_src']}; L_0 = {Mp['L0']:.2f}):")
-        for key in ('prof', 'bb', 'trace'):
+        for key in ('lag', 'prof', 'bb', 'trace'):
             v = Mp.get(key)
             if v:
                 say(f"    {key:5s}{' *' if key == Mp.get('primary') else '  '} M = {v['M']:.4f} [{v['lo']:.4f}, {v['hi']:.4f}]  (u_F = {v['uF']:+.2f} sigma, eps_F = {v['eps']:.4f}"
@@ -5675,7 +5687,8 @@ def fig_perm_M(cfg, R, P):
         return None
     F = P.get('Dc') or {}
     prim = Mp.get('primary')
-    order = (('prof', 'steady profile' + '\n' + r'parabola $c\,\zeta(2-\zeta)$', WONG['vermillion'], 's'),
+    order = (('lag', 'per-atom (Lagrangian)' + '\n' + r'$u(Z^F_{\rm mat}) - u(Z^P_{\rm mat})$, zero-flux ref', WONG['reddishpurple'], '^'),
+             ('prof', 'steady profile' + '\n' + r'parabola $c\,\zeta(2-\zeta)$', WONG['vermillion'], 's'),
              ('bb', 'thickness change' + '\n' + r'$\Delta L = L_0 - L_{ss}$ (bounding box)', WONG['blue'], 'o'),
              ('trace', 'thickness trace' + '\n' + r'asymptote $u_F(\infty)$ (bounding box)', WONG['green'], 'D'))
     show = [o for o in order if o[0] in Mp]
@@ -5712,7 +5725,9 @@ def fig_perm_M(cfg, R, P):
                f"its bottom end is a tail bead that drops with the network onto the plate and its top end the extreme bead a few \u03c3 above the\n"
                f"face, so \u0394L_bb (u_F = {ub:+.1f} \u03c3) carries {abs(ub - up):.1f} \u03c3 of the drop / tail statistics into |u_F| and the bounding-box M "
                f"({'bb and trace' if 'trace' in Mp else 'bb'}) come out\n"
-               f"{dM:+.0f}% relative to the parabola.   Primary = {prim} (PERM_M_PRIMARY): it feeds \u03ba = D_c/M and the q(t) check of figure 14.")
+               f"{dM:+.0f}% relative to the parabola.   Primary = {prim} (PERM_M_PRIMARY): it feeds \u03ba = D_c/M and the q(t) check of figure 14."
+               + (f"\nThe per-atom (Lagrangian) reading pairs the steady frames with the zero-flux reference atom by atom, so the rigid drop cancels and the\n"
+                  f"contact layer's own compaction counts: u_F = {Mp['lag']['uF']:+.1f} \u03c3.  It is the one the compression sweep reproduces (figure 15)." if 'lag' in Mp else ''))
         fig.text(0.01, -0.02, cap, ha='left', va='top', fontsize=10, family='serif',
                  bbox=dict(boxstyle='round', fc='0.97', ec='0.75'))
     return _save(fig, cfg, 'perm_M')
