@@ -227,6 +227,20 @@ class Config:
                                           # least-squares fit of the first SS_FIT_NPTS levels (the linear regime);
                                           # the higher levels are NOT in the fit, so their stiffening shows as
                                           # departure from the line instead of a negative intercept
+    # ---- strain in the denominator of M, G and kappa (2026-10-03) -----------
+    M_STRAIN: str = 'disp'                # 'disp': the slope of the STEADY displacement profile u_z(Z) of the polymer
+                                          #   (plateau frames vs the eps = 0 reference, per atom, binned by the reference
+                                          #   position Z; u_z = u_0 - eps (Z - Z^P) exactly under uniform stress, and the
+                                          #   slope is blind to the ~0.02 of rigid travel -- the gel falling onto the
+                                          #   support -- that the applied strain counts; fit_disp_profile).  Falls back to
+                                          #   'rg' then 'applied' when the trajectories / disp_z_polymer_cum are missing.
+                                          # 'rg': the Rg thickness strain of strain_zz (plateau mean).
+                                          # 'applied': the piston-travel target (the pre-2026-10-03 behaviour).
+                                          # L['eps'] stays the applied level everywhere (identity, x axes of the D_c and
+                                          # kappa sweeps); L['eps_M'] / L['eps_M_src'] is what M, G and kappa divide by.
+    DISP_TRIM_BINS: int = 3               # populated bins dropped at each face before the line fit (the diffuse
+                                          # faces and the contact layers are not in the uniform-stress interior)
+    DISP_MAX_FRAMES: int = 0              # plateau frames paired with the reference (0 = all of them)
     # ---- D_c consolidation fit ------------------------------------------
     DC_N_MODES: int = 5
     DC_KMAX_IC: int = 199
@@ -1099,6 +1113,196 @@ def load_disp(cfg, R, lvl, halt_ts=None):
     return d
 
 
+# ---------------------------------------------------------------------------
+#  Steady displacement profile -> the network strain (2026-10-03)
+# ---------------------------------------------------------------------------
+# Under a uniform network stress sigma' (the drained plateau of a compression hold) the
+# polymer displacement from the eps = 0 reference is linear in the REFERENCE position,
+#   u_z(Z) = u_0 - eps (Z - Z^P),   eps = sigma'/M,
+# so the slope of u_z(Z) is the network strain itself, whatever rigid travel (the gel
+# falling the ~3 sigma onto the support, the piston closing on the diffuse face) the
+# applied strain counts.  The deck's disp_z_polymer is reset at every hold onset (the D_c
+# fit wants the relaxation alone), so the steady profile is built from the per-atom
+# trajectories: the plateau frames of traj_stress paired by atom id with the frames of
+# traj_ref, binned by the reference z (Lagrangian).  Runs since 2026-10-03 also write
+# disp_z_polymer_cum (displace/atom never reset after the reference, binned by CURRENT z),
+# the fallback when the trajectories are not local: there du/dz = -eps/(1 - eps).
+def traj_timesteps(traj):
+    """The timesteps a LAMMPS dump holds (one sequential pass, no parsing)."""
+    ts = []
+    with open(traj) as f:
+        line = f.readline()
+        while line:
+            if line.startswith('ITEM: TIMESTEP'):
+                ts.append(int(f.readline()))
+                f.readline(); n = int(f.readline())
+                for _ in range(5 + n):
+                    f.readline()
+            line = f.readline()
+    return ts
+
+
+def read_traj_id_z(traj, want_ts=None, types=psd.POLYMER_TYPES):
+    """{ts: (ids, z)} of the atoms of `types`, sorted by id, for the requested frames
+    (all frames when want_ts is None).  pandas-parsed per frame (~0.3 s per 300k atoms)."""
+    import pandas as pd
+    want = None if want_ts is None else {int(t) for t in np.atleast_1d(want_ts)}
+    out = {}
+    with open(traj) as f:
+        line = f.readline()
+        while line:
+            if line.startswith('ITEM: TIMESTEP'):
+                ts = int(f.readline()); f.readline(); n = int(f.readline()); f.readline()
+                for _ in range(3):
+                    f.readline()
+                cols = f.readline().split()[2:]
+                if want is not None and ts not in want:
+                    for _ in range(n):
+                        f.readline()
+                else:
+                    df = pd.read_csv(f, sep=r'\s+', header=None, names=cols, nrows=n, engine='c')
+                    df = df[df['type'].isin(types)].sort_values('id')
+                    out[ts] = (df['id'].to_numpy(), df['z'].to_numpy(float))
+            line = f.readline()
+    return out
+
+
+def load_ref_positions(cfg, R):
+    """Mean reference z of every polymer atom over the traj_ref frames -> dict(ids, z, ts, sd)
+    cached on R['zref']; None without the trajectory."""
+    if 'zref' in R:
+        return R['zref']
+    tr = cfg.traj('traj_ref')
+    if not tr.exists():
+        R['zref'] = None
+        return None
+    fr = read_traj_id_z(tr)
+    if not fr:
+        R['zref'] = None
+        return None
+    ts = sorted(fr)
+    ids = fr[ts[0]][0]
+    Z = np.array([fr[t][1] for t in ts if np.array_equal(fr[t][0], ids)])
+    R['zref'] = dict(ids=ids, z=Z.mean(axis=0), sd=Z.std(axis=0), ts=ts)
+    return R['zref']
+
+
+def _fit_disp_line(cfg, zc, um, n_atoms, coord, per_frame=None):
+    """Line through the interior of a binned displacement profile.  zc: bin centres (reference z
+    for 'lagrangian', current z for 'eulerian'); um: mean displacement per bin; n_atoms: atoms per
+    bin per frame; per_frame: optional (n_frames, n_bins) stack for the frame-to-frame CI."""
+    idx = np.where(n_atoms >= cfg.Ncount_min)[0]
+    trim = int(max(cfg.DISP_TRIM_BINS, 0))
+    inner = idx[trim:len(idx) - trim] if len(idx) > 2 * trim + 3 else idx
+    if len(inner) < 3:
+        return None
+    coef, cov = np.polyfit(zc[inner], um[inner], 1, cov=True)
+    slope, icpt = float(coef[0]), float(coef[1])
+    fit = slope * zc + icpt
+    resid = um - fit
+    ss = np.sum((um[inner] - um[inner].mean()) ** 2)
+    R2 = float(1.0 - np.sum(resid[inner] ** 2) / ss) if ss > 0 else np.nan
+    to_eps = (lambda s: -s) if coord == 'lagrangian' else (lambda s: -s / (1.0 - s))
+    eps = float(to_eps(slope))
+    tq = stats.t.ppf(0.5 + cfg.ci_level / 2, max(len(inner) - 2, 1))
+    half_lsq = float(tq * np.sqrt(max(cov[0, 0], 0.0)) * abs(to_eps(slope + 1e-9) - to_eps(slope - 1e-9)) / 2e-9)
+    pf_eps, half_frames = [], 0.0
+    if per_frame is not None and len(per_frame) >= 2:
+        for row in per_frame:
+            c = np.polyfit(zc[inner], row[inner], 1)
+            pf_eps.append(float(to_eps(c[0])))
+        pf = np.array(pf_eps)
+        half_frames = float(stats.t.ppf(0.5 + cfg.ci_level / 2, len(pf) - 1) * pf.std(ddof=1) / np.sqrt(len(pf)))
+    half = max(half_lsq, half_frames)
+    return dict(zc=zc, u=um, n_atoms=n_atoms, idx=idx, inner=inner, slope=slope, icpt=icpt, fit=fit, resid=resid,
+                R2=R2, eps=eps, eps_lo=eps - half, eps_hi=eps + half, eps_half_lsq=half_lsq,
+                eps_half_frames=half_frames, per_frame_eps=pf_eps, coord=coord,
+                u_bot=float(um[idx[0]]), u_top=float(um[idx[-1]]))
+
+
+def fit_disp_profile(cfg, R, L):
+    """Steady displacement profile of one compression level and the network strain it gives
+    (see the section comment).  Trajectories first (plateau frames of traj_stress vs traj_ref,
+    per atom, binned by the reference z); else disp_z_polymer_cum (plateau mean, current z).
+    Returns a dict (keys of _fit_disp_line + src, ts, n_frames, z_P, z_T) or None."""
+    tp = cfg.traj('traj_stress', L['lvl'])
+    ref = load_ref_positions(cfg, R) if tp.exists() else None
+    if ref is not None:
+        ts_all = traj_timesteps(tp)
+        plat = [t for t in ts_all if t >= L['halt_ts']] or ts_all[-1:]
+        if cfg.DISP_MAX_FRAMES > 0 and len(plat) > cfg.DISP_MAX_FRAMES:
+            plat = list(subsample(np.array(plat), np.array(plat)[:, None], cfg.DISP_MAX_FRAMES)[0])
+        fr = read_traj_id_z(tp, plat)
+        U, Z = [], None
+        for t in sorted(fr):
+            ids, z = fr[t]
+            if np.array_equal(ids, ref['ids']):
+                Zt, u = ref['z'], z - ref['z']
+            else:
+                _, ia, ib = np.intersect1d(ids, ref['ids'], return_indices=True)
+                Zt, u = ref['z'][ib], z[ia] - ref['z'][ib]
+            if Z is None or len(Zt) == len(Z):
+                Z = Zt
+                U.append(u)
+        if U:
+            U = np.array(U)
+            edges = np.arange(np.floor(Z.min()), Z.max() + cfg.binWidth, cfg.binWidth)
+            k = np.clip(np.digitize(Z, edges) - 1, 0, len(edges) - 2)
+            nb = len(edges) - 1
+            cnt = np.bincount(k, minlength=nb)
+            per = np.array([np.bincount(k, weights=u, minlength=nb) / np.maximum(cnt, 1) for u in U])
+            out = _fit_disp_line(cfg, 0.5 * (edges[:-1] + edges[1:]), per.mean(axis=0), cnt.astype(float), 'lagrangian', per)
+            if out is not None:
+                out.update(src='trajectories', ts=[int(t) for t in sorted(fr)], n_frames=len(U),
+                           ref_ts=ref['ts'], z_P=float(R['z_support']), z_T=float(R['z_piston']))
+                return out
+    fc = cfg.path('disp_z_polymer_cum', L['lvl'])
+    if fc.exists():
+        snaps = read_ave_chunk_file(fc)
+        if snaps:
+            ts = np.array([s[0] for s in snaps], float)
+            pl = ts >= L['halt_ts']
+            if not pl.any():
+                pl[-1] = True
+            z = snaps[0][1][:, 1]
+            Nc = np.array([s[1][:, 2] for s in snaps])[pl]
+            uz = np.array([s[1][:, 3] for s in snaps])[pl]
+            w = Nc.sum(axis=0)
+            um = np.where(w > 0, (uz * Nc).sum(axis=0) / np.maximum(w, 1), np.nan)
+            out = _fit_disp_line(cfg, z, np.nan_to_num(um), Nc.mean(axis=0), 'eulerian', uz)
+            if out is not None:
+                out.update(src='disp_z_polymer_cum', ts=[int(t) for t in ts[pl]], n_frames=int(pl.sum()),
+                           z_P=float(L.get('z_supp', R['z_support'])), z_T=float(L.get('z_pist', R['z_piston'])))
+                return out
+    return None
+
+
+def _strain_for_M(cfg, L):
+    """(eps, source, CI half-width) that M, G and kappa divide by, per cfg.M_STRAIN with its
+    fallback chain disp -> rg -> applied."""
+    pref = cfg.M_STRAIN
+    chain = {'disp': ('disp', 'rg', 'applied'), 'rg': ('rg', 'applied'), 'applied': ('applied',)}.get(pref)
+    if chain is None:
+        raise ValueError(f"M_STRAIN must be 'disp', 'rg' or 'applied' (got {pref!r})")
+    for src in chain:
+        if src == 'disp' and np.isfinite(L.get('eps_disp', np.nan)):
+            return float(L['eps_disp']), 'disp', float(L['eps_disp_hi'] - L['eps_disp_lo']) / 2
+        if src == 'rg' and np.isfinite(L.get('eps_rg', np.nan)):
+            return float(L['eps_rg']), 'rg', 0.0
+        if src == 'applied':
+            return float(L['eps']), 'applied', 0.0
+
+
+EPS_LABEL = {'disp': r'network strain  $\varepsilon_{\rm disp}$  (steady displacement-profile slope)',
+             'rg': r'measured strain  $\varepsilon_{Rg}$', 'applied': r'applied strain  $\varepsilon$'}
+
+
+def eps_axis_label(levels):
+    """x-axis label for figures plotted against L['eps_M']."""
+    srcs = {L.get('eps_M_src', 'applied') for L in levels}
+    return EPS_LABEL[srcs.pop()] if len(srcs) == 1 else r'strain  $\varepsilon$  (mixed sources: ' + ', '.join(sorted(srcs)) + ')'
+
+
 def _w_modes(zh, kk):
     """Displacement modes of a slab HELD between two drained plates at the same bath pressure
     (2026-09-28).  With both faces pinned (u''(0) = u''(1) = -q/D_c) and the pore pressure equal at
@@ -1326,8 +1530,18 @@ def load_level(cfg, R, lvl, verbose=True):
     ps = load2c(cfg.path('strain_piston', lvl), 4)
     if ps is not None:
         L['eps_boundary'] = float(np.median(ps[ps[:, 0] >= L['halt_ts'], 3]))
-    say(f"  strain: applied {L['eps']:.4f} (M denominator) | measured Rg {L.get('eps_rg', np.nan):.4f}  "
+    say(f"  strain: applied {L['eps']:.4f} | measured Rg {L.get('eps_rg', np.nan):.4f}  "
         f"BB {L.get('eps_bb', np.nan):.4f}  boundary(diag) {L.get('eps_boundary', np.nan):.4f}")
+    # ---- steady displacement profile -> the network strain (2026-10-03) ----
+    L['disp_prof'] = D = fit_disp_profile(cfg, R, L)
+    if D is not None:
+        L['eps_disp'], L['eps_disp_lo'], L['eps_disp_hi'] = D['eps'], D['eps_lo'], D['eps_hi']
+        say(f"  steady displacement profile ({D['src']}, {D['n_frames']} plateau frame(s), {D['coord']} bins, "
+            f"{len(D['inner'])} interior bins): slope strain eps_disp = {D['eps']:.4f} [{D['eps_lo']:.4f}, {D['eps_hi']:.4f}]"
+            f"  R^2 = {D['R2']:.4f};  u at the faces {D['u_bot']:+.2f} / {D['u_top']:+.2f} sigma")
+    L['eps_M'], L['eps_M_src'], L['eps_M_half'] = _strain_for_M(cfg, L)
+    say(f"  M, G, kappa divide by eps_{L['eps_M_src']} = {L['eps_M']:.4f} (M_STRAIN = {cfg.M_STRAIN!r})"
+        + ('' if L['eps_M_src'] == cfg.M_STRAIN else f"  -- FALLBACK: no eps_{cfg.M_STRAIN} for this level"))
 
     # ---- solvent density / mass fraction ---------------------------------
     fd = cfg.path('solvent_density_z', lvl)
@@ -1385,7 +1599,8 @@ def load_level(cfg, R, lvl, verbose=True):
     # the increments agree within their CIs.  The absolute values are kept as *_abs.
     # The piston increment needs piston_force_avg_ref (runs since 2026-09-05); without it the
     # piston M stays absolute and L['M_pist_ref'] says so.
-    eps = L['eps']
+    eps = L['eps_M']                                   # the network strain (M_STRAIN, 2026-10-03; was the applied level)
+    eps_h = L['eps_M_half']                            # its CI half-width, folded into the M CIs below
     im = L['interior'] if L['interior'].sum() >= 3 else L['in_mem']
     L['M_net_mask'] = 'interior' if im is L['interior'] else 'membrane'
     Rzz = R['stress']['zz']
@@ -1398,9 +1613,10 @@ def load_level(cfg, R, lvl, verbose=True):
     # the reference's own CI half-width is added in quadrature to the bin-scatter interval
     ref_h = float(Rzz.get('net_interior_half', 0.0)) / eps if sub else 0.0
     m, lo, hi = mean_ci(mn_abs - L['M_net_ref'] / eps, cfg.ci_level)
-    half = np.sqrt(((hi - lo) / 2) ** 2 + ref_h ** 2)
+    half = np.sqrt(((hi - lo) / 2) ** 2 + ref_h ** 2 + (m * eps_h / eps) ** 2)
     L['M_net'], L['M_net_lo'], L['M_net_hi'] = float(m), float(m - half), float(m + half)
     L['M_net_nbins'] = len(mn_abs)
+    L['dsig_net'] = float(m * eps)                     # the stress increment itself (strain-definition free)
     L['M_net_final'] = float(np.nanmean(zz['net'][-1][L['in_mem']]) / eps)   # the pre-2026-09-05 estimator (absolute), for reference
     if 'PF' in L:
         p = L['PF']
@@ -1413,11 +1629,12 @@ def load_level(cfg, R, lvl, verbose=True):
             # CI: piston plateau bootstrap half-width (+) reference preload bootstrap half-width, in quadrature
             ph = (p['hi'] - p['lo']) / 2
             rh = (R['P_ref_hi'] - R['P_ref_lo']) / 2
-            half = np.sqrt(ph ** 2 + rh ** 2) / eps
             L['M_pist'] = (p['mean'] - R['P_ref']) / eps
+            half = np.sqrt((np.sqrt(ph ** 2 + rh ** 2) / eps) ** 2 + (L['M_pist'] * eps_h / eps) ** 2)
             L['M_pist_lo'], L['M_pist_hi'] = L['M_pist'] - half, L['M_pist'] + half
         else:
             L['M_pist'], L['M_pist_lo'], L['M_pist_hi'] = L['M_pist_abs'], L['M_pist_abs_lo'], L['M_pist_abs_hi']
+        L['dP_pist'] = float(L['M_pist'] * eps)
     # ---- unrelaxed-hold systematic (2026-09-27, RELAX_SYS): the piston tail's excess over its
     #      fitted asymptote, / eps, widens the LOWER bound of BOTH M estimators (same relaxation
     #      drives both); kappa = D_c/M below inherits it on its upper bound.  The block-bootstrap
@@ -2050,7 +2267,7 @@ def fig_perm_psd(cfg, R, P):
 #  7. EXPANSE SYNC
 # ===========================================================================
 _PROD_DAT = ('sigmazz_polymer', 'sigmazz_solvent', 'sigmaxx_polymer', 'sigmaxx_solvent',
-             'sigmayy_polymer', 'sigmayy_solvent', 'solvent_density_z', 'disp_z_polymer',
+             'sigmayy_polymer', 'sigmayy_solvent', 'solvent_density_z', 'disp_z_polymer', 'disp_z_polymer_cum',
              'strain_zz', 'strain_piston', 'piston_position', 'support_position', 'piston_force', 'piston_force_avg',
              'box_dimensions', 'gel_dimensions_bb', 'gel_dimensions_rg', 'polymer_com', 'gel_edges')
 # support_position: written since the 2026-09-18 symmetric drive (support driven up with the
@@ -3519,9 +3736,9 @@ def fig_M_sweep(cfg, R, levels):
     sub = bool(cfg.M_SUBTRACT_REF)
     incr = ' (increment from $\\varepsilon=0$)' if sub else ''
     fig.suptitle('Longitudinal modulus across the sweep' + incr + '   |   ' + cfg.sim_name, fontsize=13, fontweight='bold')
-    eps = np.array([L['eps'] for L in levels])
+    eps = np.array([L['eps_M'] for L in levels])          # the strain M divides by (M_STRAIN)
     hp = [L for L in levels if 'M_pist' in L]
-    ep = np.array([L['eps'] for L in hp])
+    ep = np.array([L['eps_M'] for L in hp])
     n_abs = sum(L['M_pist_ref'] != 'measured' for L in hp)
     net_lab = (r"network  $(\langle\sigma'_{zz}\rangle_\mathrm{int}-\sigma'_{zz,\rm ref})/\varepsilon$" if sub
                else r"network  $\langle\sigma'_{zz}\rangle_\mathrm{int}/\varepsilon$")
@@ -3549,7 +3766,7 @@ def fig_M_sweep(cfg, R, levels):
         if hp and n_abs == 0:
             txt += f"\n  $P_{{\\rm ref}} = {float(R['P_ref']):+.4f}$"
         annotate_box(axA, txt, loc='lower right', fontsize=11)
-    axA.set_xlabel(r'applied strain  $\varepsilon$')
+    axA.set_xlabel(eps_axis_label(levels))
     axA.set_ylabel(r'$M$  (LJ units)')
     axA.set_title('(a) with the absolute values (hollow) they replace', fontsize=13)
     axA.grid(alpha=0.3)
@@ -3561,7 +3778,7 @@ def fig_M_sweep(cfg, R, levels):
     if hp:
         _ser(axB, ep, 'M_pist', hp, 's', WONG['vermillion'],
              (r'piston  $\Delta P/\varepsilon$' if (sub and n_abs == 0) else pist_lab))
-    axB.set_xlabel(r'applied strain  $\varepsilon$')
+    axB.set_xlabel(eps_axis_label(levels))
     axB.set_ylabel(r'$M$  (LJ units)')
     axB.set_title('(b) longitudinal modulus per level, two independent estimates', fontsize=13)
     axB.grid(alpha=0.3)
@@ -3579,7 +3796,7 @@ def fig_stress_strain_sweep(cfg, R, levels):
     referenced to its own zero like M_SUBTRACT_REF; the higher levels' departure from the
     line is the stress-strain nonlinearity.  (Was panel (b) of fig_M_sweep until 2026-09-14.)"""
     fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
-    eps = np.array([L['eps'] for L in levels])
+    eps = np.array([L['eps_M'] for L in levels])          # the strain M divides by (M_STRAIN), not the applied level
     hp = [L for L in levels if 'M_pist' in L]
     Rzz = R['stress']['zz']
     n_fit = int(max(1, cfg.SS_FIT_NPTS))
@@ -3603,13 +3820,13 @@ def fig_stress_strain_sweep(cfg, R, levels):
     # unrelaxed-hold systematic (RELAX_SYS): the plateau stress is over by the piston tail's excess,
     # so both series carry it on their LOWER bar (as M does through delta_sys)
     exc = np.array([L.get('relax', {}).get('excess', 0.0) for L in levels])
-    sn = np.array([L['M_net_abs'] * L['eps'] for L in levels])
-    sn_err = [np.abs(np.array([L['M_net_abs_lo'] * L['eps'] for L in levels]) - sn) + exc,
-              np.abs(np.array([L['M_net_abs_hi'] * L['eps'] for L in levels]) - sn)]
+    sn = np.array([L['M_net_abs'] * L['eps_M'] for L in levels])
+    sn_err = [np.abs(np.array([L['M_net_abs_lo'] * L['eps_M'] for L in levels]) - sn) + exc,
+              np.abs(np.array([L['M_net_abs_hi'] * L['eps_M'] for L in levels]) - sn)]
     _series(eps, sn, sn_err, WONG['blue'], 'o', "network $\\langle\\sigma'_{zz}\\rangle_{\\rm int}$ (plateau)",
             e0=0.0, s0=float(Rzz['net_interior']), err0=float(Rzz.get('net_interior_half', 0.0)))
     if hp:
-        ep = np.array([L['eps'] for L in hp])
+        ep = np.array([L['eps_M'] for L in hp])
         Pp = np.array([L['P_final'] for L in hp])
         pref = R.get('P_ref', np.nan)
         exc_p = np.array([L.get('relax', {}).get('excess', 0.0) for L in hp])
@@ -3623,7 +3840,7 @@ def fig_stress_strain_sweep(cfg, R, levels):
     ax.set_title('Stress vs strain, small-strain slopes through $\\varepsilon=0$:  ' +
                  ',  '.join(f"$M_{{\\rm {n[:4]}}}\\approx{sig(s)}$ ({k} levels)" for n, s, k in fits) + '\n' + cfg.sim_name,
                  fontsize=12)
-    ax.set_xlabel(r'applied strain  $\varepsilon$')
+    ax.set_xlabel(eps_axis_label(levels))
     ax.set_ylabel(r'plateau stress  (LJ)')
     ax.grid(alpha=0.3)
     ax.set_xlim(left=-0.01)
@@ -3641,12 +3858,12 @@ def fig_G_sweep(cfg, R, levels):
         Ls = [L for L in hg if comp in L['G']]
         if not Ls:
             continue
-        e = np.array([L['eps'] for L in Ls])
+        e = np.array([L['eps_M'] for L in Ls])
         g = np.array([L['G'][comp]['G'] for L in Ls])
         ax.errorbar(e, g, yerr=[g - [L['G'][comp]['lo'] for L in Ls], [L['G'][comp]['hi'] for L in Ls] - g],
                     fmt=mk + '-', ms=10, lw=2, color=col, capsize=6,
                     label=fr"$G$ from {comp}:  $(\sigma'_{{zz}}-\sigma'_{{{comp}}})/2\varepsilon$")
-    ax.set_xlabel(r'applied strain  $\varepsilon$')
+    ax.set_xlabel(eps_axis_label(hg))
     ax.set_ylabel(r'$G$  (LJ units)')
     ax.set_title('Shear modulus from network-stress anisotropy vs strain', fontsize=15)
     ax.grid(alpha=0.3)
@@ -3756,6 +3973,151 @@ def print_hold_check(cfg, levels):
           f'higher levels are held too short: compare the observed piston/network excess above.)')
 
 
+def _ref_thickness(R):
+    """Reference gel thickness (sigma) for turning a strain offset into a length: the first of
+    the thickness keys the reference loader sets, else the seated plate gap."""
+    for k in ('L0', 'L0_bb', 'L_bb', 'L_gel', 'L_rg'):
+        if np.isfinite(R.get(k, np.nan)):
+            return float(R[k])
+    return float(R['z_piston'] - R['z_support'])
+
+
+def _disp_panel(ax, cfg, L, col, label=None, show_fit=True, ms=5):
+    """One steady displacement profile with its line fit on `ax` (shared by the single and
+    sweep figures).  Filled = interior bins in the fit, hollow = trimmed / tail bins."""
+    D = L['disp_prof']
+    zc, u, idx, inner = D['zc'], D['u'], D['idx'], D['inner']
+    out = np.setdiff1d(idx, inner)
+    ax.plot(zc[inner], u[inner], 'o', ms=ms, color=col, label=label)
+    ax.plot(zc[out], u[out], 'o', ms=ms, color=col, mfc='none', alpha=0.7)
+    if show_fit:
+        zz = zc[idx]
+        ax.plot(zz, D['slope'] * zz + D['icpt'], '-', lw=1.4, color=col, alpha=0.9)
+
+
+def fig_disp_profile(cfg, R, L):
+    """Steady displacement profile of one level and the network strain it gives (2026-10-03):
+    (a) u_z of the polymer, plateau frames vs the eps = 0 reference, binned by the reference
+        position Z (or by the current z for the disp_z_polymer_cum fallback), with the line fit
+        over the interior bins -> eps_disp = -slope; (b) the residuals.  The slope is the strain
+        of the network alone: the applied strain also counts the rigid travel (the gel falling
+        onto the support), which the title quantifies as the offset."""
+    D = L.get('disp_prof')
+    if D is None:
+        print('displacement-profile figure skipped (no local traj_ref / traj_stress and no disp_z_polymer_cum)')
+        return None
+    fig, (axA, axB) = plt.subplots(2, 1, figsize=(11, 9), sharex=True, constrained_layout=True,
+                                   gridspec_kw={'height_ratios': [3, 1.3]})
+    coord = 'reference position $Z$' if D['coord'] == 'lagrangian' else 'current position $z$'
+    fig.suptitle(f"Steady displacement profile of the network   |   {cfg.sim_name}   |   level $\\varepsilon = {L['lvl']}$\n"
+                 f"{D['src']}: {D['n_frames']} plateau frame(s) ({D['ts'][0]:.0f}-{D['ts'][-1]:.0f}) vs the $\\varepsilon=0$ reference, "
+                 f"{cfg.binWidth:g}$\\sigma$ bins by the {coord}", fontsize=12, fontweight='bold')
+    _disp_panel(axA, cfg, L, WONG['blue'], ms=6,
+                label=f"polymer $u_z$ per bin (filled = {len(D['inner'])} interior bins in the fit, hollow = trimmed {cfg.DISP_TRIM_BINS} per face)")
+    zz = D['zc'][D['idx']]
+    axA.plot(zz, D['slope'] * zz + D['icpt'], '-', lw=1.8, color=WONG['vermillion'],
+             label=(f"line fit:  $u_z = u_0 - \\varepsilon_{{\\rm disp}}\\,(Z - Z^P)$,  "
+                    f"$\\varepsilon_{{\\rm disp}} = {D['eps']:.4f}$ [{D['eps_lo']:.4f}, {D['eps_hi']:.4f}],  $R^2 = {D['R2']:.4f}$"))
+    for zp, lab in ((D['z_P'], 'support plane (reference)'), (D['z_T'], 'load-piston plane (reference)')):
+        axA.axvline(zp, color='0.4', ls='--', lw=1.0, label=lab)
+    axA.axhline(0, color='k', lw=0.8, alpha=0.5)
+    axA.set_ylabel(r'$u_z$  ($\sigma$)')
+    ci = int(cfg.ci_level * 100)
+    txt = (f"$\\varepsilon_{{\\rm disp}}$ = {D['eps']:.4f}  ({ci}% CI half-width {max(D['eps_hi'] - D['eps'], 0):.4f}: "
+           f"LSQ {D['eps_half_lsq']:.4f}, frame-to-frame {D['eps_half_frames']:.4f})\n"
+           f"$\\varepsilon_{{Rg}}$ = {L.get('eps_rg', np.nan):.4f}      applied $\\varepsilon$ = {L['eps']:.4f}  "
+           f"(rigid travel counted by the applied strain: {L['eps'] - D['eps']:+.4f} = {(L['eps'] - D['eps']) * _ref_thickness(R):+.2f}$\\sigma$)\n"
+           f"with $\\varepsilon_{{\\rm {L['eps_M_src']}}}$ (M_STRAIN):  $M_{{\\rm pist}}$ = {L.get('M_pist', np.nan):.3f},  "
+           f"$M_{{\\rm net}}$ = {L['M_net']:.3f};  with the applied strain they would be "
+           f"{L.get('dP_pist', np.nan) / L['eps']:.3f}, {L['dsig_net'] / L['eps']:.3f}")
+    annotate_box(axA, txt, loc='upper right', fontsize=10.5)
+    axA.set_title('(a) $u_z$ of the polymer in the plateau, relative to the $\\varepsilon=0$ reference', fontsize=13)
+    axA.grid(alpha=0.3)
+    smart_legend(axA, fontsize=10)
+    axB.plot(D['zc'][D['inner']], D['resid'][D['inner']], 'o-', ms=5, lw=1, color=WONG['blue'])
+    out = np.setdiff1d(D['idx'], D['inner'])
+    axB.plot(D['zc'][out], D['resid'][out], 'o', ms=5, color=WONG['blue'], mfc='none', alpha=0.7)
+    axB.axhline(0, color='k', lw=0.8)
+    axB.set_ylabel(r'$u_z - $ fit  ($\sigma$)')
+    axB.set_xlabel('reference position $Z$  ($\\sigma$)' if D['coord'] == 'lagrangian' else 'current position $z$  ($\\sigma$)')
+    axB.set_title('(b) residuals from the line (uniform-stress interior should be flat; the faces and contact layers are hollow)', fontsize=12)
+    axB.grid(alpha=0.3)
+    return _save(fig, cfg, 'disp_profile', L['lvl'])
+
+
+def fig_disp_profile_sweep(cfg, R, levels):
+    """Steady displacement profiles across the sweep (2026-10-03):
+    (a) every level's profile with its line fit; (b) the slope strain eps_disp and eps_Rg vs
+    the applied strain (the constant offset is the rigid travel the applied strain counts);
+    (c) M_pist and M_net per level under the three strain definitions -- the stress increments
+    are the same, only the denominator changes -- with the small-strain slope of each."""
+    hd = [L for L in levels if L.get('disp_prof') is not None]
+    if not hd:
+        print('displacement-profile sweep figure skipped (no level has a profile)')
+        return None
+    fig, (axA, axB, axC) = plt.subplots(1, 3, figsize=(21, 6.5), constrained_layout=True)
+    fig.suptitle('Steady displacement profiles -> the network strain that divides $M$   |   ' + cfg.sim_name,
+                 fontsize=13, fontweight='bold')
+    for i, L in enumerate(hd):
+        D = L['disp_prof']
+        _disp_panel(axA, cfg, L, level_color(levels.index(L)),
+                    label=f"$\\varepsilon$ = {L['lvl']}:  $\\varepsilon_{{\\rm disp}}$ = {D['eps']:.4f}  ($R^2$ = {D['R2']:.4f})")
+    D0 = hd[0]['disp_prof']
+    for zp in (D0['z_P'], D0['z_T']):
+        axA.axvline(zp, color='0.4', ls='--', lw=1.0)
+    axA.axhline(0, color='k', lw=0.8, alpha=0.5)
+    axA.set_xlabel('reference position $Z$  ($\\sigma$)' if D0['coord'] == 'lagrangian' else 'current position $z$  ($\\sigma$)')
+    axA.set_ylabel(r'$u_z$  ($\sigma$)')
+    axA.set_title('(a) plateau $u_z$ vs the $\\varepsilon=0$ reference, line fits over the interior (filled)', fontsize=12)
+    axA.grid(alpha=0.3)
+    smart_legend(axA, fontsize=10)
+    # ---- (b) strains ----
+    ea = np.array([L['eps'] for L in hd])
+    ed = np.array([L['disp_prof']['eps'] for L in hd])
+    ed_err = [ed - [L['disp_prof']['eps_lo'] for L in hd], [L['disp_prof']['eps_hi'] for L in hd] - ed]
+    er = np.array([L.get('eps_rg', np.nan) for L in hd])
+    axB.plot([0, ea.max() * 1.05], [0, ea.max() * 1.05], ':', color='0.4', lw=1.2, label='1:1')
+    axB.errorbar(ea, ed, yerr=ed_err, fmt='o-', ms=9, lw=2, color=WONG['blue'], capsize=5,
+                 label=r'$\varepsilon_{\rm disp}$ (profile slope)')
+    if np.isfinite(er).any():
+        axB.plot(ea, er, 's--', ms=7, lw=1.5, color=WONG['vermillion'], mfc='none', label=r'$\varepsilon_{Rg}$ (strain_zz plateau)')
+    off = ea - ed
+    axB.set_xlabel(r'applied strain  $\varepsilon$')
+    axB.set_ylabel('measured network strain')
+    axB.set_title(f"(b) applied - $\\varepsilon_{{\\rm disp}}$ = {off.mean():+.4f} ± {off.std(ddof=1) if len(off) > 1 else 0:.4f}\n"
+                  f"(= {off.mean() * _ref_thickness(R):+.2f}$\\sigma$ of rigid travel, the same at every level)", fontsize=12)
+    axB.grid(alpha=0.3)
+    smart_legend(axB, fontsize=11)
+    # ---- (c) M under each strain definition ----
+    n_fit = int(max(1, cfg.SS_FIT_NPTS))
+    hp = [L for L in hd if 'dP_pist' in L]
+    rows = []
+    for key, Ls, col, mk, name in (('dsig_net', hd, WONG['blue'], 'o', 'network'), ('dP_pist', hp, WONG['vermillion'], 's', 'piston')):
+        if not Ls:
+            continue
+        ds = np.array([L[key] for L in Ls])
+        for src, style, lab in (('applied', dict(mfc='none', ls=':', alpha=0.8, lw=1.3, ms=8), 'applied $\\varepsilon$'),
+                                ('rg', dict(mfc='none', ls='--', alpha=0.8, lw=1.3, ms=8, marker='x'), '$\\varepsilon_{Rg}$'),
+                                ('disp', dict(ls='-', lw=2.2, ms=10), '$\\varepsilon_{\\rm disp}$')):
+            e = np.array([{'applied': L['eps'], 'rg': L.get('eps_rg', np.nan), 'disp': L['disp_prof']['eps']}[src] for L in Ls])
+            if not np.isfinite(e).any():
+                continue
+            style = dict(style)
+            marker = style.pop('marker', mk)
+            x = np.array([L['eps'] for L in Ls])
+            M = ds / e
+            o = np.argsort(x)[:n_fit]
+            slope = float(np.sum(e[o] * ds[o]) / np.sum(e[o] ** 2))
+            axC.plot(x, M, marker=marker, color=col, label=f"{name} / {lab}:  small-strain $M$ = {slope:.3f}", **style)
+            rows.append((name, src, slope))
+    axC.set_xlabel(r'applied strain  $\varepsilon$  (level)')
+    axC.set_ylabel(r'$M = \Delta\sigma / \varepsilon_{\rm x}$  (LJ)')
+    axC.set_title(f"(c) the same stress increments / three strains\n(slope = through-origin fit of the first {n_fit} levels)", fontsize=12)
+    axC.grid(alpha=0.3)
+    smart_legend(axC, fontsize=10)
+    return _save(fig, cfg, 'sweep_disp_profile')
+
+
 def print_summary(cfg, levels):
     """One line per level with the headline numbers, then the hold check."""
     ci = int(cfg.ci_level * 100)
@@ -3765,10 +4127,11 @@ def print_summary(cfg, levels):
     print(f'\nSUMMARY  ({cfg.sim_name}; {ci}% CIs; {how})')
     if cfg.RELAX_SYS:
         how += '; M lower bounds include delta_sys (unrelaxed-hold excess, last column)'
-    print(f"{'eps':>6s} {'M_net':>18s} {'M_pist':>18s} {'G_x':>18s} {'G_y':>18s} {'D_c':>10s} {'kappa_net':>10s} {'kappa_pist':>10s} {'delta_sys':>10s}")
+    print(f"{'eps':>6s} {'eps_M':>9s} {'M_net':>18s} {'M_pist':>18s} {'G_x':>18s} {'G_y':>18s} {'D_c':>10s} {'kappa_net':>10s} {'kappa_pist':>10s} {'delta_sys':>10s}")
     for L in levels:
         def ci_(v, lo, hi):
             return f'{v:.3f} [{lo:.3f},{hi:.3f}]'
+        em = f"{L['eps_M']:.4f}{ {'disp': 'd', 'rg': 'r', 'applied': 'a'}[L['eps_M_src']] }"
         ds = L.get('M_sys', 0.0)
         ds_s = f"{ds:.3f}" + (' *' if ds > 0.5 * (L['M_net_hi'] - L['M_net']) else '') if cfg.RELAX_SYS else ''
         mp = ci_(L['M_pist'], L['M_pist_lo'], L['M_pist_hi']) if 'M_pist' in L else 'n/a'
@@ -3777,8 +4140,9 @@ def print_summary(cfg, levels):
         dc = f"{L['Dc']['Dc']:.3e}" if L.get('Dc') else 'n/a'
         kn = f"{L['kappa']['net']['k']:.3e}" if L.get('kappa', {}).get('net') else 'n/a'
         kp = f"{L['kappa']['pist']['k']:.3e}" if L.get('kappa', {}).get('pist') else 'n/a'
-        print(f"{L['eps']:6.3f} {ci_(L['M_net'], L['M_net_lo'], L['M_net_hi']):>18s} {mp:>18s} {gx:>18s} {gy:>18s} "
+        print(f"{L['eps']:6.3f} {em:>9s} {ci_(L['M_net'], L['M_net_lo'], L['M_net_hi']):>18s} {mp:>18s} {gx:>18s} {gy:>18s} "
               f"{dc:>10s} {kn:>10s} {kp:>10s} {ds_s:>10s}")
+    print('  eps_M = the strain M, G and kappa divide by (M_STRAIN): d = steady displacement-profile slope, r = Rg, a = applied')
     if cfg.RELAX_SYS:
         print('  delta_sys = (piston plateau - fitted tail asymptote) / eps;  * = larger than the M_net bootstrap half-width')
     print_hold_check(cfg, levels)

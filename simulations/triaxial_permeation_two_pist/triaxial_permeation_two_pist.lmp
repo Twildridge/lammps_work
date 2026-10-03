@@ -558,7 +558,11 @@ fix out_piston_pressure all print ${volume_freq} &
 # volume_data: gel BB / Rg dims + volumes, box dims, polymer COM (plot_lammps_log formats)
 fix out_gel_vol_bb all print ${volume_freq} "$(v_gel_vol_bb)" &
     file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
-fix out_gel_dims_bb all print ${volume_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
+# zlo/zhi (2026-10-02): the extreme polymer beads, so the thickness change can be split into its two ends --
+# at zero flux the face floats ~3 sigma above the support while stray beads already touch it, so Lz_bb misses
+# the network's rigid drop (fig 12/13 of the permeation notebook)
+fix out_gel_dims_bb all print ${volume_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb) $(c_minz) $(c_maxz)" &
+    title "# step Lx_bb Ly_bb Lz_bb zlo_poly zhi_poly" &
     file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${nsteps}.dat screen no
 fix out_gel_vol_rg all print ${volume_freq} "$(step) $(v_gel_vol_rg)" &
     file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no

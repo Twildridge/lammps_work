@@ -827,6 +827,14 @@ shell mkdir output_files/chemical_potential
 velocity piston_load set 0.0 0.0 0.0
 velocity support     set 0.0 0.0 0.0
 variable movie_open equal 1
+
+# cumulative polymer displacement since the eps = 0 reference (2026-10-03): NEVER reset, unlike
+# displace_poly (re-created at every hold onset for the D_c relaxation fit).  Binned by current z in
+# each hold -> disp_z_polymer_cum files: the steady profile u_z(z), whose slope is the strain of the
+# network alone (the applied strain also counts the gel's rigid fall onto the support, ~0.02);
+# fit_disp_profile in lib/triaxial.py reads it when the trajectories are not local (M_STRAIN).
+compute displace_poly_cum polymer displace/atom
+variable uz_poly_cum atom c_displace_poly_cum[3]
 fix halt_box all halt 1000 v_box_guard > 0.5 error continue
 
 print "############################################################"
@@ -1066,6 +1074,9 @@ fix avg_P_res all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} v_
 fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_polymer v_uz_poly &
     file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_disp_z_poly_cum all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_polymer v_uz_poly_cum &
+    file output_files/displacement_data/disp_z_polymer_cum_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 
 variable hold_steps equal (floor(($(step)+${hold_len}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
 print ">>> [strain=${compressions}] measurement HOLD (load piston frozen, stress relaxes) for ${hold_steps} steps (>= hold_len=${hold_len}, aligned to nfreq_stress=${nfreq_stress})"
@@ -1073,6 +1084,7 @@ run ${hold_steps}
 
 # ----- Teardown this level's hold fixes/dumps -----
 unfix avg_disp_z_poly
+unfix avg_disp_z_poly_cum
 unfix avg_P_res
 unfix avg_solv_density_fpp
 unfix avg_solv_density_ffp
