@@ -368,6 +368,13 @@ thermo ${thermo_freq}
 #   permeate piston at the BOTTOM: fluid pushes DOWN -> P_perm = -F_z/(lx*ly)
 compute fp_feed piston_feed group/group mobile
 compute fp_perm piston_perm group/group mobile
+# network load at the support (2026-10-03): the pair force of the polymer on the support sheet.
+# The support is transparent to solvent (pair 3-4 off), so the whole dP_ext drops across the gel
+# and this force / area must equal dP_ext at steady state -- the force-balance check of the
+# permeation notebook's "CHECK vs compression" cell.  fp_supp_solv is 0 by construction (kept
+# as the proof of transparency).
+compute fp_supp_poly polymer group/group support
+compute fp_supp_solv solvent group/group support
 variable area        equal lx*ly
 variable P_feed_meas equal  c_fp_feed[3]/v_area
 variable P_perm_meas equal -c_fp_perm[3]/v_area
@@ -549,6 +556,10 @@ fix out_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
     c_fp_feed[3] c_fp_perm[3] ave one &
     title2 "# TimeStep F_fluid_feed F_fluid_perm   (block-averaged)" &
     file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${nsteps}.dat
+fix out_support_force all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_fp_supp_poly[3] c_fp_supp_solv[3] ave one &
+    title2 "# TimeStep F_poly_supp F_solv_supp   (pair force of the polymer / solvent on the support sheet, z; block-averaged)" &
+    file output_files/piston_data/support_force_${dataname}_${interaction}_${nsteps}.dat
 # per-piston pressure log: measured P = F_fluid/(lx*ly) next to the applied P
 fix out_piston_pressure all print ${volume_freq} &
     "$(step) $(v_P_feed_meas) $(v_P_feed_app) $(v_P_perm_meas) $(v_P_perm_app)" &
@@ -1091,6 +1102,7 @@ unfix out_piston_pos
 unfix out_piston_vel
 unfix out_piston_force
 unfix out_piston_force_avg
+unfix out_support_force
 unfix out_piston_pressure
 unfix out_gel_vol_bb
 unfix out_gel_dims_bb

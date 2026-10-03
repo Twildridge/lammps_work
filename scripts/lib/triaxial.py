@@ -241,6 +241,11 @@ class Config:
     DISP_TRIM_BINS: int = 3               # populated bins dropped at each face before the line fit (the diffuse
                                           # faces and the contact layers are not in the uniform-stress interior)
     DISP_MAX_FRAMES: int = 0              # plateau frames paired with the reference (0 = all of them)
+    # ---- permeation vs compression consistency check (2026-10-03) ------------
+    M_RECORD: object = None               # path of the compression stress-strain record the permeation notebook checks
+                                          # against (save_M_record writes it from the sweep notebook); None -> the newest,
+                                          # flow_data_local/compression/M_record_latest.json
+    PERM_M_TOL: float = 0.10              # relative tolerance of the check (|u_F measured / predicted - 1|) before it flags
     # ---- D_c consolidation fit ------------------------------------------
     DC_N_MODES: int = 5
     DC_KMAX_IC: int = 199
@@ -2284,7 +2289,7 @@ _TWO_PIST_DAT = ('piston_pressure', 'permeation', 'pressure_reservoirs')
 _PERM_DAT = ('sigmazz_polymer', 'sigmazz_solvent', 'sigmaxx_polymer', 'sigmaxx_solvent',
              'sigmayy_polymer', 'sigmayy_solvent', 'solvent_density_z', 'disp_z_polymer', 'strain_zz',
              'piston_position', 'piston_velocity', 'piston_force', 'piston_force_avg', 'piston_pressure',
-             'permeation', 'permeate_count', 'pressure_feed', 'pressure_permeate',
+             'permeation', 'permeate_count', 'pressure_feed', 'pressure_permeate', 'support_force',
              'box_dimensions', 'gel_dimensions_bb', 'gel_dimensions_rg', 'polymer_com', 'stress_aniso')
 _PERM_REQUIRED = ('sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z', 'piston_position', 'permeation')
 
@@ -4116,6 +4121,295 @@ def fig_disp_profile_sweep(cfg, R, levels):
     axC.grid(alpha=0.3)
     smart_legend(axC, fontsize=10)
     return _save(fig, cfg, 'sweep_disp_profile')
+
+
+# ---------------------------------------------------------------------------
+#  Compression record -> permeation consistency check (2026-10-03)
+# ---------------------------------------------------------------------------
+# The permeation drive and the compression sweep measure the same modulus two ways, and on
+# 2026-10-02/03 they disagreed by 10-20 % after the strain definitions were made consistent.
+# So the sweep notebook SAVES its stress-strain curve (save_M_record) and the permeation
+# notebook CHECKS against it every time it runs (fig_perm_vs_compression): the steady
+# permeation frames are paired per atom with the zero-flux reference frames (Lagrangian, so
+# the rigid drop onto the support cancels and the contact layer is included), and the
+# measured network deformation is compared with the one the compression curve predicts for
+# the same drag load, sigma'(Z) = dP (Z_F - Z)/L_0.  A verdict line is printed and put in
+# the figure title; the check also refuses to stay silent when the record is missing.
+def save_M_record(cfg, R, levels, path=None):
+    """Write the sweep's stress-strain record (per level: the strain M divides by, the network
+    and piston stress increments with CIs, the M values) to <DATA_DIR>/M_record.json and to
+    <base>/compression/M_record_latest.json (the one the permeation check reads by default)."""
+    import json, datetime
+    rows = []
+    for L in sorted(levels, key=lambda L: L['eps']):
+        rows.append(dict(level=str(L['lvl']), eps_applied=float(L['eps']), eps=float(L['eps_M']), eps_src=L['eps_M_src'],
+                         eps_half=float(L.get('eps_M_half', 0.0)), eps_rg=float(L.get('eps_rg', np.nan)),
+                         dsig_net=float(L['dsig_net']), dsig_net_half=float((L['M_net_hi'] - L['M_net_lo']) / 2 * L['eps_M']),
+                         dP_pist=float(L.get('dP_pist', np.nan)),
+                         dP_pist_half=float((L['M_pist_hi'] - L['M_pist_lo']) / 2 * L['eps_M']) if 'M_pist' in L else np.nan,
+                         M_net=float(L['M_net']), M_pist=float(L.get('M_pist', np.nan)), M_sys=float(L.get('M_sys', 0.0))))
+    n_fit = int(max(1, cfg.SS_FIT_NPTS))
+    e = np.array([r['eps'] for r in rows[:n_fit]])
+    slopes = {k: float(np.sum(e * np.array([r[k] for r in rows[:n_fit]])) / np.sum(e ** 2)) for k in ('dsig_net', 'dP_pist')}
+    rec = dict(run_id=cfg.RUN_ID, sim_name=cfg.sim_name, saved=datetime.datetime.now().isoformat(timespec='minutes'),
+               M_STRAIN=cfg.M_STRAIN, M_SUBTRACT_REF=bool(cfg.M_SUBTRACT_REF), L0=_ref_thickness(R),
+               z_support=float(R['z_support']), z_piston=float(R['z_piston']),
+               M_small_net=slopes['dsig_net'], M_small_pist=slopes['dP_pist'], n_fit=n_fit, levels=rows)
+    outs = [Path(path)] if path else [cfg.DATA_DIR / 'M_record.json', cfg.DATA_DIR.parent / 'M_record_latest.json']
+    for o in outs:
+        o.parent.mkdir(parents=True, exist_ok=True)
+        o.write_text(json.dumps(rec, indent=1, default=lambda x: None if (isinstance(x, float) and not np.isfinite(x)) else float(x)))
+    print(f"compression record saved ({len(rows)} levels, strain = eps_{cfg.M_STRAIN}, small-strain M net {slopes['dsig_net']:.3f} / "
+          f"pist {slopes['dP_pist']:.3f}):\n  " + '\n  '.join(str(o) for o in outs))
+    return rec
+
+
+def load_M_record(cfg):
+    """The compression record for the permeation check (cfg.M_RECORD or the newest), or None."""
+    import json
+    p = Path(cfg.M_RECORD) if cfg.M_RECORD else Path(cfg.base_dir) / 'compression' / 'M_record_latest.json'
+    if not p.exists():
+        return None
+    rec = json.loads(p.read_text())
+    rec['path'] = str(p)
+    return rec
+
+
+def _record_curve(rec, key):
+    """eps(sigma') of the compression record (through the origin, linear beyond the last level)."""
+    rows = [r for r in rec['levels'] if r.get(key) is not None and np.isfinite(r[key])]
+    sg = np.array([0.0] + [r[key] for r in rows]); ep = np.array([0.0] + [r['eps'] for r in rows])
+    o = np.argsort(sg); sg, ep = sg[o], ep[o]
+
+    def f(x):
+        x = np.asarray(x, float)
+        y = np.interp(x, sg, ep)
+        hi = x > sg[-1]
+        if hi.any() and len(sg) > 2:
+            y[hi] = ep[-1] + (x[hi] - sg[-1]) * (ep[-1] - ep[-2]) / (sg[-1] - sg[-2])
+        return y
+    return f
+
+
+def perm_lagrangian_profile(cfg, R, P):
+    """Steady permeation displacement in the MATERIAL frame: the steady frames of traj_stress
+    paired per atom with the zero-flux traj_ref frames, binned by the reference position Z.
+    -> dict(zc, u, per_frame, n_atoms, idx, eps_loc (= -du/dZ, central differences), ts) or None."""
+    tp = cfg.traj('traj_stress')
+    if not tp.exists():
+        return None
+    ref = load_ref_positions(cfg, R)
+    if ref is None:
+        return None
+    ts_all = traj_timesteps(tp)
+    plat = [t for t in ts_all if t >= P['halt_ts']] or ts_all[-1:]
+    if cfg.DISP_MAX_FRAMES > 0 and len(plat) > cfg.DISP_MAX_FRAMES:
+        plat = list(subsample(np.array(plat), np.array(plat)[:, None], cfg.DISP_MAX_FRAMES)[0])
+    fr = read_traj_id_z(tp, plat)
+    U, Z = [], None
+    for t in sorted(fr):
+        ids, z = fr[t]
+        if np.array_equal(ids, ref['ids']):
+            Zt, u = ref['z'], z - ref['z']
+        else:
+            _, ia, ib = np.intersect1d(ids, ref['ids'], return_indices=True)
+            Zt, u = ref['z'][ib], z[ia] - ref['z'][ib]
+        if Z is None or len(Zt) == len(Z):
+            Z, U = Zt, U + [u]
+    if not U:
+        return None
+    U = np.array(U)
+    edges = np.arange(np.floor(Z.min()), Z.max() + cfg.binWidth, cfg.binWidth)
+    k = np.clip(np.digitize(Z, edges) - 1, 0, len(edges) - 2)
+    nb = len(edges) - 1
+    cnt = np.bincount(k, minlength=nb).astype(float)
+    per = np.array([np.bincount(k, weights=u, minlength=nb) / np.maximum(cnt, 1) for u in U])
+    zc = 0.5 * (edges[:-1] + edges[1:])
+    um = per.mean(axis=0)
+    idx = np.where(cnt >= cfg.Ncount_min)[0]
+    eps_loc = np.full(nb, np.nan)
+    if len(idx) >= 3:
+        zi, ui = zc[idx], um[idx]
+        g = np.gradient(ui, zi)
+        eps_loc[idx] = -g
+    return dict(zc=zc, u=um, per_frame=per, n_atoms=cnt, idx=idx, eps_loc=eps_loc, ts=[int(t) for t in sorted(fr)],
+                n_frames=len(U), ref_ts=ref['ts'])
+
+
+def perm_vs_compression(cfg, R, P, verbose=True):
+    """The consistency check (see the section comment).  Returns a dict with the measured and
+    predicted deformation, the ratio, the verdict and the pieces the figure draws; None when
+    the permeation M is not available.  Prints the verdict."""
+    say = print if verbose else (lambda *a, **k: None)
+    Mp = P.get('M_perm'); F = P.get('Dc')
+    if not Mp or F is None:
+        say('CHECK vs compression: skipped (no permeation M)')
+        return None
+    rec = load_M_record(cfg)
+    out = dict(rec=rec, dP=Mp['dP'], L0=F['L0'], z_P=F['z_P'], Z_P=F['Z_P'], Z_F=F['Z_F'], M_perm=Mp)
+    lag = perm_lagrangian_profile(cfg, R, P)
+    out['lag'] = lag
+    # ---- measured deformation of the network, rigid drop excluded ----
+    #   (i) the fig-12 parabola: c L_0 (contact-layer u_0 subtracted, Eulerian bins)
+    #   (ii) the Lagrangian profile: u(top material bin) - u(bottom material bin), which cancels
+    #        any rigid translation and INCLUDES the contact layer's own compaction
+    out['uF_prof'] = Mp['prof']['uF'] if 'prof' in Mp else np.nan
+    if lag is not None and len(lag['idx']) >= 4:
+        i0, i1 = lag['idx'][0], lag['idx'][-1]
+        out['uF_lag'] = float(lag['u'][i1] - lag['u'][i0])
+        out['u_contact'] = float(lag['u'][i0])                 # the rigid drop + whatever the lowest layer did
+        out['Z_bot'], out['Z_top'] = float(lag['zc'][i0]), float(lag['zc'][i1])
+        pf = lag['per_frame']
+        if len(pf) >= 2:
+            d = pf[:, i1] - pf[:, i0]
+            out['uF_lag_half'] = float(stats.t.ppf(0.5 + cfg.ci_level / 2, len(d) - 1) * d.std(ddof=1) / np.sqrt(len(d)))
+        else:
+            out['uF_lag_half'] = np.nan
+    else:
+        out['uF_lag'] = np.nan
+    # ---- support force (deck output since 2026-10-03): the network load at the contact ----
+    fs = cfg.path('support_force')
+    out['F_supp'] = None
+    if fs.exists():
+        try:
+            t = read_print_file(fs, ['step', 'F_poly', 'F_solv'])
+            st = np.where(t['step'] >= P['halt_ts'])[0]
+            st = st if len(st) else np.arange(len(t['step']))
+            A = R['AREA']
+            out['F_supp'] = dict(P_poly=float(np.mean(-t['F_poly'][st]) / A), P_solv=float(np.mean(-t['F_solv'][st]) / A),
+                                 P_poly_half=float(stats.t.ppf(0.5 + cfg.ci_level / 2, max(len(st) - 1, 1))
+                                                   * np.std(t['F_poly'][st], ddof=1) / np.sqrt(len(st)) / A) if len(st) > 1 else np.nan)
+        except Exception as e:                                  # noqa: BLE001
+            say(f'  support_force file present but unreadable: {e}')
+    if rec is None:
+        out['verdict'] = 'NO COMPRESSION RECORD'
+        say('CHECK vs compression: NO RECORD -- run the compression sweep notebook (it saves flow_data_local/compression/'
+            'M_record_latest.json via tri.save_M_record) and rerun this cell.  The permeation M is unchecked.')
+        return out
+    # ---- prediction from the compression curve for the same drag load ----
+    Z = np.linspace(F['Z_P'], F['Z_F'], 400)
+    sig = Mp['dP'] * (F['Z_F'] - Z) / F['L0']                   # drag load, linear in the material coordinate
+    preds = {}
+    for key, name in (('dsig_net', 'network'), ('dP_pist', 'piston')):
+        f = _record_curve(rec, key)
+        eps = f(sig)
+        u = -np.concatenate([[0.0], np.cumsum(0.5 * (eps[1:] + eps[:-1]) * np.diff(Z))])
+        preds[name] = dict(Z=Z, eps=eps, u=u, uF=float(u[-1]), eps_mean=float(-u[-1] / F['L0']),
+                           M_eff=float(Mp['dP'] * F['L0'] / (2 * abs(u[-1]))), M_small=rec['M_small_net' if key == 'dsig_net' else 'M_small_pist'])
+    out['pred'] = preds
+    uF_pred = float(np.mean([p['uF'] for p in preds.values()]))
+    out['uF_pred'] = uF_pred
+    # the same material span as the Lagrangian measurement
+    if np.isfinite(out['uF_lag']):
+        up = {n: float(np.interp(out['Z_top'], Z, p['u']) - np.interp(out['Z_bot'], Z, p['u'])) for n, p in preds.items()}
+        out['uF_pred_span'] = float(np.mean(list(up.values())))
+        out['ratio_lag'] = out['uF_lag'] / out['uF_pred_span']
+    else:
+        out['uF_pred_span'] = out['ratio_lag'] = np.nan
+    out['ratio_prof'] = out['uF_prof'] / uF_pred if np.isfinite(out['uF_prof']) else np.nan
+    r = out['ratio_lag'] if np.isfinite(out['ratio_lag']) else out['ratio_prof']
+    out['ratio'] = r
+    out['ratio_src'] = 'Lagrangian profile' if np.isfinite(out['ratio_lag']) else 'fig-12 parabola'
+    tol = float(cfg.PERM_M_TOL)
+    out['ok'] = bool(np.isfinite(r) and abs(r - 1) <= tol)
+    out['verdict'] = ('CONSISTENT' if out['ok'] else 'DISCREPANCY') + f': deformation {r:.3f} x the compression prediction ({out["ratio_src"]}; tolerance {tol:.0%})'
+    say(f"CHECK vs compression ({rec['run_id']}, saved {rec['saved']}, strain eps_{rec['M_STRAIN']}):  {out['verdict']}\n"
+        f"  measured |u_F| (rigid drop excluded): parabola {abs(out['uF_prof']):.2f} sigma, Lagrangian {abs(out['uF_lag']):.2f} sigma"
+        + (f" (span {out['Z_bot']:.0f}-{out['Z_top']:.0f}, contact layer u = {out['u_contact']:+.2f} sigma)" if np.isfinite(out['uF_lag']) else '')
+        + f";  predicted from the compression curve for dP = {Mp['dP']:.4f}: {abs(uF_pred):.2f} sigma (span-matched {abs(out['uF_pred_span']):.2f})\n"
+        f"  M: permeation {Mp[Mp['primary']]['M']:.3f} ({Mp['primary']}, L = {Mp['L_src']}; L_0 basis {Mp[Mp['primary']].get('M_L0', np.nan):.3f})"
+        f"  vs compression small-strain {rec['M_small_net']:.3f} (net) / {rec['M_small_pist']:.3f} (pist), "
+        f"effective at this load {preds['network']['M_eff']:.3f} / {preds['piston']['M_eff']:.3f}"
+        + (f"\n  network load at the support (polymer-support pair force / A): {out['F_supp']['P_poly']:.4f} vs dP_ext {Mp['dP']:.4f}"
+           f"  (solvent-support {out['F_supp']['P_solv']:.4f}, should be 0: transparent plate)" if out['F_supp'] else
+           '\n  (no support_force file: deck output since 2026-10-03 -- the network load at the support is not checked)'))
+    return out
+
+
+def fig_perm_vs_compression(cfg, R, P):
+    """The permeation-vs-compression check as a figure (verdict in the title):
+    (a) the steady displacement in the material frame (per-atom pairing with the zero-flux
+        reference) against the deformation the compression curve predicts for the drag load,
+        shifted by the measured contact-layer displacement; the fig-12 parabola for reference;
+    (b) the local strain -du/dZ against the predicted eps(sigma'(Z));
+    (c) M: the permeation estimates vs the compression small-strain slopes and the effective
+        modulus the compression curve gives at this load."""
+    C = perm_vs_compression(cfg, R, P, verbose=False)
+    if C is None:
+        print('check figure skipped (no permeation M)')
+        return None
+    perm_vs_compression(cfg, R, P, verbose=True)            # the printed verdict, always
+    fig, (axA, axB, axC) = plt.subplots(1, 3, figsize=(21, 6.5), constrained_layout=True)
+    ok = C.get('ok', False)
+    col_v = WONG['green'] if ok else WONG['vermillion']
+    fig.suptitle(f"CHECK -- permeation vs compression sweep:  {C['verdict']}\n{cfg.sim_name}", fontsize=13,
+                 fontweight='bold', color=col_v)
+    Mp, F, lag = C['M_perm'], P['Dc'], C['lag']
+    # ---- (a) ----
+    if lag is not None:
+        i = lag['idx']
+        axA.plot(lag['zc'][i], lag['u'][i], 'o', ms=5, color=WONG['blue'],
+                 label=f"measured: steady frames ({lag['n_frames']}) vs zero-flux reference, per atom, by reference $Z$")
+    zeta = np.linspace(0, 1, 200)
+    if 'prof' in Mp:
+        axA.plot(F['Z_P'] + zeta * F['L0'], C.get('u_contact', F['u0_ss']) + Mp['prof']['uF'] * zeta * (2 - zeta), '--', color='0.3', lw=1.3,
+                 label=f"fig-12 parabola (+ contact-layer $u$): $u_F$ = {Mp['prof']['uF']:.2f}$\\sigma$")
+    if C.get('pred'):
+        for name, p, col in (('network', C['pred']['network'], WONG['vermillion']), ('piston', C['pred']['piston'], WONG['orange'])):
+            axA.plot(p['Z'], C.get('u_contact', F['u0_ss']) + p['u'], '-', lw=1.8, color=col, alpha=0.9,
+                     label=f"predicted from the compression {name} curve: $u_F$ = {p['uF']:.2f}$\\sigma$")
+    for zp, lab in ((F['Z_P'], 'contact plane $Z^P$'), (F['Z_F'], 'free face $Z^F$')):
+        axA.axvline(zp, color='0.4', ls=':', lw=1)
+    axA.axhline(0, color='k', lw=0.8, alpha=0.5)
+    axA.set_xlabel('reference (material) position $Z$  ($\\sigma$)')
+    axA.set_ylabel('$u_z$ since the zero-flux reference  ($\\sigma$)')
+    axA.set_title('(a) steady displacement in the material frame\nvs the compression-curve prediction', fontsize=12)
+    axA.grid(alpha=0.3)
+    smart_legend(axA, fontsize=10)
+    # ---- (b) ----
+    if lag is not None:
+        i = lag['idx']
+        axB.plot(lag['zc'][i], lag['eps_loc'][i], 'o-', ms=4, lw=1, color=WONG['blue'], label=r'measured  $-\mathrm{d}u/\mathrm{d}Z$')
+    if C.get('pred'):
+        for name, p, col in (('network', C['pred']['network'], WONG['vermillion']), ('piston', C['pred']['piston'], WONG['orange'])):
+            axB.plot(p['Z'], p['eps'], '-', lw=1.8, color=col, label=f"predicted $\\varepsilon(\\sigma'(Z))$, {name} curve")
+    if 'prof' in Mp:
+        axB.plot(F['Z_P'] + zeta * F['L0'], -2 * Mp['prof']['uF'] / F['L0'] * (1 - zeta), '--', color='0.3', lw=1.3, label='fig-12 parabola')
+    axB.axhline(0, color='k', lw=0.8, alpha=0.5)
+    axB.set_xlabel('reference (material) position $Z$  ($\\sigma$)')
+    axB.set_ylabel('local compressive strain')
+    axB.set_title("(b) local strain $-\\mathrm{d}u/\\mathrm{d}Z$ vs the compression curve at the\nlocal drag load $\\sigma'(Z) = \\Delta P\\,(Z^F - Z)/L_0$ (material-linear)", fontsize=12)
+    axB.grid(alpha=0.3)
+    smart_legend(axB, fontsize=10)
+    # ---- (c) ----
+    bars = []
+    for k in ('prof', 'bb', 'trace'):
+        if k in Mp:
+            bars.append((f"permeation\n{k}" + (' (primary)' if k == Mp['primary'] else ''), Mp[k]['M'], Mp[k]['lo'], Mp[k]['hi'], WONG['blue']))
+    if np.isfinite(C.get('uF_lag', np.nan)):
+        Ml = Mp['dP'] * Mp['L'] / (2 * abs(C['uF_lag']))
+        h = C.get('uF_lag_half', np.nan)
+        rel = h / abs(C['uF_lag']) if np.isfinite(h) else 0.0
+        bars.append(('permeation\nLagrangian', Ml, Ml * (1 - rel), Ml * (1 + rel), WONG['skyblue']))
+    if C.get('rec'):
+        rec = C['rec']
+        bars.append(('compression\nsmall-strain (net)', rec['M_small_net'], np.nan, np.nan, WONG['vermillion']))
+        bars.append(('compression\nsmall-strain (pist)', rec['M_small_pist'], np.nan, np.nan, WONG['orange']))
+        bars.append(('compression curve\neffective at this load', C['pred']['network']['M_eff'], np.nan, np.nan, WONG['green']))
+    for j, (lab, m, lo, hi, col) in enumerate(bars):
+        axC.bar(j, m, color=col, alpha=0.85)
+        if np.isfinite(lo):
+            axC.errorbar(j, m, yerr=[[m - lo], [hi - m]], color='k', capsize=5, lw=1.2)
+        axC.text(j, m, f'{m:.3f}', ha='center', va='bottom', fontsize=10)
+    axC.set_xticks(range(len(bars)))
+    axC.set_xticklabels([b[0] for b in bars], fontsize=8)
+    axC.set_ylabel('$M$  (LJ)')
+    axC.set_title(f"(c) $M$: permeation (L = {Mp['L_src']}) vs the compression sweep\n" + (f"[{C['rec']['run_id']}]" if C.get('rec') else '[NO RECORD]'), fontsize=12)
+    axC.grid(axis='y', alpha=0.3)
+    txt = (f"support load: polymer {C['F_supp']['P_poly']:.4f} vs $\\Delta P_{{\\rm ext}}$ {Mp['dP']:.4f}" if C.get('F_supp')
+           else 'no support_force file\n(deck output since 2026-10-03)')
+    annotate_box(axC, txt, loc='upper left', fontsize=10)
+    return _save(fig, cfg, 'perm_vs_compression')
 
 
 def print_summary(cfg, levels):
