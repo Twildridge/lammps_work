@@ -11,6 +11,8 @@ lammps_work/                    ← This git repository
 │   ├── triaxial_permeation_two_pist/   ← STANDARD permeation workflow (two-piston): feed/permeate NPT-pistons, one constant-dP drive (no sweep)
 │   │                              (the one-piston triaxial_compression/ and triaxial_permeation/ moved to archive/simulations/ on 2026-09-22)
 │   ├── shear_slab/             ← Shear modulus measurement (plate-driven xz shear; current G workflow; deck laid out like the triaxial decks since 2026-09-22)
+│   ├── shear_slab_two_pist/    ← Shear modulus on the two-piston system (2026-10-03): reads the *_two_pist.data file unchanged, reservoirs at P*, x-force on the
+│   │                              polymer face layers (COM-steered, strain-controlled like shear_slab); same notebooks with DECK = "shear_slab_two_pist"
 │   ├── compress_slab/          ← Bulk modulus K: six plates + two wet pistons, on the template of triaxial_compression_two_pist (2026-09-29)
 │   ├── solvent_phase/          ← Pure solvent equation of state sweep
 │   ├── solvent_pure/           ← Single-state pure solvent run
@@ -50,7 +52,7 @@ lammps_work/                    ← This git repository
 │   ├── triaxial_compression_sweep.ipynb     ← one-piston runs: the same 11 figures overlaid for every sweep level; M, G, D_c, κ vs strain
 │   ├── triaxial_compression.ipynb           ← long-form original (solvent-phase stress, ss/pp virial, Widom diagnostics); the two above were distilled from it
 │   ├── triaxial_permeation.ipynb            ← one-piston runs (deck archived 2026-09-22): piston/thickness/stress/density/permeate + partial-vs-ss, with Phase 1.5 reference overlays
-│   ├── shear_analysis_single.ipynb          ← one shear level: G (network + series estimators, increments from γ = 0), N1/N2, D_c, κ, P_th (shear_slab output)
+│   ├── shear_analysis_single.ipynb          ← one shear level: G (network + series estimators, increments from γ = 0), N1/N2, D_c, κ, P_th (shear_slab or shear_slab_two_pist output: DECK in Config)
 │   ├── shear_analysis_sweep.ipynb           ← every level of a shear sweep: G vs γ, stress–strain slope, D_c, κ
 │   ├── bulk_modulus_analysis_{single,sweep}.ipynb ← Bulk modulus K (code in lib/bulk.py, on top of lib/triaxial.py)
 │   ├── calibration_analysis.ipynb           ← φ_f calibration / PMV sweep analysis (lib/volfrac.py)
@@ -60,7 +62,7 @@ lammps_work/                    ← This git repository
 │   │   │                          `sys.path.insert(0, 'lib')`; shell scripts call `$SCRIPT_DIR/lib/<tool>.py`
 │   │   │   # analysis modules (imported by the notebooks)
 │   │   ├── triaxial.py                      ← all analysis code behind triaxial_*_two_pist / triaxial_compression_{single,sweep}.ipynb (Config, readers, Terzaghi, plateau bootstrap, G, D_c, figures)
-│   │   ├── shear.py                         ← all shear analysis code (mirrors triaxial.py and imports its machinery)
+│   │   ├── shear.py                         ← all shear analysis code for both shear decks (mirrors triaxial.py and imports its machinery; G_STRAIN = M_STRAIN's counterpart)
 │   │   ├── bulk.py                          ← all bulk-modulus analysis code (on top of triaxial.py)
 │   │   ├── volfrac.py                       ← Voronoi volume fraction + λ calibration (shared with calibration_analysis.ipynb)
 │   │   ├── psd.py                           ← geometric porosity + pore-size distribution (2026-09-24)

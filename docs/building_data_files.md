@@ -44,6 +44,8 @@ compression, so raise it for sweeps beyond ε ≈ 0.10; the converter prints the
 at `sheet_spacing`).  If the 14000002 file is not on your Mac the notebook falls back to the 14000000 snapshot
 as a **smoke-test input only** and says so.
 
+`shear_slab_two_pist` (2026-10-03) needs **no data file of its own**: it reads the `<stem>_two_pist.data` file of `slab_two_pistons.ipynb` unchanged (the support and the load piston stay parked, the shear is applied as a force on the polymer face layers), so anything built for `triaxial_compression_two_pist` can be sheared as is.
+
 Shear-modulus pipeline **from the periodic slab (current, 2026-09-22)**: `python scripts/lib/slab_shear_plates.py` (defaults point at the 14000002 slab in `lammps_data_files_local/`; knobs `--clearance 0.5 --spacing 1.5 --offset 0.5 --cutoff 2.5 --box-buffer 2.0`) → copy the `*_with_plates.data` it writes to `~/Documents/lammps_data/input_data/` on the cluster → `sbatch shear_slab.batch` (its `DATANAME` already names this file). The plates sit on the slab's z-faces (z = gap, x = shear, the same axes as the compression decks), so the shear gap is the slab thickness (plate separation ~120 σ) and the sheared membrane is laterally periodic (48 × 48 σ). The older isolated-cube pipeline (`isolate_gel.ipynb` → `add_plates_to_gel.ipynb`, plates on the x-faces of a finite gel driven ±z, 2026-04-28) needs the pre-2026-09-22 revision of `shear_slab.lmp` and the pre-2026-09-23 `shear_analysis.ipynb` (git history).
 
 ### Typical workflow for a new slab
