@@ -54,6 +54,8 @@ Usage (CLI)
         [--permeate-thickness 10] [--feed-thickness None] [--margin-perm auto]
         [--margin-feed 15] [--piston-clearance 1.0] [--load-piston-frac 0.5]
         [--sheet-source support|hex] [--sheet-spacing 0.2] [--seed 42] [--no-log]
+  python3 slab_two_pistons.py --cut-existing <..._two_pist.data> [--gel-keep-frac 0.5] [--output <...>]
+        thins the gel of an existing two-piston file (cut_two_pist; -> <stem>_half.data)
   The validation (self-check) always runs; --self-check-only validates an
   existing output file without rewriting it.
 """
@@ -900,6 +902,123 @@ def check_gel_unchanged(input_file, output_file, tol=1e-6):
 
 
 # ---------------------------------------------------------------------------
+# Thinner gel from an existing two-piston file (2026-10-03)
+# ---------------------------------------------------------------------------
+def cut_two_pist(input_file, output_file=None, keep_frac=0.5, log_info=True):
+    """Thin the gel of an EXISTING two-piston data file to the bottom (support-side) keep_frac
+    of its bounding-box thickness; lx, ly and everything below the cut are untouched.
+    With z_cut = bb_lo + keep_frac L_bb and D = bb_hi - z_cut:
+      * every polymer bead above z_cut is deleted, with every bond that loses an endpoint;
+      * polymer no longer bonded to the network (outside the largest bonded cluster) is
+        deleted: a cut chain leaves a dangling end (kept) or a free piece (removed);
+      * solvent in [z_cut, z_cut + D) is deleted; the solvent above it, the load piston and
+        the feed piston move DOWN by D, so the feed reservoir sits on the new face exactly
+        as it sat on the old one, and zhi comes down by D (same vacuum margin);
+      * a moved solvent bead closer than OVERLAP_MIN to an atom below the cut is deleted.
+    The new face is a cut face (dangling ends), not an as-prepared one; the deck's minimise +
+    NPT-piston settle relax it.  Made for the half-thickness L^2 test of the hold relaxation
+    (tau_1 = L^2/(4 pi^2 D_c) must fall 4x).  Returns the info dict."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    inp = Path(input_file)
+    if output_file is None:
+        tag = '_half' if abs(keep_frac - 0.5) < 1e-9 else f'_keep{keep_frac:g}'
+        output_file = str(inp.with_name(inp.stem + tag + '.data'))
+    assert 0.0 < keep_frac < 1.0, 'keep_frac must lie in (0, 1)'
+    print('=' * 78 + f'\ncut_two_pist: {inp.name}  ->  {Path(output_file).name}   (keep the bottom {keep_frac:g} of the gel)\n' + '=' * 78)
+    atoms, bonds_in, box, _ = isolate_gel.parse_lammps_data(str(inp))
+    vel_in, img_in = parse_velocities(str(inp)), parse_image_flags(str(inp))
+    ids, typ, xyz = _arrays(atoms)
+    mols = np.array([a['mol'] for a in atoms], dtype=np.int64)
+    counts_in = {int(t): int((typ == t).sum()) for t in range(1, 8)}
+    is_poly = np.isin(typ, POLYMER_TYPES)
+    z = xyz[:, 2]
+    bb_lo, bb_hi = float(z[is_poly].min()), float(z[is_poly].max())
+    z_cut = bb_lo + keep_frac * (bb_hi - bb_lo)
+    D = bb_hi - z_cut
+    for t in (T_FEED, T_LOAD):
+        assert z[typ == t].min() > bb_hi, f'{TYPE_NAMES[t]} is not above the gel top -- is this a seated / compressed file?'
+    keep = ~(is_poly & (z > z_cut))
+    n_cut = int((~keep).sum())
+    # ---- bonded clusters of the polymer below the cut ----
+    idx_of = {int(i): k for k, i in enumerate(ids)}
+    a1 = np.array([idx_of[b['atom1']] for b in bonds_in])
+    a2 = np.array([idx_of[b['atom2']] for b in bonds_in])
+    live = keep[a1] & keep[a2]
+    n = len(ids)
+    _, lab = connected_components(coo_matrix((np.ones(int(live.sum())), (a1[live], a2[live])), shape=(n, n)), directed=False)
+    pk = is_poly & keep
+    frag = pk & (lab != np.bincount(lab[pk]).argmax())
+    keep &= ~frag
+    # ---- solvent: excise [z_cut, z_cut + D); move the rest, the load piston and the feed piston down ----
+    is_solv = typ == T_SOLVENT
+    gone = is_solv & (z >= z_cut) & (z < z_cut + D)
+    keep &= ~gone
+    moved_solv = is_solv & (z >= z_cut + D)
+    xyz = xyz.copy()
+    xyz[moved_solv | np.isin(typ, (T_FEED, T_LOAD)), 2] -= D
+    # ---- seam: moved solvent against everything that stayed below the cut ----
+    below = keep & ~moved_solv & (xyz[:, 2] > z_cut - 2.0) & (xyz[:, 2] <= z_cut) & np.isin(typ, (1, 2, 3))
+    seam = np.where(moved_solv & (xyz[:, 2] < z_cut + 2.0))[0]
+    tree, _ = _tree(xyz[below], box)
+    close = np.asarray(tree.query_ball_point(_wrap_like(xyz[seam], box), r=OVERLAP_MIN, return_length=True)) > 0
+    keep[seam[close]] = False
+    # ---- assemble ----
+    ids_k, typ_k, xyz_k, mols_k = ids[keep], typ[keep], xyz[keep], mols[keep]
+    old2new = {int(o): i + 1 for i, o in enumerate(ids_k)}
+    bonds = [(b['type'], old2new[b['atom1']], old2new[b['atom2']]) for b, ok in zip(bonds_in, keep[a1] & keep[a2]) if ok]
+    vel = np.array([vel_in.get(int(i), (0.0, 0.0, 0.0)) for i in ids_k], dtype=float)
+    img = np.array([img_in.get(int(i), (0, 0, 0)) for i in ids_k], dtype=np.int64) if img_in else None
+    new_box = dict(box, zhi=box['zhi'] - D)
+    G = gel_extent(xyz_k[np.isin(typ_k, POLYMER_TYPES), 2])
+    zmean = lambda t: float(xyz_k[typ_k == t, 2].mean())      # noqa: E731
+    margin_feed = new_box['zhi'] - zmean(T_FEED)
+    info = dict(input_file=str(inp), output_file=str(output_file), date=_dt.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                keep_frac=float(keep_frac), z_cut=z_cut, excised=D, gel_bb_in=(bb_lo, bb_hi), gel_bb=(G['bb_lo'], G['bb_hi']),
+                L_bb=G['L_bb'], L_rg=G['L_rg'], box_out=new_box, support_z=zmean(T_SUPPORT), z_perm_piston=zmean(T_PERM),
+                z_load_piston=zmean(T_LOAD), z_feed_piston=zmean(T_FEED), margin_feed=margin_feed,
+                max_strain_feed_margin=(margin_feed - 2.0) / G['L_bb'],
+                n_poly_cut=n_cut, n_poly_fragments=int(frag.sum()), n_solvent_excised=int(gone.sum()),
+                n_solvent_moved=int(moved_solv.sum()), n_seam_removed=int(close.sum()),
+                counts_in=counts_in, counts={int(t): int((typ_k == t).sum()) for t in range(1, 8)},
+                n_atoms=int(len(ids_k)), n_bonds_in=len(bonds_in), n_bonds=len(bonds))
+    print(f'  gel BB [{bb_lo:.2f}, {bb_hi:.2f}] (L_bb {bb_hi - bb_lo:.2f}) -> cut plane z = {z_cut:.2f}, {D:.2f} sigma excised; '
+          f'new gel BB [{G["bb_lo"]:.2f}, {G["bb_hi"]:.2f}] (L_bb {G["L_bb"]:.2f}, L_rg {G["L_rg"]:.2f})')
+    print(f'  polymer: {n_cut} beads above the cut + {info["n_poly_fragments"]} in detached fragments removed; bonds {len(bonds_in)} -> {len(bonds)}')
+    print(f'  solvent: {info["n_solvent_excised"]} beads excised, {info["n_solvent_moved"]} moved down with the load and feed pistons, '
+          f'{info["n_seam_removed"]} of them removed at the seam (< {OVERLAP_MIN} sigma from an atom below the cut)')
+    print(f'  z: perm piston {info["z_perm_piston"]:.2f} | support {info["support_z"]:.2f} | gel | load piston {info["z_load_piston"]:.2f} | '
+          f'feed piston {info["z_feed_piston"]:.2f} | zhi {new_box["zhi"]:.2f};  feed margin {margin_feed:.1f} sigma absorbs a compression '
+          f'strain of ~{info["max_strain_feed_margin"]:.2f}')
+    val = validate(typ_k, xyz_k, bonds, new_box, n_old=0)
+    info['validation'] = val
+    if not val['ok']:
+        raise RuntimeError('validation FAILED -- file not written:\n  ' + '\n  '.join(val['problems']))
+    header = (f'two-piston data file with the gel cut to the bottom {keep_frac:g} of its thickness, from {inp.name} via '
+              f'slab_two_pistons.cut_two_pist on {info["date"]}; types 1 xl 2 chain 3 solv 4 support 5 feed_piston 6 perm_piston 7 load_piston; '
+              f'z: support={info["support_z"]:.3f} gel_bb=[{G["bb_lo"]:.3f},{G["bb_hi"]:.3f}] perm_piston={info["z_perm_piston"]:.3f} '
+              f'load_piston={info["z_load_piston"]:.3f} feed_piston={info["z_feed_piston"]:.3f}; cut plane {z_cut:.3f}, {D:.3f} sigma excised')
+    write_two_pist_data(output_file, header, np.arange(1, len(ids_k) + 1), mols_k, typ_k, xyz_k, vel, bonds, new_box, img=img)
+    with open(str(output_file) + '.info.json', 'w') as f:
+        json.dump(_jsonable(info), f, indent=1)
+    print(f'  wrote {len(ids_k)} atoms, {len(bonds)} bonds -> {output_file}')
+    c = info['counts']
+    entry = '\n'.join([
+        f'Two-piston data file with a THINNED gel  [{info["date"]}, slab_two_pistons.cut_two_pist, keep_frac {keep_frac:g}]:',
+        f'  Input: {inp.name}   (lx, ly unchanged; everything below the cut plane untouched)',
+        f'  Cut: gel BB [{bb_lo:.2f}, {bb_hi:.2f}] cut at z = {z_cut:.2f} ({D:.2f} sigma excised); {n_cut} polymer beads above the cut and '
+        f'{info["n_poly_fragments"]} in detached fragments removed; {info["n_solvent_excised"]} solvent beads excised, {info["n_seam_removed"]} at the seam',
+        f'  z: perm piston {info["z_perm_piston"]:.2f} | support {info["support_z"]:.2f} | gel BB [{G["bb_lo"]:.2f}, {G["bb_hi"]:.2f}] '
+        f'(L_bb {G["L_bb"]:.2f}, L_rg {G["L_rg"]:.2f}) | load piston {info["z_load_piston"]:.2f} | feed piston {info["z_feed_piston"]:.2f} | zhi {new_box["zhi"]:.2f}',
+        f'  Crosslinks: {c[1]}   Chain beads: {c[2]}   Solvent: {c[3]}   Support: {c[4]}   Feed piston: {c[5]}   Permeate piston: {c[6]}   Load piston: {c[7]}',
+        f'  Total atoms: {info["n_atoms"]}   Total bonds: {info["n_bonds"]}   Output: {Path(output_file).name}', ''])
+    print('\n--- slab_data_file_info.md entry ---\n' + entry)
+    if log_info:
+        append_info_log(entry)
+    return info
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def _none_or_float(s):
@@ -923,7 +1042,13 @@ if __name__ == '__main__':
     ap.add_argument('--no-log', action='store_true', help='do not append to slab_data_file_info.md')
     ap.add_argument('--no-png', action='store_true')
     ap.add_argument('--self-check-only', metavar='DATAFILE', help='validate an existing two-piston data file and exit')
+    ap.add_argument('--cut-existing', metavar='DATAFILE', help='thin the gel of an EXISTING two-piston data file to the bottom '
+                    '--gel-keep-frac of its thickness (cut_two_pist) and exit; --output names the new file (default <stem>_half.data)')
+    ap.add_argument('--gel-keep-frac', type=float, default=0.5)
     args = ap.parse_args()
+    if args.cut_existing:
+        cut_two_pist(args.cut_existing, args.output, args.gel_keep_frac, log_info=not args.no_log)
+        sys.exit(0)
     if args.self_check_only:
         r = self_check(args.self_check_only)
         sys.exit(0 if r['ok'] else 1)

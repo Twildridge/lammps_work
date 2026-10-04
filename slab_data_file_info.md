@@ -575,3 +575,11 @@ Converted two-piston (feed/permeate) data file  [2026-09-29 10:40, slab_two_pist
   Sheets: 23316 beads each (support pattern, spacing 0.2387); piston_clearance 1.0, load_piston_frac 0.5, seed 42
   Crosslinks: 15066   Chain beads: 89424   Solvent: 92567   Support: 23316   Feed piston: 23316   Permeate piston: 23316   Load piston: 23316
   Total atoms: 290321   Total bonds: 119232   Output: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist_pm40.data
+Two-piston data file with a THINNED gel  [2026-10-03 16:29, slab_two_pistons.cut_two_pist, keep_frac 0.5]:
+  Input: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist.data   (lx, ly unchanged; everything below the cut plane untouched)
+  Cut: gel BB [31.43, 157.84] cut at z = 94.64 (63.21 sigma excised); 52169 polymer beads above the cut and 75 in detached fragments removed; 33130 solvent beads excised, 176 at the seam
+  z: perm piston 18.73 | support 29.73 | gel BB [31.43, 94.64] (L_bb 63.21, L_rg 60.85) | load piston 101.50 | feed piston 108.37 | zhi 123.37
+  Crosslinks: 7540   Chain beads: 44706   Solvent: 59261   Support: 23316   Feed piston: 23316   Permeate piston: 23316   Load piston: 23316
+  Total atoms: 204771   Total bonds: 59442   Output: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist_half.data
+  Purpose: half-thickness L^2 test of the hold relaxation (triaxial_compression_two_pist_half.batch). The new face is a CUT face (dangling ends).
+
