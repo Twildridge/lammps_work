@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=shear_2p
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=0
+#SBATCH --time=48:00:00
+#SBATCH --output=%x.o%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (must run BEFORE STRAINS is defined below).  sbatch
+# submits whatever copy of this file is on disk; if it is stale the sweep list
+# is wrong and run_lammps.sh's own git pull is too late (STRAINS is already
+# exported).  Pull first, then re-exec the fresh batch.  (Mirrors
+# triaxial_compression.batch / shear_slab.batch.)
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${SHEAR2P_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining STRAINS..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export SHEAR2P_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/shear_slab_two_pist/shear_slab_two_pist.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (SHEAR2P_BATCH_SYNCED=1)"
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# TWO-PISTON SHEAR (2026-10-03): the shear_slab protocol on the two-piston system.
+# Both reservoirs are held at PRESS_TARGET by the NPT-pistons for the whole run;
+# in place of plates, the polymer beads of the gel's top / bottom face layers get a
+# prescribed horizontal force (+x / -x, the same on every bead of a layer, steering
+# the layer's centre of mass).  Strain-controlled like shear_slab.batch: each level
+# shears until gamma reaches its target, then holds; G = sigma_xz / gamma.
+#
+# DATANAME is the compression deck's input, unchanged (scripts/slab_two_pistons.ipynb
+# output; already in ~/Documents/lammps_data/input_data/ for the compression runs).
+# =======================================================================
+FOLDER="shear_slab_two_pist"
+DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist"
+INTERACTION="1.0_1.0"   # epsSS_epsSP
+# NSTEPS: Phase 3 production HOLD per strain level (flat; also the output-file tag).
+# Other phase lengths are index knobs in shear_slab_two_pist.lmp (-var):
+#   Phase 0 (Langevin NVT) 50000, Phase 1 (piston settle) NPT_PISTON_STEPS,
+#   Phase 1.5 (gamma = 0 reference) 150000,
+#   Phase 2 (shear drive) halts at each strain target (~260k steps per 0.10, cap 570000).
+NSTEPS=9000000
+TYPE=""
+PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run
+
+# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var) -----
+export PISTON_MASS=1000
+export C_PIST_FRAC=1.0
+export NPT_PISTON_STEPS=1000000
+export SETTLE_HALT=0
+
+# -----------------------------------------------------------------------
+# Cumulative shear strains (as shear_slab.batch): shear to the first, hold NSTEPS,
+# shear FURTHER to the next, ...; files tagged _g<strain>.  The list must be exported
+# as a SCALAR string (bash does not export arrays).
+# -----------------------------------------------------------------------
+STRAINS_LIST=(0.1)
+export STRAINS="${STRAINS_LIST[*]}"
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"

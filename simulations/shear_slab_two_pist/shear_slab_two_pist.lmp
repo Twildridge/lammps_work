@@ -1,0 +1,874 @@
+# ===== Shear Modulus, TWO-PISTON system, force-driven xz shear  (2026-10-03) =====
+# SHEAR MODE ONLY.  The shear_slab.lmp protocol (same phases, strain sweep, drive-
+# until-target + hold logic, observables, binning, file names and columns) on the
+# system of ../triaxial_compression_two_pist/triaxial_compression_two_pist.lmp:
+# the converter's *_two_pist.data file is read UNCHANGED (no plates, no harmonic
+# bonds) and both solvent reservoirs stay closed by the NPT-pistons at P_target
+# for the whole run.  In place of plates, the polymer beads of the gel's two face
+# layers get a prescribed horizontal FORCE, the same on every bead of a layer
+# (fix addforce): +x on the top layer, -x on the bottom layer.  The beads are
+# otherwise free -- they keep their thermal motion and their place in the network
+# -- so nothing rigid touches the gel.
+#
+# HOW THE FORCE IS PRESCRIBED (strain control, as shear_slab.lmp): the uniform force
+# on a layer is a spring between the layer's centre of mass and a TARGET x-position,
+#     f_bead = -k_tether * (x_COM,layer - x_target)        (total = N * f_bead)
+# During a DRIVE the two targets move apart at +/-vshear (the plates' speed law);
+# fix halt stops the drive when the strain reaches the level's target (e.g. 0.10);
+# in the HOLD the targets are frozen, so the layer COMs stay put IN x -- the analogue
+# of the frozen plates -- while the interior relaxes and the stress is measured.
+# The force has an x-component ONLY and only steers the COM of a layer: every bead
+# feels the same f_x, so the layer's internal (thermal) motion is untouched, and
+# nothing at all acts in y or z -- the face layers stay free to move vertically
+# (the gel can change thickness under shear at the constant bath pressure).  The total force on a layer / (lx*ly) is
+# the shear stress the gel transmits to the boundary (S_top, S_bot), exactly the
+# plate x-force of shear_slab.lmp.
+#
+# Input: <stem>_two_pist.data from scripts/slab_two_pistons.ipynb (the compression
+#   deck's input, same gel state).
+# Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,
+#   strains (+ strains_list), press_target, piston_mass, c_pist_frac,
+#   npt_piston_steps, settle_halt.  No cont / continue_sim.sh support (as every
+#   two-piston deck).
+# Optional -var overrides (index-style knobs; short local smoke test e.g.
+#    -var phase0_steps 200 -var npt_piston_steps 400 -var min_iter 50 -var ref_avg_steps 400
+#    -var ref_nfreq 200 -var series_freq 100 -var stress_freq 100 -var nsteps_shear_base 3000
+#    -var num_dump_frames 1 -var strains 0.005 0.01 -var nsteps 2000):
+#   phase0_steps, npt_piston_steps, min_iter, ref_avg_steps, ref_nfreq, series_freq,
+#   stress_freq, thermo_freq, nsteps_shear_base, nsteps_shear, k_tether, layer_thick,
+#   track_thick, num_dump_frames
+#
+# Atom types (the two-piston convention): 1=crosslink, 2=chain bead, 3=solvent,
+#   4=support, 5=feed piston, 6=permeate piston, 7=load piston.
+#
+# GEOMETRY (z from bottom to top, as the compression deck; boundary p p p, box
+# orthogonal and never changed):
+#       vacuum | permeate piston (P_target, pushes UP) | permeate reservoir |
+#       support (type 4, FROZEN where the converter put it, transparent to solvent) |
+#       gel slab | feed reservoir [load piston, type 7: PARKED mid-feed and FROZEN,
+#       transparent to solvent, never seated] | feed piston (P_target, pushes DOWN) | vacuum
+#   z = gap direction, x = shear direction, y = neutral -- the axes of shear_slab.lmp.
+#   The network wraps x and y, so the force couple on the two faces cannot rotate
+#   the slab: it is balanced through the periodic images and the response is simple
+#   shear.  The support only keeps the gel from wandering in z; the x-force it and
+#   the load sheet exchange with the polymer is LOGGED (T_sup, T_load in
+#   plate_pressure_*; expected ~0 -- the gel does not touch the support).
+#
+# DRIVEN LAYERS (static groups, fixed bead sets, defined after the piston settle):
+#   poly_top = polymer beads above  z_face_t - layer_thick   (z_face_t = Rg top face)
+#   poly_bot = polymer beads below  z_face_b + layer_thick   (z_face_b = Rg bottom face)
+#   Inside a driven layer sigma_xz ramps from 0 (free face) to its interior value,
+#   so the layers are EXCLUDED from every stress measurement (bulk region).
+#
+# STRAIN DEFINITIONS (both: relative x-displacement of two material planes over the
+#   FULL distance between them = each plane's displacement over the half-distance):
+#   gamma     = (x_drv_top - x_drv_bot - x_drv0) / H_drv   -- driven-layer COMs, the
+#               PRESCRIBED strain: the halt watches it (shear_strain_* column 4, with
+#               H_drv in column 3 -- the plate-based gamma / plate_sep of shear_slab.lmp)
+#   gamma_trk = (x_trk_top - x_trk_bot - x_trk0) / H_trk   -- two static TRACKING slabs
+#               of polymer (track_thick thick) just inside the driven layers, where the
+#               stress is already uniform: the strain the INTERIOR actually carries, the
+#               G denominator of the notebooks (shear_strain_surface_* column 3,
+#               stress_series column 12).  It differs from gamma by the stress ramp
+#               across the driven layers (a few %).
+#
+# Behaviour:
+#   - Phase 0:   read + brief minimize + short Langevin NVT, all pistons frozen.
+#   - Phase 1:   NPT-PISTON SETTLE of both wet pistons at P_target (the compression
+#                deck's Phase 1, verbatim).  The wet pistons stay live to the end.
+#   - Phase 1.5: gamma = 0 REFERENCE window (_ref files), layer COMs tethered at
+#                their settled x (the frozen plates of shear_slab.lmp).
+#   - Phase 2/3: STRAIN SWEEP over ${strains} (cumulative).  For each target:
+#                  2. DRIVE -- targets move at +/-vshear until gamma >= target (fix halt);
+#                  3. HOLD  -- targets frozen, gel NVT for nsteps; the relaxed shear
+#                              stress is MEASURED.   G = <sigma_xz> / gamma_trk
+#   (No unload phase: the run ends in the last level's held state.)
+#
+# Recorded observables -- the shear_slab.lmp set, same file names and columns
+# (${stem} = ${dataname}_${interaction}_${nsteps}; levels tagged _g<strain>):
+#   stress_data/stress_tensor_{polymer,solvent}_${stem}_g<γ>.dat   bulk 6-component stress, one row per nfreq block
+#   stress_data/stress_series_${stem}_g<γ>.dat          fine block averages: sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz S_top S_bot gamma_trk
+#                                                       (S_* = layer force / lx*ly) over drive + hold
+#   stress_data/stress_profile_z_{polymer,solvent}_${stem}_g<γ>.dat   whole-box z-binned stress (reduced z)
+#   stress_data/shear_strain_${stem}_g<γ>.dat           step  gel_lz_initial  H_drv  gamma        (drive + hold)
+#   stress_data/shear_strain_surface_${stem}_g<γ>.dat   step  gel_gap_bb  gamma_trk  H_trk
+#   displacement_data/disp_x_polymer_${stem}_g<γ>.dat   z-binned mean polymer u_x, reference RESET at each hold onset (for D_c)
+#   displacement_data/disp_x_polymer_cum_${stem}_g<γ>.dat   the same, CUMULATIVE since the gamma = 0 reference: its interior slope
+#                                                       is the network strain G divides by (+ _cum_ref_${stem}: its zero)
+#   volume_data/{gel_volume_bb,gel_dimensions_bb,gel_volume_rg,gel_dimensions_rg,box_dimensions,polymer_com}_${stem}_g<γ>.dat
+# gamma = 0 REFERENCE (Phase 1.5): the stress files above with the tag _ref_${stem}.
+# Whole-run (stem only, from step 0):
+#   volume_data/{box_dimensions,box_bounds,gel_dimensions_rg,gel_volume_rg,gel_volume_bb}_${stem}.dat
+#   stress_data/shear_strain_${stem}.dat                (from the reference on)
+#   stress_data/shear_strain_rg_${stem}.dat             step Rg_zz^2 Rg_xz  (Rg-based shear strain, formed in the notebooks)
+#   piston_data/plate_pressure_${stem}.dat              step z_top z_bot P_feed P_perm S_top S_bot T_sup T_load
+#                                                       (gel Rg faces; wet-piston pressures; layer force / area; x-force of
+#                                                        the polymer on the support / load sheets per area)
+#   piston_data/piston_pressure_${stem}.dat, piston_position_run_${stem}.dat   (as the compression deck)
+
+
+# ==========================================================================
+#                              PARAMETERS
+# ==========================================================================
+
+# ----- Physical Parameters -----
+variable sigma         equal 1.0
+variable temp_target   equal 1.0
+variable press_target  index 1.5          # bath pressure P*; run_lammps.sh passes -var press_target
+variable P_target      equal ${press_target}
+variable timestep_prod equal 0.005
+variable min_iter      index 1000
+
+# ----- NPT-piston knobs (as triaxial_compression_two_pist.lmp) -----
+variable piston_mass      index 1000.0    # per bead, applied with `mass 5/6/7` after read_data
+variable K_solv           index 10.0      # solvent bulk modulus for the damping estimate
+variable c_pist_frac      index 1.0       # C_pist = c_pist_frac * C_crit
+variable npt_piston_steps index 1000000   # Phase-1 settle length
+variable two_pi           equal 6.283185307179586
+variable settle_halt      index 0
+variable settle_tol_v     equal 1.0e-4
+variable settle_tol_z     equal 0.05
+variable settle_min_steps equal 200000
+variable phase0_steps     index 50000
+variable box_guard_gap    equal 2.0       # halt if a wet piston face comes this close to a box face
+
+# ---- STRAIN SWEEP: cumulative shear-strain targets (as shear_slab.lmp) --------
+# `strains` is an index-style variable supplied by run_lammps.sh as
+#   -var strains 0.1 0.15 ...     (shear_slab_two_pist.batch: STRAINS_LIST=(...)).
+# CUMULATIVE: each level shears FURTHER from the held state.
+variable strains      index 0.10
+variable strains_list index "STALE-run_lammps.sh--no-list-passed--running-single-default-only"
+
+# ----- Shear Phase 2 (STRAIN-CONTROLLED drive; shear_slab.lmp's speed law) -----
+#   vshear = 1.1 * strain_rate_ref * H_drv / (2 * nsteps_shear_base * dt)   per layer
+variable strain_rate_ref   equal 0.10
+variable nsteps_shear_base index 285000   # steps a 0.10 increment would take at vshear/1.1
+variable nsteps_shear      index 570000   # safety cap per increment (2x); the halt fires first
+# Layer tether: f_bead = -k_tether*(x_COM - x_target), i.e. a spring of N*k_tether on
+# the layer COM.  At 1.0 the COM trails its target by tau*A/(N*k) ~ 0.02 sigma at
+# sigma_xz = 0.02 and the COM mode's period is 2 pi sqrt(m/k) ~ 6 tau.
+variable k_tether          index 1.0
+
+# ----- Driven layers and strain-tracking slabs -----
+variable layer_thick index 3.0      # driven layer: polymer within this depth of each Rg face (plus everything beyond the face)
+variable track_thick index 2.0      # tracking slab just inside each driven layer (strain numerator)
+
+# ----- Output Frequencies -----
+variable thermo_freq index 250000
+variable stress_freq index 1000     # fix print cadence (strain, gel/box dims, COM)
+variable volume_freq index 5000     # piston logs
+
+# ----- Phase 1.5: tau = 0 REFERENCE window -----
+variable ref_avg_steps index 150000
+variable ref_nevery    equal 100
+variable ref_nfreq     index 10000
+variable ref_nrepeat   equal v_ref_nfreq/v_ref_nevery
+
+# ----- Fine block-averaged bulk stress series -----
+variable series_freq    index 5000
+variable series_nevery  equal 50
+variable series_nrepeat equal floor(v_series_freq/v_series_nevery)
+variable series_nfreq   equal v_series_nevery*v_series_nrepeat
+
+# ----- Trajectory dump frame budget -----
+variable num_dump_frames index 30
+variable dump_freq_prod  equal floor(${nsteps}/v_num_dump_frames)
+variable setup_span      equal v_phase0_steps+v_npt_piston_steps+v_ref_avg_steps
+variable dump_freq_setup equal floor(v_setup_span/v_num_dump_frames)
+
+# ----- Time Averaging (stress): nfreq = nevery * nrepeat, ~num_stress_curves blocks per hold -----
+variable num_stress_curves equal 10
+variable nevery_target     equal 100
+variable nrepeat_max       equal 2000
+variable nrepeat_min       equal 50
+variable nfreq_raw    equal floor(${nsteps}/v_num_stress_curves)
+variable nrepeat_raw  equal floor(v_nfreq_raw/v_nevery_target)
+variable nr_lo equal (v_nrepeat_raw>v_nrepeat_min)*v_nrepeat_raw+(v_nrepeat_raw<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepeat_max)*v_nrepeat_max
+variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
+variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
+print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
+print ">>> Mode: SHEAR, TWO-PISTON (force-driven face layers; wet pistons hold the bath at P_target)"
+
+# ----- Spatial Binning -----
+variable binWidth   equal 2.0   # z-bin width (sigma); as shear_slab.lmp / lib/shear.py Config.binWidth
+variable plate_excl equal v_layer_thick+v_track_thick   # bulk region starts this far inside each Rg face (driven layer + tracking slab)
+
+# half the relative travel of the two layer targets: 0 until the sweep redefines it (drive / hold)
+variable dx_tgt equal 0.0
+
+
+# ==========================================================================
+#                           INITIALIZATION
+# ==========================================================================
+
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+pair_style lj/cut 1.122
+bond_style fene      # plain fene (no hybrid): the per-atom bond virial is tallied correctly with /omp
+
+read_data data_files/${dataname}.data nocoeff
+
+mass 5 ${piston_mass}
+mass 6 ${piston_mass}
+mass 7 ${piston_mass}
+
+comm_modify cutoff 5.0
+
+print "========================================"
+print "Shear slab, TWO-PISTON (force-driven): ${dataname}"
+print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
+print "P_target=${P_target}  piston_mass=${piston_mass}  c_pist_frac=${c_pist_frac}  settle=${npt_piston_steps}"
+print "Hold steps per strain level: ${nsteps};  first strain target = ${strains}"
+print "========================================"
+
+
+# ==========================================================================
+#                          GROUP DEFINITIONS
+# ==========================================================================
+
+group polymer     type 1 2
+group solvent     type 3
+group support     type 4
+group piston_feed type 5
+group piston_perm type 6
+group piston_load type 7
+group mobile      type 1 2 3
+group gel_system  type 1 2 3 4 5 6 7
+
+variable N_feed equal count(piston_feed)
+variable N_perm equal count(piston_perm)
+print ">>> sheets: support $(count(support))  feed ${N_feed}  permeate ${N_perm}  load $(count(piston_load))"
+
+
+# ==========================================================================
+#                       INTERATOMIC POTENTIALS  (the compression deck's table)
+# ==========================================================================
+pair_coeff * * 1.0 ${sigma} 1.122
+pair_coeff 1 3 ${epsSP} ${sigma} 1.122
+pair_coeff 2 3 ${epsSP} ${sigma} 1.122
+pair_coeff 3 3 ${epsSS} ${sigma} 1.122
+pair_coeff 1 4 1.0 ${sigma} 1.122
+pair_coeff 2 4 1.0 ${sigma} 1.122
+pair_coeff 1 5 1.0 ${sigma} 1.122
+pair_coeff 2 5 1.0 ${sigma} 1.122
+pair_coeff 1 6 1.0 ${sigma} 1.122
+pair_coeff 2 6 1.0 ${sigma} 1.122
+pair_coeff 1 7 1.0 ${sigma} 1.122         # polymer-load piston (parked: only stray beads ever reach it)
+pair_coeff 2 7 1.0 ${sigma} 1.122
+pair_coeff 3 5 1.0 ${sigma} 1.122         # solvent-wet pistons: ALWAYS ON
+pair_coeff 3 6 1.0 ${sigma} 1.122
+pair_coeff 3 4 0.0 ${sigma} 0.0           # solvent-support: off
+pair_coeff 3 7 0.0 ${sigma} 0.0           # solvent-load piston: off
+pair_coeff 4 4 0.0 ${sigma} 0.0
+pair_coeff 4 5 0.0 ${sigma} 0.0
+pair_coeff 4 6 0.0 ${sigma} 0.0
+pair_coeff 4 7 0.0 ${sigma} 0.0
+pair_coeff 5 5 0.0 ${sigma} 0.0
+pair_coeff 5 6 0.0 ${sigma} 0.0
+pair_coeff 5 7 0.0 ${sigma} 0.0
+pair_coeff 6 6 0.0 ${sigma} 0.0
+pair_coeff 6 7 0.0 ${sigma} 0.0
+pair_coeff 7 7 0.0 ${sigma} 0.0
+
+bond_coeff * 30.0 1.5 1.0 1.0
+special_bonds fene
+
+neigh_modify exclude type 4 4
+neigh_modify exclude type 4 5
+neigh_modify exclude type 4 6
+neigh_modify exclude type 4 7
+neigh_modify exclude type 5 5
+neigh_modify exclude type 5 6
+neigh_modify exclude type 5 7
+neigh_modify exclude type 6 6
+neigh_modify exclude type 6 7
+neigh_modify exclude type 7 7
+neigh_modify exclude type 3 4
+neigh_modify exclude type 3 7
+
+# MPI load balance across the vacuum margins
+balance 1.05 shift z 20 1.05
+fix lb all balance 1000 1.05 shift z 20 1.05
+
+
+# ==========================================================================
+#        WALLS: support + load piston frozen for the WHOLE run, wet pistons parked
+# ==========================================================================
+# setforce 0 0 0 and NOT integrated: immobile.  The support and the load piston
+# are never released in this deck (no seating, no drive).
+velocity support     set 0.0 0.0 0.0
+velocity piston_feed set 0.0 0.0 0.0
+velocity piston_perm set 0.0 0.0 0.0
+velocity piston_load set 0.0 0.0 0.0
+fix freeze_support support     setforce 0.0 0.0 0.0
+fix freeze_load    piston_load setforce 0.0 0.0 0.0
+fix freeze_feed    piston_feed setforce 0.0 0.0 0.0
+fix freeze_perm    piston_perm setforce 0.0 0.0 0.0
+
+
+# ==========================================================================
+#                           THERMO OUTPUT
+# ==========================================================================
+# press / c_mobile_press include the vacuum margins -> meaningless (see the
+# compression deck); the bath pressure is read from the wet pistons.
+compute mobile_temp mobile temp
+compute mobile_press all pressure thermo_temp pair bond
+thermo_style custom step c_mobile_temp pe ke etotal press c_mobile_press pxz vol lx ly lz
+thermo_modify lost warn
+thermo ${thermo_freq}
+
+
+# ==========================================================================
+#                 PISTON / SHEET FORCE READOUT (compute group/group)
+# ==========================================================================
+compute fp_feed piston_feed group/group mobile
+compute fp_perm piston_perm group/group mobile
+compute fp_sup  support     group/group polymer
+compute fp_load piston_load group/group polymer
+variable area        equal lx*ly
+variable P_feed_meas equal  c_fp_feed[3]/v_area
+variable P_perm_meas equal -c_fp_perm[3]/v_area
+# x-force of the polymer ON each frozen sheet per area (the gel feels the opposite):
+# the shear traction the sheets take up -- expected ~0 (smooth sheets).
+variable T_sup  equal c_fp_sup[1]/v_area
+variable T_load equal c_fp_load[1]/v_area
+# layer shear stress: 0 until the driven layers exist (redefined in the characterisation)
+variable S_top equal 0.0
+variable S_bot equal 0.0
+
+compute feed_com piston_feed com
+compute perm_com piston_perm com
+compute load_com piston_load com
+compute feed_vz  piston_feed reduce ave vz
+compute perm_vz  piston_perm reduce ave vz
+compute support_com support com
+variable z_load  equal c_load_com[3]
+variable z_feed  equal c_feed_com[3]
+variable z_perm  equal c_perm_com[3]
+variable vz_feed equal c_feed_vz
+variable vz_perm equal c_perm_vz
+variable feed_z_bot equal c_feed_com[3]-0.5*${sigma}
+variable feed_z_top equal c_feed_com[3]+0.5*${sigma}
+variable perm_z_top equal c_perm_com[3]+0.5*${sigma}
+variable perm_z_bot equal c_perm_com[3]-0.5*${sigma}
+variable support_z_live equal c_support_com[3]
+
+
+# ==========================================================================
+#   GEL / BOX TRACKING COMPUTES + WHOLE-RUN CONVERGENCE LOGGERS (from step 0)
+# ==========================================================================
+compute polymer_com polymer com
+compute minx polymer reduce min x
+compute maxx polymer reduce max x
+compute miny polymer reduce min y
+compute maxy polymer reduce max y
+compute minz polymer reduce min z
+compute maxz polymer reduce max z
+variable gel_lx_bb  equal c_maxx-c_minx
+variable gel_ly_bb  equal c_maxy-c_miny
+variable gel_lz_bb  equal c_maxz-c_minz
+variable gel_vol_bb equal v_gel_lx_bb*v_gel_ly_bb*v_gel_lz_bb
+compute rg_tensor polymer gyration
+variable gel_lx_rg  equal 2.0*sqrt(3.0*c_rg_tensor[1])
+variable gel_ly_rg  equal 2.0*sqrt(3.0*c_rg_tensor[2])
+variable gel_lz_rg  equal 2.0*sqrt(3.0*c_rg_tensor[3])
+variable gel_vol_rg equal v_gel_lx_rg*v_gel_ly_rg*v_gel_lz_rg
+variable gel_top_rg equal c_polymer_com[3]+0.5*v_gel_lz_rg
+variable gel_bot_rg equal c_polymer_com[3]-0.5*v_gel_lz_rg
+
+fix trk_box all print ${stress_freq} "$(step) $(lx) $(ly) $(lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_box_bounds all print ${stress_freq} "$(step) $(xlo) $(xhi) $(ylo) $(yhi) $(zlo) $(zhi)" &
+    title "# step xlo xhi ylo yhi zlo zhi   (box bounds; the face planes in plate_pressure_* are absolute z: reduced z = (z - zlo)/lz)" &
+    file output_files/volume_data/box_bounds_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_dims_rg all print ${stress_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+# gyration-tensor components for the Rg-based shear strain (2026-10-03): a simple shear x -> x + gamma*z changes
+# Rg_xz by gamma*Rg_zz^2, so gamma_rg = (Rg_xz - <Rg_xz>_ref)/Rg_zz^2 -- the shear analogue of the compression
+# decks' Rg strain; the notebooks form it (G_STRAIN fallback after the displacement-profile slope).
+fix trk_rg all print ${stress_freq} "$(step) $(c_rg_tensor[3]) $(c_rg_tensor[5])" &
+    title "# step Rg_zz^2 Rg_xz   (polymer gyration tensor, unwrapped coordinates)" &
+    file output_files/stress_data/shear_strain_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_vol_rg all print ${stress_freq} "$(step) $(v_gel_vol_rg)" &
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_vol_bb all print ${stress_freq} "$(v_gel_vol_bb)" &
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
+fix trk_plates all print ${stress_freq} "$(step) $(v_gel_top_rg) $(v_gel_bot_rg) $(v_P_feed_meas) $(v_P_perm_meas) $(v_S_top) $(v_S_bot) $(v_T_sup) $(v_T_load)" &
+    title "# step z_top z_bot P_feed P_perm S_top S_bot T_sup T_load   (gel Rg faces; wet-piston pressures; S_* = total tether force on each face layer / lx*ly = sigma_xz at that face; T_* = x-force of the polymer ON the support / load sheet per lx*ly)" &
+    file output_files/piston_data/plate_pressure_${dataname}_${interaction}_${nsteps}.dat screen no
+
+
+# ==========================================================================
+#                    PHASE 0: MINIMIZE + LANGEVIN NVT (pistons frozen)
+# ==========================================================================
+print "========================================"
+print "Phase 0: minimize + Langevin NVT (${phase0_steps} steps), all pistons frozen"
+print "========================================"
+reset_timestep 0
+timestep ${timestep_prod}
+
+# setup movie: Phase 0 + settle + reference + the FIRST level's ramp
+print ">>> gel_setup dump: ~${num_dump_frames} frames over setup span $(v_setup_span:%.0f) steps -> every ${dump_freq_setup} steps"
+dump traj_setup gel_system custom ${dump_freq_setup} &
+   traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
+   id type mol x y z
+
+minimize 1.0e-4 1.0e-6 ${min_iter} 10000
+
+fix nve_mob mobile nve
+fix lang_p0 mobile langevin ${temp_target} ${temp_target} 1.0 48279
+run ${phase0_steps}
+unfix lang_p0
+print ">>> Post-Phase-0: T=$(c_mobile_temp)"
+run 0
+
+print ">>> support z = $(c_support_com[3])  load piston z = $(v_z_load)  feed piston z = $(v_z_feed)  permeate piston z = $(v_z_perm)"
+print ">>> gel top (Rg) = $(v_gel_top_rg)  gel bottom (Rg) = $(v_gel_bot_rg)  c_maxz = $(c_maxz)  c_minz = $(c_minz)"
+
+variable L_feed equal v_feed_z_bot-v_gel_top_rg
+variable L_perm equal v_support_z_live-v_perm_z_top
+print ">>> Reservoirs: feed L=$(v_L_feed:%.2f) sigma   permeate L=$(v_L_perm:%.2f) sigma   A=$(v_area:%.2f)"
+
+# ----- Critical-damping estimate (see triaxial_permeation_two_pist.lmp) -----
+variable k_feed      equal $(v_K_solv*v_area/v_L_feed)
+variable k_perm      equal $(v_K_solv*v_area/v_L_perm)
+variable omega_feed  equal $(sqrt(v_k_feed/(v_N_feed*v_piston_mass)))
+variable omega_perm  equal $(sqrt(v_k_perm/(v_N_perm*v_piston_mass)))
+variable period_feed equal $(v_two_pi/v_omega_feed/v_timestep_prod)
+variable period_perm equal $(v_two_pi/v_omega_perm/v_timestep_prod)
+variable C_crit_feed equal $(2.0*sqrt(v_k_feed*v_piston_mass/v_N_feed))
+variable C_crit_perm equal $(2.0*sqrt(v_k_perm*v_piston_mass/v_N_perm))
+variable C_pist_feed equal $(v_c_pist_frac*v_C_crit_feed)
+variable C_pist_perm equal $(v_c_pist_frac*v_C_crit_perm)
+print "############################################################"
+print ">>> NPT-PISTON damping estimate (K_solv=${K_solv}, piston_mass=${piston_mass}, c_pist_frac=${c_pist_frac})"
+print ">>>   feed:     period=$(v_period_feed:%.0f) steps  C_pist=$(v_C_pist_feed:%.3f)"
+print ">>>   permeate: period=$(v_period_perm:%.0f) steps  C_pist=$(v_C_pist_perm:%.3f)"
+if "$(v_npt_piston_steps) < $(3.0*v_period_feed)" then &
+    "print '>>>   WARNING: settle shorter than 3 feed-piston periods -- raise npt_piston_steps'"
+print "############################################################"
+
+
+# ==========================================================================
+#            PHASE 1: NPT-PISTON SETTLE  (wet pistons at P_target; live to the end of the run)
+# ==========================================================================
+print "========================================"
+print "Phase 1: NPT-piston settle, ${npt_piston_steps} steps, P_feed = P_perm = ${P_target}"
+print "========================================"
+variable fz_feed equal -v_P_target*v_area/v_N_feed-v_C_pist_feed*vcm(piston_feed,z)
+variable fz_perm equal  v_P_target*v_area/v_N_perm-v_C_pist_perm*vcm(piston_perm,z)
+
+unfix freeze_feed
+unfix freeze_perm
+velocity piston_feed set 0.0 0.0 0.0
+velocity piston_perm set 0.0 0.0 0.0
+fix feed_xy  piston_feed setforce 0.0 0.0 NULL
+fix feed_z   piston_feed aveforce NULL NULL v_fz_feed
+fix feed_nve piston_feed nve
+fix perm_xy  piston_perm setforce 0.0 0.0 NULL
+fix perm_z   piston_perm aveforce NULL NULL v_fz_perm
+fix perm_nve piston_perm nve
+
+fix lang_settle mobile langevin ${temp_target} ${temp_target} 1.0 58291
+
+fix out_piston_pressure all print ${volume_freq} &
+    "$(step) $(v_P_feed_meas) $(v_P_target) $(v_P_perm_meas) $(v_P_target)" &
+    title "# step P_feed_meas P_feed_app P_perm_meas P_perm_app" &
+    file output_files/piston_data/piston_pressure_${dataname}_${interaction}_${nsteps}.dat screen no
+fix out_piston_pos_run all print ${volume_freq} "$(step) $(v_z_load) $(v_z_feed) $(v_z_perm)" &
+    title "# step z_load z_feed z_perm" &
+    file output_files/piston_data/piston_position_run_${dataname}_${interaction}_${nsteps}.dat screen no
+
+fix settle_win all ave/time 100 100 10000 v_vz_feed v_vz_perm v_z_feed v_z_perm ave one
+variable settle_start equal $(step)
+variable settle_ok equal (step>=v_settle_start+v_settle_min_steps)*(abs(f_settle_win[1])<v_settle_tol_v)*(abs(f_settle_win[2])<v_settle_tol_v)*(abs(v_z_feed-f_settle_win[3])<v_settle_tol_z)*(abs(v_z_perm-f_settle_win[4])<v_settle_tol_z)
+if "${settle_halt} == 1" then "fix halt_settle all halt 10000 v_settle_ok > 0.5 error continue"
+
+print ">>> settle start: z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
+thermo 10000
+run ${npt_piston_steps}
+thermo ${thermo_freq}
+if "${settle_halt} == 1" then "unfix halt_settle"
+unfix settle_win
+print ">>> settle end (step $(step)): z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  vz_feed=$(v_vz_feed:%.2e) vz_perm=$(v_vz_perm:%.2e)"
+print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f) (applied ${P_target})  T=$(c_mobile_temp:%.4f)"
+
+# ----- production thermostat: full 3-D Nose-Hoover on mobile (the compression deck's
+# choice; nothing streams once a hold has settled).  The mobile atoms' x/y COM
+# momentum (left over from the Langevin stages) is removed; the two layer tethers
+# pin the gel in x anyway.  z is left alone (the wet pistons exchange it).
+unfix lang_settle
+unfix nve_mob
+fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_prod mobile momentum 100 linear 1 1 0
+
+# box-face guard for the wet pistons
+variable box_guard equal (v_feed_z_top>=zhi-v_box_guard_gap)+(v_perm_z_bot<=zlo+v_box_guard_gap)
+fix halt_box all halt 1000 v_box_guard > 0.5 error continue
+
+run 0
+
+
+# ==========================================================================
+#        GEL CHARACTERISATION: faces, driven layers, tracking slabs   [ONCE]
+# ==========================================================================
+# Everything here is frozen to numbers from the settled configuration ($(...)).
+variable z_face_t       equal $(v_gel_top_rg)
+variable z_face_b       equal $(v_gel_bot_rg)
+variable gel_zlo        equal $(c_minz)
+variable gel_zhi        equal $(c_maxz)
+variable gel_gap        equal $(v_gel_zhi - v_gel_zlo)       # polymer bounding-box gap (diagnostic)
+variable gel_lz_initial equal $(v_gel_lz_rg)                 # Rg z-thickness (diagnostic; column 2 of shear_strain)
+
+variable z_drv_t equal $(v_z_face_t - v_layer_thick)         # driven layers: above z_drv_t / below z_drv_b
+variable z_drv_b equal $(v_z_face_b + v_layer_thick)
+variable z_trk_t equal $(v_z_drv_t - v_track_thick)          # tracking slabs: z_trk_t..z_drv_t / z_drv_b..z_trk_b
+variable z_trk_b equal $(v_z_drv_b + v_track_thick)
+
+region reg_drv_top block EDGE EDGE EDGE EDGE ${z_drv_t} EDGE       units box
+region reg_drv_bot block EDGE EDGE EDGE EDGE EDGE       ${z_drv_b} units box
+region reg_trk_top block EDGE EDGE EDGE EDGE ${z_trk_t} ${z_drv_t} units box
+region reg_trk_bot block EDGE EDGE EDGE EDGE ${z_drv_b} ${z_trk_b} units box
+group all_drv_top region reg_drv_top
+group all_drv_bot region reg_drv_bot
+group all_trk_top region reg_trk_top
+group all_trk_bot region reg_trk_bot
+group poly_top   intersect polymer all_drv_top    # STATIC: the same beads carry the force for the whole run
+group poly_bot   intersect polymer all_drv_bot
+group poly_trk_t intersect polymer all_trk_top
+group poly_trk_b intersect polymer all_trk_bot
+group all_drv_top delete
+group all_drv_bot delete
+group all_trk_top delete
+group all_trk_bot delete
+variable N_top equal $(count(poly_top))
+variable N_bot equal $(count(poly_bot))
+
+compute drv_t_com poly_top   com      # unwrapped COMs
+compute drv_b_com poly_bot   com
+compute trk_t_com poly_trk_t com
+compute trk_b_com poly_trk_b com
+run 0
+
+variable H_drv  equal $(c_drv_t_com[3] - c_drv_b_com[3])     # prescribed-strain denominator (the plate_sep of shear_slab.lmp)
+variable H_trk  equal $(c_trk_t_com[3] - c_trk_b_com[3])     # interior-strain denominator
+variable x0_top equal $(c_drv_t_com[1])
+variable x0_bot equal $(c_drv_b_com[1])
+variable x_drv0 equal $(c_drv_t_com[1] - c_drv_b_com[1])
+variable x_trk0 equal $(c_trk_t_com[1] - c_trk_b_com[1])
+variable gamma     equal (c_drv_t_com[1] - c_drv_b_com[1] - v_x_drv0) / v_H_drv
+variable gamma_trk equal (c_trk_t_com[1] - c_trk_b_com[1] - v_x_trk0) / v_H_trk
+
+print "Rg:  Lx=$(v_gel_lx_rg) Ly=$(v_gel_ly_rg) Lz=$(v_gel_lz_rg)   BB:  Lx=$(v_gel_lx_bb) Ly=$(v_gel_ly_bb) Lz=$(v_gel_lz_bb)"
+print ">>> Gel faces (Rg): z_bot = ${z_face_b}  z_top = ${z_face_t};  polymer BB z-extent ${gel_zlo} to ${gel_zhi}"
+print ">>> Driven layers (${layer_thick} sigma inside each face + everything beyond): top ${N_top} beads (z > ${z_drv_t}), bottom ${N_bot} beads (z < ${z_drv_b});  H_drv = ${H_drv} sigma (strain denominator)"
+print ">>> Tracking slabs (${track_thick} sigma): top $(count(poly_trk_t)) beads, bottom $(count(poly_trk_b)) beads;  H_trk = ${H_trk} sigma"
+
+# ----- layer forces: spring between each layer COM and its target (same f on every bead) -----
+variable x_tgt_top equal ${x0_top}+v_dx_tgt
+variable x_tgt_bot equal ${x0_bot}-v_dx_tgt
+variable fx_top equal -${k_tether}*(c_drv_t_com[1]-v_x_tgt_top)
+variable fx_bot equal -${k_tether}*(c_drv_b_com[1]-v_x_tgt_bot)
+# sigma_xz at each face = the total external x-force on the layer / area (+ for gamma > 0)
+variable S_top equal  ${N_top}*v_fx_top/(lx*ly)
+variable S_bot equal -${N_bot}*v_fx_bot/(lx*ly)
+# live from here to the end of the run: targets at rest = the frozen plates of shear_slab.lmp
+fix shear_top poly_top addforce v_fx_top 0.0 0.0
+fix shear_bot poly_bot addforce v_fx_bot 0.0 0.0
+
+# ----- drive speed (per layer target; the halt sets where it stops) -----
+variable vshear equal $(v_strain_rate_ref * v_H_drv / (2.0 * v_nsteps_shear_base * v_timestep_prod) * 1.1)
+print ">>> vshear = ${vshear} sigma/tau  (each layer target; halt fires at each ${strains} target);  k_tether = ${k_tether}"
+
+
+# ==========================================================================
+#             BULK REGION (plate_excl sigma inside each Rg face)   [ONCE]
+# ==========================================================================
+# Excludes the driven layers (stress ramp) and the tracking slabs; DYNAMIC groups
+# (solvent exchanges freely with the reservoirs), as shear_slab.lmp.
+variable zlo_bulk equal ${z_face_b}+${plate_excl}
+variable zhi_bulk equal ${z_face_t}-${plate_excl}
+variable bulk_lz  equal v_zhi_bulk-v_zlo_bulk
+variable bulk_vol equal lx*ly*v_bulk_lz
+region   reg_bulk block EDGE EDGE EDGE EDGE ${zlo_bulk} ${zhi_bulk} units box
+group    poly_bulk dynamic polymer region reg_bulk every 50
+group    solv_bulk dynamic solvent region reg_bulk every 50
+print ">>> Bulk z-range: ${zlo_bulk} to ${zhi_bulk}  (bulk_lz = $(v_bulk_lz), bulk_vol = $(v_bulk_vol))"
+
+
+# ==========================================================================
+#              ANALYSIS: PARTIAL STRESSES   [computes defined ONCE]
+# ==========================================================================
+# As shear_slab.lmp: stress/atom NULL (kinetic term included), order xx yy zz xy
+# xz yz, mechanical sign for the shear components (sum/V = sigma_xz > 0 for the
+# top layer driven +x).  fix addforce does not enter the virial (no fix_modify
+# virial), so these are the gel's own interaction stresses.
+compute stress_polymer polymer stress/atom NULL
+compute stress_solvent solvent stress/atom NULL
+
+compute sig_p_xx poly_bulk reduce sum c_stress_polymer[1]
+compute sig_p_yy poly_bulk reduce sum c_stress_polymer[2]
+compute sig_p_zz poly_bulk reduce sum c_stress_polymer[3]
+compute sig_p_xy poly_bulk reduce sum c_stress_polymer[4]
+compute sig_p_xz poly_bulk reduce sum c_stress_polymer[5]
+compute sig_p_yz poly_bulk reduce sum c_stress_polymer[6]
+variable stress_p_xx equal c_sig_p_xx/v_bulk_vol
+variable stress_p_yy equal c_sig_p_yy/v_bulk_vol
+variable stress_p_zz equal c_sig_p_zz/v_bulk_vol
+variable stress_p_xy equal c_sig_p_xy/v_bulk_vol
+variable stress_p_xz equal c_sig_p_xz/v_bulk_vol
+variable stress_p_yz equal c_sig_p_yz/v_bulk_vol
+
+compute sig_s_xx solv_bulk reduce sum c_stress_solvent[1]
+compute sig_s_yy solv_bulk reduce sum c_stress_solvent[2]
+compute sig_s_zz solv_bulk reduce sum c_stress_solvent[3]
+compute sig_s_xy solv_bulk reduce sum c_stress_solvent[4]
+compute sig_s_xz solv_bulk reduce sum c_stress_solvent[5]
+compute sig_s_yz solv_bulk reduce sum c_stress_solvent[6]
+variable stress_s_xx equal c_sig_s_xx/v_bulk_vol
+variable stress_s_yy equal c_sig_s_yy/v_bulk_vol
+variable stress_s_zz equal c_sig_s_zz/v_bulk_vol
+variable stress_s_xy equal c_sig_s_xy/v_bulk_vol
+variable stress_s_xz equal c_sig_s_xz/v_bulk_vol
+variable stress_s_yz equal c_sig_s_yz/v_bulk_vol
+
+variable s_p_xx atom c_stress_polymer[1]/(lx*ly*${binWidth})
+variable s_p_yy atom c_stress_polymer[2]/(lx*ly*${binWidth})
+variable s_p_zz atom c_stress_polymer[3]/(lx*ly*${binWidth})
+variable s_p_xy atom c_stress_polymer[4]/(lx*ly*${binWidth})
+variable s_p_xz atom c_stress_polymer[5]/(lx*ly*${binWidth})
+variable s_p_yz atom c_stress_polymer[6]/(lx*ly*${binWidth})
+variable s_s_xx atom c_stress_solvent[1]/(lx*ly*${binWidth})
+variable s_s_yy atom c_stress_solvent[2]/(lx*ly*${binWidth})
+variable s_s_zz atom c_stress_solvent[3]/(lx*ly*${binWidth})
+variable s_s_xy atom c_stress_solvent[4]/(lx*ly*${binWidth})
+variable s_s_xz atom c_stress_solvent[5]/(lx*ly*${binWidth})
+variable s_s_yz atom c_stress_solvent[6]/(lx*ly*${binWidth})
+
+# ----- whole-box z-binning of ALL polymer / ALL solvent (reduced z, the file
+# format of shear_slab.lmp; the box is orthogonal and fixed here) -----
+variable binWidth_reduced equal $(v_binWidth/lz)
+compute chunk_z_polymer   polymer chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+compute chunk_z_solvent   solvent chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+compute chunk_z_poly_disp polymer chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+
+# ----- polymer x-displacement u_x(z) for D_c: the reference is RESET at the onset of
+# each hold (uncompute/compute in the loop), as shear_slab.lmp -----
+compute  displace_shear polymer displace/atom
+variable ux_shear atom c_displace_shear[1]
+# CUMULATIVE displacement since the gamma = 0 reference (never reset; 2026-10-03, as the compression
+# deck's disp_z_polymer_cum): the steady profile u_x(z) of each hold, whose interior slope du_x/dz is the
+# shear strain the NETWORK carries -- the strain G divides by in the notebooks (G_STRAIN = 'disp'), the
+# way M divides by the steady u_z(Z) slope.  The reference-window profile (_cum_ref) is its zero.
+compute  displace_cum polymer displace/atom
+variable ux_cum atom c_displace_cum[1]
+compute  chunk_z_poly_cum polymer chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
+
+
+# ==========================================================================
+#          PHASE 1.5: gamma = 0 REFERENCE-STATE RECORDING
+# ==========================================================================
+print "========================================"
+print "Phase 1.5: gamma = 0 reference recording (${ref_avg_steps} steps, ref_nfreq=${ref_nfreq})"
+print "========================================"
+fix trk_shear_strain all print ${stress_freq} &
+    "$(step) ${gel_lz_initial} ${H_drv} $(v_gamma)" &
+    file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}.dat screen no
+fix ref_tensor_p all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xy v_stress_p_xz v_stress_p_yz &
+    file output_files/stress_data/stress_tensor_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_tensor_s all ave/time ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} &
+    v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xy v_stress_s_xz v_stress_s_yz &
+    file output_files/stress_data/stress_tensor_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_prof_p polymer ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_polymer &
+    v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_xz v_s_p_yz norm none &
+    file output_files/stress_data/stress_profile_z_polymer_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_prof_s solvent ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_solvent &
+    v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_xz v_s_s_yz norm none &
+    file output_files/stress_data/stress_profile_z_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_disp_cum polymer ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_poly_cum v_ux_cum &
+    file output_files/displacement_data/disp_x_polymer_cum_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_series all ave/time ${series_nevery} ${series_nrepeat} ${series_nfreq} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xz v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xz v_S_top v_S_bot v_gamma_trk &
+    title2 "# TimeStep sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz S_top S_bot gamma_trk   (bulk partial stresses, layer sigma_xz, tracking-slab strain; block-averaged; gamma = 0 reference)" &
+    file output_files/stress_data/stress_series_ref_${dataname}_${interaction}_${nsteps}.dat
+variable ref_run_steps equal (floor(($(step)+${ref_avg_steps}-1)/${ref_nfreq})+1)*${ref_nfreq}-$(step)
+print ">>> Reference window: running ${ref_run_steps} steps (>= ${ref_avg_steps}, aligned to ref_nfreq=${ref_nfreq})"
+run ${ref_run_steps}
+unfix ref_series
+unfix ref_disp_cum
+unfix ref_prof_s
+unfix ref_prof_p
+unfix ref_tensor_s
+unfix ref_tensor_p
+print ">>> Reference recording done.  step=$(step)  gamma=$(v_gamma:%.5f)  gamma_trk=$(v_gamma_trk:%.5f)  sigma_p,xz(bulk)=$(v_stress_p_xz:%.5f)"
+print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)  T_sup=$(v_T_sup:%.5f) T_load=$(v_T_load:%.5f)"
+
+
+# ==========================================================================
+#                 STRAIN SWEEP LOOP (cumulative, incremental shear)
+# ==========================================================================
+variable movie_open equal 1
+variable dx_held    equal 0.0      # target travel at the end of the previous level
+
+print "############################################################"
+print ">>> STRAIN SWEEP LIST (raw from run_lammps.sh): ${strains_list}"
+print ">>>   first target=${strains}   drive cap=${nsteps_shear}   hold=${nsteps} steps per level"
+print ">>>   H_drv = ${H_drv} sigma (strain denominator);  vshear = ${vshear} sigma/tau (+x top layer, -x bottom layer)"
+print ">>>   If the list reads 'STALE-run_lammps.sh...', only ONE strain will run -- update run_lammps.sh on the cluster and resubmit."
+print "############################################################"
+
+label strain_loop
+
+print "########################################################"
+print "  STRAIN TARGET (cumulative) = ${strains}"
+print "########################################################"
+
+# ----- Per-level loggers that span BOTH the drive and the hold (no chunk lock) -----
+fix out_shear_strain all print ${stress_freq} &
+    "$(step) ${gel_lz_initial} ${H_drv} $(v_gamma)" &
+    file output_files/stress_data/shear_strain_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
+fix out_shear_surf all print ${stress_freq} &
+    "$(step) ${gel_gap} $(v_gamma_trk) ${H_trk}" &
+    title "# step gel_gap_bb gamma_trk H_trk   (tracking-slab strain: what the interior carries; compare with gamma in shear_strain_*)" &
+    file output_files/stress_data/shear_strain_surface_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
+fix out_series all ave/time ${series_nevery} ${series_nrepeat} ${series_nfreq} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xz v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xz v_S_top v_S_bot v_gamma_trk &
+    title2 "# TimeStep sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz S_top S_bot gamma_trk   (bulk partial stresses, layer sigma_xz, tracking-slab strain; block-averaged; drive + hold)" &
+    file output_files/stress_data/stress_series_${dataname}_${interaction}_${nsteps}_g${strains}.dat
+fix out_gel_vol_bb all print ${stress_freq} "$(step) $(v_gel_vol_bb)" &
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
+fix out_gel_dims_bb all print ${stress_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
+    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
+fix out_gel_vol_rg all print ${stress_freq} "$(step) $(v_gel_vol_rg)" &
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
+fix out_gel_dims_rg all print ${stress_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
+fix out_box_dims all print ${stress_freq} "$(step) $(lx) $(ly) $(lz) $(xy) $(xz) $(yz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
+fix out_polymer_com all print ${stress_freq} &
+    "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
+
+# ----- PHASE 2: drive -- layer targets move apart at +/-vshear until gamma >= ${strains} -----
+variable drive_start equal $(step)
+variable dx_tgt equal ${dx_held}+${vshear}*(step-${drive_start})*${timestep_prod}
+fix halt_shear all halt ${stress_freq} v_gamma >= ${strains} error continue
+variable drive_dump_freq equal floor(${nsteps_shear_base}*1.1/5)
+if "${movie_open} == 1" then "dump_modify traj_setup every ${drive_dump_freq}"
+print ">>> [strain=${strains}] driving the layer targets at +/-${vshear} sigma/tau until gamma >= ${strains} (cap ${nsteps_shear} steps)..."
+run ${nsteps_shear}
+unfix halt_shear
+if "${movie_open} == 1" then &
+    "undump traj_setup" &
+    "variable movie_open delete" &
+    "variable movie_open equal 0"
+# freeze the targets AT the layer COMs' current travel (not at the targets' own position, which leads
+# the COMs by the spring stretch + viscous lag and would keep shearing into the hold)
+variable dx_now  equal $(0.5*v_gamma*v_H_drv)
+variable dx_held equal ${dx_now}
+variable dx_tgt  equal ${dx_held}
+print ">>> [strain=${strains}] drive done: gamma = $(v_gamma:%.4f)  (target ${strains});  tracking-slab strain = $(v_gamma_trk:%.4f)  step=$(step)"
+
+# ----- reset the displacement reference to the held state (u_x(z,0) = 0 at the hold onset, for D_c) -----
+variable  ux_shear delete
+uncompute displace_shear
+compute   displace_shear polymer displace/atom
+variable  ux_shear atom c_displace_shear[1]
+
+# ----- PHASE 3: production HOLD (targets frozen) -- chunk-locked averaging fixes created HERE -----
+dump traj_prod gel_system custom ${dump_freq_prod} &
+    traj_files/gel_prod_${dataname}_${interaction}_${nsteps}_g${strains}.lammpstrj &
+    id type mol x y z
+
+fix avg_stress_polymer all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_stress_p_xx v_stress_p_yy v_stress_p_zz &
+    v_stress_p_xy v_stress_p_xz v_stress_p_yz &
+    file output_files/stress_data/stress_tensor_polymer_${dataname}_${interaction}_${nsteps}_g${strains}.dat
+fix avg_stress_solvent all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    v_stress_s_xx v_stress_s_yy v_stress_s_zz &
+    v_stress_s_xy v_stress_s_xz v_stress_s_yz &
+    file output_files/stress_data/stress_tensor_solvent_${dataname}_${interaction}_${nsteps}_g${strains}.dat
+fix avg_prof_z_poly polymer ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_polymer &
+    v_s_p_xx v_s_p_yy v_s_p_zz v_s_p_xy v_s_p_xz v_s_p_yz &
+    norm none &
+    file output_files/stress_data/stress_profile_z_polymer_${dataname}_${interaction}_${nsteps}_g${strains}.dat
+fix avg_prof_z_solv solvent ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_solvent &
+    v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_xz v_s_s_yz &
+    norm none &
+    file output_files/stress_data/stress_profile_z_solvent_${dataname}_${interaction}_${nsteps}_g${strains}.dat
+fix avg_disp_z_poly polymer ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_poly_disp v_ux_shear &
+    file output_files/displacement_data/disp_x_polymer_${dataname}_${interaction}_${nsteps}_g${strains}.dat
+fix avg_disp_z_cum polymer ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_poly_cum v_ux_cum &
+    file output_files/displacement_data/disp_x_polymer_cum_${dataname}_${interaction}_${nsteps}_g${strains}.dat
+
+# hold padded to an nfreq_stress epoch boundary (chunk/atom lock released before the unfix)
+variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print "========================================"
+print ">>> [strain=${strains}] measurement HOLD (targets frozen, stress relaxes) for ${hold_steps} steps (>= nsteps=${nsteps}, aligned to nfreq_stress=${nfreq_stress})"
+print ">>> [strain=${strains}] gamma = $(v_gamma:%.4f) (driven layers);  tracking-slab strain = $(v_gamma_trk:%.4f)"
+print "========================================"
+run ${hold_steps}
+
+unfix avg_disp_z_poly
+unfix avg_disp_z_cum
+unfix avg_prof_z_solv
+unfix avg_prof_z_poly
+unfix avg_stress_solvent
+unfix avg_stress_polymer
+undump traj_prod
+unfix out_polymer_com
+unfix out_box_dims
+unfix out_gel_dims_rg
+unfix out_gel_vol_rg
+unfix out_gel_dims_bb
+unfix out_gel_vol_bb
+unfix out_series
+unfix out_shear_surf
+unfix out_shear_strain
+
+print ">>> Completed strain=${strains}:  gamma = $(v_gamma:%.4f)  tracking-slab strain = $(v_gamma_trk:%.4f)  S_top = $(v_S_top:%.5f)  S_bot = $(v_S_bot:%.5f)  sigma_p,xz(bulk) = $(v_stress_p_xz:%.5f)  step=$(step)"
+
+variable hold_steps      delete
+variable drive_start     delete
+variable drive_dump_freq delete
+variable dx_now          delete
+
+next strains
+jump SELF strain_loop
+
+
+# ==========================================================================
+#                            FINAL STATE
+# ==========================================================================
+print "========================================"
+print "Shear slab (two-piston, force-driven) strain sweep complete"
+print "  Final gamma: $(v_gamma:%.4f)   tracking-slab strain: $(v_gamma_trk:%.4f)"
+print "  H_drv: ${H_drv}  H_trk: ${H_trk}  gel_gap (BB): ${gel_gap}  gel_lz_initial: ${gel_lz_initial}"
+print "========================================"
+
+unfix shear_bot
+unfix shear_top
+unfix halt_box
+unfix trk_shear_strain
+unfix out_piston_pressure
+unfix out_piston_pos_run
+unfix trk_plates
+unfix trk_vol_bb
+unfix trk_vol_rg
+unfix trk_dims_rg
+unfix trk_rg
+unfix trk_box
+unfix trk_box_bounds
+
+variable outfile string "final_shear_${dataname}_${interaction}_${nsteps}"
+write_data ${outfile}.data

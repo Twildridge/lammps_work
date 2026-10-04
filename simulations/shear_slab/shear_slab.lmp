@@ -69,7 +69,7 @@
 #                rejected 2026-09-22: the 1.5-sigma plate lattice is a ~0.7 kT
 #                sieve for solvent, so a force-driven plate sinks through the fluid.)
 #   - Phase 1b:  NVT with the plates frozen: the gel thermalises before any shear.
-#   - Phase 4:   UNLOAD (unload = 1, default): plates driven back to gamma = 0, then a
+#   - Phase 4:   UNLOAD (optional, -var unload 1; OFF by default): plates driven back to gamma = 0, then a
 #                hold like Phase 3 with every output tagged _unload -- the residual-
 #                stress check (sigma_xz should return to the reference reading).
 #   - Phase 1.5: gamma = 0 REFERENCE window (ref_avg_steps, plates frozen): bulk stress
@@ -150,16 +150,19 @@
 #                                                        col 3 = the strain denominator, col 4 = the strain)
 #   stress_data/shear_strain_surface_${stem}_g<γ>.dat    step  gel_gap_bb  gel_strain_surf  (slip diagnostic)
 #   displacement_data/disp_x_polymer_${stem}_g<γ>.dat    z-binned mean polymer u_x (for D_c)
+#   displacement_data/disp_x_polymer_cum_${stem}_g<γ>.dat   the same, CUMULATIVE since the gamma = 0 reference (2026-10-03): its
+#                                                        interior slope is the network strain G divides by (+ _cum_ref_${stem})
 #   volume_data/{gel_volume_bb,gel_dimensions_bb,gel_volume_rg,gel_dimensions_rg,box_dimensions,polymer_com}_${stem}_g<γ>.dat
 # gamma = 0 REFERENCE (Phase 1.5, files tagged _ref_${stem}, no _g suffix -- the analogue of the
 #   compression deck's eps = 0 reference window):
-#   UNLOAD (Phase 4, unload = 1): the same per-level files with the tag _unload in place of _g<γ>
+#   UNLOAD (Phase 4, only with -var unload 1): the same per-level files with the tag _unload in place of _g<γ>
 #   (stress_tensor_*, stress_profile_z_*, stress_series, shear_strain[_surface], disp_x_polymer, gel/box dims, polymer_com).
 #   stress_data/stress_tensor_{polymer,solvent}_ref_${stem}.dat, stress_profile_z_{polymer,solvent}_ref_${stem}.dat,
 #   stress_data/stress_series_ref_${stem}.dat            (G is formed as an INCREMENT from these, like M and G in the compression notebooks)
 # Whole-run (stem only, from step 0):
 #   volume_data/{box_dimensions,gel_dimensions_rg,gel_volume_rg,gel_volume_bb}_${stem}.dat
 #   stress_data/shear_strain_${stem}.dat                 (plot_lammps_log.py convergence + shear panels; same 4 columns)
+#   stress_data/shear_strain_rg_${stem}.dat              step Rg_zz^2 Rg_xz  (Rg-based shear strain, formed in the notebooks)
 #   volume_data/box_bounds_${stem}.dat                   step xlo xhi ylo yhi zlo zhi  (whole run; plate planes are absolute z)
 #   piston_data/plate_pressure_${stem}.dat               step z_top z_bot P_top_pair P_bot_pair S_top S_bot  (plate planes + the PAIR force
 #                                                        of the gel on each plate / area, whole run; the harmonic-bond part is not
@@ -227,13 +230,13 @@ variable strain_rate_ref   equal 0.10
 variable nsteps_shear_base index 285000   # steps a 0.10 increment would take at vshear/1.1
 variable nsteps_shear      index 570000   # safety cap per increment (2x); the halt fires first
 # ----- Phase 4: UNLOAD (residual-stress check, 2026-09-25) -----
-# unload 1 (default): after the last level the plates are driven BACK to gamma = 0
+# unload 1 (default 0 since 2026-10-03: it was a one-off residual-stress test): after the last level the plates are driven BACK to gamma = 0
 # at the same |vshear| (halt at gamma <= 0) and a hold of unload_hold_steps
 # (0 -> = nsteps) is recorded with the full production output set tagged
 # _unload: a reversible network returns sigma_xz to its reference reading; a
 # residual means plastic rearrangement, plate-bond slip or a relaxation slower
 # than the hold.  0 skips it; always skipped under cont=1.
-variable unload            index 1
+variable unload            index 0
 variable unload_hold_steps index 0
 
 # ----- Phase 1 lengths (index: -var override for smoke tests) -----
@@ -514,6 +517,12 @@ fix trk_box_bounds all print ${stress_freq} "$(step) $(xlo) $(xhi) $(ylo) $(yhi)
     file output_files/volume_data/box_bounds_${dataname}_${interaction}_${nsteps}.dat screen no
 fix trk_dims_rg all print ${stress_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
     file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${nsteps}.dat screen no
+# gyration-tensor components for the Rg-based shear strain (2026-10-03): a simple shear x -> x + gamma*z changes
+# Rg_xz by gamma*Rg_zz^2, so gamma_rg = (Rg_xz - <Rg_xz>_ref)/Rg_zz^2 -- the shear analogue of the compression
+# decks' Rg strain; the notebooks form it (G_STRAIN fallback after the displacement-profile slope).
+fix trk_rg all print ${stress_freq} "$(step) $(c_rg_tensor[3]) $(c_rg_tensor[5])" &
+    title "# step Rg_zz^2 Rg_xz   (polymer gyration tensor, unwrapped coordinates)" &
+    file output_files/stress_data/shear_strain_rg_${dataname}_${interaction}_${nsteps}.dat screen no
 fix trk_vol_rg all print ${stress_freq} "$(step) $(v_gel_vol_rg)" &
     file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
 fix trk_vol_bb all print ${stress_freq} "$(v_gel_vol_bb)" &
@@ -805,6 +814,13 @@ compute chunk_z_poly_disp polymer chunk/atom bin/1d z lower ${binWidth_reduced} 
 # the linear shear ramp; D_c (= G/zeta) is fit from that relaxation.
 compute  displace_shear polymer displace/atom
 variable ux_shear atom c_displace_shear[1]
+# CUMULATIVE displacement since the gamma = 0 reference (never reset; 2026-10-03, as the compression
+# deck's disp_z_polymer_cum): the steady profile u_x(z) of each hold, whose interior slope du_x/dz is the
+# shear strain the NETWORK carries -- the strain G divides by in the notebooks (G_STRAIN = 'disp'), the
+# way M divides by the steady u_z(Z) slope.  The reference-window profile (_cum_ref) is its zero.
+compute  displace_cum polymer displace/atom
+variable ux_cum atom c_displace_cum[1]
+compute  chunk_z_poly_cum polymer chunk/atom bin/1d z lower ${binWidth_reduced} units reduced
 
 
 # ==========================================================================
@@ -835,6 +851,8 @@ fix ref_prof_p polymer ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk
 fix ref_prof_s solvent ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_solvent &
     v_s_s_xx v_s_s_yy v_s_s_zz v_s_s_xy v_s_s_xz v_s_s_yz norm none &
     file output_files/stress_data/stress_profile_z_solvent_ref_${dataname}_${interaction}_${nsteps}.dat
+fix ref_disp_cum polymer ave/chunk ${ref_nevery} ${ref_nrepeat} ${ref_nfreq} chunk_z_poly_cum v_ux_cum &
+    file output_files/displacement_data/disp_x_polymer_cum_ref_${dataname}_${interaction}_${nsteps}.dat
 fix ref_series all ave/time ${series_nevery} ${series_nrepeat} ${series_nfreq} &
     v_stress_p_xx v_stress_p_yy v_stress_p_zz v_stress_p_xz v_stress_s_xx v_stress_s_yy v_stress_s_zz v_stress_s_xz v_S_top v_S_bot &
     title2 "# TimeStep sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz S_top S_bot   (bulk partial stresses + plate sigma_xz, block-averaged; gamma = 0 reference)" &
@@ -843,6 +861,7 @@ variable ref_run_steps equal (floor(($(step)+${ref_avg_steps}-1)/${ref_nfreq})+1
 print ">>> Reference window: running ${ref_run_steps} steps (>= ${ref_avg_steps}, aligned to ref_nfreq=${ref_nfreq})"
 run ${ref_run_steps}
 unfix ref_series
+unfix ref_disp_cum
 unfix ref_prof_s
 unfix ref_prof_p
 unfix ref_tensor_s
@@ -1017,6 +1036,9 @@ fix avg_prof_z_solv solvent ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq
 fix avg_disp_z_poly polymer ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_poly_disp v_ux_shear &
     file output_files/displacement_data/disp_x_polymer_${dataname}_${interaction}_${nsteps}_g${strains}.dat
+fix avg_disp_z_cum polymer ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
+    chunk_z_poly_cum v_ux_cum &
+    file output_files/displacement_data/disp_x_polymer_cum_${dataname}_${interaction}_${nsteps}_g${strains}.dat
 
 variable hold_steps equal (floor(($(step)+${nsteps}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
 print "========================================"
@@ -1028,6 +1050,7 @@ run ${hold_steps}
 # ----- Teardown this level's hold fixes/dumps (lock released on the epoch-
 #       aligned end_of_step above) BEFORE the next increment. -----
 unfix avg_disp_z_poly
+unfix avg_disp_z_cum
 unfix avg_prof_z_solv
 unfix avg_prof_z_poly
 unfix avg_stress_solvent
@@ -1198,6 +1221,7 @@ unfix trk_shear_strain
 unfix trk_vol_bb
 unfix trk_vol_rg
 unfix trk_dims_rg
+unfix trk_rg
 unfix trk_box
 unfix trk_box_bounds
 

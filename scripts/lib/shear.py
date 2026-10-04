@@ -28,8 +28,14 @@ G is estimated the way the compression notebooks estimate M and G:
     solv_bulk group while solvent exchanges through the permeable plates with
     the film behind them, so the profiles are rescaled by the reference count
     (see _swap_correct);
-  * the strain is the PRESCRIBED plate-based gamma the deck records (plate
-    x-displacement / plate separation), averaged over the plateau window;
+  * the strain G divides by is the NETWORK strain (G_STRAIN, 2026-10-03 -- the shear
+    counterpart of the compression notebooks' M_STRAIN): the interior slope of the
+    steady CUMULATIVE displacement profile u_x(z) (disp_x_polymer_cum, plateau mean
+    minus the gamma = 0 reference window), falling back to the Rg-based shear strain
+    (Rg_xz - Rg_xz,ref)/Rg_zz^2, then [two-piston deck] the tracking-slab strain, then
+    the PRESCRIBED boundary strain (plate / driven-layer displacement over their
+    separation), which is what runs older than 2026-10-03 have.  Its CI is folded into
+    every G in quadrature, as eps_M's is into M;
   * D_c from the transverse (even-sine) relaxation fit of u_x(z,t) during the
     hold, kappa = D_c/G  (= k/eta, the same kappa as D_c/M in compression);
   * P_th = (1/3) tr(sigma^t) (compression positive) is the P* = 1.5 check.
@@ -49,6 +55,19 @@ Layout of this file
     7. figures, single level         fig_strain ... fig_thermo_pressure
     8. figures, sweep                fig_*_sweep
     9. summaries                     print_summary, print_hold_check
+
+Two decks (Config.DECK, 2026-10-03), same protocol, file names, _g<strain> tags and columns:
+  * 'shear_slab'          -- harmonic-bonded plates on the gel faces, driven +/-x.
+  * 'shear_slab_two_pist' -- the two-piston system (reservoirs at P_bath); a force on the
+                             polymer beads of the gel's two face layers steers each
+                             layer's COM (drive until the strain target, then hold).
+                             Differences read here: the dash-dot planes are the gel's Rg
+                             faces; the prescribed strain is the driven-layer one; the
+                             tracking-slab strain (stress_series column 12) is one more
+                             rung of the G_STRAIN fallback chain;
+                             S_top / S_bot are the layer forces per area; the D_c fit
+                             maps the bulk bins onto the driven-layer COM planes; no
+                             unload phase.
 
 Geometry (shear_slab.lmp since 2026-09-22): z = gap (plate normal), x = shear
 direction, y neutral; the network is periodic in x and y; profiles are z-binned
@@ -107,7 +126,9 @@ class Config:
     INTERACTION: str                      # "epsSS_epsSP"
     RUN_ID: str                           # local folder under flow_data_local/{shear,plots/shear}
     STRAINS: list = field(default_factory=list)   # shear-strain targets as STRINGS ("0.1"), = STRAINS_LIST
-                                          # in shear_slab.batch (files are tagged _g<level>)
+                                          # in shear_slab.batch / shear_slab_two_pist.batch (files are tagged _g<level>)
+    DECK: str = 'shear_slab'              # 'shear_slab' (plate-driven) | 'shear_slab_two_pist' (two-piston system,
+                                          # force-driven face layers); same strain-controlled protocol and files
     NSTEPS: object = None                 # the <steps> tag of the file names (= NSTEPS of the batch, one tag for every
                                           # level); None -> resolved from the files on disk, an int pins it
     base_dir: str = '../../flow_data_local'
@@ -140,6 +161,13 @@ class Config:
     # ---- G as an increment from the gamma = 0 reference --------------------
     G_SUBTRACT_REF: bool = True           # G = (stress - its own gamma = 0 reading) / gamma for BOTH estimators
                                           # (needs the _ref files of Phase 1.5; older runs fall back to absolute, flagged)
+    # ---- the strain G (and kappa) divide by -- the M_STRAIN of the compression notebooks ----
+    G_STRAIN: str = 'disp'                # 'disp': interior slope of the steady CUMULATIVE displacement profile u_x(z)
+                                          #         (disp_x_polymer_cum, decks since 2026-10-03) = the network strain;
+                                          # 'rg':   (Rg_xz - Rg_xz,ref)/Rg_zz^2 (shear_strain_rg);  'trk': tracking slabs
+                                          #         (shear_slab_two_pist);  'applied': the prescribed boundary strain.
+                                          # Fallback chain disp -> rg -> trk -> applied when a source is missing.
+    DISP_TRIM_BINS: int = 3               # populated bins dropped at each face before the line fit (as triaxial's)
     # ---- D_c transverse relaxation fit ----------------------------------
     DC_N_MODES: int = 5
     DC_TRIM_BINS: int = 1
@@ -158,8 +186,17 @@ class Config:
     TRAJ_DIR: Path = field(init=False)
     sim_name: str = field(init=False)
     mode: str = field(init=False, default='shear')
+    two_pist: bool = field(init=False, default=False)
 
     def __post_init__(self):
+        assert self.DECK in ('shear_slab', 'shear_slab_two_pist'), f"DECK must be 'shear_slab' or 'shear_slab_two_pist' (got {self.DECK!r})"
+        self.two_pist = self.DECK == 'shear_slab_two_pist'
+        if self.two_pist:
+            # the deck's bulk starts layer_thick + track_thick = 5 sigma inside each Rg face
+            self.plate_excl = max(self.plate_excl, 5.0)
+            self.wall_margin = max(self.wall_margin, 6.0)
+            if self.RUNS_ROOT.rstrip('/').endswith('/shear_slab'):
+                self.RUNS_ROOT = self.RUNS_ROOT.rstrip('/') + '_two_pist'
         assert self.STRAINS, 'STRAINS is empty -- list at least one level, e.g. ["0.1"]'
         self.STRAINS = [str(l) for l in self.STRAINS]
         base = Path(self.base_dir)
@@ -173,7 +210,7 @@ class Config:
             self.NSTEPS = int(self.NSTEPS)
         t = self.tag_for()
         self.sim_name = f'{self.DATANAME}_{self.INTERACTION}' + (f'_{t}' if t else '')
-        print(f'Config (shear): {self.sim_name}  |  levels {self.STRAINS}\n'
+        print(f'Config (shear, {self.DECK}): {self.sim_name}  |  levels {self.STRAINS}\n'
               f'  data  {self.DATA_DIR}\n  plots {self.PLOT_DIR}\n'
               f'  file tag (NSTEPS): {t if t else "not local yet"}')
 
@@ -244,6 +281,8 @@ def read_series(path):
     if a.shape[1] >= 11:                       # 2026-09-25 deck: block-averaged plate sigma_xz (S_top S_bot)
         d['S_top'], d['S_bot'] = a[:, 9], a[:, 10]
         d['S_plate'] = 0.5 * (a[:, 9] + a[:, 10])
+    if a.shape[1] >= 12:                       # shear_slab_two_pist: block-averaged tracking-slab (interior) strain
+        d['gamma'] = a[:, 11]
     return d
 
 
@@ -347,6 +386,8 @@ def _film_mask(cfg, R, sp=None):
     free = Np.max(axis=0) <= cfg.film_poly_max
     if sp is not None:
         free &= sp['N'][0] > cfg.Ncount_min
+        if cfg.two_pist:                       # reservoirs end at the wet pistons: keep FULL solvent bins only
+            free &= sp['N'][0] > 0.9 * sp['N'][0].max()
     if not all(np.isfinite(R.get(k, np.nan)) for k in ('zf_bot', 'zf_top', 'LZ')):
         return np.zeros_like(free)
     d = np.full(len(zf), np.inf)
@@ -455,6 +496,7 @@ def load_reference(cfg, verbose=True):
             raise FileNotFoundError(f'no stress_profile_z_polymer file for the reference or level {first} in {cfg.DATA_DIR}'
                                     ' -- run the sync cell')
     R['zf'], R['N_ref'] = prof['zf'], prof['N']
+    R['plane_label'] = 'face' if cfg.two_pist else 'plate'
     _geometry(cfg, R, first)
     sp = read_profiles(cfg.path('stress_profile_z_solvent_ref')) if src == 'reference' else None
     R['film'] = _film_mask(cfg, R, sp)
@@ -546,6 +588,22 @@ def load_reference(cfg, verbose=True):
         v, h = Rf.get('net_xz_int', Rf['sp_xz_int']), Rf.get('net_xz_int_half', Rf['sp_xz_int_half'])
         Rf['S_ref'], Rf['S_ref_lo'], Rf['S_ref_hi'] = v, v - h, v + h
         Rf['S_ref_pp'], Rf['S_ref_pp_lo'], Rf['S_ref_pp_hi'] = Rf['sp_xz_int'], Rf['sp_xz_int'] - Rf['sp_xz_int_half'], Rf['sp_xz_int'] + Rf['sp_xz_int_half']
+    dref = read_disp(cfg.path('disp_x_polymer_cum_ref'))
+    if dref is not None:                             # zero of the cumulative displacement profile
+        w = dref['N'].sum(axis=0)
+        Rf['ux_cum_ref'] = np.where(w > 0, (dref['ux'] * dref['N']).sum(axis=0) / np.maximum(w, 1), 0.0)
+    R['rg'] = RG = tri.load2c(cfg.path('shear_strain_rg'), 3)
+    if RG is not None:                               # zero of the Rg-based shear strain
+        nf = float(tp_ts[1] - tp_ts[0]) if len(tp_ts) > 1 else 0.0
+        w = (RG[:, 0] > tp_ts[0] - nf) & (RG[:, 0] <= tp_ts[-1])
+        if w.any():
+            Rf['rg_xz_ref'] = float(np.mean(RG[w, 2]))
+    if cfg.two_pist and S is not None and 'gamma' in S and len(S['step']) >= 2:
+        # tracking-slab strain at gamma = 0: the trackers are zeroed on ONE instantaneous configuration, so the
+        # window mean (not 0) is the strain origin -- thermal strain noise would otherwise offset every level
+        m, lo, hi, blk, tau = block_bootstrap_ci(S['gamma'], cfg.ci_level)
+        Rf['gamma_ref'], Rf['gamma_ref_half'] = float(m), float(0.5 * (hi - lo))
+        say(f"  reference tracking-slab strain: <gamma_trk> = {m:+.5f} [{lo:+.5f}, {hi:+.5f}]  (subtracted from every level's interior strain)")
     R['ref'] = Rf
     say(f"  reference (gamma = 0, {n} snapshots): <sigma'_xz>_int = {Rf.get('net_xz_int', np.nan):+.5f} ± {Rf.get('net_xz_int_half', np.nan):.5f}"
         f"   series <sigma^t_xz> = {Rf['S_ref']:+.5f} [{Rf['S_ref_lo']:+.5f}, {Rf['S_ref_hi']:+.5f}]"
@@ -586,6 +644,14 @@ def fit_Dc(cfg, R, disp, t_hold):
     # [plate_excl, L - plate_excl] in absolute distance from the bottom plate
     scale = (L - 2.0 * cfg.plate_excl) / (n_gel * cfg.binWidth)
     zhat_all = (cfg.plate_excl + (np.arange(len(ok)) - i_lo + 0.5) * cfg.binWidth * scale) / L
+    if cfg.two_pist and R.get('planes_exact') and len(R['in_bulk']) == len(ok):
+        # the held boundaries are the driven-layer COM planes, L = H_drv apart and centred between the Rg faces;
+        # bin centres are exact (whole-box reduced z), and only the bulk bins (inside the layers) are fitted
+        z_mid = 0.5 * (R['z_top_abs'] + R['z_bot_abs'])
+        zhat_all = (disp['zf'] * R['LZ'] + R['zlo_abs'] - (z_mid - 0.5 * L)) / L
+        idx = np.where(ok & R['in_bulk'])[0]
+        if len(idx) < 4 + 2 * cfg.DC_TRIM_BINS:
+            return None
     if cfg.DC_TRIM_BINS:
         idx = idx[cfg.DC_TRIM_BINS:-cfg.DC_TRIM_BINS]
     zf = zhat_all[idx]
@@ -684,6 +750,96 @@ def _finish_unload(cfg, R, L, say):
     return L
 
 
+def fit_disp_profile(cfg, R, L, lvl):
+    """Steady CUMULATIVE displacement profile u_x(z) of one level (disp_x_polymer_cum: displace/atom never
+    reset after the gamma = 0 reference; plateau mean minus the reference-window profile) and the line through
+    its interior: slope = du_x/dz = the shear strain of the network -- the counterpart of
+    triaxial.fit_disp_profile (z does not change under shear, so the current-z bins need no conversion).
+    Fitted bins: populated, between the plate / face planes, DISP_TRIM_BINS dropped at each end.
+    CI half-width = max(least-squares, frame-to-frame t-interval).  None without the file."""
+    D = read_disp(cfg.path('disp_x_polymer_cum', lvl))
+    if D is None or not np.isfinite(R.get('LZ', np.nan)):
+        return None
+    pl = D['ts'] >= L['halt_ts']
+    if not pl.any():
+        pl[-1] = True
+    Nc, ux = D['N'][pl], D['ux'][pl].copy()
+    ref = (R.get('ref') or {}).get('ux_cum_ref')
+    have_ref = ref is not None and ref.shape == ux.shape[1:]
+    if have_ref:
+        ux -= ref[None, :]
+    w = Nc.sum(axis=0)
+    um = np.where(w > 0, (ux * Nc).sum(axis=0) / np.maximum(w, 1), 0.0)
+    zf = D['zf']
+    z = zf * R['LZ'] + (R['zlo_abs'] if np.isfinite(R.get('zlo_abs', np.nan)) else 0.0)
+    ok = Nc.mean(axis=0) > cfg.Ncount_min
+    if np.isfinite(R.get('zf_bot', np.nan)) and np.isfinite(R.get('zf_top', np.nan)):
+        ok &= (zf > R['zf_bot']) & (zf < R['zf_top'])
+    idx = np.where(ok)[0]
+    trim = int(max(cfg.DISP_TRIM_BINS, 0))
+    inner = idx[trim:len(idx) - trim] if len(idx) > 2 * trim + 3 else idx
+    if len(inner) < 3:
+        return None
+    coef, cov = np.polyfit(z[inner], um[inner], 1, cov=True)
+    slope, icpt = float(coef[0]), float(coef[1])
+    resid = um - (slope * z + icpt)
+    ss = np.sum((um[inner] - um[inner].mean()) ** 2)
+    R2 = float(1.0 - np.sum(resid[inner] ** 2) / ss) if ss > 0 else np.nan
+    half_lsq = float(stats.t.ppf(0.5 + cfg.ci_level / 2, max(len(inner) - 2, 1)) * np.sqrt(max(cov[0, 0], 0.0)))
+    pf, half_frames = [], 0.0
+    if len(ux) >= 2:
+        pf = np.array([np.polyfit(z[inner], row[inner], 1)[0] for row in ux])
+        half_frames = float(stats.t.ppf(0.5 + cfg.ci_level / 2, len(pf) - 1) * pf.std(ddof=1) / np.sqrt(len(pf)))
+    half = max(half_lsq, half_frames)
+    return dict(z=z, u=um, idx=idx, inner=inner, slope=slope, icpt=icpt, resid=resid, R2=R2, gamma=slope,
+                lo=slope - half, hi=slope + half, half=half, half_lsq=half_lsq, half_frames=half_frames,
+                n_frames=int(pl.sum()), ts=D['ts'][pl], ref_subtracted=bool(have_ref))
+
+
+def _strains(cfg, R, L, lvl, say):
+    """Every strain measure of the level and the one G and kappa divide by (cfg.G_STRAIN with its fallback
+    chain disp -> rg -> trk -> applied) -- triaxial._strain_for_M for shear.  On entry L['gamma'] is the
+    prescribed boundary strain; on exit it is the chosen one (L['gamma_src'], L['gamma_half']) and the
+    prescribed strain is kept as L['gamma_applied']."""
+    Rf = R.get('ref') or {}
+    L['gamma_applied'] = float(L['gamma'])
+    t1 = float(L['ts'][-1])
+    # tracking slabs (shear_slab_two_pist): plateau of the block-averaged series minus the gamma = 0 reading
+    S = read_series(cfg.path('stress_series', lvl)) if cfg.two_pist else None
+    if S is not None and 'gamma' in S and (S['step'] >= L['t_hold']).sum() >= 4:
+        hold = S['step'] >= L['t_hold']
+        p = plateau_window(S['step'][hold], S['gamma'][hold], cfg.plateau_frac_auto, cfg.ci_level)
+        L['PF_gamma'] = p
+        L['gamma_trk'] = float(p['mean'] - Rf.get('gamma_ref', 0.0))
+        L['gamma_trk_half'] = float(np.hypot(0.5 * (p['hi'] - p['lo']), Rf.get('gamma_ref_half', 0.0)))
+    # Rg-based shear strain: (Rg_xz - Rg_xz,ref) / Rg_zz^2 over the plateau window
+    RG = R.get('rg')
+    if RG is not None and 'rg_xz_ref' in Rf:
+        w = (RG[:, 0] >= L['halt_ts']) & (RG[:, 0] <= t1)
+        if w.any():
+            L['gamma_rg'] = float(np.mean((RG[w, 2] - Rf['rg_xz_ref']) / RG[w, 1]))
+    # steady displacement profile
+    L['disp_prof'] = D = fit_disp_profile(cfg, R, L, lvl)
+    if D is not None:
+        L['gamma_disp'], L['gamma_disp_half'] = D['gamma'], D['half']
+    chain = {'disp': ('disp', 'rg', 'trk', 'applied'), 'rg': ('rg', 'trk', 'applied'), 'trk': ('trk', 'applied'),
+             'applied': ('applied',)}.get(cfg.G_STRAIN)
+    if chain is None:
+        raise ValueError(f"G_STRAIN must be 'disp', 'rg', 'trk' or 'applied' (got {cfg.G_STRAIN!r})")
+    for src in chain:
+        if np.isfinite(L.get('gamma_' + src, np.nan)):
+            L['gamma'], L['gamma_src'], L['gamma_half'] = float(L['gamma_' + src]), src, float(L.get(f'gamma_{src}_half', 0.0))
+            break
+    say(f"  strain: {'driven-layer' if cfg.two_pist else 'plate-based'} (prescribed) {L['gamma_applied']:.5f} (target {L['gamma_target']})"
+        + (f" | displacement-profile slope {D['gamma']:.5f} [{D['lo']:.5f}, {D['hi']:.5f}] (R^2 = {D['R2']:.4f}, {len(D['inner'])} interior bins, "
+           f"{D['n_frames']} plateau frame(s){'' if D['ref_subtracted'] else ', NO reference profile'})" if D is not None else '')
+        + (f" | Rg {L['gamma_rg']:.5f}" if 'gamma_rg' in L else '')
+        + (f" | tracking slabs {L['gamma_trk']:.5f} ± {L['gamma_trk_half']:.5f}" if 'gamma_trk' in L else '')
+        + f" | surface-COM {L.get('gamma_surf', np.nan):.5f};  plate_sep = {L['plate_sep']:.2f}")
+    say(f"  G, kappa divide by gamma_{L['gamma_src']} = {L['gamma']:.5f} (G_STRAIN = {cfg.G_STRAIN!r})"
+        + ('' if L['gamma_src'] == cfg.G_STRAIN else f"  -- FALLBACK: no gamma_{cfg.G_STRAIN} for this level"))
+
+
 def load_level(cfg, R, lvl, verbose=True):
     """Everything for ONE shear-strain level `lvl` (string, e.g. "0.1"): strain history,
     bulk stress tensors, z-profiles (polymer, swap-corrected solvent, total, NETWORK
@@ -693,6 +849,8 @@ def load_level(cfg, R, lvl, verbose=True):
     missing."""
     say = print if verbose else (lambda *a, **k: None)
     unload = str(lvl) == 'unload'
+    if unload and cfg.two_pist:                  # shear_slab_two_pist has no unload phase
+        return None
     L = dict(lvl=lvl, gamma_target=(0.0 if unload else float(lvl)), is_unload=unload)
     say(f'\n=== {"UNLOAD (Phase 4: plates back to gamma = 0, residual-stress hold)" if unload else f"level _g{lvl}  (target shear strain {float(lvl):.4f})"} ===')
     ts, tp = read_tensor(cfg.path('stress_tensor_polymer', lvl))
@@ -727,9 +885,11 @@ def load_level(cfg, R, lvl, verbose=True):
         L['surf_ts'], L['gamma_surf_ts'] = SU[:, 0], SU[:, 2]
         pl = SU[:, 0] >= L['halt_ts']
         L['gamma_surf'] = float(np.mean(SU[pl, 2])) if pl.any() else float(SU[-1, 2])
+    if unload:
+        L['gamma_applied'], L['gamma_src'], L['gamma_half'] = L['gamma'], 'applied', 0.0
+    else:
+        _strains(cfg, R, L, lvl, say)
     g = L['gamma']
-    say(f"  strain: held plate-based gamma = {g:.5f} (G denominator; target {L['gamma_target']}), "
-        f"surface-COM gamma = {L.get('gamma_surf', np.nan):.5f}, plate_sep = {L['plate_sep']:.2f}")
 
     # ---- profiles (bulk z-bins): polymer, solvent (swap-corrected), total, network ----
     pp = read_profiles(cfg.path('stress_profile_z_polymer', lvl))
@@ -838,9 +998,18 @@ def load_level(cfg, R, lvl, verbose=True):
             v = (p['mean'] - rv) / g
             L['G']['plate'] = dict(G=v, lo=v - half, hi=v + half, abs=p['mean'] / g, abs_lo=p['lo'] / g, abs_hi=p['hi'] / g,
                                    ref=rv, sigma=p['mean'])
+    if L.get('gamma_half'):
+        # measured network strain: its CI enters every G = sigma/gamma in quadrature (as eps_M's into M)
+        rel = L['gamma_half'] / max(abs(g), 1e-30)
+        for d in L['G'].values():
+            for v, lo, hi in (('G', 'lo', 'hi'), ('abs', 'abs_lo', 'abs_hi')):
+                if v in d and lo in d:
+                    half = float(np.hypot(0.5 * (d[hi] - d[lo]), abs(d[v]) * rel))
+                    d[lo], d[hi] = d[v] - half, d[v] + half
     how = 'increment from gamma = 0' if sub else ('ABSOLUTE (no _ref files)' if cfg.G_SUBTRACT_REF else 'absolute')
     for key, name in (('net', "G_network (sigma'_xz profile, interior bins)"), ('ser', "G_series  (sigma^t_xz series, plateau window)"),
-                      ('plate', 'G_plate   (plate x-force / area, plateau window)'), ('pp', 'G_polymer (sigma_p,xz partial -- check only)')):
+                      ('plate', 'G_plate   (' + ('face-layer' if cfg.two_pist else 'plate') + ' x-force / area, plateau window)'),
+                      ('pp', 'G_polymer (sigma_p,xz partial -- check only)')):
         Gd = L['G'].get(key)
         if Gd:
             say(f"  {name} = {Gd['G']:.4f} [{Gd['lo']:.4f}, {Gd['hi']:.4f}]  ({how}"
@@ -887,16 +1056,18 @@ def load_level(cfg, R, lvl, verbose=True):
 #  5. EXPANSE SYNC
 # ===========================================================================
 _REF_DAT = ('stress_tensor_polymer_ref', 'stress_tensor_solvent_ref', 'stress_profile_z_polymer_ref',
-            'stress_profile_z_solvent_ref', 'stress_series_ref')
-_RUN_DAT = ('shear_strain', 'plate_pressure', 'box_dimensions', 'box_bounds', 'gel_dimensions_rg', 'gel_volume_rg', 'gel_volume_bb')
+            'stress_profile_z_solvent_ref', 'stress_series_ref', 'disp_x_polymer_cum_ref')
+_RUN_DAT = ('shear_strain', 'shear_strain_rg', 'plate_pressure', 'box_dimensions', 'box_bounds', 'gel_dimensions_rg', 'gel_volume_rg', 'gel_volume_bb')
 _PROD_DAT = ('stress_tensor_polymer', 'stress_tensor_solvent', 'stress_profile_z_polymer', 'stress_profile_z_solvent',
-             'stress_series', 'shear_strain', 'shear_strain_surface', 'disp_x_polymer', 'gel_dimensions_rg',
+             'stress_series', 'shear_strain', 'shear_strain_surface', 'disp_x_polymer', 'disp_x_polymer_cum', 'gel_dimensions_rg',
              'gel_dimensions_bb', 'gel_volume_rg', 'gel_volume_bb', 'box_dimensions', 'polymer_com')
 _REQUIRED = ('stress_tensor_polymer', 'stress_profile_z_polymer', 'shear_strain')
 
 
 def sync_files(cfg, levels=None):
     levels = cfg.STRAINS if levels is None else [str(l) for l in levels]
+    if cfg.two_pist:                           # no unload phase in shear_slab_two_pist
+        levels = [l for l in levels if l != 'unload']
     data = [cfg.path(n) for n in _REF_DAT + _RUN_DAT]
     req = []
     for l in levels:
@@ -924,7 +1095,7 @@ def mark_plates(ax, R, label=True):
         if zf is not None and np.isfinite(zf):
             ax.axvline(zf, color='k', ls='-.', lw=1.5, alpha=0.85, zorder=4)
             if label:
-                ax.text(zf, 1.005, 'plate', transform=ax.get_xaxis_transform(), ha='center', va='bottom',
+                ax.text(zf, 1.005, R.get('plane_label', 'plate'), transform=ax.get_xaxis_transform(), ha='center', va='bottom',
                         fontsize=9, color='0.25', clip_on=False)
 
 
@@ -1037,18 +1208,26 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
         if 'gamma_ts' not in L:
             continue
         any_ = True
-        ax.plot(L['strain_ts'], L['gamma_ts'], '-', color=col, lw=2.2, label=fr'$\gamma$ plate-based (target {L["lvl"]})')
+        ax.plot(L['strain_ts'], L['gamma_ts'], '-', color=col, lw=2.2,
+                label=(fr'$\gamma$ driven layers (target {L["lvl"]})' if cfg.two_pist else fr'$\gamma$ plate-based (target {L["lvl"]})'))
         if 'gamma_surf_ts' in L:
-            ax.plot(L['surf_ts'], L['gamma_surf_ts'], '--', color=col, lw=1.5, alpha=0.7, label=fr'$\gamma_{{\rm surf}}$ (polymer surface COM)')
+            ax.plot(L['surf_ts'], L['gamma_surf_ts'], '--', color=col, lw=1.5, alpha=0.7,
+                    label=(r'$\gamma_{\rm trk}$ (interior tracking slabs, raw)' if cfg.two_pist else fr'$\gamma_{{\rm surf}}$ (polymer surface COM)'))
         ax.axvspan(L['halt_ts'], float(L['strain_ts'][-1]), color=col, alpha=0.06)
         ax.axhline(L['gamma_target'], color=col, ls=':', lw=1.0, alpha=0.6)
-        ax.annotate(f"held: {sig(L['gamma'], 4)}  surf {sig(L.get('gamma_surf', np.nan), 4)}",
+        ax.annotate(f"held: {sig(L.get('gamma_applied', L['gamma']), 4)}  " + (f"surf {sig(L.get('gamma_surf', np.nan), 4)}" if L.get('gamma_src', 'applied') == 'applied'
+                                                                    else f"network ({L['gamma_src']}) {sig(L['gamma'], 4)}"),
                     (L['strain_ts'][-1], L['gamma_ts'][-1]), textcoords='offset points', xytext=(-6, 9), ha='right',
                     va='bottom', fontsize=10, color=col, bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='none', alpha=0.8))
     ax.set_xlabel('time step')
-    ax.set_ylabel(r'shear strain  $\gamma = \Delta x_{\rm plates}/L_{\rm plates}$')
-    ax.set_title('Strain diagnostic: solid = plate-based $\\gamma$ (prescribed), dashed = surface COM,\n'
-                 'dotted = target, shaded = plateau window', fontsize=15)
+    if cfg.two_pist:
+        ax.set_ylabel(r'shear strain  $\gamma = \Delta x_{\rm layers}/H_{\rm layers}$')
+        ax.set_title('Strain diagnostic: solid = driven-layer $\\gamma$ (prescribed), dashed = interior tracking slabs,\n'
+                     'dotted = target, shaded = plateau window;  "network" = the strain $G$ divides by (G_STRAIN)', fontsize=15)
+    else:
+        ax.set_ylabel(r'shear strain  $\gamma = \Delta x_{\rm plates}/L_{\rm plates}$')
+        ax.set_title('Strain diagnostic: solid = plate-based $\\gamma$ (prescribed), dashed = surface COM,\n'
+                     'dotted = target, shaded = plateau window', fontsize=15)
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=10)
     if not any_:
@@ -1188,7 +1367,7 @@ def fig_series(cfg, R, L):
     if PS is not None:
         w = (PS['step'] >= st[0]) & (PS['step'] <= st[-1])
         axL.plot(PS['step'][w], rolling_mean(PS['S'][w], cfg.roll_win), '-', color=WONG['green'], lw=1.4, alpha=0.9,
-                 label=r'$\sigma_{xz}$ at the plates (x-force / area)')
+                 label=(r'$\sigma_{xz}$ at the driven face layers (x-force / area)' if cfg.two_pist else r'$\sigma_{xz}$ at the plates (x-force / area)'))
     Rf = R.get('ref')
     if Rf is not None:
         axL.axhline(Rf['S_ref'], color='k', ls=':', lw=1.2, alpha=0.7, label=f"reference $\\gamma=0$: {sig(Rf['S_ref'], 2)}")
@@ -1305,7 +1484,7 @@ def fig_Dc(cfg, R, L):
                   + ('  (AT BOUND)' if F['at_bound'] else ''), fontsize=15)
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
     fig.colorbar(sm, ax=[axl, axr], fraction=0.015, pad=0.04).set_label('timestep')
-    fig.suptitle(f'Cooperative diffusivity (shear) fit, level _g{L["lvl"]}  |  {cfg.sim_name}  |  plates frozen, '
+    fig.suptitle(f'Cooperative diffusivity (shear) fit, level {cfg.gsuf(L["lvl"])}  |  {cfg.sim_name}  |  plates frozen, '
                  f'$L_{{\\rm plates}}={sig(F["L"])}\\,\\sigma$', fontsize=12, fontweight='bold')
     return _save(fig, cfg, 'Dc_shear_fit', L['lvl'])
 
@@ -1478,6 +1657,50 @@ def fig_network_stress_sweep(cfg, R, levels):
     return _save(fig, cfg, 'sweep_network_stress')
 
 
+def fig_disp_profile(cfg, R, levels, stem='disp_profile'):
+    """Steady displacement profile(s) of the network and the strain they give -- the shear counterpart of
+    triaxial.fig_disp_profile: (a) plateau-mean cumulative u_x(z) relative to the gamma = 0 reference, line fit
+    over the interior bins (filled; hollow = trimmed), slope = gamma_disp; (b) residuals from the line."""
+    hd = [L for L in levels if L.get('disp_prof') is not None]
+    if not hd:
+        print('displacement-profile figure skipped (no disp_x_polymer_cum files: deck before 2026-10-03)')
+        return None
+    fig, (axA, axB) = plt.subplots(2, 1, figsize=(11, 9), sharex=True, constrained_layout=True, gridspec_kw={'height_ratios': [3, 1.3]})
+    fig.suptitle(f'Steady displacement profile of the network -> the strain that divides $G$   |   {cfg.sim_name}', fontsize=12, fontweight='bold')
+    lines = []
+    for L in hd:
+        D = L['disp_prof']
+        col = level_color(levels.index(L)) if len(levels) > 1 else WONG['blue']
+        out = np.setdiff1d(D['idx'], D['inner'])
+        axA.plot(D['z'][D['inner']], D['u'][D['inner']], 'o', ms=5, color=col,
+                 label=f"level {L['lvl']}:  $\\gamma_{{\\rm disp}}$ = {D['gamma']:.4f} [{D['lo']:.4f}, {D['hi']:.4f}],  $R^2$ = {D['R2']:.4f}")
+        axA.plot(D['z'][out], D['u'][out], 'o', ms=5, color=col, mfc='none', alpha=0.7)
+        zz = D['z'][D['idx']]
+        axA.plot(zz, D['slope'] * zz + D['icpt'], '-', lw=1.6, color=col, alpha=0.9)
+        axB.plot(D['z'][D['inner']], D['resid'][D['inner']], 'o-', ms=4, lw=1, color=col)
+        axB.plot(D['z'][out], D['resid'][out], 'o', ms=4, color=col, mfc='none', alpha=0.7)
+        lines.append(f"{L['lvl']}:  disp {D['gamma']:.4f}" + (f"   Rg {L['gamma_rg']:.4f}" if 'gamma_rg' in L else '')
+                     + (f"   trk {L['gamma_trk']:.4f}" if 'gamma_trk' in L else '') + f"   prescribed {L['gamma_applied']:.4f}"
+                     + f"   ->  $G$ uses $\\gamma_{{\\rm {L['gamma_src']}}}$")
+    if np.isfinite(R.get('zlo_abs', np.nan)):
+        for zf in (R.get('zf_bot'), R.get('zf_top')):
+            if zf is not None and np.isfinite(zf):
+                for ax in (axA, axB):
+                    ax.axvline(zf * R['LZ'] + R['zlo_abs'], color='k', ls='-.', lw=1.2, alpha=0.7)
+    axA.axhline(0, color='k', lw=0.8, alpha=0.5)
+    axA.set_ylabel(r'$u_x$  ($\sigma$)')
+    axA.set_title(f'(a) plateau $u_x(z)$ of the polymer relative to the $\\gamma=0$ reference; line fit over the interior '
+                  f'(filled; {cfg.DISP_TRIM_BINS} bins trimmed per face; dash-dot = {R.get("plane_label", "plate")} planes)', fontsize=12)
+    axA.grid(alpha=0.3)
+    annotate_box(axA, '\n'.join(lines), loc='lower right', fontsize=10)
+    smart_legend(axA, fontsize=10)
+    axB.axhline(0, color='k', lw=0.8)
+    axB.set_xlabel(r'$z$  ($\sigma$)'); axB.set_ylabel(r'$u_x - $ fit  ($\sigma$)')
+    axB.set_title('(b) residuals from the line (a uniformly strained interior is flat)', fontsize=12)
+    axB.grid(alpha=0.3)
+    return _save(fig, cfg, stem, levels[0]['lvl'] if len(levels) == 1 else None)
+
+
 def fig_total_stress_sweep(cfg, R, levels):
     """Final plateau total stress of every level: sigma^t_xz and -sigma^t_ii / P_bath."""
     hp = [L for L in levels if L.get('prof_t') is not None]
@@ -1550,7 +1773,7 @@ def fig_G_sweep(cfg, R, levels):
     for ax, pane in ((axA, 'a'), (axB, 'b')):
         _ser(ax, 'net', 'o', WONG['blue'], r"network  $\Delta\langle\sigma'_{xz}\rangle_{\rm int}/\gamma$")
         _ser(ax, 'ser', 's', WONG['vermillion'], r"series  $\Delta\langle\sigma'_{xz}\rangle_{\rm plateau}/\gamma$")
-        _ser(ax, 'plate', '^', WONG['green'], r"plate  $\Delta F_x/(A\,\gamma)$")
+        _ser(ax, 'plate', '^', WONG['green'], ("face layers" if cfg.two_pist else "plate") + r"  $\Delta F_x/(A\,\gamma)$")
         if pane == 'a':
             if sub:
                 _ser(ax, 'net', 'o', WONG['blue'], 'network, absolute', hollow=True, dx=0.002, val='abs')
@@ -1702,7 +1925,7 @@ def print_hold_check(cfg, levels):
           f'stress over the last {cfg.plateau_frac:.0%} of the hold, i.e. the window G is read from)')
     for L in hd:
         F = L['Dc']
-        print(f"  level _g{L['lvl']}:  L = {F['L']:.1f} sigma   hold T = {F['hold_T']:.0f} tau = {F['hold_T'] / cfg.dt_lj / 1e6:.2f}M steps")
+        print(f"  level {cfg.gsuf(L['lvl'])}:  L = {F['L']:.1f} sigma   hold T = {F['hold_T']:.0f} tau = {F['hold_T'] / cfg.dt_lj / 1e6:.2f}M steps")
         for tag, h in F['hold_check'].items():
             flag = '' if h['ok'] else '   <-- TOO SHORT'
             print(f"     {tag:<4s} D_c={h['Dc']:.3f}:  tau_1 = {h['tau1']:.0f} tau = {h['tau1'] / cfg.dt_lj / 1e6:.2f}M steps"
@@ -1733,6 +1956,12 @@ def print_summary(cfg, levels):
     print('  P_th,tens = bulk tensor (box-integrated); P_th,prof = profile interior (swap-corrected for static-group files); '
           'swap = fraction of the profiled solvent behind the plates in the plateau (static-group files: the swapped-out fraction; '
           'whole-box files: the film)')
+    print("  gamma = the strain G and kappa divide by (G_STRAIN = %r; chain disp -> rg -> trk -> applied).  Per level:" % cfg.G_STRAIN)
+    for L in levels:
+        print(f"    {L['lvl']}: used gamma_{L.get('gamma_src', 'applied')} = {L['gamma']:.5f} ± {L.get('gamma_half', 0.0):.5f}  |  prescribed {L.get('gamma_applied', np.nan):.5f}"
+              + (f"  disp {L['gamma_disp']:.5f}" if 'gamma_disp' in L else '') + (f"  Rg {L['gamma_rg']:.5f}" if 'gamma_rg' in L else '')
+              + (f"  trk {L['gamma_trk']:.5f}" if 'gamma_trk' in L else '')
+              + (f"  ->  G_net with the prescribed strain would be {L['G']['net']['G'] * L['gamma'] / L['gamma_applied']:.4f}" if 'net' in L['G'] and L.get('gamma_src', 'applied') != 'applied' and L.get('gamma_applied') else ''))
     print_hold_check(cfg, levels)
 
 
