@@ -257,6 +257,10 @@ class Config:
     DC_FRAC_EARLY: float = 1.0
     DC_TRIM_BINS: int = 2
     DC_FREE_AMPS: bool = True
+    DC_USE_FINE: bool = True              # read disp_z_polymer_fine (the deck's fine-cadence hold profile, DISP_FINE_NFREQ
+                                          # in the batch, 2026-10-05) for the D_c fit when a level has one; the coarse
+                                          # disp_z_polymer otherwise.  DC_TRIM_BINS stays in COARSE bins (binWidth) either way.
+    DC_PLOT_MAX: int = 25                 # at most this many snapshots drawn in the D_c fit panels (the fit uses all)
     DC_WINDOW_AVG: bool = True            # fit_Dc averages each mode's decay over the ave/chunk window, as the permeation fit
                                           # does (PERM_DC_WINDOW_AVG): the deck block-averages u_z over the whole nfreq
                                           # interval (~1/20 of the hold) and tags the snapshot with the window END.  Read as
@@ -1119,12 +1123,16 @@ def fmt_plates(T):
 def load_disp(cfg, R, lvl, halt_ts=None):
     """disp_z_polymer + piston_position + gel BB for one level -> dict/None."""
     f = cfg.path('disp_z_polymer', lvl)
+    ff = cfg.path('disp_z_polymer_fine', lvl)
+    fine = bool(cfg.DC_USE_FINE and ff.exists())
+    if fine:
+        f = ff
     if not f.exists():
         return None
     snaps = read_ave_chunk_file(f)
     if not snaps:
         return None
-    d = dict(ts=np.array([s[0] for s in snaps], float), z=snaps[0][1][:, 1],
+    d = dict(fine=fine, ts=np.array([s[0] for s in snaps], float), z=snaps[0][1][:, 1],
              Nc=np.array([s[1][:, 2] for s in snaps]), uz=np.array([s[1][:, 3] for s in snaps]))
     fp = cfg.path('piston_position', lvl)
     if fp.exists():
@@ -1416,10 +1424,12 @@ def fit_Dc(cfg, R, disp):
     zeta = (z - z_perm) / L
     uhat = disp['uz'] / L
     idx = np.where((Nc.min(axis=0) > cfg.Ncount_min) & (zeta > 0) & (zeta < 1))[0]
-    if len(idx) < 4 + 2 * cfg.DC_TRIM_BINS:
+    # DC_TRIM_BINS counts COARSE bins (binWidth): the same sigma of gel is dropped at each face on the fine file
+    n_trim = int(round(cfg.DC_TRIM_BINS * cfg.binWidth / abs(float(z[1] - z[0])))) if len(z) > 1 else cfg.DC_TRIM_BINS
+    if len(idx) < 4 + 2 * n_trim:
         return None
-    if cfg.DC_TRIM_BINS:
-        idx = idx[cfg.DC_TRIM_BINS:-cfg.DC_TRIM_BINS]
+    if n_trim:
+        idx = idx[n_trim:-n_trim]
     zf = zeta[idx]
     t_lj = (ts - disp['t_hold']) * cfg.dt_lj
     early = np.where(t_lj <= cfg.DC_FRAC_EARLY * t_lj[-1])[0]
@@ -1468,7 +1478,8 @@ def fit_Dc(cfg, R, disp):
     return dict(Dc=Dc, A=A, beta=beta, R2=R2, L=L, DL=DL, DL_pist=DL_pist, DL_sup=DL_sup, f_sup=f_sup,
                 gap=gap, z_perm=z_perm, z_feed=z_feed, z_sup=z_sup, z_pist=disp['z_pist_held'],
                 zeta=zeta, idx=idx, zf=zf, uhat=uhat, early=early, t_lj=t_lj, ts=ts,
-                T=T, u_model=u_model, u_IC=u_IC, kk=kk, hold_T=hold_T, W=W,
+                T=T, u_model=u_model, u_IC=u_IC, kk=kk, hold_T=hold_T, W=W, fine=bool(disp.get('fine', False)),
+                shown=early[::max(1, int(np.ceil(len(early) / max(cfg.DC_PLOT_MAX, 1))))],
                 hold_check=hold_adequacy(cfg, L, hold_T, Dc))
 
 
@@ -1813,7 +1824,8 @@ def load_level(cfg, R, lvl, verbose=True):
     else:
         F = L['Dc']
         say(f"  D_c = {F['Dc']:.4e} sigma^2/tau  (R^2 = {F['R2']:.3f};  L = {F['L']:.2f}, "
-            f"DL/L = {F['DL'] / F['L']:.4f} [support share {F['f_sup']:.2f}], hold = {F['hold_T']:.0f} tau)")
+            f"DL/L = {F['DL'] / F['L']:.4f} [support share {F['f_sup']:.2f}], hold = {F['hold_T']:.0f} tau; "
+            f"{len(F['early'])} {'FINE' if F['fine'] else 'coarse'} snapshots, first at {F['t_lj'][F['early'][0]]:.0f} tau, block {F['W']:.0f} tau)")
         L['kappa'] = {}
         for key, Mk in (('net', 'M_net'), ('pist', 'M_pist')):
             if Mk in L:
@@ -2351,6 +2363,8 @@ _REQUIRED_PROD = ('sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z', 'st
                   'piston_force', 'box_dimensions', 'gel_dimensions_bb', 'disp_z_polymer')
 # two-piston compression extras (per level) and permeation-mode lists (no level tag), 2026-09-16
 _TWO_PIST_DAT = ('piston_pressure', 'permeation', 'pressure_reservoirs')
+# fine-cadence hold displacement profile (DISP_FINE_NFREQ > 0 in the batch, 2026-10-05): optional, most runs have none
+_TWO_PIST_OPT = ('disp_z_polymer_fine',)
 _PERM_DAT = ('sigmazz_polymer', 'sigmazz_solvent', 'sigmaxx_polymer', 'sigmaxx_solvent',
              'sigmayy_polymer', 'sigmayy_solvent', 'solvent_density_z', 'disp_z_polymer', 'strain_zz',
              'piston_position', 'piston_velocity', 'piston_force', 'piston_force_avg', 'piston_pressure',
@@ -2382,7 +2396,7 @@ def sync_files(cfg, levels=None):
         req += [cfg.path(n) for n in _PERM_REQUIRED]
         return data, traj, req
     for l in levels:
-        data += [cfg.path(n, l) for n in _PROD_DAT + (_TWO_PIST_DAT if cfg.two_pist else ())]
+        data += [cfg.path(n, l) for n in _PROD_DAT + ((_TWO_PIST_DAT + _TWO_PIST_OPT) if cfg.two_pist else ())]
         traj += [cfg.traj('traj_stress', l)]
         req += [cfg.path(n, l) for n in _REQUIRED_PROD]
     return data, traj, req
@@ -2397,7 +2411,7 @@ def sync_from_expanse(cfg, levels=None, force=False):
     prompt for a login every time; force=True clears that memory."""
     data_files, traj_files, required = sync_files(cfg, levels)
     optional = {cfg.path(n).name for n in _REF_DAT_OPT}
-    optional |= {cfg.path(n, l).name for n in _TWO_PIST_DAT for l in ([None] + list(cfg.COMP_LEVELS))}
+    optional |= {cfg.path(n, l).name for n in _TWO_PIST_DAT + _TWO_PIST_OPT for l in ([None] + list(cfg.COMP_LEVELS))}
     sync_pull(cfg, data_files, traj_files, required, optional, force,
               refresh=lambda: sync_files(cfg, levels))
 
@@ -3487,7 +3501,7 @@ def fig_Dc(cfg, R, L):
     fig, (axl, axr) = plt.subplots(1, 2, figsize=(18, 7), constrained_layout=True)
     norm = Normalize(vmin=F['ts'][F['early'][0]], vmax=F['ts'][F['early'][-1]])
     cmap = plt.cm.viridis
-    for i in F['early']:
+    for i in F['shown']:
         c = cmap(norm(F['ts'][i]))
         axl.plot(F['zf'], u0_b + F['uhat'][i][F['idx']], 'o-', color=c, ms=3, alpha=0.6)
         axr.plot(F['zf'], u0_b + F['uhat'][i][F['idx']], 'o', color=c, ms=3, alpha=0.35)
@@ -3974,7 +3988,7 @@ def fig_Dc_sweep(cfg, R, levels):
         cmap = plt.cm.viridis
         norm = Normalize(vmin=F['ts'][F['early'][0]], vmax=F['ts'][F['early'][-1]])
         u0_b = F['u_IC'](F['zf'])
-        for i in F['early']:
+        for i in F['shown']:
             c = cmap(norm(F['ts'][i]))
             ax.plot(F['zf'], u0_b + F['uhat'][i][F['idx']], 'o', color=c, ms=2.5, alpha=0.35)
             ax.plot(zff, F['u_model'](zff, F['t_lj'][i]), '-', color=c, lw=1.5)

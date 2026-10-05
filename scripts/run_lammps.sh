@@ -58,6 +58,8 @@ NPT_PISTON_STEPS=${NPT_PISTON_STEPS:-1000000}  # Phase-1 NPT-piston settle lengt
 SETTLE_HALT=${SETTLE_HALT:-0}               # 1 = halt the settle early once both pistons are at rest
 DRIVE_SPLIT=${DRIVE_SPLIT:-0.5}             # compression decks: piston share of each level's gap closure
                                             # (0.5 = symmetric drive, piston down + support up; 1.0 = old top-only)
+DISP_FINE_NFREQ=${DISP_FINE_NFREQ:-0}       # triaxial_compression_two_pist: block length (steps) of the fine-cadence
+DISP_FINE_BIN=${DISP_FINE_BIN:-1.0}         # hold displacement profile disp_z_polymer_fine and its bin width; 0 = off
 CALIB_FRAMES=${CALIB_FRAMES:-5}          # calibration-dump frames near run end (polymer_pure /
 CALIB_DUMP_EVERY=${CALIB_DUMP_EVERY:-2000}  # solvent_pure only; other engines ignore these vars)
 # PRERELAXED=1 tells polymer_pure to skip its Stage 0 harmonic pre-relaxation:
@@ -291,6 +293,8 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var npt_piston_steps "$NPT_PISTON_STEPS" \
     -var settle_halt "$SETTLE_HALT" \
     -var drive_split "$DRIVE_SPLIT" \
+    -var disp_fine_nfreq "$DISP_FINE_NFREQ" \
+    -var disp_fine_bin "$DISP_FINE_BIN" \
     -var wall_timeout "$WALL_TIMEOUT" \
     \
     -in $LAMMPS_FILE &

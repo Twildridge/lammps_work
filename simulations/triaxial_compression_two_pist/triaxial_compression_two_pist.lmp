@@ -142,6 +142,20 @@ variable num_drive_frames equal 5
 variable volume_freq     index 5000
 variable strain_freq     index 1000
 
+# ----- fine-cadence displacement profile for the D_c fit (2026-10-05) -----
+# disp_z_polymer shares the stress cadence (hold/20 blocks: 1000 tau on a 4M-step hold) and its first complete
+# block ends 1000-1900 tau into the hold -- one to two tau_1 of a thin gel (half-thickness run: tau_1 ~ 900-2300
+# tau, transient at the first snapshot 0.2 sigma against 0.05 of scatter at the later levels).  With
+# disp_fine_nfreq > 0 (steps; DISP_FINE_NFREQ in the batch) every hold also writes disp_z_polymer_fine: the
+# same hold-referenced u_z on disp_fine_bin-wide bins, block-averaged over EVERY 10th step of each
+# disp_fine_nfreq window (contiguous blocks, like the coarse file, so fit_Dc's window averaging holds).
+# lib/triaxial.py load_disp prefers the fine file when it exists.  0 = off (the standard runs).
+variable disp_fine_nfreq   index 0
+variable disp_fine_bin     index 1.0
+variable disp_fine_nevery  equal 10
+variable disp_fine_nrepeat equal floor(${disp_fine_nfreq}/v_disp_fine_nevery)
+variable disp_fine_nf      equal v_disp_fine_nevery*v_disp_fine_nrepeat
+
 variable skip_widom index 1
 variable num_widom_frames equal 50
 variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
@@ -551,6 +565,7 @@ compute chunk_z_poly_zz  polymer chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_poly_xx  polymer chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_poly_yy  polymer chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_polymer  polymer chunk/atom bin/1d z lower ${binWidth}
+compute chunk_z_poly_dfine polymer chunk/atom bin/1d z lower ${disp_fine_bin}
 compute chunk_z_solv_p   solvent chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_solv_zz  solvent chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_solv_xx  solvent chunk/atom bin/1d z lower ${binWidth}
@@ -1081,6 +1096,9 @@ fix avg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_str
 fix avg_disp_z_poly_cum all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} &
     chunk_z_polymer v_uz_poly_cum &
     file output_files/displacement_data/disp_z_polymer_cum_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+if "${disp_fine_nfreq} > 0" then &
+    "print '>>> [strain=${compressions}] fine displacement profile: every ${disp_fine_nf} steps (nevery=${disp_fine_nevery} nrepeat=${disp_fine_nrepeat}), bins ${disp_fine_bin} sigma'" &
+    "fix avg_disp_z_poly_fine all ave/chunk ${disp_fine_nevery} ${disp_fine_nrepeat} ${disp_fine_nf} chunk_z_poly_dfine v_uz_poly file output_files/displacement_data/disp_z_polymer_fine_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat"
 
 variable hold_steps equal (floor(($(step)+${hold_len}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
 print ">>> [strain=${compressions}] measurement HOLD (load piston frozen, stress relaxes) for ${hold_steps} steps (>= hold_len=${hold_len}, aligned to nfreq_stress=${nfreq_stress})"
@@ -1089,6 +1107,7 @@ run ${hold_steps}
 # ----- Teardown this level's hold fixes/dumps -----
 unfix avg_disp_z_poly
 unfix avg_disp_z_poly_cum
+if "${disp_fine_nfreq} > 0" then "unfix avg_disp_z_poly_fine"
 unfix avg_P_res
 unfix avg_solv_density_fpp
 unfix avg_solv_density_ffp
