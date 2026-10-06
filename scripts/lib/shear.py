@@ -58,9 +58,11 @@ Layout of this file
 
 Two decks (Config.DECK, 2026-10-03), same protocol, file names, _g<strain> tags and columns:
   * 'shear_slab'          -- harmonic-bonded plates on the gel faces, driven +/-x.
-  * 'shear_slab_two_pist' -- the two-piston system (reservoirs at P_bath); a force on the
-                             polymer beads of the gel's two face layers steers each
-                             layer's COM (drive until the strain target, then hold).
+  * 'shear_slab_two_pist' -- the two-piston system (reservoirs at P_bath); the polymer
+                             beads of the gel's two face layers are the plates: rigid in
+                             x/y (prescribed translation, free in z; since 2026-10-05 --
+                             the first version steered each layer's COM with a force),
+                             drive until the strain target, then hold.
                              Differences read here: the dash-dot planes are the gel's Rg
                              faces; the prescribed strain is the driven-layer one; the
                              tracking-slab strain (stress_series column 12) is one more
@@ -128,7 +130,7 @@ class Config:
     STRAINS: list = field(default_factory=list)   # shear-strain targets as STRINGS ("0.1"), = STRAINS_LIST
                                           # in shear_slab.batch / shear_slab_two_pist.batch (files are tagged _g<level>)
     DECK: str = 'shear_slab'              # 'shear_slab' (plate-driven) | 'shear_slab_two_pist' (two-piston system,
-                                          # force-driven face layers); same strain-controlled protocol and files
+                                          # rigid-in-plane face layers); same strain-controlled protocol and files
     NSTEPS: object = None                 # the <steps> tag of the file names (= NSTEPS of the batch, one tag for every
                                           # level); None -> resolved from the files on disk, an int pins it
     base_dir: str = '../../flow_data_local'
@@ -1563,6 +1565,83 @@ def fig_thermo_pressure(cfg, R, L):
     else:
         axB.text(0.5, 0.5, 'solvent profile\nnot found', ha='center', va='center', transform=axB.transAxes)
     return _save(fig, cfg, 'thermo_pressure', L['lvl'])
+
+
+def fig_ref_normal_stress(cfg, R, stem='ref_normal_stress'):
+    """The three TOTAL normal stresses before shearing starts (the gamma = 0 reference
+    window of Phase 1.5; compression-positive).  (a) bulk sigma^t_xx, sigma^t_yy,
+    sigma^t_zz from the fine block-averaged series (+ P_th = tr/3), window means with
+    block-bootstrap CIs and the lateral pre-stress sigma^t_xx - sigma^t_zz, sigma^t_yy -
+    sigma^t_zz; (b) their window-mean z-profiles (whole box).  In the solvent reservoirs /
+    film the three MUST coincide at P_bath (a fluid is isotropic) -- a check of the
+    stress/atom normalisation; inside the gel a lateral component away from sigma^t_zz is
+    a pre-stress of the slab (periodic x,y, free z), which makes the network transversely
+    isotropic and the compression (C33 - C13)/2 a different number from the shear C44.
+    Pore pressure cancels in the differences, so this is the network's own anisotropy."""
+    Rf = R.get('ref')
+    if Rf is None:
+        print('reference normal-stress figure skipped (no gamma = 0 reference files)')
+        return None
+    S = Rf.get('series')
+    tot = Rf.get('prof_t')
+    if S is None and tot is None:
+        print('reference normal-stress figure skipped (no stress_series_ref / solvent reference profile)')
+        return None
+    col = {'xx': WONG['blue'], 'yy': WONG['orange'], 'zz': WONG['vermillion']}
+    lab = {c: f'$\\sigma^t_{{{c}}}$' for c in DIAG}
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(19, 6.5), constrained_layout=True)
+    fig.suptitle(f'Normal stresses before shearing  |  $\\gamma = 0$ reference window  |  {cfg.sim_name}',
+                 fontsize=13, fontweight='bold')
+    # ---- (a) bulk series over the reference window --------------------------------
+    if S is not None and len(S['step']) >= 2:
+        st = S['step']
+        tser = {c: S['sp_' + c] + S['ss_' + c] for c in DIAG}
+        pth = (tser['xx'] + tser['yy'] + tser['zz']) / 3.0
+        stats, lines = {}, []
+        for c in DIAG:
+            m, lo, hi, blk, tau = block_bootstrap_ci(tser[c], cfg.ci_level)
+            stats[c] = (m, lo, hi)
+            axA.plot(st, tser[c], '-', color=col[c], lw=1.0, alpha=0.3)
+            axA.plot(st, rolling_mean(tser[c], cfg.roll_win), '-', color=col[c], lw=2.4, alpha=0.95,
+                     label=lab[c] + f'  (mean {fmt_val_unc(m, 0.5 * (hi - lo))})')
+        axA.plot(st, rolling_mean(pth, cfg.roll_win), '--', color='k', lw=1.6, alpha=0.8,
+                 label=r'$P_{th}=\frac{1}{3}\mathrm{tr}\,\sigma^t$')
+        axA.axhline(cfg.P_BARO, color='k', ls=':', lw=1.4, alpha=0.8, label=f'$P_{{\\rm bath}} = {sig(cfg.P_BARO)}$')
+        for c in ('xx', 'yy'):
+            m, lo, hi, blk, tau = block_bootstrap_ci(tser[c] - tser['zz'], cfg.ci_level)
+            lines.append(f'$\\langle\\sigma^t_{{{c}}}-\\sigma^t_{{zz}}\\rangle$ = {fmt_val_unc(m, 0.5 * (hi - lo))}')
+            Rf['prestress_' + c] = (float(m), float(lo), float(hi))
+        annotate_box(axA, 'lateral pre-stress (block bootstrap):\n' + '\n'.join(lines), loc='lower right', fontsize=12)
+        axA.set_xlabel('time step'); axA.set_ylabel(r'$\sigma^t$  (bulk, compression-positive, LJ)')
+        axA.set_title(f'(a) bulk values over the reference window (block-averaged every {int(st[1] - st[0])} steps)')
+        axA.grid(alpha=0.3)
+        robust_ylim(axA, [rolling_mean(tser[c], cfg.roll_win) for c in DIAG] + [[cfg.P_BARO]], pad=0.6, qlo=0, qhi=100, include_zero=False)
+        smart_legend(axA, fontsize=11)
+    else:
+        axA.text(0.5, 0.5, 'stress_series_ref\nnot found', ha='center', va='center', transform=axA.transAxes)
+    # ---- (b) window-mean z-profiles --------------------------------------------------
+    if tot is not None:
+        b = R.get('shown', R['in_bulk'])
+        zf = R['zf']
+        notes = []
+        for c in DIAG:
+            m, lo, hi = mean_ci(tot[c], cfg.ci_level)
+            axB.fill_between(zf[b], lo[b], hi[b], color=col[c], alpha=0.18, lw=0, zorder=1)
+            axB.plot(zf[b], m[b], '-', color=col[c], lw=2.2, alpha=0.95, zorder=3, label=lab[c])
+            notes.append(f'{lab[c]} interior = {fmt_mu(m[R["interior"]])}')
+        axB.axhline(cfg.P_BARO, color='k', ls=':', lw=1.4, alpha=0.8, label=f'$P_{{\\rm bath}} = {sig(cfg.P_BARO)}$')
+        shade_bulk(axB, R)
+        mark_plates(axB, R)
+        finish_axes(axB, r'$\sigma^t(z)$  (compression-positive, LJ)', r'(b) window-mean profiles (reservoirs: all three $= P_{\rm bath}$)')
+        robust_ylim(axB, [mean_ci(tot[c], cfg.ci_level)[0] for c in DIAG] + [np.full(len(zf), cfg.P_BARO)],
+                    zmask=b, pad=0.6, include_zero=False)
+        h, lb = axB.get_legend_handles_labels()
+        for note in notes:
+            h.append(Patch(alpha=0, label=note)); lb.append(note)
+        smart_legend(axB, handles=h, labels=lb, fontsize=11)
+    else:
+        axB.text(0.5, 0.5, 'solvent reference profile\nnot found', ha='center', va='center', transform=axB.transAxes)
+    return _save(fig, cfg, stem)
 
 
 def fig_residual(cfg, R, L, U):

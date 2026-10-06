@@ -46,10 +46,11 @@ module load python/3.8.12
 # =======================================================================
 # TWO-PISTON SHEAR (2026-10-03): the shear_slab protocol on the two-piston system.
 # Both reservoirs are held at PRESS_TARGET by the NPT-pistons for the whole run;
-# in place of plates, the polymer beads of the gel's top / bottom face layers get a
-# prescribed horizontal force (+x / -x, the same on every bead of a layer, steering
-# the layer's centre of mass).  Strain-controlled like shear_slab.batch: each level
-# shears until gamma reaches its target, then holds; G = sigma_xz / gamma.
+# in place of plates, the polymer beads of the gel's top / bottom face layers are
+# rigid in x and y (prescribed translation +x / -x, free in z; 2026-10-05 -- the first
+# version applied a COM-steering force and left the beads thermally free in x, which
+# swamped the D_c displacement profiles).  Strain-controlled like shear_slab.batch:
+# each level shears until gamma reaches its target, then holds; G = sigma_xz / gamma.
 #
 # DATANAME is the compression deck's input, unchanged (scripts/slab_two_pistons.ipynb
 # output; already in ~/Documents/lammps_data/input_data/ for the compression runs).

@@ -1,28 +1,31 @@
-# ===== Shear Modulus, TWO-PISTON system, force-driven xz shear  (2026-10-03) =====
+# ===== Shear Modulus, TWO-PISTON system, displacement-driven xz shear  (2026-10-03; rigid layers 2026-10-05) =====
 # SHEAR MODE ONLY.  The shear_slab.lmp protocol (same phases, strain sweep, drive-
 # until-target + hold logic, observables, binning, file names and columns) on the
 # system of ../triaxial_compression_two_pist/triaxial_compression_two_pist.lmp:
 # the converter's *_two_pist.data file is read UNCHANGED (no plates, no harmonic
 # bonds) and both solvent reservoirs stay closed by the NPT-pistons at P_target
 # for the whole run.  In place of plates, the polymer beads of the gel's two face
-# layers get a prescribed horizontal FORCE, the same on every bead of a layer
-# (fix addforce): +x on the top layer, -x on the bottom layer.  The beads are
-# otherwise free -- they keep their thermal motion and their place in the network
-# -- so nothing rigid touches the gel.
+# layers ARE the plates: their x and y coordinates are PRESCRIBED (rigid in the
+# plane, every bead of a layer moves with the same x-velocity: +x top, -x bottom),
+# while z stays free -- the face layers can still move along the gap, so the gel can
+# change thickness under shear at the constant bath pressure.
 #
-# HOW THE FORCE IS PRESCRIBED (strain control, as shear_slab.lmp): the uniform force
-# on a layer is a spring between the layer's centre of mass and a TARGET x-position,
-#     f_bead = -k_tether * (x_COM,layer - x_target)        (total = N * f_bead)
-# During a DRIVE the two targets move apart at +/-vshear (the plates' speed law);
+# HOW THE MOTION IS PRESCRIBED (strain control, as shear_slab.lmp):
+#     fix setforce 0 0 NULL  on each layer   -- no x/y force ever reaches a layer bead
+#     velocity set +/-vshear 0 NULL           -- drive: uniform x-translation at the
+#                                                plates' speed law (y frozen)
+#     velocity set 0 0 NULL                   -- hold / reference: the layer is frozen
+#                                                in the plane at its current travel
 # fix halt stops the drive when the strain reaches the level's target (e.g. 0.10);
-# in the HOLD the targets are frozen, so the layer COMs stay put IN x -- the analogue
-# of the frozen plates -- while the interior relaxes and the stress is measured.
-# The force has an x-component ONLY and only steers the COM of a layer: every bead
-# feels the same f_x, so the layer's internal (thermal) motion is untouched, and
-# nothing at all acts in y or z -- the face layers stay free to move vertically
-# (the gel can change thickness under shear at the constant bath pressure).  The total force on a layer / (lx*ly) is
-# the shear stress the gel transmits to the boundary (S_top, S_bot), exactly the
-# plate x-force of shear_slab.lmp.
+# in the HOLD the layers stay put IN x and y -- the frozen plates of shear_slab.lmp
+# -- while the interior relaxes and the stress is measured.  z is integrated by a
+# plain fix nve (no thermostat on the layers: a thermostat would rescale the
+# prescribed x-velocity), so the layers are thermalised in z through the network.
+# (2026-10-05: replaces the COM-tethered uniform force of the first version, whose
+# layer beads kept their full thermal motion in x and swamped the D_c displacement
+# profiles.)  The x-force the gel exerts on a layer -- the force fix setforce
+# removes -- / (lx*ly) is the shear stress the gel transmits to the boundary
+# (S_top, S_bot), exactly the plate x-force of shear_slab.lmp.
 #
 # Input: <stem>_two_pist.data from scripts/slab_two_pistons.ipynb (the compression
 #   deck's input, same gel state).
@@ -35,7 +38,7 @@
 #    -var ref_nfreq 200 -var series_freq 100 -var stress_freq 100 -var nsteps_shear_base 3000
 #    -var num_dump_frames 1 -var strains 0.005 0.01 -var nsteps 2000):
 #   phase0_steps, npt_piston_steps, min_iter, ref_avg_steps, ref_nfreq, series_freq,
-#   stress_freq, thermo_freq, nsteps_shear_base, nsteps_shear, k_tether, layer_thick,
+#   stress_freq, thermo_freq, nsteps_shear_base, nsteps_shear, layer_thick,
 #   track_thick, num_dump_frames
 #
 # Atom types (the two-piston convention): 1=crosslink, 2=chain bead, 3=solvent,
@@ -57,8 +60,12 @@
 # DRIVEN LAYERS (static groups, fixed bead sets, defined after the piston settle):
 #   poly_top = polymer beads above  z_face_t - layer_thick   (z_face_t = Rg top face)
 #   poly_bot = polymer beads below  z_face_b + layer_thick   (z_face_b = Rg bottom face)
-#   Inside a driven layer sigma_xz ramps from 0 (free face) to its interior value,
-#   so the layers are EXCLUDED from every stress measurement (bulk region).
+#   Rigid in x and y (prescribed), free in z (fix nve, no thermostat).  Inside a
+#   driven layer sigma_xz ramps from 0 (free face) to its interior value, so the
+#   layers are EXCLUDED from every stress measurement (bulk region).  The production
+#   thermostat (fix nvt) and the x/y momentum zeroing act on poly_free = mobile minus
+#   the two layers; c_mobile_temp in the thermo output still counts the layers' frozen
+#   x/y degrees of freedom and reads a little low from the characterisation on.
 #
 # STRAIN DEFINITIONS (both: relative x-displacement of two material planes over the
 #   FULL distance between them = each plane's displacement over the half-distance):
@@ -76,11 +83,11 @@
 #   - Phase 0:   read + brief minimize + short Langevin NVT, all pistons frozen.
 #   - Phase 1:   NPT-PISTON SETTLE of both wet pistons at P_target (the compression
 #                deck's Phase 1, verbatim).  The wet pistons stay live to the end.
-#   - Phase 1.5: gamma = 0 REFERENCE window (_ref files), layer COMs tethered at
-#                their settled x (the frozen plates of shear_slab.lmp).
+#   - Phase 1.5: gamma = 0 REFERENCE window (_ref files), layers frozen in x/y at
+#                their settled positions (the frozen plates of shear_slab.lmp).
 #   - Phase 2/3: STRAIN SWEEP over ${strains} (cumulative).  For each target:
-#                  2. DRIVE -- targets move at +/-vshear until gamma >= target (fix halt);
-#                  3. HOLD  -- targets frozen, gel NVT for nsteps; the relaxed shear
+#                  2. DRIVE -- layers translate at +/-vshear until gamma >= target (fix halt);
+#                  3. HOLD  -- layers frozen in x/y, gel NVT for nsteps; the relaxed shear
 #                              stress is MEASURED.   G = <sigma_xz> / gamma_trk
 #   (No unload phase: the run ends in the last level's held state.)
 #
@@ -88,7 +95,7 @@
 # (${stem} = ${dataname}_${interaction}_${nsteps}; levels tagged _g<strain>):
 #   stress_data/stress_tensor_{polymer,solvent}_${stem}_g<γ>.dat   bulk 6-component stress, one row per nfreq block
 #   stress_data/stress_series_${stem}_g<γ>.dat          fine block averages: sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz S_top S_bot gamma_trk
-#                                                       (S_* = layer force / lx*ly) over drive + hold
+#                                                       (S_* = constraint x-force on a layer / lx*ly) over drive + hold
 #   stress_data/stress_profile_z_{polymer,solvent}_${stem}_g<γ>.dat   whole-box z-binned stress (reduced z)
 #   stress_data/shear_strain_${stem}_g<γ>.dat           step  gel_lz_initial  H_drv  gamma        (drive + hold)
 #   stress_data/shear_strain_surface_${stem}_g<γ>.dat   step  gel_gap_bb  gamma_trk  H_trk
@@ -102,8 +109,8 @@
 #   stress_data/shear_strain_${stem}.dat                (from the reference on)
 #   stress_data/shear_strain_rg_${stem}.dat             step Rg_zz^2 Rg_xz  (Rg-based shear strain, formed in the notebooks)
 #   piston_data/plate_pressure_${stem}.dat              step z_top z_bot P_feed P_perm S_top S_bot T_sup T_load
-#                                                       (gel Rg faces; wet-piston pressures; layer force / area; x-force of
-#                                                        the polymer on the support / load sheets per area)
+#                                                       (gel Rg faces; wet-piston pressures; constraint x-force on each layer / area;
+#                                                        x-force of the polymer on the support / load sheets per area)
 #   piston_data/piston_pressure_${stem}.dat, piston_position_run_${stem}.dat   (as the compression deck)
 
 
@@ -144,10 +151,6 @@ variable strains_list index "STALE-run_lammps.sh--no-list-passed--running-single
 variable strain_rate_ref   equal 0.10
 variable nsteps_shear_base index 285000   # steps a 0.10 increment would take at vshear/1.1
 variable nsteps_shear      index 570000   # safety cap per increment (2x); the halt fires first
-# Layer tether: f_bead = -k_tether*(x_COM - x_target), i.e. a spring of N*k_tether on
-# the layer COM.  At 1.0 the COM trails its target by tau*A/(N*k) ~ 0.02 sigma at
-# sigma_xz = 0.02 and the COM mode's period is 2 pi sqrt(m/k) ~ 6 tau.
-variable k_tether          index 1.0
 
 # ----- Driven layers and strain-tracking slabs -----
 variable layer_thick index 3.0      # driven layer: polymer within this depth of each Rg face (plus everything beyond the face)
@@ -188,14 +191,11 @@ variable nrepeat_stress equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepea
 variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
-print ">>> Mode: SHEAR, TWO-PISTON (force-driven face layers; wet pistons hold the bath at P_target)"
+print ">>> Mode: SHEAR, TWO-PISTON (rigid-in-plane face layers; wet pistons hold the bath at P_target)"
 
 # ----- Spatial Binning -----
 variable binWidth   equal 2.0   # z-bin width (sigma); as shear_slab.lmp / lib/shear.py Config.binWidth
 variable plate_excl equal v_layer_thick+v_track_thick   # bulk region starts this far inside each Rg face (driven layer + tracking slab)
-
-# half the relative travel of the two layer targets: 0 until the sweep redefines it (drive / hold)
-variable dx_tgt equal 0.0
 
 
 # ==========================================================================
@@ -220,7 +220,7 @@ mass 7 ${piston_mass}
 comm_modify cutoff 5.0
 
 print "========================================"
-print "Shear slab, TWO-PISTON (force-driven): ${dataname}"
+print "Shear slab, TWO-PISTON (rigid-layer driven): ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
 print "P_target=${P_target}  piston_mass=${piston_mass}  c_pist_frac=${c_pist_frac}  settle=${npt_piston_steps}"
 print "Hold steps per strain level: ${nsteps};  first strain target = ${strains}"
@@ -399,7 +399,7 @@ fix trk_vol_rg all print ${stress_freq} "$(step) $(v_gel_vol_rg)" &
 fix trk_vol_bb all print ${stress_freq} "$(v_gel_vol_bb)" &
     file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
 fix trk_plates all print ${stress_freq} "$(step) $(v_gel_top_rg) $(v_gel_bot_rg) $(v_P_feed_meas) $(v_P_perm_meas) $(v_S_top) $(v_S_bot) $(v_T_sup) $(v_T_load)" &
-    title "# step z_top z_bot P_feed P_perm S_top S_bot T_sup T_load   (gel Rg faces; wet-piston pressures; S_* = total tether force on each face layer / lx*ly = sigma_xz at that face; T_* = x-force of the polymer ON the support / load sheet per lx*ly)" &
+    title "# step z_top z_bot P_feed P_perm S_top S_bot T_sup T_load   (gel Rg faces; wet-piston pressures; S_* = constraint x-force on each face layer / lx*ly = sigma_xz at that face; T_* = x-force of the polymer ON the support / load sheet per lx*ly)" &
     file output_files/piston_data/plate_pressure_${dataname}_${interaction}_${nsteps}.dat screen no
 
 
@@ -498,14 +498,11 @@ unfix settle_win
 print ">>> settle end (step $(step)): z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  vz_feed=$(v_vz_feed:%.2e) vz_perm=$(v_vz_perm:%.2e)"
 print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f) (applied ${P_target})  T=$(c_mobile_temp:%.4f)"
 
-# ----- production thermostat: full 3-D Nose-Hoover on mobile (the compression deck's
-# choice; nothing streams once a hold has settled).  The mobile atoms' x/y COM
-# momentum (left over from the Langevin stages) is removed; the two layer tethers
-# pin the gel in x anyway.  z is left alone (the wet pistons exchange it).
+# ----- end of the Langevin stages.  The production integrators are created in the
+# characterisation below, once the driven layers exist (they are integrated apart
+# from the thermostatted atoms).  No steps run in between.
 unfix lang_settle
 unfix nve_mob
-fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix mom_prod mobile momentum 100 linear 1 1 0
 
 # box-face guard for the wet pistons
 variable box_guard equal (v_feed_z_top>=zhi-v_box_guard_gap)+(v_perm_z_bot<=zlo+v_box_guard_gap)
@@ -548,6 +545,27 @@ group all_trk_top delete
 group all_trk_bot delete
 variable N_top equal $(count(poly_top))
 variable N_bot equal $(count(poly_bot))
+group poly_drv  union    poly_top poly_bot
+group poly_free subtract mobile poly_top poly_bot     # everything the thermostat acts on
+
+# ----- production integrators -----
+# poly_free: full 3-D Nose-Hoover (the compression deck's choice; nothing streams once a
+# hold has settled) + x/y COM-momentum zeroing (left over from the Langevin stages; the
+# rigid layers pin the gel in x anyway).  z is left alone (the wet pistons exchange it).
+# poly_drv: plain nve -- x and y are PRESCRIBED below (setforce 0 0 NULL + velocity set),
+# only z is a free degree of freedom; a thermostat on these beads would rescale the
+# prescribed x-velocity, so none is applied (they are thermalised in z by the network).
+fix nvt_prod poly_free nvt temp ${temp_target} ${temp_target} 1.0
+fix mom_prod poly_free momentum 100 linear 1 1 0
+fix nve_drv  poly_drv  nve
+# rigid in the plane from here to the end of the run: no x/y force reaches a layer bead,
+# so the x/y velocity set below is kept exactly (0 in the reference and every hold,
+# +/-vshear in a drive).  setforce must come AFTER every other force-modifying fix on
+# these atoms (it does: nothing else touches them).
+velocity poly_top set 0.0 0.0 NULL
+velocity poly_bot set 0.0 0.0 NULL
+fix shear_top poly_top setforce 0.0 0.0 NULL
+fix shear_bot poly_bot setforce 0.0 0.0 NULL
 
 compute drv_t_com poly_top   com      # unwrapped COMs
 compute drv_b_com poly_bot   com
@@ -557,8 +575,6 @@ run 0
 
 variable H_drv  equal $(c_drv_t_com[3] - c_drv_b_com[3])     # prescribed-strain denominator (the plate_sep of shear_slab.lmp)
 variable H_trk  equal $(c_trk_t_com[3] - c_trk_b_com[3])     # interior-strain denominator
-variable x0_top equal $(c_drv_t_com[1])
-variable x0_bot equal $(c_drv_b_com[1])
 variable x_drv0 equal $(c_drv_t_com[1] - c_drv_b_com[1])
 variable x_trk0 equal $(c_trk_t_com[1] - c_trk_b_com[1])
 variable gamma     equal (c_drv_t_com[1] - c_drv_b_com[1] - v_x_drv0) / v_H_drv
@@ -568,22 +584,18 @@ print "Rg:  Lx=$(v_gel_lx_rg) Ly=$(v_gel_ly_rg) Lz=$(v_gel_lz_rg)   BB:  Lx=$(v_
 print ">>> Gel faces (Rg): z_bot = ${z_face_b}  z_top = ${z_face_t};  polymer BB z-extent ${gel_zlo} to ${gel_zhi}"
 print ">>> Driven layers (${layer_thick} sigma inside each face + everything beyond): top ${N_top} beads (z > ${z_drv_t}), bottom ${N_bot} beads (z < ${z_drv_b});  H_drv = ${H_drv} sigma (strain denominator)"
 print ">>> Tracking slabs (${track_thick} sigma): top $(count(poly_trk_t)) beads, bottom $(count(poly_trk_b)) beads;  H_trk = ${H_trk} sigma"
+print ">>> Thermostatted atoms (poly_free): $(count(poly_free));  rigid-in-plane layer beads (poly_drv, nve in z): $(count(poly_drv))"
 
-# ----- layer forces: spring between each layer COM and its target (same f on every bead) -----
-variable x_tgt_top equal ${x0_top}+v_dx_tgt
-variable x_tgt_bot equal ${x0_bot}-v_dx_tgt
-variable fx_top equal -${k_tether}*(c_drv_t_com[1]-v_x_tgt_top)
-variable fx_bot equal -${k_tether}*(c_drv_b_com[1]-v_x_tgt_bot)
-# sigma_xz at each face = the total external x-force on the layer / area (+ for gamma > 0)
-variable S_top equal  ${N_top}*v_fx_top/(lx*ly)
-variable S_bot equal -${N_bot}*v_fx_bot/(lx*ly)
-# live from here to the end of the run: targets at rest = the frozen plates of shear_slab.lmp
-fix shear_top poly_top addforce v_fx_top 0.0 0.0
-fix shear_bot poly_bot addforce v_fx_bot 0.0 0.0
+# ----- boundary shear stress from the constraint force -----
+# f_shear_*[1] = total x-force on the layer BEFORE setforce zeroed it = the force the gel
+# (pair + bond) exerts on the layer.  The constraint supplies the opposite, so
+# sigma_xz at each face = the external x-force on the layer / area (+ for gamma > 0):
+variable S_top equal -f_shear_top[1]/(lx*ly)
+variable S_bot equal  f_shear_bot[1]/(lx*ly)
 
-# ----- drive speed (per layer target; the halt sets where it stops) -----
+# ----- drive speed (per layer; the halt sets where it stops) -----
 variable vshear equal $(v_strain_rate_ref * v_H_drv / (2.0 * v_nsteps_shear_base * v_timestep_prod) * 1.1)
-print ">>> vshear = ${vshear} sigma/tau  (each layer target; halt fires at each ${strains} target);  k_tether = ${k_tether}"
+print ">>> vshear = ${vshear} sigma/tau  (each layer; halt fires at each ${strains} target)"
 
 
 # ==========================================================================
@@ -606,8 +618,8 @@ print ">>> Bulk z-range: ${zlo_bulk} to ${zhi_bulk}  (bulk_lz = $(v_bulk_lz), bu
 # ==========================================================================
 # As shear_slab.lmp: stress/atom NULL (kinetic term included), order xx yy zz xy
 # xz yz, mechanical sign for the shear components (sum/V = sigma_xz > 0 for the
-# top layer driven +x).  fix addforce does not enter the virial (no fix_modify
-# virial), so these are the gel's own interaction stresses.
+# top layer driven +x).  fix setforce does not enter the virial, so these are the
+# gel's own interaction stresses.
 compute stress_polymer polymer stress/atom NULL
 compute stress_solvent solvent stress/atom NULL
 
@@ -714,7 +726,6 @@ print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)
 #                 STRAIN SWEEP LOOP (cumulative, incremental shear)
 # ==========================================================================
 variable movie_open equal 1
-variable dx_held    equal 0.0      # target travel at the end of the previous level
 
 print "############################################################"
 print ">>> STRAIN SWEEP LIST (raw from run_lammps.sh): ${strains_list}"
@@ -755,24 +766,23 @@ fix out_polymer_com all print ${stress_freq} &
     "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
     file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
 
-# ----- PHASE 2: drive -- layer targets move apart at +/-vshear until gamma >= ${strains} -----
-variable drive_start equal $(step)
-variable dx_tgt equal ${dx_held}+${vshear}*(step-${drive_start})*${timestep_prod}
+# ----- PHASE 2: drive -- the layers translate at +/-vshear until gamma >= ${strains} -----
+# (x/y forces are zeroed by setforce, so the velocity set here persists unchanged)
+velocity poly_top set  ${vshear} 0.0 NULL
+velocity poly_bot set -${vshear} 0.0 NULL
 fix halt_shear all halt ${stress_freq} v_gamma >= ${strains} error continue
 variable drive_dump_freq equal floor(${nsteps_shear_base}*1.1/5)
 if "${movie_open} == 1" then "dump_modify traj_setup every ${drive_dump_freq}"
-print ">>> [strain=${strains}] driving the layer targets at +/-${vshear} sigma/tau until gamma >= ${strains} (cap ${nsteps_shear} steps)..."
+print ">>> [strain=${strains}] driving the layers at +/-${vshear} sigma/tau until gamma >= ${strains} (cap ${nsteps_shear} steps)..."
 run ${nsteps_shear}
 unfix halt_shear
 if "${movie_open} == 1" then &
     "undump traj_setup" &
     "variable movie_open delete" &
     "variable movie_open equal 0"
-# freeze the targets AT the layer COMs' current travel (not at the targets' own position, which leads
-# the COMs by the spring stretch + viscous lag and would keep shearing into the hold)
-variable dx_now  equal $(0.5*v_gamma*v_H_drv)
-variable dx_held equal ${dx_now}
-variable dx_tgt  equal ${dx_held}
+# freeze the layers in the plane where the halt left them (the frozen plates of the hold)
+velocity poly_top set 0.0 0.0 NULL
+velocity poly_bot set 0.0 0.0 NULL
 print ">>> [strain=${strains}] drive done: gamma = $(v_gamma:%.4f)  (target ${strains});  tracking-slab strain = $(v_gamma_trk:%.4f)  step=$(step)"
 
 # ----- reset the displacement reference to the held state (u_x(z,0) = 0 at the hold onset, for D_c) -----
@@ -839,9 +849,7 @@ unfix out_shear_strain
 print ">>> Completed strain=${strains}:  gamma = $(v_gamma:%.4f)  tracking-slab strain = $(v_gamma_trk:%.4f)  S_top = $(v_S_top:%.5f)  S_bot = $(v_S_bot:%.5f)  sigma_p,xz(bulk) = $(v_stress_p_xz:%.5f)  step=$(step)"
 
 variable hold_steps      delete
-variable drive_start     delete
 variable drive_dump_freq delete
-variable dx_now          delete
 
 next strains
 jump SELF strain_loop
@@ -851,7 +859,7 @@ jump SELF strain_loop
 #                            FINAL STATE
 # ==========================================================================
 print "========================================"
-print "Shear slab (two-piston, force-driven) strain sweep complete"
+print "Shear slab (two-piston, rigid-layer driven) strain sweep complete"
 print "  Final gamma: $(v_gamma:%.4f)   tracking-slab strain: $(v_gamma_trk:%.4f)"
 print "  H_drv: ${H_drv}  H_trk: ${H_trk}  gel_gap (BB): ${gel_gap}  gel_lz_initial: ${gel_lz_initial}"
 print "========================================"
