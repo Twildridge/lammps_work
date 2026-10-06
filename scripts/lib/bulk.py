@@ -25,9 +25,13 @@ the compression notebooks estimate M:
   * eps_vol is the MEASURED plate strain 1 - prod(1 - closure_i / L0_i), L0_i = seated plate gap
     - 2 contact_gap (the edge of gel the seated plates enclose), averaged over the hold (the
     plates are frozen there); the network's own Rg and BB volumetric strains are reported next
-    to it and K_STRAIN selects the denominator.  The plates load the network through its
-    sparse outer shell, so the network strain can fall short of the plate strain: K_network
-    is printed for both (K_net and K_net(Rg)) and a gap between them is that shortfall;
+    to it and K_STRAIN selects the denominator -- 'disp' (default since 2026-10-05, as
+    M_STRAIN in the compression notebooks): the interior slope of the steady CUMULATIVE
+    displacement profile u_a(a) of each axis (disp_*_polymer_cum, written by decks since
+    2026-10-05; eps_a = -s/(1-s), eps_vol = 1 - prod(1 - eps_a)), falling back to 'rg' then
+    'plate' when the files are missing.  The plates load the network through its sparse
+    outer shell, so the network strain falls short of the plate strain (~0.02 per axis in
+    the compression runs): K_network is printed for both and the gap is that shortfall;
   * unrelaxed-hold systematic (RELAX_SYS), isotropy of the network stress (the deviator must
     vanish under isotropic loading: there is no G in this measurement);
   * D_c from the THREE-DIMENSIONAL consolidation fit (fit_Dc_cube): the held-cube version of
@@ -77,6 +81,7 @@ import hashlib
 
 import numpy as np
 from scipy.optimize import minimize_scalar
+from scipy import stats
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from matplotlib.lines import Line2D
@@ -117,7 +122,9 @@ class Config(tri.Config):
     contact_gap: float = 1.12             # compress_slab.lmp contact_gap: seated plate plane to the gel face
     core_margin: float = 6.0              # compress_slab.lmp core_margin: the core column stops this far inside the plates
     K_SUBTRACT_REF: bool = True           # K = (stress - its own eps_vol = 0 reading) / eps_vol for BOTH estimators
-    K_STRAIN: str = 'plate'               # eps_vol in the denominator: 'plate' (measured plate closure, the applied
+    K_STRAIN: str = 'disp'                # eps_vol in the denominator: 'disp' (steady displacement-profile slopes of
+                                          # the network along the three axes, disp_*_polymer_cum files; falls back to
+                                          # rg -> plate when missing), 'plate' (measured plate closure, the applied
                                           # strain), 'rg' / 'bb' (the network's own Rg / bounding-box volume), or
                                           # 'nominal' (the level's target)
     PLATE_AREA: str = 'gap'               # plate pressure = load / face area.  'gap': the face enclosed by the other two
@@ -140,7 +147,7 @@ class Config(tri.Config):
 
     def __post_init__(self):
         assert self.COMP_LEVELS, 'COMP_LEVELS is empty -- list at least one level, e.g. ["0.10"]'
-        assert self.K_STRAIN in ('plate', 'rg', 'bb', 'nominal'), "K_STRAIN must be 'plate', 'rg', 'bb' or 'nominal'"
+        assert self.K_STRAIN in ('disp', 'plate', 'rg', 'bb', 'nominal'), "K_STRAIN must be 'disp', 'plate', 'rg', 'bb' or 'nominal'"
         assert self.PLATE_AREA in ('gap', 'bb'), "PLATE_AREA must be 'gap' or 'bb'"
         self.AXES = tuple(a for a in self.AXES if a in AXI)
         assert self.AXES, "AXES must name at least one of 'x', 'y', 'z'"
@@ -180,6 +187,8 @@ class Config(tri.Config):
             return ('solvent_density_z' if axis == 'z' else f'solvent_density_along{axis}') + r
         if kind == 'disp':
             return 'disp_z_polymer' if axis == 'z' else f'disp_along{axis}_polymer'
+        if kind == 'disp_cum':                      # cumulative since the eps_vol = 0 reference (decks since 2026-10-05)
+            return 'disp_z_polymer_cum' if axis == 'z' else f'disp_along{axis}_polymer_cum'
         raise ValueError(kind)
 
     def plot(self, stem, lvl=None):
@@ -466,6 +475,55 @@ def _load_disp(cfg, axis, lvl, Pt, R):
     return d
 
 
+def fit_disp_profile(cfg, L, axis, lvl):
+    """Steady CUMULATIVE displacement profile u_a(a) along `axis` for one level (disp_*_polymer_cum:
+    displace/atom never reset after the eps_vol = 0 reference; plateau-window, count-weighted mean) and
+    the line through its interior: slope s = du_a/da in the CURRENT (Eulerian) bins, so the network's
+    linear strain along a is eps_a = -s/(1-s) -- the per-axis counterpart of triaxial.fit_disp_profile.
+    Fitted bins: populated, between the held plate planes, DISP_TRIM_BINS dropped at each end.  CI
+    half-width = max(least-squares, frame-to-frame t-interval).  None without the file."""
+    f = cfg.path(cfg.pname('disp_cum', axis), lvl)
+    if not f.exists():
+        return None
+    snaps = [sn for sn in tri.read_ave_chunk_file(f) if sn[1].shape[1] >= 4]
+    if not snaps:
+        return None
+    nb = min(sn[1].shape[0] for sn in snaps)
+    ts = np.array([sn[0] for sn in snaps], float)
+    pl = ts >= L['halt_ts']
+    if not pl.any():
+        pl[-1] = True
+    a = snaps[-1][1][:nb, 1]
+    Nc = np.array([sn[1][:nb, 2] for sn in snaps])[pl]
+    u = np.array([sn[1][:nb, 3] for sn in snaps])[pl]
+    w = Nc.sum(axis=0)
+    um = np.where(w > 0, (u * Nc).sum(axis=0) / np.maximum(w, 1), 0.0)
+    ok = Nc.mean(axis=0) > cfg.Ncount_min
+    lo, hi = L['plane'][axis + 'lo'], L['plane'][axis + 'hi']
+    if np.isfinite(lo) and np.isfinite(hi):
+        ok &= (a > lo) & (a < hi)
+    idx = np.where(ok)[0]
+    trim = int(max(cfg.DISP_TRIM_BINS, 0))
+    inner = idx[trim:len(idx) - trim] if len(idx) > 2 * trim + 3 else idx
+    if len(inner) < 3:
+        return None
+    coef, cov = np.polyfit(a[inner], um[inner], 1, cov=True)
+    slope, icpt = float(coef[0]), float(coef[1])
+    resid = um - (slope * a + icpt)
+    ss = np.sum((um[inner] - um[inner].mean()) ** 2)
+    R2 = float(1.0 - np.sum(resid[inner] ** 2) / ss) if ss > 0 else np.nan
+    half_lsq = float(stats.t.ppf(0.5 + cfg.ci_level / 2, max(len(inner) - 2, 1)) * np.sqrt(max(cov[0, 0], 0.0)))
+    half_frames = 0.0
+    if len(u) >= 2:
+        pf = np.array([np.polyfit(a[inner], row[inner], 1)[0] for row in u])
+        half_frames = float(stats.t.ppf(0.5 + cfg.ci_level / 2, len(pf) - 1) * pf.std(ddof=1) / np.sqrt(len(pf)))
+    half_s = max(half_lsq, half_frames)
+    eps = -slope / (1.0 - slope)                      # Eulerian slope -> compressive linear strain of the network
+    deps = half_s / (1.0 - slope) ** 2
+    return dict(a=a, u=um, idx=idx, inner=inner, slope=slope, icpt=icpt, resid=resid, R2=R2, eps=float(eps),
+                eps_lo=float(eps - deps), eps_hi=float(eps + deps), half=float(deps), n_frames=int(pl.sum()), ts=ts[pl])
+
+
 def load_level(cfg, R, lvl, verbose=True):
     """Everything for ONE volumetric-strain level `lvl` (string, e.g. "0.10"): measured strains,
     per-axis stress stacks with their Terzaghi split, the plate histories and plateau, K
@@ -508,15 +566,28 @@ def load_level(cfg, R, lvl, verbose=True):
                 v = 1.0 - S[f'V_{key}'][pl] / V0
                 L['strain'][key] = float(np.mean(v))
                 L['strain'][key + '_sd'] = float(np.std(v))
-    L['eps'] = L['strain'].get(cfg.K_STRAIN, np.nan)
-    if not np.isfinite(L['eps']) or L['eps'] <= 0:
-        say(f"  WARNING: K_STRAIN='{cfg.K_STRAIN}' strain is {L['eps']} -- falling back to the plate strain")
-        L['eps'] = L['strain']['plate']
+    # network strain from the steady cumulative displacement profiles (decks since 2026-10-05), all three axes
+    L['disp_fit'] = {a: fit_disp_profile(cfg, L, a, lvl) for a in 'xyz'}
+    if all(L['disp_fit'][a] is not None for a in 'xyz'):
+        L['eps_lin_disp'] = {a: L['disp_fit'][a]['eps'] for a in 'xyz'}
+        L['strain']['disp'] = 1.0 - float(np.prod([1.0 - L['eps_lin_disp'][a] for a in 'xyz']))
+        # CI of the product from the three independent slope CIs (first order)
+        L['strain']['disp_half'] = float((1.0 - L['strain']['disp']) * np.sqrt(sum(
+            (L['disp_fit'][a]['half'] / (1.0 - L['eps_lin_disp'][a])) ** 2 for a in 'xyz')))
+    # K denominator: the requested strain, falling back disp -> rg -> plate when a source is missing / unusable
+    chain = [cfg.K_STRAIN] + [k for k in ('disp', 'rg', 'plate') if k != cfg.K_STRAIN]
+    L['eps_src'] = next((k for k in chain if np.isfinite(L['strain'].get(k, np.nan)) and L['strain'].get(k, 0) > 0), 'plate')
+    L['eps'] = L['strain'][L['eps_src']]
+    if L['eps_src'] != cfg.K_STRAIN:
+        say(f"  NOTE: K_STRAIN='{cfg.K_STRAIN}' strain unavailable" + (' (no disp_*_polymer_cum files: deck before 2026-10-05)' if cfg.K_STRAIN == 'disp' else '')
+            + f" -- K divides by the '{L['eps_src']}' strain")
     eps = L['eps']
     say(f"  plates (held): " + '   '.join(f'{a}: gap {L["gap"][a]:.3f} (closed {L["closure"][a]:.3f} = {L["eps_lin"][a]:.4f} L0)' for a in 'xyz'))
-    say(f"  eps_vol: target {float(lvl):.4f} | plates {L['strain']['plate']:.5f} (K denominator: {cfg.K_STRAIN} = {eps:.5f}) | "
+    say(f"  eps_vol: target {float(lvl):.4f} | plates {L['strain']['plate']:.5f} (K denominator: {L['eps_src']} = {eps:.5f}) | "
         f"network Rg {L['strain'].get('rg', np.nan):.4f} ± {L['strain'].get('rg_sd', np.nan):.4f}   "
-        f"BB {L['strain'].get('bb', np.nan):.4f} ± {L['strain'].get('bb_sd', np.nan):.4f}")
+        f"BB {L['strain'].get('bb', np.nan):.4f} ± {L['strain'].get('bb_sd', np.nan):.4f}"
+        + (f"   disp-profile {L['strain']['disp']:.4f} ± {L['strain']['disp_half']:.4f} (per axis "
+           + ' '.join(f"{a} {L['eps_lin_disp'][a]:.4f}" for a in 'xyz') + ')' if 'disp' in L['strain'] else ''))
     if abs(L['strain']['plate'] - float(lvl)) > 0.02 * float(lvl):
         say(f"  NOTE: the plate strain differs from the target by {L['strain']['plate'] / float(lvl) - 1:+.1%} "
             '(drive stopped early / overshot): the measured value is used')
@@ -675,9 +746,9 @@ def load_level(cfg, R, lvl, verbose=True):
     say(f"  K_network = {L['K_net']:.4f} [{L['K_net_lo']:.4f}, {L['K_net_hi']:.4f}]  ({how}; mean of the profiles along "
         f"{', '.join(axs)}; spread between them {L['K_axes_spread']:.4f}"
         + (f"; ref Pi subtracted {L['K_net_ref']:+.4f}; absolute {L['K_net_abs']:.4f}" if sub else '') + ')')
-    if np.isfinite(L['K_net_rg']) and cfg.K_STRAIN != 'rg':
+    if np.isfinite(L['K_net_rg']) and L['eps_src'] != 'rg':
         say(f"  K_network over the network's own strain (Rg, {e_rg:.4f}) = {L['K_net_rg']:.4f}   "
-            f"[network strain / {cfg.K_STRAIN} strain = {e_rg / eps:.3f}]")
+            f"[Rg strain / {L['eps_src']} strain = {e_rg / eps:.3f}]")
     if 'K_pl' in L:
         note = {'measured': f"ref P subtracted {L['P_ref']:+.4f}; absolute {L['K_pl_abs']:.4f}",
                 'absent': 'NO plate_force_avg_ref -> ABSOLUTE', 'off': 'absolute'}[L['K_pl_ref']]
@@ -756,6 +827,7 @@ def _profile_names(cfg, ref):
         out.append(cfg.pname('density', a, ref))
         if not ref:
             out.append(cfg.pname('disp', a))
+            out.append(cfg.pname('disp_cum', a))
     return out
 
 
@@ -1026,7 +1098,7 @@ def fig_K(cfg, R, L):
     ci = int(cfg.ci_level * 100)
     sub = bool(cfg.K_SUBTRACT_REF)
     fig.suptitle('Bulk modulus' + (' (increment from $\\varepsilon_{vol}=0$)' if sub else '') + '   |   ' + cfg.RUN_ID
-                 + f"   |   $\\varepsilon_{{vol}} = {sig(L['eps'])}$ ({cfg.K_STRAIN})", fontsize=14, fontweight='bold')
+                 + f"   |   $\\varepsilon_{{vol}} = {sig(L['eps'])}$ ({L.get('eps_src', cfg.K_STRAIN)})", fontsize=14, fontweight='bold')
     axs = [a for a in cfg.AXES if a in L['ax']]
     has_p = 'K_pl' in L
     # ---- (a) diagnostic ---------------------------------------------------------
@@ -1466,7 +1538,7 @@ def print_summary(cfg, levels):
     """One line per level with the headline numbers, then the hold check."""
     ci = int(cfg.ci_level * 100)
     how = 'K = increment from the eps_vol = 0 reference' if cfg.K_SUBTRACT_REF else 'K = absolute stress / eps_vol'
-    print(f'\nSUMMARY  ({cfg.sim_name}; {ci}% CIs; {how}; eps_vol = {cfg.K_STRAIN}'
+    print(f'\nSUMMARY  ({cfg.sim_name}; {ci}% CIs; {how}; eps_vol = {cfg.K_STRAIN} (used: {", ".join(sorted(set(L.get("eps_src", cfg.K_STRAIN) for L in levels)))})'
           + ('; K lower bounds include delta_sys' if cfg.RELAX_SYS else '') + ')')
     print(f"{'target':>7s} {'eps_vol':>8s} {'eps_Rg':>8s} {'K_net':>22s} {'K_net(Rg)':>10s} {'K_plates':>22s} {'dev/dPi':>8s} {'D_c':>10s} {'delta_sys':>10s}"
           + (f" {'G=3(M-K)/4':>11s}" if cfg.M_REF is not None else ''))

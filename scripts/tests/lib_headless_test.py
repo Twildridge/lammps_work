@@ -90,6 +90,10 @@ assert abs(Rb['Pi_ref'] - B_PI_REF) < 0.003 and abs(Rb['P_ref'] - B_P_REF) < 0.0
 for L in LB:
     assert abs(L['strain']['plate'] - float(L['lvl'])) < 1e-3 * float(L['lvl']) + 1e-6, 'plate strain not recovered'
     assert abs(L['strain']['plate'] - L['strain']['plate_geo']) < 1e-4, "deck and geometric plate strains disagree"
+    assert L['eps_src'] == 'disp' and 'disp' in L['strain'], 'displacement-profile strain (disp_*_polymer_cum) not used'
+    assert abs(L['strain']['disp'] - float(L['lvl'])) < 2e-3, f"disp-profile eps_vol {L['strain']['disp']:.4f} vs built {L['lvl']}"
+    for a in 'xyz':
+        assert L['disp_fit'][a]['R2'] > 0.99, f'cumulative displacement profile along {a} not linear'
     for key in ('K_net', 'K_pl'):
         assert abs(L[key] - K_TRUE) < 0.06 * K_TRUE, f"{key} = {L[key]:.4f} at eps_vol {L['lvl']}, built from {K_TRUE}"
         assert L[key + '_lo'] <= L[key] <= L[key + '_hi']

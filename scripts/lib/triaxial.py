@@ -233,6 +233,8 @@ class Config:
                                           # the higher levels are NOT in the fit, so their stiffening shows as
                                           # departure from the line instead of a negative intercept
     # ---- strain in the denominator of M, G and kappa (2026-10-03) -----------
+    G_REF: object = None                  # shear modulus from the shear notebooks (e.g. 0.2): drawn as G_REF / M on the
+                                          # reservoir normal-stress sweep figure next to (1 - sigma'_lat/sigma'_zz)/2
     M_STRAIN: str = 'disp'                # 'disp': the slope of the STEADY displacement profile u_z(Z) of the polymer
                                           #   (plateau frames vs the eps = 0 reference, per atom, binned by the reference
                                           #   position Z; u_z = u_0 - eps (Z - Z^P) exactly under uniform stress, and the
@@ -4078,6 +4080,200 @@ def _disp_panel(ax, cfg, L, col, label=None, show_fit=True, ms=5):
     if show_fit:
         zz = zc[idx]
         ax.plot(zz, D['slope'] * zz + D['icpt'], '-', lw=1.4, color=col, alpha=0.9)
+
+
+# ---------------------------------------------------------------------------
+#  Reservoir normal-stress check (2026-10-06)
+# ---------------------------------------------------------------------------
+_NCOL = {'xx': WONG['blue'], 'yy': WONG['orange'], 'zz': WONG['vermillion']}
+
+
+def _perm_masks(cfg, R, L, ts):
+    """Per-snapshot permeate-reservoir masks (between the permeate piston and the support,
+    res_wall_margin clear of the piston), the mirror of L['bw'] for the lower reservoir;
+    all-False rows when the run has no permeate piston."""
+    z = R['z']
+    if not np.isfinite(R.get('z_perm', np.nan)):
+        return np.zeros((len(ts), len(z)), bool)
+    pa = L['wetz']['perm_at'] if L is not None and L.get('wetz') else (lambda t: R['z_perm'])
+    rows = []
+    for t in ts:
+        zs = _level_support_z(R, L, t)
+        rows.append(reservoir_mask(z, cfg, 'perm', float(pa(t)), float(zs) if np.isfinite(zs) else R['z_gel_lo']))
+    return np.array(rows, bool)
+
+
+def _masked_series(stack, masks):
+    """mean of stack[i] over masks[i] per snapshot (nan where the mask is empty)."""
+    out = np.full(len(stack), np.nan)
+    for i in range(len(stack)):
+        v = stack[i][masks[i]]
+        v = v[np.isfinite(v)]
+        if len(v):
+            out[i] = float(np.mean(v))
+    return out
+
+
+def reservoir_normal_stress(cfg, R, L):
+    """Total normal stresses sigma^t_xx, yy, zz during a compression hold, in the gel interior
+    and in the two solvent reservoirs, as INCREMENTS from the eps = 0 reference of the same
+    region (plateau means, CI = t-interval over the plateau snapshots).  The reservoirs are
+    pure fluid: their increments must be 0 in every component (the bath stays at P_bath);
+    the gel's lateral increments are the sigma'_xx that sets G_comp = (M/2)(1 - sigma'_xx/
+    sigma'_zz).  Also returns the per-snapshot series and the plateau profiles.  None when
+    a component is missing."""
+    if not all(c in L['stress'] and c in R['stress'] for c in COMPONENTS):
+        return None
+    ts = L['ts']
+    pm = _perm_masks(cfg, R, L, ts)
+    nref = len(R['stress']['zz']['t'])
+    pm_ref = np.tile(_perm_masks(cfg, R, None, [0.0])[0], (nref, 1))      # reference pistons / support at rest
+    regions = {'gel': ('interior', np.tile(L['interior'], (len(ts), 1)), np.tile(R['interior'], (nref, 1))),
+               'feed': ('feed reservoir', L['bw'], np.tile(np.asarray(R['bw'], bool), (nref, 1))),
+               'perm': ('permeate reservoir', pm, pm_ref)}
+    out = dict(ts=ts, plat=L['plat'], series={}, ref={}, inc={}, prof={}, prof_ref={}, has_perm=bool(pm.any()))
+    for reg, (lab, m, mref) in regions.items():
+        out['series'][reg], out['ref'][reg], out['inc'][reg] = {}, {}, {}
+        for c in COMPONENTS:
+            ser = _masked_series(L['stress'][c]['t'], m)
+            rser = _masked_series(R['stress'][c]['t'], mref)
+            out['series'][reg][c] = ser
+            rm = float(np.nanmean(rser)) if np.isfinite(rser).any() else np.nan
+            out['ref'][reg][c] = rm
+            v = ser[L['plat']] - rm
+            v = v[np.isfinite(v)]
+            if len(v) >= 2:
+                h = stats.t.ppf(0.5 + cfg.ci_level / 2, len(v) - 1) * np.std(v, ddof=1) / np.sqrt(len(v))
+                out['inc'][reg][c] = (float(np.mean(v)), float(h))
+            elif len(v) == 1:
+                out['inc'][reg][c] = (float(v[0]), np.nan)
+            else:
+                out['inc'][reg][c] = (np.nan, np.nan)
+    for c in COMPONENTS:
+        out['prof'][c] = np.nanmean(L['stress'][c]['t'][L['plat']], axis=0)
+        out['prof_ref'][c] = np.nanmean(R['stress'][c]['t'], axis=0)
+    g, z = out['inc']['gel'], out['inc']['gel']['zz'][0]
+    lat = 0.5 * (g['xx'][0] + g['yy'][0])
+    out['ratio'] = lat / z if z else np.nan                     # sigma'_xx / sigma'_zz (pore pressure cancels: same bath)
+    out['G_comp_M'] = 0.5 * (1.0 - out['ratio'])                # G_comp / M implied by the lateral stress
+    return out
+
+
+def fig_reservoir_normal_stress(cfg, R, L):
+    """(a) sigma^t_xx, yy, zz over the hold in the gel interior (solid) and in the solvent
+    reservoirs (feed dashed, permeate dotted), with P_bath; (b) plateau-mean z-profiles of the
+    three components (solid) over the reference (thin dashed).  The reservoirs are the in-situ
+    control: a fluid must read P_bath in all three components through the whole hold, so a
+    lateral drift there is a box / normalisation artefact, while a lateral rise confined to the
+    gel is network stress -- the sigma'_xx of G_comp = (M/2)(1 - sigma'_xx/sigma'_zz)."""
+    if _is_perm(L):
+        print('reservoir normal-stress figure: compression holds only')
+        return None
+    Q = reservoir_normal_stress(cfg, R, L)
+    if Q is None:
+        print('reservoir normal-stress figure skipped (sigmaxx / sigmayy files missing)')
+        return None
+    L['res_check'] = Q
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(20, 6.8), constrained_layout=True)
+    lab_eps = f'$\\varepsilon={L["eps"]:.2f}$' if np.isfinite(L['eps']) else ''
+    fig.suptitle(f'Normal stresses in the gel vs the solvent reservoirs during the hold  |  {lab_eps}  |  {cfg.sim_name}',
+                 fontsize=13, fontweight='bold')
+    ts = Q['ts']
+    styles = {'gel': ('-', 2.4, 1.0, 'gel interior'), 'feed': ('--', 1.6, 0.9, 'feed reservoir'), 'perm': (':', 1.8, 0.9, 'permeate reservoir')}
+    for reg, (ls, lw, al, name) in styles.items():
+        if reg == 'perm' and not Q['has_perm']:
+            continue
+        for c in COMPONENTS:
+            axA.plot(ts, Q['series'][reg][c], ls, color=_NCOL[c], lw=lw, alpha=al,
+                     label=(f'$\\sigma^t_{{{c}}}$ {name}' if reg == 'gel' else None))
+    for reg, (ls, lw, al, name) in styles.items():
+        if reg == 'gel' or (reg == 'perm' and not Q['has_perm']):
+            continue
+        axA.plot([], [], ls, color='0.3', lw=lw, label=name + ' (all three components)')
+    axA.axhline(cfg.P_BARO, color='k', ls=':', lw=1.2, alpha=0.7, label=f'$P_{{\\rm bath}}={sig(cfg.P_BARO)}$')
+    axA.axvspan(L['halt_ts'], float(ts[-1]), color=WONG['green'], alpha=0.10, label='plateau window')
+    axA.set_xlabel('time step'); axA.set_ylabel(r'$\sigma^t$  (region mean, compression-positive, LJ)')
+    axA.set_title('(a) gel interior vs reservoirs over the hold'); axA.grid(alpha=0.3)
+    # y-range from the plateau window (the early-hold consolidation transient would otherwise set the scale)
+    pl = Q['plat']
+    curves = [Q['series'][r][c][pl] for r in styles for c in COMPONENTS if not (r == 'perm' and not Q['has_perm'])]
+    robust_ylim(axA, curves + [[cfg.P_BARO]], pad=0.8, qlo=0, qhi=100, include_zero=False)
+    lines = ['plateau increments from the $\\varepsilon=0$ reference (region means):']
+    for reg, (_, _, _, name) in styles.items():
+        if reg == 'perm' and not Q['has_perm']:
+            continue
+        lines.append(name + ':  ' + '   '.join(f'$\\Delta\\sigma^t_{{{c}}}$ = {fmt_val_unc(*Q["inc"][reg][c])}' for c in COMPONENTS))
+    lines.append(f"gel $\\sigma'_{{\\rm lat}}/\\sigma'_{{zz}}$ = {Q['ratio']:.3f}  $\\rightarrow$  $G_{{\\rm comp}}/M = \\frac{{1}}{{2}}(1 - \\sigma'_{{xx}}/\\sigma'_{{zz}})$ = {Q['G_comp_M']:.3f}")
+    annotate_box(axA, '\n'.join(lines), loc='lower left', fontsize=10.5)
+    smart_legend(axA, fontsize=10.5)
+    zx = zn(R, R['z'])
+    for c in COMPONENTS:
+        axB.plot(zx, Q['prof_ref'][c], '--', color=_NCOL[c], lw=1.2, alpha=0.6, zorder=2)
+        axB.plot(zx, Q['prof'][c], '-', color=_NCOL[c], lw=2.4, alpha=0.95, zorder=3, label=f'$\\sigma^t_{{{c}}}$ plateau')
+    axB.plot([], [], '--', color='0.3', lw=1.2, label=r'reference ($\varepsilon=0$), same colours')
+    axB.axhline(cfg.P_BARO, color='k', ls=':', lw=1.2, alpha=0.7, label=f'$P_{{\\rm bath}}={sig(cfg.P_BARO)}$')
+    shade_gel(axB, R, L)
+    mark_walls(axB, R, L)
+    finish_axes(axB, r'$\sigma^t(z)$  (compression-positive, LJ)', '(b) plateau profiles: reservoirs must read $P_{\\rm bath}$ in all three')
+    robust_ylim(axB, [Q['prof'][c] for c in COMPONENTS] + [Q['prof_ref'][c] for c in COMPONENTS] + [np.full(len(zx), cfg.P_BARO)],
+                zmask=_scale_mask(cfg, R, L), pad=0.5, qlo=1, qhi=99, include_zero=False)
+    smart_legend(axB, fontsize=11)
+    return _save(fig, cfg, 'reservoir_normal_stress', L['lvl'])
+
+
+def fig_reservoir_normal_stress_sweep(cfg, R, levels):
+    """Plateau increments of sigma^t_xx, yy, zz from the reference, normalised by the gel's
+    Delta sigma^t_zz, vs strain: gel interior (filled: = sigma'_lat/sigma'_zz) and the solvent
+    reservoirs (hollow: feed squares, permeate triangles -- must sit at 0), plus the implied
+    G_comp/M = (1 - sigma'_lat/sigma'_zz)/2 per level (right panel) against G_REF / M_net of
+    the lowest level when cfg.G_REF is set."""
+    Qs = [(L, L.get('res_check') or reservoir_normal_stress(cfg, R, L)) for L in levels if not _is_perm(L)]
+    Qs = [(L, Q) for L, Q in Qs if Q is not None]
+    if not Qs:
+        print('reservoir normal-stress sweep figure skipped (no level with the three total-stress components)')
+        return None
+    for L, Q in Qs:
+        L['res_check'] = Q
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(19, 6.5), constrained_layout=True, gridspec_kw=dict(width_ratios=[1.35, 1]))
+    fig.suptitle(f'Normal-stress increments vs strain: gel interior vs solvent reservoirs (plateau means)  |  {cfg.sim_name}',
+                 fontsize=13, fontweight='bold')
+    eps = np.array([L['eps'] for L, Q in Qs])
+    off = {'xx': -0.004, 'yy': 0.0, 'zz': 0.004}
+    zz_gel = np.array([Q['inc']['gel']['zz'][0] for L, Q in Qs])
+    for c in COMPONENTS:
+        if c != 'zz':
+            g = np.array([Q['inc']['gel'][c] for L, Q in Qs])
+            axA.errorbar(eps + off[c], g[:, 0] / zz_gel, yerr=g[:, 1] / zz_gel, fmt='o-', color=_NCOL[c], ms=7, lw=1.6, capsize=3,
+                         label=f'gel interior $\\Delta\\sigma^t_{{{c}}} / \\Delta\\sigma^t_{{zz}}$  ($= \\sigma\'_{{{c}}}/\\sigma\'_{{zz}}$)')
+        f = np.array([Q['inc']['feed'][c] for L, Q in Qs])
+        axA.errorbar(eps + off[c], f[:, 0] / zz_gel, yerr=f[:, 1] / zz_gel, fmt='s', mfc='none', color=_NCOL[c], ms=7, lw=1.2, capsize=3,
+                     label=f'feed reservoir $\\Delta\\sigma^t_{{{c}}} / \\Delta\\sigma^t_{{zz,\\rm gel}}$')
+        if any(Q['has_perm'] for L, Q in Qs):
+            pr = np.array([Q['inc']['perm'][c] for L, Q in Qs])
+            axA.errorbar(eps + off[c], pr[:, 0] / zz_gel, yerr=pr[:, 1] / zz_gel, fmt='^', mfc='none', color=_NCOL[c], ms=7, lw=1.2, capsize=3,
+                         label=f'permeate reservoir $\\Delta\\sigma^t_{{{c}}} / \\Delta\\sigma^t_{{zz,\\rm gel}}$')
+    axA.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
+    axA.axhline(1, color='k', ls=':', lw=1, alpha=0.5)
+    axA.set_xlabel(eps_axis_label([L for L, Q in Qs]))
+    axA.set_ylabel(r'$\Delta\sigma^t / \Delta\sigma^t_{zz,\rm gel}$  (plateau increments)')
+    axA.set_title("(a) lateral / axial increment: filled = gel interior, hollow = reservoirs (must be 0)"); axA.grid(alpha=0.3)
+    axA.set_ylim(-0.1, 1.1)
+    smart_legend(axA, fontsize=10)
+    ratio = np.array([Q['G_comp_M'] for L, Q in Qs])
+    axB.plot(eps, ratio, 'o-', color=WONG['blue'], ms=8, lw=2, label=r"$\frac{1}{2}\left(1-\sigma'_{\rm lat}/\sigma'_{zz}\right)$ from the hold")
+    Ms = np.array([L.get('M_net', np.nan) for L, Q in Qs], float)
+    if cfg.G_REF is not None and np.isfinite(Ms).any():
+        i0 = int(np.nanargmin(np.where(np.isfinite(Ms), eps, np.inf)))      # small-strain M: the lowest level
+        M0 = float(Ms[i0])
+        axB.axhline(cfg.G_REF / M0, color=WONG['vermillion'], ls='--', lw=1.8,
+                    label=f'$G_{{\\rm shear}}/M$ = {cfg.G_REF / M0:.3f}  (G_REF {cfg.G_REF:g}, $M_{{\\rm net}}$ {M0:.3f} at $\\varepsilon$ = {eps[i0]:.2f})')
+    axB.axhline(0.5, color='k', ls=':', lw=1, alpha=0.6, label=r'$\nu = 0$ ($\sigma_{\rm lat}^\prime = 0$)')
+    axB.axhline(0.0, color='k', ls='--', lw=1, alpha=0.4, label=r'$\nu = 0.5$ ($\sigma_{\rm lat}^\prime = \sigma_{zz}^\prime$)')
+    axB.set_xlabel(eps_axis_label([L for L, Q in Qs])); axB.set_ylabel(r'$G/M$')
+    axB.set_title(r'(b) $G_{\rm comp}/M$ implied by the lateral network stress'); axB.grid(alpha=0.3)
+    axB.set_ylim(-0.05, 0.6)
+    smart_legend(axB, fontsize=11)
+    return _save(fig, cfg, 'sweep_reservoir_normal_stress')
 
 
 def fig_disp_profile(cfg, R, L):

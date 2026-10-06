@@ -348,6 +348,8 @@ def _b_name(kind, axis, ref=False, comp=None, species=None):
         return f'sigma{comp}_{species}' + ('' if axis == 'z' else f'_along{axis}') + r
     if kind == 'density':
         return ('solvent_density_z' if axis == 'z' else f'solvent_density_along{axis}') + r
+    if kind == 'disp_cum':
+        return 'disp_z_polymer_cum' if axis == 'z' else f'disp_along{axis}_polymer_cum'
     return 'disp_z_polymer' if axis == 'z' else f'disp_along{axis}_polymer'
 
 
@@ -513,6 +515,13 @@ def six_plate_bulk(root, levels=('0.05', '0.10')):
                 u = np.where(g, 0.15 * np.sin(2 * np.pi * zeta) * (np.mean(np.exp(-lam * tw)) - 1.0), 0.0)
                 disp.append(np.column_stack([np.where(g, 1500, 0), u + np.where(g, rng.normal(0, 0.001, len(zc)), 0.0)]))
             _b_chunk(dd / f'{_b_name("disp", a)}_{st}.dat', 'avg_disp', hs, zc, disp, [f'v_u{a}_poly'])
+            # cumulative displacement since the reference (deck since 2026-10-05): the network strain along a equals the
+            # plate's linear strain e_lin here; Eulerian bins -> u = -e/(1-e) (a - a_centre) inside the gel
+            a_c = 0.5 * (planes_t[-1][a + 'lo'] + planes_t[-1][a + 'hi'])
+            s_eul = -e_lin / (1.0 - e_lin)
+            cum = [np.column_stack([np.where(g, 1500, 0), np.where(g, s_eul * (zc - a_c) + rng.normal(0, 0.001, len(zc)), 0.0)])
+                   for _ in hs]
+            _b_chunk(dd / f'{_b_name("disp_cum", a)}_{st}.dat', 'avg_disp_cum', hs, zc, cum, [f'v_u{a}_poly_cum'])
         write_traj(r / 'traj_files' / f'traj_stress_{st}.lammpstrj', hs[:2], {4: zlo[-1], 5: B_ZFEED, 6: B_ZPERM, 7: zhi[-1]})
         t_start += hold + 1000
     # whole-run polymer partial-stress anisotropy (stem tagged with NSTEPS = hold here), as slab_with_support writes it

@@ -79,6 +79,13 @@
 #      cap 40x longer than the default level needs; no velocity / cap coincidence;
 #   6. the header describes the contact as it is (WCA only, no plate-polymer bonds);
 #   7. the data file name comes from the converter (DATANAME = its output stem).
+#   8. (2026-10-05, as the compression deck's disp_z_polymer_cum) every hold also writes the
+#      CUMULATIVE polymer displacement since the eps_vol = 0 reference along each axis,
+#      displacement_data/disp_{z,alongx,alongy}_polymer_cum_<stem>_c<strain>.dat (never
+#      reset, unlike the hold-referenced disp_* files of the D_c fit): the steady profile
+#      u_a(a) whose interior slope is the strain of the NETWORK alone -- the applied plate
+#      strain also counts the plates closing on the diffuse faces (~0.02 per axis in the
+#      compression runs) -- the eps_vol K divides by (lib/bulk.py K_STRAIN = 'disp').
 
 
 # ==========================================================================
@@ -893,6 +900,14 @@ print '>>> Reference recording done.  step=$(step)  strain_vol: plate $(v_strain
 variable strain_vol_pct equal v_strain_vol_plate*100.0
 variable e_lin_prev equal 0.0
 variable movie_open equal 1
+# cumulative polymer displacement since the eps_vol = 0 reference (2026-10-05): NEVER reset, unlike
+# displace_poly (re-created at every hold onset for the D_c relaxation fit).  Binned by current
+# coordinate in the core columns in each hold -> disp_*_polymer_cum files: the steady profile u_a(a),
+# whose slope s gives the network's own linear strain along a, eps_a = -s/(1-s) (Eulerian bins).
+compute displace_poly_cum polymer displace/atom
+variable ux_poly_cum atom c_displace_poly_cum[1]
+variable uy_poly_cum atom c_displace_poly_cum[2]
+variable uz_poly_cum atom c_displace_poly_cum[3]
 fix halt_box all halt 1000 v_box_guard > 0.5 error continue
 
 print "############################################################"
@@ -1110,12 +1125,21 @@ fix avg_disp_x all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} 
     file output_files/displacement_data/disp_alongx_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_disp_y all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_y v_uy_poly &
     file output_files/displacement_data/disp_alongy_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_disp_z_cum all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_z v_uz_poly_cum &
+    file output_files/displacement_data/disp_z_polymer_cum_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_disp_x_cum all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_x v_ux_poly_cum &
+    file output_files/displacement_data/disp_alongx_polymer_cum_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
+fix avg_disp_y_cum all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_y v_uy_poly_cum &
+    file output_files/displacement_data/disp_alongy_polymer_cum_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 
 variable hold_steps equal (floor(($(step)+${hold_len}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
 print ">>> [eps_vol=${compressions}] measurement HOLD (plates frozen, stress relaxes) for ${hold_steps} steps (>= hold_len=${hold_len}, aligned to nfreq_stress=${nfreq_stress})"
 run ${hold_steps}
 
 # ----- Teardown this level's hold fixes/dumps -----
+unfix avg_disp_y_cum
+unfix avg_disp_x_cum
+unfix avg_disp_z_cum
 unfix avg_disp_y
 unfix avg_disp_x
 unfix avg_disp_z

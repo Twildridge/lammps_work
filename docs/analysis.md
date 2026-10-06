@@ -121,7 +121,7 @@ constant-load series bent to vanish at both plates; on the exact relaxation it r
 times never changed, the conversion to D_c did: comp_1 at ε = 0.1 now reads D_c = 0.043 and κ = D_c/M = 0.13 (was
 0.49 / 1.5). The hold-adequacy line uses the corrected τ₁ for the fitted D_c and keeps the deck's own sizing formula
 for the *slow* line; levels above ε ≈ 0.2 now show as held for fewer than 5 τ₁, and their D_c is correspondingly less
-certain (the `RELAX_SYS` tail fit is the direct measure of the unrelaxed stress).
+certain (the `RELAX_SYS` tail fit is the direct measure of the unrelaxed stress). **Figure 5b, reservoir normal-stress check (2026-10-06, `fig_reservoir_normal_stress[_sweep]`):** σᵗ_xx, σᵗ_yy, σᵗ_zz over the hold in the gel interior and in the two solvent reservoirs (per-snapshot piston-tracking masks, the pore-baseline windows), as plateau increments from the ε = 0 reference. The reservoirs are the in-situ control — a fluid must stay at P_bath in every component — so a lateral rise confined to the gel is network stress (σ'_xx; the box quotes G_comp/M = ½(1 − σ'_xx/σ'_zz)), while a lateral drift in the reservoirs would be a box / normalisation artefact. Sweep: increments normalised by the gel's Δσᵗ_zz per level + the implied G_comp/M against `G_REF`/M_net (Config `G_REF`, the shear notebooks' G). Run 7: reservoirs 0 within ±0.003 at every level while the gel's lateral increment is 0.77–0.97 of the axial one → the compression lateral stress is real network stress, not an artefact.
 
 **`triaxial_permeation_single_two_pist.ipynb`** (two-piston permeation, 2026-09-16, standard since 2026-09-22 — no sweep notebook)
 `Config(mode="permeation", two_pist=True)`; `tri.load_permeation` builds one dict `P`: total / partial / network
