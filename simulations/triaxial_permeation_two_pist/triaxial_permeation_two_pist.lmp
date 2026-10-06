@@ -153,7 +153,11 @@ variable num_widom_frames equal 50
 variable nfreq_widom_dump equal floor(${nsteps}/v_num_widom_frames)
 
 # ----- Time Averaging (stress) -----  nfreq = nevery * nrepeat (LAMMPS constraint)
-variable num_stress_curves equal 10
+# perm_stress_curves (2026-10-06): number of block-averaged profile snapshots (and traj_stress frames) over the
+# production run; -var perm_stress_curves from the batch (PERM_STRESS_CURVES).  10 is the historical value; a
+# thin gel reaches steady state early, so more, shorter blocks give the steady window more frames.
+variable perm_stress_curves index 10
+variable num_stress_curves equal v_perm_stress_curves
 variable nevery_target     equal 100
 variable nrepeat_max       equal 2000
 variable nrepeat_min       equal 50

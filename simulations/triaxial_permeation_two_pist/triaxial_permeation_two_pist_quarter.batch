@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=triax_perm2p_quarter
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=0
+#SBATCH --time=16:00:00
+#SBATCH --output=%x.o%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (mirrors triaxial_compression.batch): pull the repo FIRST,
+# then re-exec the freshly pulled batch so every exported knob below is read
+# from the current file, not a stale local copy.  The guard var prevents a loop.
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${TRIAX_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining the run knobs..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export TRIAX_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/triaxial_permeation_two_pist/triaxial_permeation_two_pist_quarter.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (TRIAX_BATCH_SYNCED=1)"
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# QUARTER-THICKNESS GEL PERMEATION (2026-10-06): the same gel as the quarter compression sweep
+# (triaxial_compression_two_pist_quarter.batch), under the standard dP = 0.1 through-flow.
+# Why: the hold D_c is now known to be a bulk, thickness-independent number (0.045-0.055 at
+# L = 23-114 sigma) and steady permeation on the full gel gives ~0.09 at the same phi_s, from
+# a phi profile that rests on 3 steady frames.  On a gel a quarter as thick the Darcy flux
+# and the profile slope are 4x larger, steady state arrives in ~0.4M steps instead of ~2M
+# (tau_1 = L^2/(pi^2 D_c) ~ 1800 tau), and the steady window can hold tens of block-averaged
+# profiles; the compression states of the same gel are the matched reference.
+# Data file: scripts/lib/slab_two_pistons.py --cut-existing <..._two_pist.data> --gel-keep-frac 0.25
+#   --feed-add 16 --margin-perm 35 --output <..._two_pist_quarter_perm.data>   (178,990 atoms):
+#   the quarter cut of the compression run, with the feed reservoir enlarged from 13.7 to 29.7
+#   sigma (17,355 solvent beads at the reservoir density) and 35 sigma of vacuum below the
+#   permeate piston.  Budget at dP = 0.1: through-flux ~4 sigma per M steps (4x the full gel's
+#   ~1 sigma), so 4.2M steps drain ~18 sigma of feed (leaving ~12 for the pore-baseline window)
+#   and move the permeate piston ~24 sigma (6 of gel consolidation + the flux) against 33 of room.
+# What differs from the standard batch (all via run_lammps.sh -var; defaults unchanged elsewhere):
+#   * NSTEPS 4M production (steady from ~1M on: a ~3M-step steady window).
+#   * PERM_STRESS_CURVES=30: 30 profile snapshots / traj_stress frames of 133k steps (667 tau)
+#     instead of 10 -> ~20 steady frames for the phi profile.
+#   * N_RAMP x RAMP_STEPS = 100 x 2000 = 200k steps (1000 tau ~ 0.5 tau_1; the standard 1M-step
+#     ramp would be ~3 tau_1 here).  The transient fit models the ramp, whatever its length.
+#   * DISP_NFREQ=10000 (50 tau) displacement-profile blocks for the transient.
+# Analysis: triaxial_permeation_single_two_pist.ipynb with DATANAME ..._quarter_perm, NSTEPS 4000000,
+#   a new RUN_ID; cross_deck_comparison.ipynb against the quarter compression sweep.
+#
+FOLDER="triaxial_permeation_two_pist"
+DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist_quarter_perm"
+INTERACTION="1.0_1.0"   # epsSS_epsSP
+NSTEPS=4000000           # production steps (constant-dP drive); also the output-file tag.  ~11 tau_1 of
+                         # the quarter gel (tau_1 ~ 0.36M steps); see the header for the reservoir budget
+TYPE=""                 # stress, volume, stressvol, or leave empty
+PRESS_TARGET=1.5        # bath pressure P* (both pistons in the settle; permeate piston in production)
+
+# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var; see the .lmp for the rationale) -----
+export DP_PISTON=0.1          # SINGLE pressure step dP (= the current one-piston P_piston). Not a list.
+export PISTON_MASS=1000       # mass per piston bead (paper's value)
+export C_PIST_FRAC=1.0        # damping / critical damping (the .lmp prints C_crit and the piston period)
+#   C_PIST_FRAC now acts on the settle + reference window only: the .lmp drops the
+#   damper at the start of production (damp_prod=0 in the .lmp; 2026-09-23).
+export NPT_PISTON_STEPS=1000000   # Phase-1 settle; check the printed piston period (aim >= 3-5 periods)
+export SETTLE_HALT=0          # 1 = end the settle early once both pistons are at rest
+export N_RAMP=100             # dP ramp stages ...
+export RAMP_STEPS=2000        # ... x steps each = 200k steps (standard: 100 x 10000)
+export PERM_STRESS_CURVES=30  # profile snapshots / traj_stress frames over NSTEPS (standard 10)
+export DISP_NFREQ=10000       # displacement-profile block length, steps (standard 50000)
+
+# >>> WALL TIME <<<  setup ~50k + NPT_PISTON_STEPS (1M) + 150k (reference) + 200k (ramp) + 4M
+# production = ~5.4M steps of 179k atoms (the quarter compression sweep did 14.4M steps of
+# 162k atoms within 24 h) -> well inside 16 h; run_lammps.sh force-returns 5 min before the
+# limit and every output file is streamed.
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"

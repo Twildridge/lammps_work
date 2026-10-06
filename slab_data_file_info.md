@@ -590,3 +590,10 @@ Two-piston data file with a THINNED gel  [2026-10-05 13:05, slab_two_pistons.cut
   z: perm piston 18.73 | support 29.73 | gel BB [31.43, 63.04] (L_bb 31.60, L_rg 29.34) | load piston 69.90 | feed piston 76.77 | zhi 91.77
   Crosslinks: 3643   Chain beads: 21344   Solvent: 43384   Support: 23316   Feed piston: 23316   Permeate piston: 23316   Load piston: 23316
   Total atoms: 161635   Total bonds: 28276   Output: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist_quarter.data
+
+Two-piston data file with a THINNED gel  [2026-10-06 10:14, slab_two_pistons.cut_two_pist, keep_frac 0.25, feed +16 sigma, margin_perm 35]:
+  Input: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist.data   (lx, ly unchanged; everything below the cut plane untouched); 17355 solvent beads added to the feed reservoir at rho 0.4723; all z shifted +16.27 for the permeate margin
+  Cut: gel BB [31.43, 157.84] cut at z = 63.04 (94.81 sigma excised); 79444 polymer beads above the cut and 59 in detached fragments removed; 49007 solvent beads excised, 176 at the seam
+  z: perm piston 35.00 | support 46.00 | gel BB [47.70, 79.30] (L_bb 31.60, L_rg 29.34) | load piston 86.17 | feed piston 109.04 | zhi 124.04
+  Crosslinks: 3643   Chain beads: 21344   Solvent: 60739   Support: 23316   Feed piston: 23316   Permeate piston: 23316   Load piston: 23316
+  Total atoms: 178990   Total bonds: 28276   Output: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist_quarter_perm.data

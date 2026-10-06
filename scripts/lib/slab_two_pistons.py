@@ -55,7 +55,9 @@ Usage (CLI)
         [--margin-feed 15] [--piston-clearance 1.0] [--load-piston-frac 0.5]
         [--sheet-source support|hex] [--sheet-spacing 0.2] [--seed 42] [--no-log]
   python3 slab_two_pistons.py --cut-existing <..._two_pist.data> [--gel-keep-frac 0.5] [--output <...>]
-        thins the gel of an existing two-piston file (cut_two_pist; -> <stem>_half.data)
+        [--feed-add <sigma>] [--margin-perm <sigma>]
+        thins the gel of an existing two-piston file (cut_two_pist; -> <stem>_half.data); --feed-add /
+        --margin-perm enlarge the feed reservoir / the permeate vacuum for permeation on the thin gel
   The validation (self-check) always runs; --self-check-only validates an
   existing output file without rewriting it.
 """
@@ -904,7 +906,7 @@ def check_gel_unchanged(input_file, output_file, tol=1e-6):
 # ---------------------------------------------------------------------------
 # Thinner gel from an existing two-piston file (2026-10-03)
 # ---------------------------------------------------------------------------
-def cut_two_pist(input_file, output_file=None, keep_frac=0.5, log_info=True):
+def cut_two_pist(input_file, output_file=None, keep_frac=0.5, log_info=True, feed_add=0.0, margin_perm=None, seed=42):
     """Thin the gel of an EXISTING two-piston data file to the bottom (support-side) keep_frac
     of its bounding-box thickness; lx, ly and everything below the cut are untouched.
     With z_cut = bb_lo + keep_frac L_bb and D = bb_hi - z_cut:
@@ -917,7 +919,14 @@ def cut_two_pist(input_file, output_file=None, keep_frac=0.5, log_info=True):
       * a moved solvent bead closer than OVERLAP_MIN to an atom below the cut is deleted.
     The new face is a cut face (dangling ends), not an as-prepared one; the deck's minimise +
     NPT-piston settle relax it.  Made for the half-thickness L^2 test of the hold relaxation
-    (tau_1 = L^2/(4 pi^2 D_c) must fall 4x).  Returns the info dict."""
+    (tau_1 = L^2/(4 pi^2 D_c) must fall 4x).  Returns the info dict.
+
+    Permeation on a thin gel (2026-10-06): the Darcy flux scales as 1/L, so a quarter gel
+    drains the ~14-sigma feed reservoir in ~2M steps at dP = 0.1 and drives the permeate
+    piston ~4 sigma per M steps.  `feed_add` > 0 raises the feed piston (and zhi) by that
+    many sigma and fills the opened slab with solvent at the reservoir's own bulk density
+    (fill_to_density, seeded); `margin_perm` (sigma) sets the vacuum below the permeate
+    piston (the file is re-based so zlo = 0).  Both leave the gel and the support untouched."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
     inp = Path(input_file)
@@ -970,11 +979,50 @@ def cut_two_pist(input_file, output_file=None, keep_frac=0.5, log_info=True):
     vel = np.array([vel_in.get(int(i), (0.0, 0.0, 0.0)) for i in ids_k], dtype=float)
     img = np.array([img_in.get(int(i), (0, 0, 0)) for i in ids_k], dtype=np.int64) if img_in else None
     new_box = dict(box, zhi=box['zhi'] - D)
+    # ---- optional feed enlargement (permeation on a thin gel) ----
+    n_feed_added, rho_bulk = 0, float('nan')
+    if feed_add and feed_add > 0:
+        rng = np.random.default_rng(seed)
+        A = (box['xhi'] - box['xlo']) * (box['yhi'] - box['ylo'])
+        is_solv_k = typ_k == T_SOLVENT
+        gel_top = float(xyz_k[np.isin(typ_k, POLYMER_TYPES), 2].max())
+        z_fp = float(xyz_k[typ_k == T_FEED, 2].mean())
+        w_lo, w_hi = gel_top + 3.0, z_fp - 3.0            # reservoir window clear of the gel face and the piston layering
+        n_win = int((is_solv_k & (xyz_k[:, 2] >= w_lo) & (xyz_k[:, 2] < w_hi)).sum())
+        rho_bulk = n_win / (A * (w_hi - w_lo))
+        z_top_solv = float(xyz_k[is_solv_k, 2].max())
+        clear = z_fp - z_top_solv                           # the file's own solvent-piston clearance (~1 sigma)
+        xyz_k = xyz_k.copy()
+        xyz_k[typ_k == T_FEED, 2] += feed_add
+        new_box['zhi'] += feed_add
+        print(f'  feed enlargement: +{feed_add:.2f} sigma (feed piston {z_fp:.2f} -> {z_fp + feed_add:.2f}, zhi -> {new_box["zhi"]:.2f}); '
+              f'bulk density from z=[{w_lo:.2f}, {w_hi:.2f}] ({n_win} beads): rho = {rho_bulk:.4f}')
+        pad = fill_to_density(xyz_k, is_solv_k, new_box, z_top_solv - 0.5, z_fp + feed_add - clear, rho_bulk, rng, ' [feed add]')
+        n_feed_added = len(pad)
+        if n_feed_added:
+            mol_next = int(mols_k.max()) + 1
+            ids_k = np.concatenate([ids_k, np.arange(ids_k.max() + 1, ids_k.max() + 1 + n_feed_added)])
+            typ_k = np.concatenate([typ_k, np.full(n_feed_added, T_SOLVENT)])
+            xyz_k = np.vstack([xyz_k, pad])
+            mols_k = np.concatenate([mols_k, np.arange(mol_next, mol_next + n_feed_added)])
+            vel = np.vstack([vel, np.zeros((n_feed_added, 3))])
+            if img is not None:
+                img = np.vstack([img, np.zeros((n_feed_added, 3), dtype=np.int64)])
+    # ---- optional permeate vacuum margin: re-base so zlo = 0 ----
+    z_shift = 0.0
+    if margin_perm is not None:
+        z_pp = float(xyz_k[typ_k == T_PERM, 2].mean())
+        z_shift = margin_perm - (z_pp - box['zlo'])         # > 0 lifts everything (more vacuum below the permeate piston)
+        xyz_k = xyz_k.copy()
+        xyz_k[:, 2] += z_shift
+        new_box['zhi'] += z_shift
+        print(f'  permeate margin: {margin_perm:.2f} sigma below the permeate piston (was {z_pp - box["zlo"]:.2f}); all z shifted by {z_shift:+.2f}, zhi -> {new_box["zhi"]:.2f}')
     G = gel_extent(xyz_k[np.isin(typ_k, POLYMER_TYPES), 2])
     zmean = lambda t: float(xyz_k[typ_k == t, 2].mean())      # noqa: E731
     margin_feed = new_box['zhi'] - zmean(T_FEED)
     info = dict(input_file=str(inp), output_file=str(output_file), date=_dt.datetime.now().strftime('%Y-%m-%d %H:%M'),
-                keep_frac=float(keep_frac), z_cut=z_cut, excised=D, gel_bb_in=(bb_lo, bb_hi), gel_bb=(G['bb_lo'], G['bb_hi']),
+                keep_frac=float(keep_frac), z_cut=z_cut, excised=D, feed_add=float(feed_add or 0.0), n_feed_added=n_feed_added,
+                rho_bulk=rho_bulk, margin_perm=(None if margin_perm is None else float(margin_perm)), z_shift=z_shift, gel_bb_in=(bb_lo, bb_hi), gel_bb=(G['bb_lo'], G['bb_hi']),
                 L_bb=G['L_bb'], L_rg=G['L_rg'], box_out=new_box, support_z=zmean(T_SUPPORT), z_perm_piston=zmean(T_PERM),
                 z_load_piston=zmean(T_LOAD), z_feed_piston=zmean(T_FEED), margin_feed=margin_feed,
                 max_strain_feed_margin=(margin_feed - 2.0) / G['L_bb'],
@@ -994,8 +1042,10 @@ def cut_two_pist(input_file, output_file=None, keep_frac=0.5, log_info=True):
     info['validation'] = val
     if not val['ok']:
         raise RuntimeError('validation FAILED -- file not written:\n  ' + '\n  '.join(val['problems']))
+    extra = (f' feed +{feed_add:g} sigma ({n_feed_added} solvent added);' if n_feed_added else '') + \
+            (f' permeate margin {margin_perm:g} sigma (z shift {z_shift:+.3f});' if margin_perm is not None else '')
     header = (f'two-piston data file with the gel cut to the bottom {keep_frac:g} of its thickness, from {inp.name} via '
-              f'slab_two_pistons.cut_two_pist on {info["date"]}; types 1 xl 2 chain 3 solv 4 support 5 feed_piston 6 perm_piston 7 load_piston; '
+              f'slab_two_pistons.cut_two_pist on {info["date"]};{extra} types 1 xl 2 chain 3 solv 4 support 5 feed_piston 6 perm_piston 7 load_piston; '
               f'z: support={info["support_z"]:.3f} gel_bb=[{G["bb_lo"]:.3f},{G["bb_hi"]:.3f}] perm_piston={info["z_perm_piston"]:.3f} '
               f'load_piston={info["z_load_piston"]:.3f} feed_piston={info["z_feed_piston"]:.3f}; cut plane {z_cut:.3f}, {D:.3f} sigma excised')
     write_two_pist_data(output_file, header, np.arange(1, len(ids_k) + 1), mols_k, typ_k, xyz_k, vel, bonds, new_box, img=img)
@@ -1004,8 +1054,11 @@ def cut_two_pist(input_file, output_file=None, keep_frac=0.5, log_info=True):
     print(f'  wrote {len(ids_k)} atoms, {len(bonds)} bonds -> {output_file}')
     c = info['counts']
     entry = '\n'.join([
-        f'Two-piston data file with a THINNED gel  [{info["date"]}, slab_two_pistons.cut_two_pist, keep_frac {keep_frac:g}]:',
-        f'  Input: {inp.name}   (lx, ly unchanged; everything below the cut plane untouched)',
+        f'Two-piston data file with a THINNED gel  [{info["date"]}, slab_two_pistons.cut_two_pist, keep_frac {keep_frac:g}'
+        + (f', feed +{feed_add:g} sigma' if n_feed_added else '') + (f', margin_perm {margin_perm:g}' if margin_perm is not None else '') + ']:',
+        f'  Input: {inp.name}   (lx, ly unchanged; everything below the cut plane untouched)'
+        + (f'; {n_feed_added} solvent beads added to the feed reservoir at rho {rho_bulk:.4f}' if n_feed_added else '')
+        + (f'; all z shifted {z_shift:+.2f} for the permeate margin' if margin_perm is not None else ''),
         f'  Cut: gel BB [{bb_lo:.2f}, {bb_hi:.2f}] cut at z = {z_cut:.2f} ({D:.2f} sigma excised); {n_cut} polymer beads above the cut and '
         f'{info["n_poly_fragments"]} in detached fragments removed; {info["n_solvent_excised"]} solvent beads excised, {info["n_seam_removed"]} at the seam',
         f'  z: perm piston {info["z_perm_piston"]:.2f} | support {info["support_z"]:.2f} | gel BB [{G["bb_lo"]:.2f}, {G["bb_hi"]:.2f}] '
@@ -1045,9 +1098,12 @@ if __name__ == '__main__':
     ap.add_argument('--cut-existing', metavar='DATAFILE', help='thin the gel of an EXISTING two-piston data file to the bottom '
                     '--gel-keep-frac of its thickness (cut_two_pist) and exit; --output names the new file (default <stem>_half.data)')
     ap.add_argument('--gel-keep-frac', type=float, default=0.5)
+    ap.add_argument('--feed-add', type=float, default=0.0, help='--cut-existing only: raise the feed piston by this many sigma '
+                    'and fill the gap with solvent at the reservoir density (permeation on a thin gel); --margin-perm sets its vacuum')
     args = ap.parse_args()
     if args.cut_existing:
-        cut_two_pist(args.cut_existing, args.output, args.gel_keep_frac, log_info=not args.no_log)
+        cut_two_pist(args.cut_existing, args.output, args.gel_keep_frac, log_info=not args.no_log,
+                     feed_add=args.feed_add, margin_perm=args.margin_perm, seed=args.seed)
         sys.exit(0)
     if args.self_check_only:
         r = self_check(args.self_check_only)

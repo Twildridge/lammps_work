@@ -58,6 +58,12 @@ NPT_PISTON_STEPS=${NPT_PISTON_STEPS:-1000000}  # Phase-1 NPT-piston settle lengt
 SETTLE_HALT=${SETTLE_HALT:-0}               # 1 = halt the settle early once both pistons are at rest
 DRIVE_SPLIT=${DRIVE_SPLIT:-0.5}             # compression decks: piston share of each level's gap closure
                                             # (0.5 = symmetric drive, piston down + support up; 1.0 = old top-only)
+# triaxial_permeation_two_pist (2026-10-06): dP ramp (N_RAMP stages x RAMP_STEPS steps), profile snapshots over
+# the production run (PERM_STRESS_CURVES) and the displacement-profile block length (DISP_NFREQ steps)
+N_RAMP=${N_RAMP:-100}
+RAMP_STEPS=${RAMP_STEPS:-10000}
+PERM_STRESS_CURVES=${PERM_STRESS_CURVES:-10}
+DISP_NFREQ=${DISP_NFREQ:-50000}
 DISP_FINE_NFREQ=${DISP_FINE_NFREQ:-0}       # triaxial_compression_two_pist: block length (steps) of the fine-cadence
 DISP_FINE_BIN=${DISP_FINE_BIN:-1.0}         # hold displacement profile disp_z_polymer_fine and its bin width; 0 = off
 CALIB_FRAMES=${CALIB_FRAMES:-5}          # calibration-dump frames near run end (polymer_pure /
@@ -295,6 +301,10 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var drive_split "$DRIVE_SPLIT" \
     -var disp_fine_nfreq "$DISP_FINE_NFREQ" \
     -var disp_fine_bin "$DISP_FINE_BIN" \
+    -var n_ramp "$N_RAMP" \
+    -var ramp_steps "$RAMP_STEPS" \
+    -var perm_stress_curves "$PERM_STRESS_CURVES" \
+    -var disp_nfreq "$DISP_NFREQ" \
     -var wall_timeout "$WALL_TIMEOUT" \
     \
     -in $LAMMPS_FILE &
