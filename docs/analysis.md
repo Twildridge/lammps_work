@@ -169,6 +169,21 @@ unrecorded — hence the 50 k cadence and the 1 M-step ramp in the deck). Knobs:
 `PERM_DC_WINDOW_AVG`, `PERM_DC_BOUNDS`, `PERM_DISP_RESET`, `PERM_TRACE_SKIP` (leave a short-ramp run's piston ringing out
 of the trace fit).
 
+**Figure conventions shared by the three two-piston notebooks (2026-10-06)** — two `tri.Config` knobs, both on by default.
+`FLIP_Z = True` draws every z-profile figure with the feed / load piston on the left and the permeate / support on the
+right (as in Marioni et al.): the x axis is inverted, so `z/L`, `Z` and `ζ` label the same coordinates and decrease to
+the right; it is plotting only (`finish_axes` / `_zlim` / `flip_z_axis`), and `False` reproduces the old figures pixel for
+pixel. `PARTIAL_NORM = 'share'` makes `fig_total_stress`, `fig_partial_stress`, `fig_thermo_pressure` and their `_sweep`
+versions draw a second figure under the original (same cell, same plot number, file stem `…_norm`; the original PNGs are
+untouched) with each species' share of the back pressure removed and the result divided by the driving pressure:
+`w_s = σ_s/σᵗ` per z-bin and snapshot, `σ_s* = (σ_s − w_s P_ref)/ΔP`, `σ_p* = (σ_p − (1 − w_s) P_ref)/ΔP`,
+`σᵗ* = (σᵗ − P_ref)/ΔP` (`tri.partial_norm`; `P_ref`, `ΔP` = the applied permeate pressure and feed − permeate difference
+under permeation, `P_BARO` and the level's plateau load-piston increment `dP_pist` in compression; the trace is treated the
+same way with `w_s = tr σ_s/tr σᵗ`). The shares come from the partial stresses alone — no mass or volume fractions. It is
+the form of Marioni's partial-`P_zz` figure but does not reproduce his end points (perm_3: solvent* 0.50 → 0.38, polymer*
+0.49 → 0.61 from the feed face to the support face); see the Notes cells. `'raw'` draws the originals only. `bulk.Config`
+overrides both to off; the shear and cross-deck notebooks do not use these figures.
+
 **Tests** (`scripts/tests/`, 2026-09-16; six-plate `compress_slab` fixture added 2026-09-29): `run_plot_tests.sh` builds synthetic one-piston, two-piston and six-plate run
 trees (`make_fixtures.py`) and runs the three plotters on both formats; `run_notebook_tests.sh` executes the
 two-piston notebooks headlessly on the same tree; `lint_lmp.py` statically checks a deck (definitions before use,

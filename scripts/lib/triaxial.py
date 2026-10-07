@@ -28,6 +28,11 @@ Layout of this file
                                     panels for two-piston compression runs; D_c and M from
                                     the polymer displacement under permeation (2026-09-28)
 
+Figure conventions (2026-10-06): cfg.FLIP_Z draws every z-profile with the feed / load piston on
+the left (finish_axes / _zlim / flip_z_axis -- plotting only); cfg.PARTIAL_NORM = 'share' adds,
+under each total-stress, partial-stress and thermodynamic-pressure profile figure, the version
+with the back pressure removed and divided by the driving pressure (partial_norm, section 9).
+
 Physics conventions (see the Notes section at the end of either notebook):
   * total stress sigma^t = sigma_p + sigma_s (group stress/atom, kinetic term included)
   * Terzaghi: sigma' = sigma^t - p_pore, p_pore read per curve from the flat
@@ -170,6 +175,21 @@ class Config:
     GEL_SHADE_TO_PISTON: bool = True      # permeation figures (2026-09-24): the grey membrane shading runs up to the
                                           # FINAL feed-piston plane instead of ending at the polymer-stress edge
                                           # (which sits ~4 bins below the piston: the remaining feed reservoir)
+    # ---- profile-figure conventions (2026-10-06) ---------------------------
+    PARTIAL_NORM: str = 'share'           # 'raw' | 'share'.  'share': under each total-stress, partial-stress and
+                                          # thermodynamic-pressure profile figure a second figure (same call, file stem
+                                          # <stem>_norm) draws the profiles with the back pressure removed and divided
+                                          # by the driving pressure -- the form of Marioni et al.'s partial P_zz figure,
+                                          # whose permeate is at ~0 where ours is at P_perm = 1.5.  Per bin and snapshot:
+                                          #   w_s = sigma_s/sigma_t,   sigma_s* = (sigma_s - w_s P_ref)/dP,
+                                          #   sigma_p* = (sigma_p - (1 - w_s) P_ref)/dP,   sigma_t* = (sigma_t - P_ref)/dP
+                                          # (partial_norm; the shares come from the stresses alone).  The original
+                                          # figures and their PNGs are untouched.  'raw': the original figures only.
+    FLIP_Z: bool = True                   # every z-profile figure is drawn with the feed / load piston on the LEFT and
+                                          # the permeate / support on the RIGHT, as in Marioni et al. (the x axis is
+                                          # inverted: z still labels the box coordinate and decreases to the right).
+                                          # Plotting only -- no z array, mask, window or fit sees it.  False = z
+                                          # increasing to the right (the orientation of every figure before 2026-10-06)
     # ---- pore-size distribution (lib/psd.py, 2026-09-24) ---------------------
     PSD_ENABLE: bool = True               # geometric porosity + PSD on the tessellated frames (needs VOR_ENABLE)
     PSD_R_PROBE: float = 0.5              # probe radius (sigma): void = grid points >= this far from a bead surface
@@ -179,6 +199,22 @@ class Config:
     # ---- permeation: D_c and M from the polymer displacement (2026-09-28) ----------
     PERM_GAP: float = 1.0                 # sigma: the pinned polymer face z^P = z_support + PERM_GAP (the plate-bead
                                           # exclusion; the compression fit's plate gap is the same ~1 sigma).  zeta = (z - z^P)/L_0
+    PERM_FORCING: str = 'applied'         # the dP(t) history driving the consolidation model (2026-10-07): 'applied' = the
+                                          # piston_pressure ramp P_feed_app - P_perm_app; 'measured' = the reservoir pressure
+                                          # difference P_res_feed - P_res_perm (pressure_feed / pressure_permeate, pf cadence,
+                                          # smoothed over PERM_FORCING_SMOOTH samples; the applied ramp start stays t = 0 and
+                                          # the ramp is assumed to carry no load until the first measured sample).  The
+                                          # undamped pistons (damp_prod=0) ring after the ramp: on the quarter gel the
+                                          # measured dP overshot to 2x the applied for ~0.3M steps and the gel followed it
+                                          # (tau_1 ~0.35M steps); the full gel (tau_1 ~2M) filtered it.
+    PERM_FORCING_SMOOTH: int = 5          # rolling-mean window (samples) of the measured dP before differencing
+    PERM_L0_MODE: str = 'face'            # the L_0 of the permeation fit (2026-10-07): 'face' = reference polymer-stress edge
+                                          # minus Z^P (the pinned face's REFERENCE position z^P - u_0): the thickness of the
+                                          # dense gel the material coordinate spans, so zeta reaches 1 at the real top face.
+                                          # 'bb' (old): the bounding-box thickness, which also counts the ~3 sigma the face
+                                          # floats above the plate at zero flux (perm_2/3: 2.4 % of L_0; the quarter gel:
+                                          # 10 %, the fit domain stopped at zeta ~0.8 and the modes ran wild above it).
+                                          # The bounding-box L_0 still drives the thickness trace (L_bb(t) - L_bb(0)).
     PERM_L0_STEPS: int = 100000           # steps before the production onset averaged for L_0 (bounding-box thickness; lies
                                           # inside the zero-flux reference window)
     PERM_DC_WINDOW_AVG: bool = True       # the fitted modes are averaged over each ave/chunk window: the deck block-averages
@@ -287,6 +323,7 @@ class Config:
 
     def __post_init__(self):
         assert self.mode in ('compression', 'permeation'), "mode must be 'compression' or 'permeation'"
+        assert self.PARTIAL_NORM in ('raw', 'share'), "PARTIAL_NORM must be 'raw' or 'share'"
         if self.mode == 'compression':
             assert self.COMP_LEVELS, 'COMP_LEVELS is empty -- list at least one level, e.g. ["0.10"]'
         self.COMP_LEVELS = [str(l) for l in self.COMP_LEVELS]
@@ -921,7 +958,7 @@ def load_reference(cfg):
     box geometry, wall planes, reference stress profiles (zz, and xx/yy when the
     run wrote them), gel bounds, reference network stress per component and the
     reference solvent density.  Returns a dict R."""
-    R = {}
+    R = {'flip_z': bool(cfg.FLIP_Z)}      # orientation of the z-profile figures (_zlim / finish_axes; plotting only)
     # ---- geometry from a dump header (box fixed; only the piston moves) ----
     src = cfg.traj('traj_ref')
     if not src.exists():
@@ -2290,7 +2327,7 @@ def fig_perm_psd(cfg, R, P):
     ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)
     shade_gel(ax, R, P)
     mark_walls(ax, R, P)
-    finish_axes(ax, r'geometric porosity $\epsilon_g$', f'(a) porosity ($r_{{\\rm probe}}={cfg.PSD_R_PROBE}$) vs $\\phi_s^{{\\rm cal}}$')
+    finish_axes(ax, r'geometric porosity $\epsilon_g$', f'(a) porosity ($r_{{\\rm probe}}={cfg.PSD_R_PROBE}$) vs $\\phi_s^{{\\rm cal}}$', R=R)
     ax.set_ylim(0, 1.15)
     smart_legend(ax, fontsize=11)
     txt = []
@@ -2316,7 +2353,7 @@ def fig_perm_psd(cfg, R, P):
         curves.append(np.where(P['interior'], m, np.nan))
     shade_gel(ax, R, P)
     mark_walls(ax, R, P)
-    finish_axes(ax, r'$\langle D_{\rm pore}\rangle$  ($\sigma$)', '(b) mean pore diameter per bin')
+    finish_axes(ax, r'$\langle D_{\rm pore}\rangle$  ($\sigma$)', '(b) mean pore diameter per bin', R=R)
     robust_ylim(ax, curves, pad=0.3, qlo=0, qhi=100, include_zero=True)
     smart_legend(ax, fontsize=11)
     txt = []
@@ -2619,11 +2656,27 @@ def mark_level_walls(ax, R, levels):
         ax.axvline(zn(R, L['z_pist']), color=level_color(i), ls='-.', lw=1.2, alpha=0.6, zorder=4)
 
 
-def finish_axes(ax, ylabel, title):
+def _zlim(R, lo=0.0, hi=1.0):
+    """x-limits of a z-profile axis.  With cfg.FLIP_Z (carried as R['flip_z'] by load_reference,
+    2026-10-06) the axis is inverted -- (hi, lo) -- so the feed / load piston (high z) is on the
+    left and the permeate / support on the right; the data, the shading and the wall markers keep
+    their z coordinates.  R = None or a dict without the key (other libraries) -> (lo, hi)."""
+    return (hi, lo) if (R is not None and R.get('flip_z')) else (lo, hi)
+
+
+def flip_z_axis(ax, R):
+    """FLIP_Z for a z-profile axis with autoscaled limits (z or Z in sigma): invert it BEFORE
+    plotting, so the autoscaled limits stay inverted and the legend / box placement sees the
+    final layout.  No-op without R['flip_z']."""
+    if R is not None and R.get('flip_z'):
+        ax.xaxis.set_inverted(True)
+
+
+def finish_axes(ax, ylabel, title, R=None):
     ax.set_xlabel(r'$z/L$')
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    ax.set_xlim(0, 1)
+    ax.set_xlim(*_zlim(R))
     ax.grid(alpha=0.3)
 
 
@@ -2837,7 +2890,7 @@ def plot_reference(ax, R, z, m, lo, hi, color, ylabel, title, annotate=True):
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
     shade_gel(ax, R)
     mark_walls(ax, R)
-    finish_axes(ax, ylabel, title)
+    finish_axes(ax, ylabel, title, R=R)
     if annotate:
         ig = R['in_gel']
         annotate_box(ax, f'mean in gel = {fmt_mu(np.asarray(m)[ig])}\nmean out gel = {fmt_mu(np.asarray(m)[~ig])}',
@@ -2871,7 +2924,7 @@ def plot_evolution(ax, cfg, R, L, z, ts, stack, ylabel, title, ref=None, band=No
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
     shade_gel(ax, R, L)
     mark_walls(ax, R, L, ts)
-    finish_axes(ax, ylabel, title)
+    finish_axes(ax, ylabel, title, R=R)
     if colorbar:
         sm = plt.cm.ScalarMappable(cmap=EVO_CMAP, norm=norm)
         sm.set_array([])
@@ -2917,7 +2970,7 @@ def overlay_levels(ax, R, levels, get_z, get_ts, get_stack, cfg, ref=None, autos
                 finals.append(stack[j])
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.4)
     mark_level_walls(ax, R, levels)
-    finish_axes(ax, ylabel, title)
+    finish_axes(ax, ylabel, title, R=R)
     if finals:
         robust_ylim(ax, finals, zmask=autoscale_mask, pad=pad, qlo=qlo, qhi=100, include_zero=include_zero)
     return finals
@@ -3005,7 +3058,7 @@ def _phi_panel(ax, cfg, R, D, L=None, title='', bands=True, delta_from=None):
     ax.axhline(cfg.PHI_FLOOR, color='r', ls=':', lw=1.0, alpha=0.5)
     shade_gel(ax, R, L)
     mark_walls(ax, R, L)
-    finish_axes(ax, r'$\phi_s$', title)
+    finish_axes(ax, r'$\phi_s$', title, R=R)
     ax.set_ylim(0, 1.15)
     smart_legend(ax, fontsize=12)
     mask = L['interior'] if L is not None else R['interior']
@@ -3033,7 +3086,9 @@ def fig_volfrac(cfg, R, L):
 
 
 def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
-    """1 x 3 evolution panels (zz, xx, yy) for kind='t' (total) or 'net' (network)."""
+    """1 x 3 evolution panels (zz, xx, yy) for kind='t' (total) or 'net' (network).  With
+    cfg.PARTIAL_NORM = 'share' the total-stress figure is followed by (sigma^t - P_ref)/dP
+    (_fig_total_norm, saved as <stem>_norm; 2026-10-06)."""
     fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
     fig.suptitle(suptitle, fontsize=13, fontweight='bold')
     for ax, comp in zip(axes, COMPONENTS):
@@ -3044,7 +3099,7 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
             r'total $\sigma^{t}_{%s}$' % comp if kind == 't' else r"network $\sigma'_{%s}=\sigma^t_{%s}-p_{\rm pore}$" % (comp, comp))
         if S is None:
             ax.text(0.5, 0.5, f'sigma{comp} files\nnot found', ha='center', va='center', transform=ax.transAxes)
-            finish_axes(ax, lab, title)
+            finish_axes(ax, lab, title, R=R)
             continue
         ts, ev = post_halt(cfg, L, L['ts'], S[kind])
         band = None
@@ -3075,7 +3130,10 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
         h.append(Patch(alpha=0, label=note))          # the number rides in the legend, never on data
         lab.append(note)
         smart_legend(ax, handles=h, labels=lab, fontsize=12)
-    return _save(fig, cfg, stem, L['lvl'])
+    fig = _save(fig, cfg, stem, L['lvl'])
+    if kind == 't' and cfg.PARTIAL_NORM == 'share':        # normalised companion, drawn right under the original
+        _fig_total_norm(cfg, R, L, stem + '_norm')
+    return fig
 
 
 def _is_perm(L):
@@ -3101,7 +3159,7 @@ def _pending_panels(cfg, R, L, stem, suptitle, titles, ylabels, note):
     for ax, t, yl in zip(axes[0], titles, ylabels):
         shade_gel(ax, R, L)
         mark_walls(ax, R, L)
-        finish_axes(ax, yl, t)
+        finish_axes(ax, yl, t, R=R)
         ax.set_ylim(-1, 1)
         ax.text(0.5, 0.5, note, ha='center', va='center', transform=ax.transAxes, fontsize=14, color='0.35')
     return _save(fig, cfg, stem, L['lvl'])
@@ -3157,7 +3215,7 @@ def _net_panel(ax, cfg, R, L, comp, ylabel, title, band_color=WONG['blue'], line
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
     shade_gel(ax, R, L)
     mark_walls(ax, R, L)
-    finish_axes(ax, ylabel, title)
+    finish_axes(ax, ylabel, title, R=R)
     return m
 
 
@@ -3183,7 +3241,7 @@ def fig_network_stress(cfg, R, L):
         title = f'({"abc"[COMPONENTS.index(comp)]}) ' + r"network $\sigma'_{%s}$" % comp
         if comp not in L['stress']:
             ax.text(0.5, 0.5, f'sigma{comp} files\nnot found', ha='center', va='center', transform=ax.transAxes)
-            finish_axes(ax, r"$\sigma'_{%s}$" % comp, title)
+            finish_axes(ax, r"$\sigma'_{%s}$" % comp, title, R=R)
             continue
         m = _net_panel(ax, cfg, R, L, comp, r"$\sigma'_{%s}(z)$" % comp, title)
         robust_ylim(ax, [m] + ([R['stress'][comp]['net_m']] if comp in R['stress'] else []), zmask=_scale_mask(cfg, R, L), pad=0.2)
@@ -3205,7 +3263,10 @@ def _tr3(D, key):
 def fig_thermo_pressure(cfg, R, L):
     """Thermodynamic pressure P_th = -(1/3) tr(sigma^t) (sign convention of the
     profiles: positive under compression), time evolution over the hold (cividis,
-    final bold) with the eps = 0 reference dashed.  Needs the xx and yy profiles."""
+    final bold) with the eps = 0 reference dashed.  Needs the xx and yy profiles.
+    With cfg.PARTIAL_NORM = 'share' a second figure follows (thermo_pressure_evolution_norm,
+    2026-10-06): the solvent, polymer and total traces with the back pressure removed, / dP
+    (partial_norm on the trace; the total keeps its gradient across the gel)."""
     Pt = _tr3(L['stress'], 't')
     if Pt is None:
         print('thermodynamic-pressure figure skipped (sigmaxx / sigmayy files missing)')
@@ -3239,7 +3300,10 @@ def fig_thermo_pressure(cfg, R, L):
     smart_legend(ax, handles=h, labels=lab, fontsize=12)
     lab_eps = f'($\\varepsilon={L["eps"]:.2f}$)' if np.isfinite(L['eps']) else '(permeation drive)'
     fig.suptitle(f'Thermodynamic pressure evolution {lab_eps}  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
-    return _save(fig, cfg, 'thermo_pressure_evolution', L['lvl'])
+    fig = _save(fig, cfg, 'thermo_pressure_evolution', L['lvl'])
+    if cfg.PARTIAL_NORM == 'share':
+        _fig_partial_norm(cfg, R, L, 'tr', 'thermo_pressure_evolution_norm')
+    return fig
 
 
 def fig_osmotic_pressure(cfg, R, L):
@@ -3283,38 +3347,314 @@ def fig_osmotic_pressure(cfg, R, L):
     return _save(fig, cfg, 'osmotic_pressure_final', L['lvl'])
 
 
-def fig_partial_stress(cfg, R, L):
-    """One axis: solvent partial (blues), polymer partial (oranges) and total
-    (greys) sigma_zz evolutions, reference dashed, final curves bold."""
-    zz, Rz = L['stress']['zz'], R['stress']['zz']
-    fig, ax = plt.subplots(figsize=(13, 7), constrained_layout=True)
+def _partial_evo(ax, cfg, R, L, fam, stack_of, ref_of, zero=True):
+    """Solvent / polymer / total profile evolutions on one axis: one colour family per entry
+    of fam = ((key, label, cmap name), ...), the reference dashed, the final curve bold.
+    stack_of(key) -> the per-snapshot stack, ref_of(key) -> the reference mean profile (None:
+    not drawn).  Returns the legend handles and every curve drawn (for the y-range)."""
     zx = zn(R, R['z'])
-    fam = (('s', r'solvent $\sigma_{s,zz}$', 'Blues'), ('p', r'polymer $\sigma_{p,zz}$', 'Oranges'),
-           ('t', r'total $\sigma^{t}_{zz}$', 'Greys'))
-    handles = []
+    handles, curves = [], []
     for key, lab, cmap_name in fam:
         cmap = plt.get_cmap(cmap_name)
-        ts, ev = post_halt(cfg, L, L['ts'], zz[key])
-        ref = Rz[key + '_m']
+        ts, ev = post_halt(cfg, L, L['ts'], stack_of(key))
+        ref = ref_of(key)
         base = cmap(0.85)
-        ax.plot(zx, ref, '--', color=base, lw=1.8, alpha=0.9, zorder=2)
+        if ref is not None:
+            ax.plot(zx, ref, '--', color=base, lw=1.8, alpha=0.9, zorder=2)
+            curves.append(ref)
         n = len(ts)
         for i in range(n):
             last = (i == n - 1)
             ax.plot(zx, ev[i], '-', color=(base if last else cmap(0.3 + 0.5 * i / max(n - 1, 1))),
                     lw=(3.2 if last else 1.2), alpha=(1.0 if last else 0.6), zorder=(5 if last else 3))
+        curves.extend(ev)
         handles.append(Line2D([0], [0], color=base, lw=3, label=lab))
     handles.append(Line2D([0], [0], color='0.4', ls='--', lw=2, label=r'reference ($\varepsilon=0$)'))
     if not _is_perm(L):
         handles.append(Line2D([0], [0], color='0.4', lw=1.2, alpha=0.6, label='hold (faint = early)'))
-    ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
+    if zero:
+        ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
     shade_gel(ax, R, L)
     mark_walls(ax, R, L)
+    return handles, curves
+
+
+def fig_partial_stress(cfg, R, L):
+    """One axis: solvent partial (blues), polymer partial (oranges) and total
+    (greys) sigma_zz evolutions, reference dashed, final curves bold.  With
+    cfg.PARTIAL_NORM = 'share' a second figure follows (partial_stress_evolution_norm,
+    2026-10-06): the same three curves with the back pressure removed, / dP (partial_norm)."""
+    zz, Rz = L['stress']['zz'], R['stress']['zz']
+    fig, ax = plt.subplots(figsize=(13, 7), constrained_layout=True)
+    fam = (('s', r'solvent $\sigma_{s,zz}$', 'Blues'), ('p', r'polymer $\sigma_{p,zz}$', 'Oranges'),
+           ('t', r'total $\sigma^{t}_{zz}$', 'Greys'))
+    handles, _ = _partial_evo(ax, cfg, R, L, fam, lambda k: zz[k], lambda k: Rz[k + '_m'])
     finish_axes(ax, r'$\sigma_{zz}(z,t)$  (LJ)',
                 'Partial and total normal stresses: reference $\\rightarrow$ evolution' if _is_perm(L) else
-                f'Partial and total $\\sigma_{{zz}}$: reference $\\rightarrow$ compressed ($\\varepsilon={L["eps"]:.2f}$)')
+                f'Partial and total $\\sigma_{{zz}}$: reference $\\rightarrow$ compressed ($\\varepsilon={L["eps"]:.2f}$)', R=R)
     smart_legend(ax, handles=handles, fontsize=12)
-    return _save(fig, cfg, 'partial_stress_evolution', L['lvl'])
+    fig = _save(fig, cfg, 'partial_stress_evolution', L['lvl'])
+    if cfg.PARTIAL_NORM == 'share':
+        _fig_partial_norm(cfg, R, L, 'zz', 'partial_stress_evolution_norm')
+        if _is_perm(L):
+            _fig_partial_norm_phi(cfg, R, L, 'zz', 'partial_stress_evolution_norm_phi')   # TEST (2026-10-07), see below
+    return fig
+
+
+# ---------------------------------------------------------------------------
+#  Back-pressure-subtracted partial stresses (cfg.PARTIAL_NORM = 'share', 2026-10-06)
+# ---------------------------------------------------------------------------
+# Marioni et al. plot the raw partial P_zz of water and polyamide across the membrane with
+# the permeate at ~0, so their partial / total IS each species' share of the driving pressure.
+# Here the permeate (or the bath) sits at P_ref = 1.5 and the signal (dP ~ 0.1) rides on top
+# of it, so the same figure needs each species' share of that back pressure taken off first.
+# The share comes from the stresses themselves, per z-bin and per snapshot -- no mass or
+# volume fractions, no calibration against another run:
+#     w_s      = sigma_s / sigma_t                      (same snapshot, same component)
+#     sigma_s* = (sigma_s - w_s P_ref) / dP             = w_s sigma_t*
+#     sigma_p* = (sigma_p - (1 - w_s) P_ref) / dP       = (1 - w_s) sigma_t*
+#     sigma_t* = (sigma_t - P_ref) / dP
+# i.e. the excess of the total over the back pressure, split between the species in proportion
+# to their current partial stresses; sigma_s* + sigma_p* = sigma_t* by construction (asserted).
+# In a reservoir sigma_p = 0, so w_s = 1: the solvent curve reads 1 in the feed and 0 in the
+# permeate, the polymer curve 0.  This is the literal analogue of Marioni's figure but it does
+# NOT reproduce his end points (water 0.3 -> 0, polyamide 0.7 -> 1): the solvent's share of
+# the back pressure cannot be told apart from the transferred load with the local stresses
+# alone, so the solvent curve does not reach 0 at the permeate face.  That is accepted.
+#     P_ref : permeation -> the applied permeate pressure (_p_norm); compression -> cfg.P_BARO
+#     dP    : permeation -> the applied feed - permeate pressure; compression -> the level's
+#             plateau load-piston pressure increment (L['dP_pist'])
+# The trace (thermodynamic pressure) is treated the same way with w_s = tr(sigma_s)/tr(sigma_t).
+# Only the constant P_ref is taken off the total, so the total trace keeps the gradient it has
+# across the gel.  Bins that hold no matter (beyond the pistons, sigma_t ~ 0) are masked, and
+# so are the bins within res_wall_margin of a wet-piston plane (the same clearance as the
+# reservoir windows: the sheet depletes and layers the solvent there and takes half the wall
+# virial, an offset of ~0.07 that the division by dP would turn into a spike of order 1).
+_NORM_VAC = 0.05          # a bin is empty when |sigma_t| <= _NORM_VAC * P_ref
+
+
+def _clear_of_pistons(cfg, R, L, n):
+    """(n_snap, n_bins) mask of the z-bins lying ENTIRELY between the two wet-piston planes
+    and >= cfg.res_wall_margin clear of them, per stress snapshot of level / run L (measured
+    piston tracks; the extreme plane over the snapshot's averaging window, since the pistons
+    travel) or of the reference (L = None: the planes at rest).  All True for one-piston runs."""
+    z, h = np.asarray(R['z'], float), 0.5 * cfg.binWidth
+    m = np.ones((n, len(z)), bool)
+    wz = L.get('wetz') if L is not None else None
+    for i in range(n):
+        if wz:
+            t1 = float(L['ts'][i])
+            t0 = float(L['ts'][i - 1]) if i > 0 else t1 - (float(L['ts'][1] - L['ts'][0]) if n > 1 else 0.0)
+            zf = min(wz['feed_at'](t0), wz['feed_at'](t1))
+            zp = max(wz['perm_at'](t0), wz['perm_at'](t1))
+        else:
+            zf, zp = R.get('z_feed', np.nan), R.get('z_perm', np.nan)
+        if np.isfinite(zf):
+            m[i] &= z + h <= zf - cfg.res_wall_margin
+        if np.isfinite(zp):
+            m[i] &= z - h >= zp + cfg.res_wall_margin
+    return m
+
+
+def _dp_norm(cfg, L):
+    """Driving pressure the normalised profiles are divided by (see the block comment above);
+    nan when the run does not provide it."""
+    if _is_perm(L):
+        if cfg.DP_PISTON is not None:
+            return float(cfg.DP_PISTON)
+        pl = (L.get('wet') or {}).get('plat', {})
+        if 'P_feed_app' in pl and 'P_perm_app' in pl:
+            return float(pl['P_feed_app'] - pl['P_perm_app'])
+        return np.nan
+    return float(L.get('dP_pist', np.nan))
+
+
+def _norm_symbols(L):
+    """(P_ref, dP) as mathtext, for labels."""
+    return (r'P_{\rm perm}', r'\Delta P_{\rm ext}') if _is_perm(L) else (r'P_{\rm bath}', r'\Delta P_{\rm pist}')
+
+
+def _norm_skip(cfg, L, what):
+    print(f'normalised {what} figure skipped (PARTIAL_NORM = {cfg.PARTIAL_NORM!r}): no driving pressure -- '
+          + ('piston_pressure carries no applied feed / permeate pressure' if _is_perm(L) else 'no load-piston plateau (piston_force file)'))
+
+
+def _spt(D, comp):
+    """(solvent, polymer, total) per-snapshot stacks of D = L['stress'] or R['stress'] for
+    comp in COMPONENTS, or comp = 'tr' for the trace / 3; None when a file is missing."""
+    if comp == 'tr':
+        return tuple(_tr3(D, k) for k in ('s', 'p', 't')) if all(c in D for c in COMPONENTS) else None
+    S = D.get(comp)
+    return None if S is None else (S['s'], S['p'], S['t'])
+
+
+def partial_norm(cfg, R, L, comp='zz', ref=False):
+    """Back-pressure-subtracted partial stresses of level / run L (see the block comment
+    above): dict(s, p, t = the normalised solvent, polymer and total stacks (snapshot x z-bin),
+    w = the solvent share sigma_s/sigma_t, P_ref, dP).  comp = 'zz' | 'xx' | 'yy' | 'tr' (trace).
+    ref=True normalises the eps = 0 reference stacks of R with the SAME P_ref and dP: its total
+    equals P_ref, so all three come out ~0 -- the sanity check drawn dashed.  None when the
+    component or the driving pressure is missing."""
+    P_ref, dP = _p_norm(cfg, L), _dp_norm(cfg, L)
+    spt = _spt(R['stress'] if ref else L['stress'], comp)
+    if spt is None or not (np.isfinite(dP) and dP > 0):
+        return None
+    s, p, t = (np.asarray(a, float) for a in spt)
+    ok = (np.abs(t) > _NORM_VAC * P_ref) & _clear_of_pistons(cfg, R, None if ref else L, len(t))
+    with np.errstate(invalid='ignore', divide='ignore'):
+        w = np.where(ok, s / t, np.nan)                                  # nan = masked bin, in all three
+    out = dict(w=w, P_ref=P_ref, dP=dP, s=(s - w * P_ref) / dP, p=(p - (1.0 - w) * P_ref) / dP,
+               t=np.where(np.isfinite(w), (t - P_ref) / dP, np.nan))
+    assert np.allclose(out['s'] + out['p'], out['t'], rtol=0, atol=1e-9, equal_nan=True), 'partial_norm: s* + p* != t*'
+    return out
+
+
+def _norm_ylim(ax, curves, mask, pad=0.2):
+    """y-range of a normalised panel: robust over the scale bins, always showing 0 and 1."""
+    robust_ylim(ax, curves, zmask=mask, pad=pad, qlo=1, qhi=99)
+    lo, hi = ax.get_ylim()
+    ax.set_ylim(min(lo, -0.15), max(hi, 1.15))
+
+
+def _fig_total_norm(cfg, R, L, stem):
+    """Normalised companion of fig_total_stress: (sigma^t_c - P_ref)/dP for c = zz, xx, yy on
+    the same evolution panels (reference dashed with its 95 % band, final bold), dotted guide
+    at 1.  Under permeation the zz panel reads 1 in the feed and across the membrane, 0 in the
+    permeate; in a compression hold 1 in the gel and 0 in both reservoirs."""
+    dP = _dp_norm(cfg, L)
+    if not (np.isfinite(dP) and dP > 0):
+        _norm_skip(cfg, L, 'total-stress')
+        return None
+    pr, dp = _norm_symbols(L)
+    fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
+    fig.suptitle(f'Total stress with the back pressure removed, $(\\sigma^t-{pr})/{dp}$  ($' + pr + f'={sig(_p_norm(cfg, L))}$, $'
+                 + dp + f'={sig(dP)}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    for ax, comp in zip(axes, COMPONENTS):
+        lab = rf'$(\sigma^{{t}}_{{{comp}}}-{pr})/{dp}$'
+        title = f'({"abc"[COMPONENTS.index(comp)]}) ' + r'total $\sigma^{t}_{%s}$, back pressure removed' % comp
+        N = partial_norm(cfg, R, L, comp)
+        if N is None:
+            ax.text(0.5, 0.5, f'sigma{comp} files\nnot found', ha='center', va='center', transform=ax.transAxes)
+            finish_axes(ax, lab, title, R=R)
+            continue
+        Nr = partial_norm(cfg, R, L, comp, ref=True)
+        ref = mean_ci(Nr['t'], cfg.ci_level) if Nr is not None else None
+        ts, ev = post_halt(cfg, L, L['ts'], N['t'])
+        ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
+        plot_evolution(ax, cfg, R, L, R['z'], ts, ev, lab + '$(z,t)$', title, ref=ref, annotate=False, legend=False)
+        _norm_ylim(ax, list(ev) + ([ref[0]] if ref is not None else []), _scale_mask(cfg, R, L), pad=0.3)
+        note = (('steady' if _is_perm(L) else 'plateau') + ' mean in gel interior = '
+                + fmt_mu(mean_ci(N['t'][L['plat']], cfg.ci_level)[0][L['interior']]))
+        h, lb = ax.get_legend_handles_labels()
+        h.append(Patch(alpha=0, label=note))
+        lb.append(note)
+        smart_legend(ax, handles=h, labels=lb, fontsize=12)
+    return _save(fig, cfg, stem, L['lvl'])
+
+
+def _norm_family(comp):
+    """((key, label, cmap name), ...) and the y symbol of the normalised partial figures."""
+    if comp == 'tr':
+        return ((('s', r'solvent $P^*_{th,s}$', 'Blues'), ('p', r'polymer $P^*_{th,p}$', 'Oranges'),
+                 ('t', r'total $P^*_{th}$', 'Greys')), r'P_{th}')
+    return ((('s', r'solvent $\sigma^*_{s,%s}$' % comp, 'Blues'), ('p', r'polymer $\sigma^*_{p,%s}$' % comp, 'Oranges'),
+             ('t', r'total $\sigma^{t*}_{%s}$' % comp, 'Greys')), r'\sigma_{%s}' % comp)
+
+
+def _fig_partial_norm(cfg, R, L, comp, stem):
+    """Normalised companion of fig_partial_stress (comp = 'zz') and of fig_thermo_pressure
+    (comp = 'tr', the partial and total traces): solvent* (blues), polymer* (oranges) and total*
+    (greys) evolutions of partial_norm on one axis, the reference dashed (~0: the sanity check),
+    final curves bold, dotted guides at 0 and 1."""
+    what = 'thermodynamic-pressure' if comp == 'tr' else 'partial-stress'
+    N = partial_norm(cfg, R, L, comp)
+    if N is None:
+        if np.isfinite(_dp_norm(cfg, L)):
+            print(f'normalised {what} figure skipped (sigmaxx / sigmayy files missing)')
+        else:
+            _norm_skip(cfg, L, what)
+        return None
+    Nr = partial_norm(cfg, R, L, comp, ref=True)
+    pr, dp = _norm_symbols(L)
+    fam, sym = _norm_family(comp)
+    fig, ax = plt.subplots(figsize=(13, 7), constrained_layout=True)
+    for y in (0.0, 1.0):
+        ax.axhline(y, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
+    handles, curves = _partial_evo(ax, cfg, R, L, fam, lambda k: N[k],
+                                   lambda k: (None if Nr is None else mean_ci(Nr[k], cfg.ci_level)[0]), zero=False)
+    name = (r'Partial and total $P_{th}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma})$' if comp == 'tr'
+            else r'Partial and total $\sigma_{%s}$' % comp)
+    finish_axes(ax, rf'$({sym}-w\,{pr})/{dp}$', name + ', back pressure removed: reference $\\rightarrow$ '
+                + ('evolution' if _is_perm(L) else f'compressed ($\\varepsilon={L["eps"]:.2f}$)'), R=R)
+    _norm_ylim(ax, curves, _scale_mask(cfg, R, L))
+    smart_legend(ax, handles=handles, fontsize=12)
+    num = rf'\mathrm{{tr}}\,\sigma_s/\mathrm{{tr}}\,\sigma^t' if comp == 'tr' else rf'\sigma_{{s,{comp}}}/\sigma^t_{{{comp}}}'
+    fig.suptitle(f'Each species\' share $w$ of the back pressure removed, per bin and snapshot:  $w_s={num}$, $w_p=1-w_s$, $w=1$ for the total\n'
+                 f'(${pr}={sig(N["P_ref"])}$, ${dp}={sig(N["dP"])}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    return _save(fig, cfg, stem, L['lvl'])
+
+
+def _phi_cal_on_snapshots(L, ts):
+    """lambda-calibrated solvent volume fraction phi_s^cal (snapshot x z-bin) on the stress
+    snapshot times ts: the per-frame Voronoi stacks of L['vf'] interpolated linearly in time,
+    bin by bin (held constant beyond the first / last tessellated frame); without the per-
+    frame stacks the steady mean L['phi_cal'] is used for every snapshot.  None without a
+    calibrated fraction."""
+    vf = L.get('vf')
+    if vf is not None and vf.get('phi_cal') is not None and len(vf['ts']):
+        ft, fc = np.asarray(vf['ts'], float), np.asarray(vf['phi_cal'], float)
+        o = np.argsort(ft)
+        ft, fc = ft[o], fc[o]
+        ts = np.asarray(ts, float)
+        return np.column_stack([np.interp(ts, ft, fc[:, j]) for j in range(fc.shape[1])])
+    if L.get('phi_cal') is not None:
+        return np.broadcast_to(np.asarray(L['phi_cal'][0], float), (len(ts), len(L['phi_cal'][0]))).copy()
+    return None
+
+
+def _fig_partial_norm_phi(cfg, R, L, comp, stem):
+    """TEST figure (2026-10-07, permeation only; may be dropped): the normalised total sigma^t*
+    of _fig_partial_norm next to the normalised SOLVENT partial divided by the calibrated solvent
+    volume fraction, sigma_s* / phi_s^cal -- the solvent's back-pressure-free excess per unit
+    solvent volume (phi_s^cal = 1 in the reservoirs, so the two curves coincide there).  No
+    polymer curve.  phi_s^cal per snapshot from _phi_cal_on_snapshots; the reference uses
+    R['phi_cal'].  Bins with phi_s^cal <= cfg.PHI_FLOOR are masked."""
+    N = partial_norm(cfg, R, L, comp)
+    if N is None:
+        return None
+    phi = _phi_cal_on_snapshots(L, L['ts'])
+    if phi is None:
+        print('normalised partial-stress / phi_s^cal figure skipped (no calibrated volume fraction: run add_perm_volume_fractions with VOR_ENABLE)')
+        return None
+    Nr = partial_norm(cfg, R, L, comp, ref=True)
+    phi_r = np.asarray(R['phi_cal'][0], float) if R.get('phi_cal') is not None else None
+    with np.errstate(invalid='ignore', divide='ignore'):
+        s_phi = np.where(phi > cfg.PHI_FLOOR, N['s'] / phi, np.nan)
+        s_phi_r = (None if (Nr is None or phi_r is None)
+                   else np.where(phi_r > cfg.PHI_FLOOR, mean_ci(Nr['s'], cfg.ci_level)[0] / phi_r, np.nan))
+    pr, dp = _norm_symbols(L)
+    fam = (('s', r'solvent $\sigma^*_{s,%s}/\phi_s^{\rm cal}$' % comp, 'Blues'),
+           ('t', r'total $\sigma^{t*}_{%s}$' % comp, 'Greys'))
+    stacks = {'s': s_phi, 't': N['t']}
+    refs = {'s': s_phi_r, 't': (None if Nr is None else mean_ci(Nr['t'], cfg.ci_level)[0])}
+    fig, ax = plt.subplots(figsize=(13, 7), constrained_layout=True)
+    for y in (0.0, 1.0):
+        ax.axhline(y, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
+    handles, curves = _partial_evo(ax, cfg, R, L, fam, lambda k: stacks[k], lambda k: refs[k], zero=False)
+    finish_axes(ax, rf'$(\sigma_{{{comp}}}-w\,{pr})/{dp}$   [solvent: $/\,\phi_s^{{\rm cal}}$]',
+                r'Total $\sigma^{t*}_{%s}$ and solvent $\sigma^*_{s,%s}$ per unit solvent volume: reference $\rightarrow$ evolution' % (comp, comp), R=R)
+    _norm_ylim(ax, curves, _scale_mask(cfg, R, L))
+    vf = L.get('vf')
+    src = (rf'$\phi_s^{{\rm cal}}$ interpolated in time from {len(vf["ts"])} tessellated frames' if vf is not None and vf.get('phi_cal') is not None
+           else r'$\phi_s^{\rm cal}$ = steady mean for every snapshot')
+    note = 'steady mean in gel interior: solvent ' + fmt_mu(mean_ci(s_phi[L['plat']], cfg.ci_level)[0][L['interior']]) \
+           + ', total ' + fmt_mu(mean_ci(N['t'][L['plat']], cfg.ci_level)[0][L['interior']])
+    handles.append(Patch(alpha=0, label=note))
+    smart_legend(ax, handles=handles, fontsize=12)
+    fig.suptitle(f'TEST -- solvent partial with the back pressure removed, divided by the calibrated solvent volume fraction '
+                 f'(P_CAL_MODE = {cfg.P_CAL_MODE!r}; {src})\n'
+                 f'(${pr}={sig(N["P_ref"])}$, ${dp}={sig(N["dP"])}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    return _save(fig, cfg, stem, L['lvl'])
 
 
 def fig_piston(cfg, R, L):
@@ -3518,7 +3858,7 @@ def fig_Dc(cfg, R, L):
                 label=r'BC: $u_z(0,t)=+\Delta L_\mathrm{sup}/L$ (held support)')
         ax.plot(1, (fs - 1.0) * dlL, 'D', color=WONG['vermillion'], ms=9, zorder=5,
                 label=r'BC: $u_z(1,t)=-\Delta L_\mathrm{pist}/L$ (held piston)')
-        ax.set(xlabel=r'$\zeta=(z-z_\mathrm{perm})/L$', ylabel=r'$u_z/L$', xlim=(0, 1))
+        ax.set(xlabel=r'$\zeta=(z-z_\mathrm{perm})/L$', ylabel=r'$u_z/L$', xlim=_zlim(R))
         ax.grid(alpha=0.3)
         smart_legend(ax, fontsize=11)
     axl.set_title(r'$u_z(\zeta,t)/L$ -- hold snapshots (data + fitted IC offset)', fontsize=15)
@@ -3592,7 +3932,7 @@ def fig_volfrac_sweep(cfg, R, levels):
         ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)
         if np.isfinite(R['z_support']):
             ax.axvline(zn(R, R['z_support']), color='k', lw=1.5, alpha=0.85)
-        finish_axes(ax, r'$\phi_s$', title)
+        finish_axes(ax, r'$\phi_s$', title, R=R)
         ax.set_ylim(0, 1.15)
         smart_legend(ax, handles=level_handles(levels, ref=True), fontsize=11)
         if txt:
@@ -3603,6 +3943,9 @@ def fig_volfrac_sweep(cfg, R, levels):
 
 
 def _sweep_stress_panels(cfg, R, levels, kind, stem, suptitle):
+    """1 x 3 sweep overlays (zz, xx, yy) for kind='t' (total) or 'net' (network).  With
+    cfg.PARTIAL_NORM = 'share' the total-stress figure is followed by its normalised version
+    (_sweep_norm_panels, saved as <stem>_norm; 2026-10-06)."""
     fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
     fig.suptitle(suptitle, fontsize=13, fontweight='bold')
     mask = _scale_mask(cfg, R, levels=levels)
@@ -3613,7 +3956,7 @@ def _sweep_stress_panels(cfg, R, levels, kind, stem, suptitle):
             r'total $\sigma^{t}_{%s}$' % comp if kind == 't' else r"network $\sigma'_{%s}$" % comp)
         if not any(comp in L['stress'] for L in levels):
             ax.text(0.5, 0.5, f'sigma{comp} files\nnot found', ha='center', va='center', transform=ax.transAxes)
-            finish_axes(ax, lab, title)
+            finish_axes(ax, lab, title, R=R)
             continue
         ref = None
         if Rs is not None:
@@ -3631,7 +3974,66 @@ def _sweep_stress_panels(cfg, R, levels, kind, stem, suptitle):
             lo, hi = ax.get_ylim()
             ax.set_ylim(min(lo, 1 - 0.3 * (hi - lo)), max(hi, 1 + 0.3 * (hi - lo)))
         smart_legend(ax, handles=level_handles(levels, ref=Rs is not None), fontsize=11)
+    fig = _save(fig, cfg, stem)
+    if kind == 't' and cfg.PARTIAL_NORM == 'share':        # normalised companion, drawn right under the original
+        pr, dp = _norm_symbols(None)
+        _sweep_norm_panels(cfg, R, levels, [(c, 't', rf'$(\sigma^{{t}}_{{{c}}}-{pr})/{dp}$', f'({"abc"[i]}) '
+                                             + r'total $\sigma^{t}_{%s}$, back pressure removed' % c) for i, c in enumerate(COMPONENTS)],
+                           stem + '_norm', f'Total stress with the back pressure removed, $(\\sigma^t-{pr})/{dp}$, all levels', 'total-stress')
+    return fig
+
+
+def _norm_ref_level(cfg, levels):
+    """The level whose driving pressure normalises the eps = 0 reference in the sweep overlays:
+    the smallest one (the strictest reading of 'the reference comes out ~0')."""
+    ok = [L for L in levels if np.isfinite(_dp_norm(cfg, L)) and _dp_norm(cfg, L) > 0]
+    return min(ok, key=lambda L: _dp_norm(cfg, L)) if ok else None
+
+
+def _sweep_norm_panels(cfg, R, levels, panels, stem, suptitle, what):
+    """1 x 3 sweep overlays of partial_norm profiles (2026-10-06): panels = ((comp, key, ylabel,
+    title), ...) with key 's' | 'p' | 't'.  Each level is normalised by its OWN driving pressure
+    (plateau load-piston increment); the reference (dashed, 95 % band) by the smallest of them.
+    Dotted guide at 1."""
+    L0 = _norm_ref_level(cfg, levels)
+    if L0 is None:
+        _norm_skip(cfg, None, what + ' sweep')
+        return None
+    pr, dp = _norm_symbols(L0)
+    fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
+    dps = ', '.join(f'{sig(_dp_norm(cfg, L))}' for L in levels)
+    fig.suptitle(f'{suptitle}  (${pr}={sig(_p_norm(cfg, L0))}$; ${dp}$ = {dps} per level, reference / {sig(_dp_norm(cfg, L0))})\n{cfg.sim_name}',
+                 fontsize=13, fontweight='bold')
+    mask = _scale_mask(cfg, R, levels=levels)
+    for ax, (comp, key, ylabel, title) in zip(axes, panels):
+        if not any(_spt(L['stress'], comp) is not None for L in levels):
+            ax.text(0.5, 0.5, 'sigmaxx / sigmayy files\nnot found', ha='center', va='center', transform=ax.transAxes)
+            finish_axes(ax, ylabel, title, R=R)
+            continue
+        Nr = partial_norm(cfg, R, L0, comp, ref=True)
+        ref = mean_ci(Nr[key], cfg.ci_level) if Nr is not None else None
+        ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
+
+        def stack(L, c=comp, k=key):
+            N = partial_norm(cfg, R, L, c)
+            return None if N is None else N[k]
+        finals = overlay_levels(ax, R, levels, lambda L: L['z'], lambda L: L['ts'], stack, cfg, ref=ref,
+                                autoscale_mask=mask, ylabel=ylabel, title=title)
+        _norm_ylim(ax, finals, mask, pad=0.3)
+        smart_legend(ax, handles=level_handles(levels, ref=ref is not None), fontsize=11)
     return _save(fig, cfg, stem)
+
+
+def _sweep_partial_norm(cfg, R, levels, comp, stem):
+    """Normalised companion of fig_partial_stress_sweep (comp = 'zz') and of
+    fig_thermo_pressure_sweep (comp = 'tr'): (a) solvent*, (b) polymer*, (c) total*, all levels."""
+    fam, sym = _norm_family(comp)
+    pr, dp = _norm_symbols(None)
+    name = r'Partial and total $P_{th}$' if comp == 'tr' else r'Partial and total $\sigma_{%s}$' % comp
+    return _sweep_norm_panels(cfg, R, levels,
+                              [(comp, k, rf'$({sym}-w\,{pr})/{dp}$', f'({"abc"[i]}) ' + lab) for i, (k, lab, _) in enumerate(fam)],
+                              stem, name + r" with each species' share $w$ of the back pressure removed, all levels",
+                              'thermodynamic-pressure' if comp == 'tr' else 'partial-stress')
 
 
 def fig_total_stress_sweep(cfg, R, levels):
@@ -3686,7 +4088,7 @@ def _final_overlay(ax, cfg, R, levels, get_stack, ref_stack, ylabel, title, matt
         finals.append(m)
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.4)
     mark_level_walls(ax, R, levels)
-    finish_axes(ax, ylabel, title)
+    finish_axes(ax, ylabel, title, R=R)
     if finals:
         robust_ylim(ax, finals, zmask=_scale_mask(cfg, R, levels=levels), pad=0.2)
     smart_legend(ax, handles=level_handles(levels, ref=ref_stack is not None), fontsize=11)
@@ -3703,7 +4105,7 @@ def fig_network_stress_sweep(cfg, R, levels):
         title = f'({"abc"[COMPONENTS.index(comp)]}) ' + r"network $\sigma'_{%s}$" % comp
         if not any(comp in L['stress'] for L in levels):
             ax.text(0.5, 0.5, f'sigma{comp} files\nnot found', ha='center', va='center', transform=ax.transAxes)
-            finish_axes(ax, r"$\sigma'_{%s}$" % comp, title)
+            finish_axes(ax, r"$\sigma'_{%s}$" % comp, title, R=R)
             continue
         Rs = R['stress'].get(comp)
         _final_overlay(ax, cfg, R, levels, lambda L, c=comp: (L['stress'][c]['net'] if c in L['stress'] else None),
@@ -3712,7 +4114,9 @@ def fig_network_stress_sweep(cfg, R, levels):
 
 
 def fig_thermo_pressure_sweep(cfg, R, levels):
-    """P_th = -(1/3) tr(sigma^t) evolution, all levels overlaid (faint -> bold), reference dashed."""
+    """P_th = -(1/3) tr(sigma^t) evolution, all levels overlaid (faint -> bold), reference dashed.
+    With cfg.PARTIAL_NORM = 'share' the normalised solvent | polymer | total traces follow
+    (sweep_thermo_pressure_evolution_norm, 2026-10-06)."""
     if not any(_tr3(L['stress'], 't') is not None for L in levels):
         print('thermodynamic-pressure sweep figure skipped (sigmaxx / sigmayy files missing)')
         return None
@@ -3727,7 +4131,10 @@ def fig_thermo_pressure_sweep(cfg, R, levels):
     lo, hi = ax.get_ylim()
     ax.set_ylim(min(lo, cfg.P_BARO - 0.3 * (hi - lo)), max(hi, cfg.P_BARO + 0.3 * (hi - lo)))
     smart_legend(ax, handles=level_handles(levels, ref=ref is not None), fontsize=11)
-    return _save(fig, cfg, 'sweep_thermo_pressure_evolution')
+    fig = _save(fig, cfg, 'sweep_thermo_pressure_evolution')
+    if cfg.PARTIAL_NORM == 'share':
+        _sweep_partial_norm(cfg, R, levels, 'tr', 'sweep_thermo_pressure_evolution_norm')
+    return fig
 
 
 def fig_osmotic_pressure_sweep(cfg, R, levels):
@@ -3744,6 +4151,9 @@ def fig_osmotic_pressure_sweep(cfg, R, levels):
 
 
 def fig_partial_stress_sweep(cfg, R, levels):
+    """(a) solvent partial, (b) polymer partial, (c) total sigma_zz evolutions, all levels.  With
+    cfg.PARTIAL_NORM = 'share' the normalised version follows (sweep_partial_stress_evolution_norm,
+    2026-10-06)."""
     fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
     fig.suptitle(f'Partial and total $\\sigma_{{zz}}$ evolution, all levels  |  {cfg.sim_name}',
                  fontsize=13, fontweight='bold')
@@ -3756,7 +4166,10 @@ def fig_partial_stress_sweep(cfg, R, levels):
                        lambda L, k=key: L['stress']['zz'][k], cfg, ref=(m, lo, hi),
                        ylabel=r'$\sigma_{zz}(z,t)$ (LJ)', title=title)
         smart_legend(ax, handles=level_handles(levels, ref=True), fontsize=11)
-    return _save(fig, cfg, 'sweep_partial_stress_evolution')
+    fig = _save(fig, cfg, 'sweep_partial_stress_evolution')
+    if cfg.PARTIAL_NORM == 'share':
+        _sweep_partial_norm(cfg, R, levels, 'zz', 'sweep_partial_stress_evolution_norm')
+    return fig
 
 
 def fig_piston_sweep(cfg, R, levels):
@@ -3996,7 +4409,7 @@ def fig_Dc_sweep(cfg, R, levels):
             ax.plot(zff, F['u_model'](zff, F['t_lj'][i]), '-', color=c, lw=1.5)
         dlL, fs = F['DL'] / F['L'], F['f_sup']
         ax.plot([0, 1], [fs * dlL, (fs - 1.0) * dlL], 'k:', lw=1.6)
-        ax.set(xlabel=r'$\zeta$', ylabel=r'$u_z/L$', xlim=(0, 1))
+        ax.set(xlabel=r'$\zeta$', ylabel=r'$u_z/L$', xlim=_zlim(R))
         ax.set_title(fr"({'bcdefgh'[k]}) $\varepsilon={L['lvl']}$:  $D_c={sig(F['Dc'])}$, $R^2={sig(F['R2'])}$",
                      fontsize=14, color=level_color(i_lvl))
         ax.grid(alpha=0.3)
@@ -4214,7 +4627,7 @@ def fig_reservoir_normal_stress(cfg, R, L):
     axB.axhline(cfg.P_BARO, color='k', ls=':', lw=1.2, alpha=0.7, label=f'$P_{{\\rm bath}}={sig(cfg.P_BARO)}$')
     shade_gel(axB, R, L)
     mark_walls(axB, R, L)
-    finish_axes(axB, r'$\sigma^t(z)$  (compression-positive, LJ)', '(b) plateau profiles: reservoirs must read $P_{\\rm bath}$ in all three')
+    finish_axes(axB, r'$\sigma^t(z)$  (compression-positive, LJ)', '(b) plateau profiles: reservoirs must read $P_{\\rm bath}$ in all three', R=R)
     robust_ylim(axB, [Q['prof'][c] for c in COMPONENTS] + [Q['prof_ref'][c] for c in COMPONENTS] + [np.full(len(zx), cfg.P_BARO)],
                 zmask=_scale_mask(cfg, R, L), pad=0.5, qlo=1, qhi=99, include_zero=False)
     smart_legend(axB, fontsize=11)
@@ -4289,6 +4702,7 @@ def fig_disp_profile(cfg, R, L):
         return None
     fig, (axA, axB) = plt.subplots(2, 1, figsize=(11, 9), sharex=True, constrained_layout=True,
                                    gridspec_kw={'height_ratios': [3, 1.3]})
+    flip_z_axis(axA, R)                                    # shared x: both panels
     coord = 'reference position $Z$' if D['coord'] == 'lagrangian' else 'current position $z$'
     fig.suptitle(f"Steady displacement profile of the network   |   {cfg.sim_name}   |   level $\\varepsilon = {L['lvl']}$\n"
                  f"{D['src']}: {D['n_frames']} plateau frame(s) ({D['ts'][0]:.0f}-{D['ts'][-1]:.0f}) vs the $\\varepsilon=0$ reference, "
@@ -4337,6 +4751,7 @@ def fig_disp_profile_sweep(cfg, R, levels):
         print('displacement-profile sweep figure skipped (no level has a profile)')
         return None
     fig, (axA, axB, axC) = plt.subplots(1, 3, figsize=(21, 6.5), constrained_layout=True)
+    flip_z_axis(axA, R)
     fig.suptitle('Steady displacement profiles -> the network strain that divides $M$   |   ' + cfg.sim_name,
                  fontsize=13, fontweight='bold')
     for i, L in enumerate(hd):
@@ -4616,6 +5031,8 @@ def fig_perm_vs_compression(cfg, R, P):
         return None
     perm_vs_compression(cfg, R, P, verbose=True)            # the printed verdict, always
     fig, (axA, axB, axC) = plt.subplots(1, 3, figsize=(21, 6.5), constrained_layout=True)
+    flip_z_axis(axA, R)
+    flip_z_axis(axB, R)
     ok = C.get('ok', False)
     col_v = WONG['green'] if ok else WONG['vermillion']
     fig.suptitle(f"CHECK -- permeation vs compression sweep:  {C['verdict']}\n{cfg.sim_name}", fontsize=13,
@@ -5159,7 +5576,7 @@ def fig_perm_volfrac(cfg, R, P):
             ax.axhline(pp, color=WONG['vermillion'], ls=':', lw=1.4, alpha=0.8, label=f'permeate baseline {pp:.3f}')
         shade_gel(ax, R, P)
         mark_walls(ax, R, P)
-        finish_axes(ax, r'$P_{\rm local}$  (LJ)', r'(c) calibration pressure handed to $\lambda(\phi_p, P)$')
+        finish_axes(ax, r'$P_{\rm local}$  (LJ)', r'(c) calibration pressure handed to $\lambda(\phi_p, P)$', R=R)
         vals = np.concatenate([m[np.isfinite(m)], [pf, cfg.P_BARO]])
         span = max(float(vals.max() - vals.min()), 0.05)
         ax.set_ylim(vals.min() - 0.6 * span, vals.max() + 0.6 * span)
@@ -5181,7 +5598,7 @@ def fig_perm_volfrac(cfg, R, P):
         ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)
         shade_gel(ax, R, P)
         mark_walls(ax, R, P)
-        finish_axes(ax, r'$\lambda$', r'(d) $\lambda(\phi_p^{\rm vor}, P_{\rm local})$ per bin  (reservoir bins: exactly 1)')
+        finish_axes(ax, r'$\lambda$', r'(d) $\lambda(\phi_p^{\rm vor}, P_{\rm local})$ per bin  (reservoir bins: exactly 1)', R=R)
         fin = m[np.isfinite(m)]
         if fin.size:
             span = max(float(fin.max() - fin.min()), 0.02)
@@ -5501,8 +5918,29 @@ def perm_forcing(cfg):
     inc, tinc = inc[keep], tinc[keep]
     if inc.size == 0:
         inc, tinc = np.array([full]), np.array([t0])
-    return dict(t0=t0, t_end=float(st[i_end]), full=full, n=int(inc.size), steps=st, dp=dp,
-                tj=(tinc - t0) * cfg.dt_lj, wj=inc / inc.sum())
+    fz = dict(t0=t0, t_end=float(st[i_end]), full=full, n=int(inc.size), steps=st, dp=dp,
+              tj=(tinc - t0) * cfg.dt_lj, wj=inc / inc.sum(), forcing='applied')
+    if cfg.PERM_FORCING == 'measured':
+        pf, pp = load2c(cfg.path('pressure_feed'), 2), load2c(cfg.path('pressure_permeate'), 2)
+        if pf is not None and pp is not None and len(pf) >= 8:
+            stm = pf[:, 0]
+            dpm = pf[:, 1] - np.interp(stm, pp[:, 0], pp[:, 1])
+            if cfg.PERM_FORCING_SMOOTH > 1:
+                dpm = rolling_mean(dpm, int(cfg.PERM_FORCING_SMOOTH))
+            after = stm > t0
+            n_ss = max(int(0.25 * after.sum()), 4)
+            dp_ss = float(np.mean(dpm[after][-n_ss:]))            # the steady measured dP normalises the weights
+            if dp_ss > 0 and after.sum() >= 4:
+                st2 = np.concatenate([[t0], stm[after]])
+                dp2 = np.concatenate([[0.0], dpm[after]])          # no load until the first measured sample
+                dsm = float(np.median(np.diff(stm)))
+                inc_m = np.diff(dp2)
+                tinc_m = st2[1:] - 0.5 * dsm
+                tinc_m[0] = max(tinc_m[0], t0)
+                fz.update(tj=(tinc_m - t0) * cfg.dt_lj, wj=inc_m / dp_ss, full=dp_ss, n=int(inc_m.size), forcing='measured',
+                          dp_meas=dpm, steps_meas=stm, dp_applied_full=full,
+                          dp_meas_max=float(np.max(dpm[after])), step_meas_max=float(stm[after][np.argmax(dpm[after])]))
+    return fz
 
 
 def load_perm_disp(cfg, R, P):
@@ -5524,6 +5962,10 @@ def load_perm_disp(cfg, R, P):
         t0 = float(d['ts'][0] - d['stride'])              # the first window must lie entirely after the reset
         fz = dict(t0=t0, t_end=t0, full=np.nan, n=1, tj=np.array([0.0]), wj=np.array([1.0]),
                   source='assumed: a step at the first displacement window start (no usable piston_pressure)')
+    elif fz.get('forcing') == 'measured':
+        fz['source'] = (f"MEASURED reservoir dP (pressure_feed - pressure_permeate, {cfg.PERM_FORCING_SMOOTH}-sample smoothing): "
+                        f"steady {fz['full']:.4f}, peak {fz['dp_meas_max']:.4f} at step {int(fz['step_meas_max'])} "
+                        f"(applied {fz['dp_applied_full']:.4f})")
     else:
         fz['source'] = 'piston_pressure (applied P_feed_app - P_perm_app)'
     d['forcing'] = fz
@@ -5554,22 +5996,22 @@ def fit_perm_Dc(cfg, R, P, disp):
     t_on = fz['t0']                                        # the ramp start = t = 0 of the model
     t_reset_lj = (disp['t_reset'] - t_on) * cfg.dt_lj
     z_P = float(R['z_support']) + cfg.PERM_GAP
-    # ---- L_0: bounding-box thickness over the PERM_L0_STEPS before the ramp start ----
-    L0_ci = (np.nan, np.nan)
+    # ---- L_0 (bounding box): thickness over the PERM_L0_STEPS before the ramp start -- the reference of the
+    #      thickness trace; the fit's own L_0 is chosen below (PERM_L0_MODE), once u_0 is known ----
+    L0_bb_ci = (np.nan, np.nan)
     if 'bb_L' in disp:
         w0 = (disp['bb_step'] >= t_on - cfg.PERM_L0_STEPS) & (disp['bb_step'] < t_on)
         if w0.sum() >= 4:
-            L0, lo, hi, *_ = block_bootstrap_ci(disp['bb_L'][w0], cfg.ci_level)
-            L0_ci = (lo, hi)
+            L0_bb, lo, hi, *_ = block_bootstrap_ci(disp['bb_L'][w0], cfg.ci_level)
+            L0_bb_ci = (lo, hi)
         else:
-            L0 = float(disp['bb_L'][disp['bb_step'] <= t_on][-1]) if (disp['bb_step'] <= t_on).any() else float(disp['bb_L'][0])
-        L0_source = 'gel_dimensions_bb'
+            L0_bb = float(disp['bb_L'][disp['bb_step'] <= t_on][-1]) if (disp['bb_step'] <= t_on).any() else float(disp['bb_L'][0])
+        L0_bb_source = 'gel_dimensions_bb'
     else:
-        L0 = float(R['z_gel_hi'] + 0.5 * cfg.binWidth - z_P)
-        L0_source = 'reference polymer-stress edge'
-    if not L0 > 0:
+        L0_bb = float(R['z_gel_hi'] + 0.5 * cfg.binWidth - z_P)
+        L0_bb_source = 'reference polymer-stress edge'
+    if not L0_bb > 0:
         return None
-    z_F = z_P + L0
     n_snap = len(ts)
     steady = np.where(ts >= P['halt_ts'])[0]
     if len(steady) == 0:
@@ -5596,6 +6038,16 @@ def fit_perm_Dc(cfg, R, P, disp):
         u0_sd = np.zeros(n_snap)
     u0_ss = float(np.median(u0[steady]))
     Z_P = z_P - u0_ss                                      # reference (material) position of the pinned face
+    # ---- the fit's L_0: dense-gel thickness Z_top - Z^P ('face') or the bounding box ('bb') ----
+    if cfg.PERM_L0_MODE == 'face' and np.isfinite(R.get('z_gel_hi', np.nan)):
+        L0 = float(R['z_gel_hi'] + 0.5 * cfg.binWidth - Z_P)
+        L0_ci = (np.nan, np.nan)
+        L0_source = f"reference polymer-stress edge {R['z_gel_hi'] + 0.5 * cfg.binWidth:.1f} - Z^P (PERM_L0_MODE 'face'; bounding box {L0_bb:.2f})"
+    else:
+        L0, L0_ci, L0_source = L0_bb, L0_bb_ci, L0_bb_source
+    if not L0 > 0:
+        return None
+    z_F = z_P + L0
     Z_F = Z_P + L0
     # ---- coordinates and the deformation, per snapshot ----
     lagr = cfg.PERM_COORDS == 'lagrangian'
@@ -5672,7 +6124,8 @@ def fit_perm_Dc(cfg, R, P, disp):
 
     tau1 = L0 ** 2 / (np.pi ** 2 * Dc)                         # first-mode time (mu_1 = pi: Dirichlet strain at both faces)
     T_prod = float(t_lj[-1])
-    F = dict(Dc=Dc, A=A, R2=R2, L0=L0, L0_ci=L0_ci, L0_source=L0_source, z_P=z_P, z_F=z_F, Z_P=Z_P, Z_F=Z_F,
+    F = dict(Dc=Dc, A=A, R2=R2, L0=L0, L0_ci=L0_ci, L0_source=L0_source, L0_bb=L0_bb, L0_bb_ci=L0_bb_ci,
+             z_P=z_P, z_F=z_F, Z_P=Z_P, Z_F=Z_F,
              u0=u0, u0_sd=u0_sd, u0_ss=u0_ss, rigid=cfg.PERM_RIGID, pin_nbins=nb, lagr=lagr, n_modes=n_modes,
              t_onset=t_on, forcing=fz, t_reset=disp['t_reset'], t_reset_lj=t_reset_lj, reset_mode=disp['reset_mode'],
              H_reset=H_reset, stride=disp['stride'], W=W, zeta=zeta, uhat=uhat, pop=pop, zl=zl, yl=yl, il=il,
@@ -5705,7 +6158,7 @@ def fit_perm_Dc(cfg, R, P, disp):
     F['trace'] = None
     if 'bb_L' in disp:
         wt = disp['bb_step'] >= t_on
-        st, uF = disp['bb_step'][wt], disp['bb_L'][wt] - L0
+        st, uF = disp['bb_step'][wt], disp['bb_L'][wt] - L0_bb      # the trace is a thickness CHANGE: bounding box minus bounding box
         tt = (st - t_on) * cfg.dt_lj
         fit = (tt <= cfg.DC_FRAC_EARLY * tt[-1]) & (st >= t_on + cfg.PERM_TRACE_SKIP)
         if fit.sum() >= 8:
@@ -5771,10 +6224,11 @@ def perm_M_estimates(cfg, P, F):
             d['M_L0'] = float(M * L0 / Lm)
         return d
 
+    L0_bb = F.get('L0_bb', L0)
     if np.isfinite(F.get('L_ss', np.nan)):
-        h0 = 0.5 * (F['L0_ci'][1] - F['L0_ci'][0]) if np.isfinite(F['L0_ci'][0]) else 0.0
+        h0 = 0.5 * (F['L0_bb_ci'][1] - F['L0_bb_ci'][0]) if np.isfinite(F.get('L0_bb_ci', (np.nan,))[0]) else 0.0
         hs = 0.5 * (F['L_ss_ci'][1] - F['L_ss_ci'][0]) if np.isfinite(F['L_ss_ci'][0]) else 0.0
-        out['bb'] = _m(F['L_ss'] - L0, np.sqrt(h0 ** 2 + hs ** 2), 'bb', 'steady thickness change L_0 - L_ss (bounding box)')
+        out['bb'] = _m(F['L_ss'] - L0_bb, np.sqrt(h0 ** 2 + hs ** 2), 'bb', 'steady thickness change L_0 - L_ss (bounding box, both)')
     out['prof'] = _m(F['c'] * L0, 0.5 * (F['c_hi'] - F['c_lo']) * L0, 'prof',
                      f"steady-profile parabola c zeta(2 - zeta), least squares over {F['c_npts']} points of {len(F['steady'])} steady snapshot(s)")
     T = F.get('trace')
@@ -5832,7 +6286,7 @@ def add_perm_displacement(cfg, R, P, verbose=True):
             f"(u_F(inf) = {T['u_inf']:.2f} +/- {T['u_inf_se']:.2f} sigma, R^2 = {T['R2']:.3f}, tau_ac = {T['tau_ac']:.0f} samples);  "
             f"tau_1 = {T['tau1']:.0f} tau = {T['tau1'] / cfg.dt_lj / 1e6:.2f}M steps")
     say(f"  steady profile: c = u_F/L_0 = {F['c']:.4f} [{F['c_lo']:.4f}, {F['c_hi']:.4f}] (parabola R^2 = {F['parab_R2']:.3f})"
-        + (f";  L_ss = {F['L_ss']:.2f} sigma (dL = {F['L0'] - F['L_ss']:.2f}, eps_F = {(F['L0'] - F['L_ss']) / F['L0']:.4f})" if 'L_ss' in F else ''))
+        + (f";  L_ss = {F['L_ss']:.2f} sigma (bounding box; dL = {F['L0_bb'] - F['L_ss']:.2f} from the bounding-box L_0 {F['L0_bb']:.2f}, eps_F = {(F['L0_bb'] - F['L_ss']) / F['L0']:.4f})" if 'L_ss' in F else ''))
     P['lag'] = perm_lagrangian_profile(cfg, R, P)             # per-atom steady profile (None without local trajectories)
     if P['lag'] is None:
         say('  NOTE: no local traj_ref / traj_stress -> no Lagrangian u_F; the parabola is the primary M')
@@ -5895,7 +6349,7 @@ def fig_perm_Dc(cfg, R, P):
                 label=r'BC: $\partial u_z/\partial\zeta\,|_{\zeta=1}=0$ (free feed face)')
         if contact and ax is axl:
             ax.plot([], [], ' ', label=rf"rigid drop $u_0={F['u0_ss']:+.2f}\,\sigma$ subtracted (contact layer)")
-        ax.set(xlabel=xlab, ylabel=ylab, xlim=(0, 1))
+        ax.set(xlabel=xlab, ylabel=ylab, xlim=_zlim(R))
         ax.grid(alpha=0.3)
         smart_legend(ax, fontsize=10)
     axl.set_title(r'(a) ' + ylab + r' -- production snapshots (since the reset)'

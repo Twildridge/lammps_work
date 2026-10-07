@@ -144,6 +144,11 @@ class Config(tri.Config):
                                           # signal is degenerate: D_c and D_c/2 fit alike) -- a cross-check, not the default
     HOST: str = 'expanse'                 # 'expanse' | 'pod' | 'bridges': which cluster folder RUNS_ROOT defaults to
                                           # (the sync cell logs in to Expanse only; copy Pod / Bridges output by hand)
+    PARTIAL_NORM: str = 'raw'             # the triaxial notebooks' normalised partial-stress figures (triaxial.Config,
+                                          # 2026-10-06) stay off here: the six-plate cube has no feed / permeate side
+                                          # and no single driving pressure
+    FLIP_Z: bool = False                  # likewise their z-flip; bulk.load_reference does not set R['flip_z'], so the
+                                          # profile figures here keep their orientation whatever this says
 
     def __post_init__(self):
         assert self.COMP_LEVELS, 'COMP_LEVELS is empty -- list at least one level, e.g. ["0.10"]'

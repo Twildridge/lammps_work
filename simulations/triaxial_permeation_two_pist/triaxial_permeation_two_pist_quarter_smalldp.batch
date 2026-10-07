@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=triax_perm2p_q_smalldp
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=0
+#SBATCH --time=16:00:00
+#SBATCH --output=%x.o%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (mirrors triaxial_compression.batch): pull the repo FIRST,
+# then re-exec the freshly pulled batch so every exported knob below is read
+# from the current file, not a stale local copy.  The guard var prevents a loop.
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${TRIAX_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining the run knobs..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export TRIAX_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/triaxial_permeation_two_pist/triaxial_permeation_two_pist_quarter_smalldp.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (TRIAX_BATCH_SYNCED=1)"
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# QUARTER-GEL PERMEATION AT SMALL dP (2026-10-07): is the factor ~2 between the permeation
+# D_c (0.10-0.12 on this gel at dP = 0.1) and the compression-hold D_c (0.047-0.054, same gel)
+# an AMPLITUDE effect?  The hold is a small perturbation (plates move 1.6-3.4 sigma, then
+# nothing); dP = 0.1 is a sustained finite drive (mean strain ~0.11).  Same data file, same
+# deck, dP = 0.02 (mean strain ~0.02, u_F ~0.7 sigma) and, as a second submission, 0.05:
+#     D_c falls to ~0.05 at small dP  -> amplitude: the hold sits in a linear regime dP = 0.1 leaves
+#     D_c stays ~0.1               -> through-flow itself raises kappa; the hold kappa is the odd one
+# Submit:  sbatch <this file>                       (dP = 0.02, files tagged _3000000)
+#          sbatch --export=ALL,DP_PISTON=0.05 <this file>   (dP = 0.05, files tagged _3100000)
+# The NSTEPS tag differs per dP so the two runs' output files never collide in the sync.
+#
+# Piston ringing: the dP = 0.1 run's undamped pistons (damp_prod=0; the damper cannot stay on
+# under flow, its -C v term ate 0.037 of a 0.1 dP on the full gel and this gel's flux is 4x)
+# rang with a ~1M-step period and damping ratio ~0.4 (measured dP peaked at 2.2x the applied),
+# and this thin gel (tau_1 ~0.2M steps) followed it.  The damping comes from the gel's own
+# hydraulic resistance and is mass-independent, so PISTON_MASS=100 (10x lighter sheets) raises
+# the damping ratio ~sqrt(10)x to ~1.3 (no overshoot) and shortens the period to ~0.3M steps.
+# With the 400k-step ramp (~2 tau_1) the reservoir dP then tracks the applied ramp; the
+# notebook's PERM_FORCING = 'measured' remains available if it does not (check figure 12c).
+# Everything else as the dP = 0.1 quarter batch (feed +16 sigma, margin_perm 35, 30 profile
+# snapshots, 50-tau displacement blocks); 3M production steps = ~15 tau_1, flux ~0.8 sigma per
+# M steps at dP = 0.02.
+# Analysis: triaxial_permeation_single_two_pist.ipynb, DATANAME ..._quarter_perm, NSTEPS 3000000 (or
+#   3100000), a new RUN_ID per dP; compare D_c with the dP = 0.1 run (perm_4_quarter).
+#
+FOLDER="triaxial_permeation_two_pist"
+DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist_quarter_perm"
+INTERACTION="1.0_1.0"   # epsSS_epsSP
+export DP_PISTON="${DP_PISTON:-0.02}"   # the ONE pressure step; override with sbatch --export=ALL,DP_PISTON=0.05
+case "$DP_PISTON" in
+    0.02) NSTEPS=3000000 ;;
+    0.05) NSTEPS=3100000 ;;
+    *)    NSTEPS=3200000 ;;
+esac                     # production steps AND the output-file tag: one tag per dP (see the header)
+echo ">>> small-dP quarter permeation: DP_PISTON=$DP_PISTON  NSTEPS=$NSTEPS"
+TYPE=""                 # stress, volume, stressvol, or leave empty
+PRESS_TARGET=1.5        # bath pressure P* (both pistons in the settle; permeate piston in production)
+
+# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var; see the .lmp for the rationale) -----
+export PISTON_MASS=100        # mass per piston bead: 100 here (standard 1000) -- see the header (ringing)
+export C_PIST_FRAC=1.0        # damping / critical damping (the .lmp prints C_crit and the piston period)
+#   C_PIST_FRAC now acts on the settle + reference window only: the .lmp drops the
+#   damper at the start of production (damp_prod=0 in the .lmp; 2026-09-23).
+export NPT_PISTON_STEPS=1000000   # Phase-1 settle; check the printed piston period (aim >= 3-5 periods)
+export SETTLE_HALT=0          # 1 = end the settle early once both pistons are at rest
+export N_RAMP=100             # dP ramp stages ...
+export RAMP_STEPS=4000        # ... x steps each = 400k steps (~2 tau_1; standard: 100 x 10000)
+export PERM_STRESS_CURVES=30  # profile snapshots / traj_stress frames over NSTEPS (standard 10)
+export DISP_NFREQ=10000       # displacement-profile block length, steps (standard 50000)
+
+# >>> WALL TIME <<<  setup ~50k + NPT_PISTON_STEPS (1M) + 150k (reference) + 400k (ramp) + 3M
+# production = ~4.6M steps of 179k atoms (the dP = 0.1 quarter run did 5.4M inside 16 h).
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"
