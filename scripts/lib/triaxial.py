@@ -186,9 +186,10 @@ class Config:
                                           # (partial_norm; the shares come from the stresses alone).  The original
                                           # figures and their PNGs are untouched.  'raw': the original figures only.
     FLIP_Z: bool = True                   # every z-profile figure is drawn with the feed / load piston on the LEFT and
-                                          # the permeate / support on the RIGHT, as in Marioni et al. (the x axis is
-                                          # inverted: z still labels the box coordinate and decreases to the right).
-                                          # Plotting only -- no z array, mask, window or fit sees it.  False = z
+                                          # the permeate / support on the RIGHT, as in Marioni et al.: the z/L axes
+                                          # show 1 - z/L running 0 -> 1 and say which side is which; the sigma- and
+                                          # zeta-unit axes are inverted and say so.  Plotting only -- no z array, mask,
+                                          # window or fit sees it (zn, finish_axes, _zlim, flip_z_axis).  False = z
                                           # increasing to the right (the orientation of every figure before 2026-10-06)
     # ---- pore-size distribution (lib/psd.py, 2026-09-24) ---------------------
     PSD_ENABLE: bool = True               # geometric porosity + PSD on the tessellated frames (needs VOR_ENABLE)
@@ -270,7 +271,14 @@ class Config:
                                           # departure from the line instead of a negative intercept
     # ---- strain in the denominator of M, G and kappa (2026-10-03) -----------
     G_REF: object = None                  # shear modulus from the shear notebooks (e.g. 0.2): drawn as G_REF / M on the
-                                          # reservoir normal-stress sweep figure next to (1 - sigma'_lat/sigma'_zz)/2
+                                          # reservoir normal-stress sweep figure next to (1 - sigma'_lat/sigma'_zz)/2, and
+                                          # (2026-10-07) as the guide dP_th = (4/3)(G/M) dP on the normalised
+                                          # thermodynamic-pressure figure (fig_thermo_pressure_norm)
+    G_COMP_REF: object = None             # the compression-mode G of the same gel (the lateral network stress of the
+                                          # triaxial holds, ~0.05): a second dP_th guide on that figure, so the two G
+                                          # estimates can be told apart there (M is trusted, G is not; 2026-10-07)
+    M_REF: object = None                  # the M of those guides; None -> the run's own M (permeation: the primary
+                                          # estimate of add_perm_displacement; compression: M_net of the level)
     M_STRAIN: str = 'disp'                # 'disp': the slope of the STEADY displacement profile u_z(Z) of the polymer
                                           #   (plateau frames vs the eps = 0 reference, per atom, binned by the reference
                                           #   position Z; u_z = u_0 - eps (Z - Z^P) exactly under uniform stress, and the
@@ -958,7 +966,8 @@ def load_reference(cfg):
     box geometry, wall planes, reference stress profiles (zz, and xx/yy when the
     run wrote them), gel bounds, reference network stress per component and the
     reference solvent density.  Returns a dict R."""
-    R = {'flip_z': bool(cfg.FLIP_Z)}      # orientation of the z-profile figures (_zlim / finish_axes; plotting only)
+    R = {'flip_z': bool(cfg.FLIP_Z),       # orientation of the z-profile figures (zn / finish_axes / _zlim; plotting only)
+         'flip_ends': (r'feed $\rightarrow$ permeate' if cfg.mode == 'permeation' else r'load piston $\rightarrow$ support')}
     # ---- geometry from a dump header (box fixed; only the piston moves) ----
     src = cfg.traj('traj_ref')
     if not src.exists():
@@ -2602,8 +2611,26 @@ echo "  staged: $(ls "$STAGE/data" 2>/dev/null | wc -l) data, $(ls "$STAGE/traj"
 #  8. PLOTTING PRIMITIVES
 # ===========================================================================
 def zn(R, z):
-    """Fractional box height z/Lz."""
-    return (np.asarray(z, float) - R['Z_LO']) / R['LZ']
+    """Fractional box height z/Lz -- or 1 - z/Lz under cfg.FLIP_Z (R['flip_z'], set by load_reference,
+    2026-10-07), so that the feed / load piston end (high z) draws at 0 on the left and the permeate /
+    support end at 1 on the right.  Plotting coordinate only: every mask, window and fit uses z itself."""
+    x = (np.asarray(z, float) - R['Z_LO']) / R['LZ']
+    return 1.0 - x if R.get('flip_z') else x
+
+
+def _flipped(R):
+    return bool(R is not None and R.get('flip_z'))
+
+
+def _zx_label(R):
+    """x label of a z/L profile axis: z/L, or 1 - z/L with the two ends named under FLIP_Z."""
+    return rf'$1 - z/L$   ({R["flip_ends"]})' if _flipped(R) else r'$z/L$'
+
+
+def flip_hint(R, label):
+    """Append 'left -> right' orientation to the x label of a sigma- or zeta-unit axis that is
+    drawn inverted under FLIP_Z (flip_z_axis / _zlim); the label itself when not flipped."""
+    return f'{label}   [{R["flip_ends"]}, left to right]' if _flipped(R) else label
 
 
 def shade_gel(ax, R, L=None):
@@ -2657,26 +2684,27 @@ def mark_level_walls(ax, R, levels):
 
 
 def _zlim(R, lo=0.0, hi=1.0):
-    """x-limits of a z-profile axis.  With cfg.FLIP_Z (carried as R['flip_z'] by load_reference,
-    2026-10-06) the axis is inverted -- (hi, lo) -- so the feed / load piston (high z) is on the
-    left and the permeate / support on the right; the data, the shading and the wall markers keep
-    their z coordinates.  R = None or a dict without the key (other libraries) -> (lo, hi)."""
-    return (hi, lo) if (R is not None and R.get('flip_z')) else (lo, hi)
+    """x-limits of a zeta-unit profile axis (zeta = 0 at the support).  Under cfg.FLIP_Z (R['flip_z'],
+    2026-10-06) the axis is inverted -- (hi, lo) -- so the feed / load piston end is on the left; the
+    data keep their coordinates and the label says so (flip_hint).  R = None or a dict without the
+    key (other libraries) -> (lo, hi)."""
+    return (hi, lo) if _flipped(R) else (lo, hi)
 
 
 def flip_z_axis(ax, R):
     """FLIP_Z for a z-profile axis with autoscaled limits (z or Z in sigma): invert it BEFORE
     plotting, so the autoscaled limits stay inverted and the legend / box placement sees the
-    final layout.  No-op without R['flip_z']."""
-    if R is not None and R.get('flip_z'):
+    final layout; label it with flip_hint.  No-op without R['flip_z']."""
+    if _flipped(R):
         ax.xaxis.set_inverted(True)
 
 
 def finish_axes(ax, ylabel, title, R=None):
-    ax.set_xlabel(r'$z/L$')
+    """x label, limits and grid of a z/L profile axis (zn coordinates: 0 -> 1 either way)."""
+    ax.set_xlabel(_zx_label(R))
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    ax.set_xlim(*_zlim(R))
+    ax.set_xlim(0, 1)
     ax.grid(alpha=0.3)
 
 
@@ -3561,11 +3589,70 @@ def _norm_family(comp):
              ('t', r'total $\sigma^{t*}_{%s}$' % comp, 'Greys')), r'\sigma_{%s}' % comp)
 
 
+def _gm_guide(cfg, L):
+    """(M, source of M, [(G, name, colour), ...]) for the dP_th guides of the normalised
+    thermodynamic-pressure figure (2026-10-07): G = cfg.G_REF (the shear notebooks' modulus) and
+    cfg.G_COMP_REF (the compression-mode estimate), whichever are set; M = cfg.M_REF when set,
+    else the run's own -- the primary permeation estimate (add_perm_displacement) or the level's
+    M_net.  None when no G or no M is available."""
+    Gs = [(float(G), name, col) for G, name, col in ((cfg.G_REF, r'G_{\rm shear}', WONG['green']),
+                                                     (cfg.G_COMP_REF, r'G_{\rm comp}', WONG['reddishpurple']))
+          if G is not None and np.isfinite(G)]
+    if not Gs:
+        return None
+    if cfg.M_REF is not None:
+        return float(cfg.M_REF), 'M_REF', Gs
+    if _is_perm(L):
+        Mp = L.get('M_perm')
+        if Mp and Mp.get('primary'):
+            return float(Mp[Mp['primary']]['M']), f"$M_{{\\rm {Mp['primary']}}}$", Gs
+        return None
+    return (float(L['M_net']), r'$M_{\rm net}$', Gs) if np.isfinite(L.get('M_net', np.nan)) else None
+
+
+def _draw_dpth_guide(ax, cfg, R, L, N):
+    """The dP_th = (4/3)(G/M) dP guides on the normalised trace figure (2026-10-07), one per G
+    estimate (G_REF: shear notebooks; G_COMP_REF: the triaxial holds' lateral stress).  Under
+    uniaxial strain the lateral stresses carry (M - 2G)/M of the axial one, so the trace of the
+    load is (1 - 4G/3M) of it: across a membrane that passes dP_ext the total P_th falls from the
+    feed reservoir's value at the feed face to dP_th = (4/3)(G/M) dP_ext below it at the permeate
+    side (drawn as the straight line between the membrane faces, 1 -> 1 - 4G/3M in normalised
+    units); in a compression hold it sits at 1 - 4G/3M across the gel.  Returns the legend handles."""
+    gm = _gm_guide(cfg, L)
+    if gm is None:
+        return []
+    M, src, Gs = gm
+    pr, dp = _norm_symbols(L)
+    handles = []
+    for G, name, col in Gs:
+        r = 4.0 * G / (3.0 * M)
+        if _is_perm(L):
+            x0, x1 = zn(R, L['z_mem_hi']), zn(R, L['z_mem_lo'])            # feed face -> support face
+            h, = ax.plot([x0, x1], [1.0, 1.0 - r], '-.', color=col, lw=2.4, zorder=6,
+                         label=(rf'$\Delta P_{{th}}=\frac{{4}}{{3}}\frac{{{name}}}{{M}}\,{dp}$ = {r:.2f} ${dp}$  (${name}$ = {G:g}, {src} = {M:.3f}):' + '\n'
+                                rf'feed-reservoir $P_{{th}}$ at the feed face $\rightarrow$ {1.0 - r:.2f} at the permeate side'))
+        else:
+            x0, x1 = zn(R, L['z_mem_lo']), zn(R, L['z_mem_hi'])
+            h, = ax.plot([x0, x1], [1.0 - r, 1.0 - r], '-.', color=col, lw=2.4, zorder=6,
+                         label=rf'$1-\frac{{4}}{{3}}\frac{{{name}}}{{M}}$ = {1.0 - r:.2f}  (${name}$ = {G:g}, {src} = {M:.3f})')
+        handles.append(h)
+    return handles
+
+
+def fig_thermo_pressure_norm(cfg, R, L):
+    """The normalised thermodynamic-pressure figure on its own (2026-10-07; fig_thermo_pressure
+    draws it under the raw one when cfg.PARTIAL_NORM = 'share'): solvent, polymer and total
+    traces with the back pressure removed, / dP, plus the dP_th = (4/3)(G/M) dP guides when
+    cfg.G_REF / cfg.G_COMP_REF are set."""
+    return _fig_partial_norm(cfg, R, L, 'tr', 'thermo_pressure_evolution_norm')
+
+
 def _fig_partial_norm(cfg, R, L, comp, stem):
     """Normalised companion of fig_partial_stress (comp = 'zz') and of fig_thermo_pressure
     (comp = 'tr', the partial and total traces): solvent* (blues), polymer* (oranges) and total*
     (greys) evolutions of partial_norm on one axis, the reference dashed (~0: the sanity check),
-    final curves bold, dotted guides at 0 and 1."""
+    final curves bold, dotted guides at 0 and 1.  The trace figure also carries the
+    dP_th = (4/3)(G/M) dP guide (_draw_dpth_guide) when cfg.G_REF is set."""
     what = 'thermodynamic-pressure' if comp == 'tr' else 'partial-stress'
     N = partial_norm(cfg, R, L, comp)
     if N is None:
@@ -3577,7 +3664,7 @@ def _fig_partial_norm(cfg, R, L, comp, stem):
     Nr = partial_norm(cfg, R, L, comp, ref=True)
     pr, dp = _norm_symbols(L)
     fam, sym = _norm_family(comp)
-    fig, ax = plt.subplots(figsize=(13, 7), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=((16, 7) if comp == 'tr' and _gm_guide(cfg, L) else (13, 7)), constrained_layout=True)
     for y in (0.0, 1.0):
         ax.axhline(y, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
     handles, curves = _partial_evo(ax, cfg, R, L, fam, lambda k: N[k],
@@ -3587,6 +3674,11 @@ def _fig_partial_norm(cfg, R, L, comp, stem):
     finish_axes(ax, rf'$({sym}-w\,{pr})/{dp}$', name + ', back pressure removed: reference $\\rightarrow$ '
                 + ('evolution' if _is_perm(L) else f'compressed ($\\varepsilon={L["eps"]:.2f}$)'), R=R)
     _norm_ylim(ax, curves, _scale_mask(cfg, R, L))
+    if comp == 'tr':
+        hs = _draw_dpth_guide(ax, cfg, R, L, N)
+        handles.extend(hs)
+        if not hs and cfg.G_REF is None and cfg.G_COMP_REF is None:
+            print('  (no dP_th = 4/3 G/M dP guide: set cfg.G_REF / cfg.G_COMP_REF, the shear modulus estimates)')
     smart_legend(ax, handles=handles, fontsize=12)
     num = rf'\mathrm{{tr}}\,\sigma_s/\mathrm{{tr}}\,\sigma^t' if comp == 'tr' else rf'\sigma_{{s,{comp}}}/\sigma^t_{{{comp}}}'
     fig.suptitle(f'Each species\' share $w$ of the back pressure removed, per bin and snapshot:  $w_s={num}$, $w_p=1-w_s$, $w=1$ for the total\n'
@@ -3858,7 +3950,7 @@ def fig_Dc(cfg, R, L):
                 label=r'BC: $u_z(0,t)=+\Delta L_\mathrm{sup}/L$ (held support)')
         ax.plot(1, (fs - 1.0) * dlL, 'D', color=WONG['vermillion'], ms=9, zorder=5,
                 label=r'BC: $u_z(1,t)=-\Delta L_\mathrm{pist}/L$ (held piston)')
-        ax.set(xlabel=r'$\zeta=(z-z_\mathrm{perm})/L$', ylabel=r'$u_z/L$', xlim=_zlim(R))
+        ax.set(xlabel=flip_hint(R, r'$\zeta=(z-z_\mathrm{perm})/L$'), ylabel=r'$u_z/L$', xlim=_zlim(R))
         ax.grid(alpha=0.3)
         smart_legend(ax, fontsize=11)
     axl.set_title(r'$u_z(\zeta,t)/L$ -- hold snapshots (data + fitted IC offset)', fontsize=15)
@@ -4409,7 +4501,7 @@ def fig_Dc_sweep(cfg, R, levels):
             ax.plot(zff, F['u_model'](zff, F['t_lj'][i]), '-', color=c, lw=1.5)
         dlL, fs = F['DL'] / F['L'], F['f_sup']
         ax.plot([0, 1], [fs * dlL, (fs - 1.0) * dlL], 'k:', lw=1.6)
-        ax.set(xlabel=r'$\zeta$', ylabel=r'$u_z/L$', xlim=_zlim(R))
+        ax.set(xlabel=flip_hint(R, r'$\zeta$'), ylabel=r'$u_z/L$', xlim=_zlim(R))
         ax.set_title(fr"({'bcdefgh'[k]}) $\varepsilon={L['lvl']}$:  $D_c={sig(F['Dc'])}$, $R^2={sig(F['R2'])}$",
                      fontsize=14, color=level_color(i_lvl))
         ax.grid(alpha=0.3)
@@ -4734,7 +4826,7 @@ def fig_disp_profile(cfg, R, L):
     axB.plot(D['zc'][out], D['resid'][out], 'o', ms=5, color=WONG['blue'], mfc='none', alpha=0.7)
     axB.axhline(0, color='k', lw=0.8)
     axB.set_ylabel(r'$u_z - $ fit  ($\sigma$)')
-    axB.set_xlabel('reference position $Z$  ($\\sigma$)' if D['coord'] == 'lagrangian' else 'current position $z$  ($\\sigma$)')
+    axB.set_xlabel(flip_hint(R, 'reference position $Z$  ($\\sigma$)' if D['coord'] == 'lagrangian' else 'current position $z$  ($\\sigma$)'))
     axB.set_title('(b) residuals from the line (uniform-stress interior should be flat; the faces and contact layers are hollow)', fontsize=12)
     axB.grid(alpha=0.3)
     return _save(fig, cfg, 'disp_profile', L['lvl'])
@@ -4762,7 +4854,7 @@ def fig_disp_profile_sweep(cfg, R, levels):
     for zp in (D0['z_P'], D0['z_T']):
         axA.axvline(zp, color='0.4', ls='--', lw=1.0)
     axA.axhline(0, color='k', lw=0.8, alpha=0.5)
-    axA.set_xlabel('reference position $Z$  ($\\sigma$)' if D0['coord'] == 'lagrangian' else 'current position $z$  ($\\sigma$)')
+    axA.set_xlabel(flip_hint(R, 'reference position $Z$  ($\\sigma$)' if D0['coord'] == 'lagrangian' else 'current position $z$  ($\\sigma$)'))
     axA.set_ylabel(r'$u_z$  ($\sigma$)')
     axA.set_title('(a) plateau $u_z$ vs the $\\varepsilon=0$ reference, line fits over the interior (filled)', fontsize=12)
     axA.grid(alpha=0.3)
@@ -5054,7 +5146,7 @@ def fig_perm_vs_compression(cfg, R, P):
     for zp, lab in ((F['Z_P'], 'contact plane $Z^P$'), (F['Z_F'], 'free face $Z^F$')):
         axA.axvline(zp, color='0.4', ls=':', lw=1)
     axA.axhline(0, color='k', lw=0.8, alpha=0.5)
-    axA.set_xlabel('reference (material) position $Z$  ($\\sigma$)')
+    axA.set_xlabel(flip_hint(R, 'reference (material) position $Z$  ($\\sigma$)'))
     axA.set_ylabel('$u_z$ since the zero-flux reference  ($\\sigma$)')
     axA.set_title('(a) steady displacement in the material frame\nvs the compression-curve prediction', fontsize=12)
     axA.grid(alpha=0.3)
@@ -5069,7 +5161,7 @@ def fig_perm_vs_compression(cfg, R, P):
     if 'prof' in Mp:
         axB.plot(F['Z_P'] + zeta * F['L0'], -2 * Mp['prof']['uF'] / F['L0'] * (1 - zeta), '--', color='0.3', lw=1.3, label='fig-12 parabola')
     axB.axhline(0, color='k', lw=0.8, alpha=0.5)
-    axB.set_xlabel('reference (material) position $Z$  ($\\sigma$)')
+    axB.set_xlabel(flip_hint(R, 'reference (material) position $Z$  ($\\sigma$)'))
     axB.set_ylabel('local compressive strain')
     axB.set_title("(b) local strain $-\\mathrm{d}u/\\mathrm{d}Z$ vs the compression curve at the\nlocal drag load $\\sigma'(Z) = \\Delta P\\,(Z^F - Z)/L_0$ (material-linear)", fontsize=12)
     axB.grid(alpha=0.3)
@@ -6349,7 +6441,7 @@ def fig_perm_Dc(cfg, R, P):
                 label=r'BC: $\partial u_z/\partial\zeta\,|_{\zeta=1}=0$ (free feed face)')
         if contact and ax is axl:
             ax.plot([], [], ' ', label=rf"rigid drop $u_0={F['u0_ss']:+.2f}\,\sigma$ subtracted (contact layer)")
-        ax.set(xlabel=xlab, ylabel=ylab, xlim=_zlim(R))
+        ax.set(xlabel=flip_hint(R, xlab), ylabel=ylab, xlim=_zlim(R))
         ax.grid(alpha=0.3)
         smart_legend(ax, fontsize=10)
     axl.set_title(r'(a) ' + ylab + r' -- production snapshots (since the reset)'

@@ -171,9 +171,10 @@ of the trace fit).
 
 **Figure conventions shared by the three two-piston notebooks (2026-10-06)** — two `tri.Config` knobs, both on by default.
 `FLIP_Z = True` draws every z-profile figure with the feed / load piston on the left and the permeate / support on the
-right (as in Marioni et al.): the x axis is inverted, so `z/L`, `Z` and `ζ` label the same coordinates and decrease to
-the right; it is plotting only (`finish_axes` / `_zlim` / `flip_z_axis`), and `False` reproduces the old figures pixel for
-pixel. `PARTIAL_NORM = 'share'` makes `fig_total_stress`, `fig_partial_stress`, `fig_thermo_pressure` and their `_sweep`
+right (as in Marioni et al.): the `z/L` axes become `1 − z/L`, running 0 → 1 with the two ends named in the label
+(feed → permeate, or load piston → support); the σ- and ζ-unit axes are inverted and say so in their labels. It is
+plotting only (`zn` / `finish_axes` / `_zlim` / `flip_z_axis`; every mask, window and fit uses z itself), and `False`
+reproduces the old figures pixel for pixel. `PARTIAL_NORM = 'share'` makes `fig_total_stress`, `fig_partial_stress`, `fig_thermo_pressure` and their `_sweep`
 versions draw a second figure under the original (same cell, same plot number, file stem `…_norm`; the original PNGs are
 untouched) with each species' share of the back pressure removed and the result divided by the driving pressure:
 `w_s = σ_s/σᵗ` per z-bin and snapshot, `σ_s* = (σ_s − w_s P_ref)/ΔP`, `σ_p* = (σ_p − (1 − w_s) P_ref)/ΔP`,
@@ -181,8 +182,13 @@ untouched) with each species' share of the back pressure removed and the result 
 under permeation, `P_BARO` and the level's plateau load-piston increment `dP_pist` in compression; the trace is treated the
 same way with `w_s = tr σ_s/tr σᵗ`). The shares come from the partial stresses alone — no mass or volume fractions. It is
 the form of Marioni's partial-`P_zz` figure but does not reproduce his end points (perm_3: solvent* 0.50 → 0.38, polymer*
-0.49 → 0.61 from the feed face to the support face); see the Notes cells. `'raw'` draws the originals only. `bulk.Config`
-overrides both to off; the shear and cross-deck notebooks do not use these figures.
+0.49 → 0.61 from the feed face to the support face); see the Notes cells. The normalised trace figure
+(`fig_thermo_pressure_norm`, 2026-10-07) also carries the guide `ΔP_th = (4/3)(G/M) ΔP_ext` — the drop of the total `P_th`
+from the feed reservoir's value at the feed face to the permeate side when the lateral stresses carry `(M − 2G)/M` of the
+axial load (one guide per G estimate: `G_REF`, the shear notebooks' 0.2, and `G_COMP_REF`, the holds' lateral-stress ~0.05; `M` = the run's own primary estimate or `M_REF`; a flat `1 − 4G/3M` in a compression hold).
+`calibration_analysis.ipynb` ends with that figure drawn from perm_3 (its own `tri.Config`, "for now" that run) as the
+input to the `P_CAL_MODE` question. `'raw'` draws the originals only. `bulk.Config` overrides both knobs to off; the shear
+and cross-deck notebooks do not use these figures.
 
 **Tests** (`scripts/tests/`, 2026-09-16; six-plate `compress_slab` fixture added 2026-09-29): `run_plot_tests.sh` builds synthetic one-piston, two-piston and six-plate run
 trees (`make_fixtures.py`) and runs the three plotters on both formats; `run_notebook_tests.sh` executes the

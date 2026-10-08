@@ -2281,7 +2281,7 @@
     ]
   },
   "metadata": {
-    "date": "2026-09-01T12:56:32",
+    "date": "2026-10-07T22:36:59",
     "interaction": "1.0_1.0",
     "pure_interaction": "1.0_0.0",
     "network_file": "final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000.data",
@@ -2308,7 +2308,7 @@
       20800
     ],
     "nreps": 2,
-    "git_rev": "93d0b60",
+    "git_rev": "3edd390",
     "gate_excluded_runs": 0
   }
 }
