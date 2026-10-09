@@ -61,6 +61,12 @@ class Config:
                                           # segments than ~3 leave the slope of a segment unresolved; 'mf' carries 4-5)
     PERM_POLY_DEG: int = 2                # degree of the polynomial phi_s(z) behind the continuous D_c(phi_s) curve
     N_MC: int = 400                       # Monte-Carlo draws for the CI of the compression curve sigma'(phi_s) and M_cur
+    # ---- the solvent-measures figure of the permeation membrane (fig_solvent_measures, 2026-10-08) ----
+    CONC_MARGIN: float = 5.0              # sigma of reservoir kept on either side of the membrane (the reservoir values of
+                                          # the mass fraction -- > 1 on the feed side -- stay visible, the rest is trimmed)
+    CONC_FRAMES: bool = True              # draw the individual steady Voronoi frames of c_s faintly (the frame-to-frame noise
+                                          # under the 95 % band; the reference keeps its band only, its frames are not stored)
+    CONC_DIFF_PANEL: bool = True          # a second panel with the two other measures minus the calibrated fraction
     ci_level: float = 0.95
     save: bool = True
 
@@ -109,6 +115,8 @@ def load_deck(cfg, verbose=True):
     if cfg.mode == 'permeation':
         P = tri.load_permeation(cfg, R, verbose=verbose)
         tri.add_perm_volume_fractions(cfg, R, P)
+        if cfg.PSD_ENABLE and cfg.VOR_ENABLE:
+            tri.add_perm_psd(cfg, R, P)                       # probe porosity (fig_solvent_measures); cfg.PSD_R_PROBE
         tri.add_perm_displacement(cfg, R, P, verbose=verbose)
         return dict(kind='permeation', cfg=cfg, R=R, P=P)
     levels = [L for L in (tri.load_level(cfg, R, lvl, verbose=verbose) for lvl in cfg.COMP_LEVELS) if L is not None]
@@ -358,7 +366,164 @@ def print_phi_kinds(ccfg, comp, perm, kinds=('cal', 'vor', 'mf')):
 
 
 # ===========================================================================
-#  5. FIGURES
+#  5. FIGURES -- the permeation membrane on its own (2026-10-08)
+# ===========================================================================
+def fig_thermo_pressure_norm(ccfg, perm):
+    """The permeation notebook's normalised thermodynamic-pressure figure (tri.fig_thermo_pressure_norm:
+    solvent, polymer and total traces with the back pressure removed, / dP_ext) with its two dash-dot
+    guides dP_th = (4/3)(G/M) dP_ext, one per shear-modulus estimate (cfg.G_REF = the shear decks' G,
+    cfg.G_COMP_REF = the lateral network stress of the compression holds; M = this run's).  The deck's
+    own library draws and saves it under the deck's plot folder; a copy goes to the comparison folder."""
+    cfg, R, P = perm['cfg'], perm['R'], perm['P']
+    if cfg.G_REF is None and cfg.G_COMP_REF is None:
+        print('NOTE: set G_REF / G_COMP_REF in the permeation Config for the two dP_th guides')
+    fig = tri.fig_thermo_pressure_norm(cfg, R, P)
+    if fig is not None and ccfg.save:
+        ccfg.PLOT_DIR.mkdir(parents=True, exist_ok=True)
+        out = ccfg.PLOT_DIR / 'perm_thermo_pressure_norm.png'
+        fig.savefig(out, dpi=150, bbox_inches='tight')
+        print('copied to', out)
+    return fig
+
+
+def _band(ax, x, prof, color, ls, lw, label, alpha=0.22, scale=1.0, zorder=3):
+    """A (mean, lo, hi) bin profile times `scale`: 95 % band + line.  Returns the line handle."""
+    m, lo, hi = (np.asarray(a, float) * scale for a in prof)
+    ax.fill_between(x, lo, hi, color=color, alpha=alpha, lw=0, zorder=zorder)
+    h, = ax.plot(x, m, ls=ls, color=color, lw=lw, zorder=zorder + 1, label=label)
+    return h
+
+
+def _in_window(z, lo, hi):
+    """1 inside [lo, hi], nan outside: multiplies a profile to trim it to the window."""
+    return np.where((np.asarray(z, float) >= lo) & (np.asarray(z, float) <= hi), 1.0, np.nan)
+
+
+def fig_solvent_measures(ccfg, perm):
+    """The analogue of the permeation notebook's figure 7a for the membrane community: three measures
+    of "how much solvent is where", reference (zero flux, dashed) and steady permeation (solid), each
+    with its 95 % band over frames / snapshots:
+
+      * solvent CONCENTRATION  c_s = phi_s^cal rho_s,0 / M_s  (left axis, beads per sigma^3; M_s = 1 in LJ
+        units, rho_s,0 = the bulk reservoir density at zero flux) -- phi_s^cal is the lambda-calibrated Voronoi
+        fraction, the thermodynamic solvent volume fraction;
+      * the solvent MASS fraction  rho_s(z)/rho_s,0  (= the NUMBER fraction, all beads of mass 1) -- the local
+        density relative to the bulk; it is NOT 1 in the feed reservoir, whose solvent is denser under the feed
+        pressure, and it counts solvent packed against the polymer that the calibration assigns to the network;
+      * the PROBE POROSITY  eps_g  (lib/psd.py; a solvent-sized probe of radius cfg.PSD_R_PROBE, the fraction of
+        space its centre can occupy, as PoreBlazer in Marioni et al.) -- geometric, below the thermodynamic
+        fraction because the excluded shell around every bead is counted as solid.
+
+    The fractions sit on the right axis, scaled by rho_s,0 so the three curves are directly comparable (the
+    calibrated curve reads phi_s^cal there).  The individual steady Voronoi frames of c_s are drawn faintly
+    (ccfg.CONC_FRAMES) to show the frame-to-frame noise.  The z range is the membrane plus ccfg.CONC_MARGIN sigma
+    of reservoir on either side.  (b) (ccfg.CONC_DIFF_PANEL): the mass fraction and eps_g minus phi_s^cal."""
+    cfg, R, P = perm['cfg'], perm['R'], perm['P']
+    rho0 = float(R.get('rho_s0', np.nan))
+    if not np.isfinite(rho0):
+        print('solvent-measures figure skipped (no reference solvent density -> no rho_s,0)')
+        return None
+    if P.get('phi_cal') is None:
+        print('solvent-measures figure skipped (no calibrated phi_s: VOR_ENABLE + calibration artifact needed)')
+        return None
+    S, S0 = P.get('psd'), R.get('psd')
+    if S is None:
+        print('  NOTE: no steady probe porosity (PSD_ENABLE / tessellated frames) -> eps_g left out')
+    z = np.asarray(R['z'], float)
+    zx = tri.zn(R, z)
+    # ---- z window: membrane (reference and steady) + the margin ----
+    bw = cfg.binWidth
+    zf = P['shade_hi'] if P.get('shade_hi') is not None else R['z_feed']          # the final feed-piston plane
+    lo_z = min(R['z_gel_lo'], P['z_mem_lo']) - ccfg.CONC_MARGIN
+    hi_z = min(zf + bw, max(R['z_gel_hi'], P['z_mem_hi']) + ccfg.CONC_MARGIN)       # feed side: up to the piston (no vacuum)
+    win = _in_window(z, lo_z, hi_z)
+    ncol = 2 if ccfg.CONC_DIFF_PANEL else 1
+    fig, axes = plt.subplots(1, ncol, figsize=(10.5 * ncol + 2, 7), constrained_layout=True,
+                             gridspec_kw=(dict(width_ratios=[1.45, 1]) if ncol == 2 else None), squeeze=False)
+    ax = axes[0, 0]
+    C_CAL, C_MF, C_POR = WONG['green'], WONG['orange'], WONG['blue']
+    rp = cfg.PSD_R_PROBE
+    # ---- reference (dashed) ----
+    if R.get('phi_cal') is not None:
+        _band(ax, zx, [np.asarray(a) * win for a in R['phi_cal']], C_CAL, '--', 1.8, r'$c_s$ reference (zero flux)', scale=rho0, alpha=0.18)
+    if R.get('phi_mf') is not None:
+        _band(ax, zx, [np.asarray(a) * win for a in R['phi_mf']], C_MF, '--', 1.8, r'$\rho_s/\rho_{s,0}$ reference', scale=rho0, alpha=0.18)
+    if S0 is not None:
+        _band(ax, zx, [np.asarray(a) * win for a in S0['por']], C_POR, '--', 1.8, r'$\epsilon_g$ reference', scale=rho0, alpha=0.18)
+    # ---- steady (solid) ----
+    vf = P.get('vf')
+    if ccfg.CONC_FRAMES and vf is not None and vf.get('phi_cal') is not None and P.get('vor_steady_ts') is not None:
+        sm = np.isin(vf['ts'], P['vor_steady_ts'])
+        for row in np.asarray(vf['phi_cal'], float)[sm]:
+            ax.plot(zx, row * win * rho0, '-', color=C_CAL, lw=0.8, alpha=0.45, zorder=4)
+        n_fr = int(sm.sum())
+    else:
+        n_fr = len(P.get('vor_steady_ts', []))
+    h_cal = _band(ax, zx, [np.asarray(a) * win for a in P['phi_cal']], C_CAL, '-', 2.8,
+                  rf'$c_s=\phi_s^{{\rm cal}}\,\rho_{{s,0}}/M_s$  steady' + (f' (faint: each of the {n_fr} frames)' if ccfg.CONC_FRAMES else f' ({n_fr} frames)'), scale=rho0)
+    h_mf = h_por = None
+    if P.get('phi_mf') is not None:
+        n_sn = int((np.asarray(P['mf_ts']) >= P['halt_ts']).sum()) if 'mf_ts' in P else 0
+        h_mf = _band(ax, zx, [np.asarray(a) * win for a in P['phi_mf']], C_MF, '-', 2.4,
+                     r'mass (= number) fraction $\rho_s(z)/\rho_{s,0}$  steady' + (f' ({n_sn} snapshots)' if n_sn else ''), scale=rho0)
+    if S is not None:
+        h_por = _band(ax, zx, [np.asarray(a) * win for a in S['por']], C_POR, '-', 2.4,
+                      rf'probe porosity $\epsilon_g$  steady ($r_{{\rm probe}}={rp:g}\,\sigma$)', scale=rho0)
+    ax.axhline(rho0, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
+    tri.shade_gel(ax, R, P)
+    tri.mark_walls(ax, R, P)
+    tri.finish_axes(ax, r'concentration  $c_s=\phi_s\,\rho_{s,0}/M_s$   (beads/$\sigma^3$)',
+                    r'(a) concentration $c_s$ vs mass fraction $\rho_s/\rho_{s,0}$ vs probe porosity $\epsilon_g$', R=R)
+    ax.set_xlim(sorted([tri.zn(R, lo_z), tri.zn(R, hi_z)]))
+    ax.set_ylim(0, rho0 * 1.42)                                           # headroom for the legend and the numbers box
+    ax2 = ax.secondary_yaxis('right', functions=(lambda c: c / rho0, lambda f: f * rho0))
+    ax2.set_ylabel(r'fraction  $c_s/\rho_{s,0}$  (--)')
+    ax.legend(loc='upper right', fontsize=9, framealpha=0.9)
+    # ---- the numbers: interior means and the reservoir values of the mass fraction ----
+    def _im(D, k, mask):
+        return np.nanmean(np.asarray(D[k][0], float)[mask]) if D.get(k) is not None else np.nan
+    im = P['interior']
+    txt = ['steady, gel interior:',
+           rf'  $c_s$ = {_im(P, "phi_cal", im) * rho0:.3f} $\sigma^{{-3}}$  ($\phi_s^{{\rm cal}}$ = {_im(P, "phi_cal", im):.3f})',
+           rf'  $\rho_s/\rho_{{s,0}}$ = {_im(P, "phi_mf", im):.3f}' + (rf'    $\epsilon_g$ = {np.nanmean(S["por"][0][im]):.3f}' if S is not None else '')]
+    if P.get('phi_mf') is not None:
+        feed = (z >= P['z_mem_hi'] + bw) & (z <= zf - bw)
+        perm_res = (z <= P['z_mem_lo'] - bw) & (z >= R['z_perm'] + bw) if np.isfinite(R.get('z_perm', np.nan)) else np.zeros_like(z, bool)
+        txt.append(r'reservoirs, $\rho_s/\rho_{s,0}$:  feed ' + (f'{_im(P, "phi_mf", feed):.3f}' if feed.any() else '--')
+                   + (rf',  permeate {_im(P, "phi_mf", perm_res):.3f}' if perm_res.any() else ''))
+        txt.append(rf'  ($\rho_{{s,0}}$ = {rho0:.3f}: bulk reservoir at zero flux)')
+    tri.annotate_box(ax, '\n'.join(txt), loc='upper left', fontsize=10)
+    # ---- (b) differences from the calibrated fraction ----
+    if ccfg.CONC_DIFF_PANEL:
+        bx = axes[0, 1]
+        cal = np.asarray(P['phi_cal'][0], float)
+        cal_h = 0.5 * (np.asarray(P['phi_cal'][2], float) - np.asarray(P['phi_cal'][1], float))
+        mem = P['in_mem'] & np.isfinite(cal) & (cal > cfg.PHI_FLOOR)
+        wm = np.where(mem, 1.0, np.nan)
+        bx.axhline(0.0, color=C_CAL, lw=2.0, zorder=2, label=r'$\phi_s^{\rm cal}$ (zero line)')
+        bx.fill_between(zx, -cal_h * wm, cal_h * wm, color=C_CAL, alpha=0.18, lw=0, zorder=1, label=r'95 % band of $\phi_s^{\rm cal}$')
+        for D, k, col, lab in ((P, 'phi_mf', C_MF, r'$\rho_s/\rho_{s,0}-\phi_s^{\rm cal}$  (solvent the calibration assigns to the network)'),
+                               (S, 'por', C_POR, r'$\epsilon_g-\phi_s^{\rm cal}$  (excluded shell around the beads, $r_{\rm probe}$)')):
+            if D is None or D.get(k) is None:
+                continue
+            m, lo, hi = (np.asarray(a, float) for a in D[k])
+            bx.fill_between(zx, (lo - cal) * wm, (hi - cal) * wm, color=col, alpha=0.2, lw=0, zorder=2)
+            bx.plot(zx, (m - cal) * wm, '-', color=col, lw=2.4, zorder=3, label=lab + f'  (interior mean {np.nanmean((m - cal)[P["interior"]]):+.3f})')
+        tri.shade_gel(bx, R, P)
+        tri.mark_walls(bx, R, P)
+        tri.finish_axes(bx, r'difference from $\phi_s^{\rm cal}$  (--)', r'(b) steady membrane: $\rho_s/\rho_{s,0}$ and $\epsilon_g$ minus $\phi_s^{\rm cal}$', R=R)
+        bx.set_xlim(sorted([tri.zn(R, P['z_mem_lo'] - 0.5 * ccfg.CONC_MARGIN), tri.zn(R, P['z_mem_hi'] + 0.5 * ccfg.CONC_MARGIN)]))
+        smart_legend(bx, fontsize=10)
+    fig.suptitle(rf'Three measures of the solvent across the membrane, zero flux (dashed) and steady permeation (solid):  '
+                 rf'$c_s=\phi_s^{{\rm cal}}\rho_{{s,0}}/M_s$ ($\lambda$-calibrated Voronoi),  $\rho_s/\rho_{{s,0}}$ (mass = number fraction),  '
+                 rf'$\epsilon_g$ (probe porosity)' + '\n'
+                 rf'$\rho_{{s,0}}$ = {rho0:.3f} $\sigma^{{-3}}$ (bulk reservoir at zero flux), $M_s$ = 1, $r_{{\rm probe}}$ = {rp:g} $\sigma$  |  {cfg.sim_name}',
+                 fontsize=12, fontweight='bold')
+    return _save(fig, ccfg, 'perm_solvent_measures')
+
+
+# ===========================================================================
+#  6. FIGURES -- D_c and kappa against phi_s
 # ===========================================================================
 def _phi_axis(ax, ccfg):
     ax.set_xlabel(rf"solvent volume fraction  $\phi_s$  ({PHI_LABEL[ccfg.PHI_KIND]})")

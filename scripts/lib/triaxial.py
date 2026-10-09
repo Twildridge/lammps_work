@@ -6023,14 +6023,22 @@ def perm_forcing(cfg):
             n_ss = max(int(0.25 * after.sum()), 4)
             dp_ss = float(np.mean(dpm[after][-n_ss:]))            # the steady measured dP normalises the weights
             if dp_ss > 0 and after.sum() >= 4:
-                st2 = np.concatenate([[t0], stm[after]])
-                dp2 = np.concatenate([[0.0], dpm[after]])          # no load until the first measured sample
+                # the deck logs the reservoir pressures from the production start, i.e. after the ramp, so the
+                # reservoir dP during the ramp is unobserved: it is taken to rise linearly from 0 at the ramp start
+                # to the first measured sample (the quarter runs: the reservoir lags the applied ramp, 0.003 of
+                # 0.1 at the end of a 200k-step ramp, 0.036 of 0.02 after 400k)
+                t_first = float(stm[after][0])
                 dsm = float(np.median(np.diff(stm)))
-                inc_m = np.diff(dp2)
-                tinc_m = st2[1:] - 0.5 * dsm
-                tinc_m[0] = max(tinc_m[0], t0)
+                n_pre = max(int(round((t_first - t0) / dsm)), 1)
+                st_pre = t0 + (np.arange(1, n_pre + 1)) * (t_first - t0) / n_pre
+                dp_pre = dpm[after][0] * np.arange(1, n_pre + 1) / n_pre
+                st2 = np.concatenate([st_pre, stm[after][1:]])
+                dp2 = np.concatenate([dp_pre, dpm[after][1:]])
+                tinc_m = st2 - 0.5 * np.diff(np.concatenate([[t0], st2]))
+                inc_m = np.diff(np.concatenate([[0.0], dp2]))
+                tj_app = st_pre
                 fz.update(tj=(tinc_m - t0) * cfg.dt_lj, wj=inc_m / dp_ss, full=dp_ss, n=int(inc_m.size), forcing='measured',
-                          dp_meas=dpm, steps_meas=stm, dp_applied_full=full,
+                          dp_meas=dpm, steps_meas=stm, dp_applied_full=full, n_ramp_prefix=int(n_pre),
                           dp_meas_max=float(np.max(dpm[after])), step_meas_max=float(stm[after][np.argmax(dpm[after])]))
     return fz
 
@@ -6055,7 +6063,8 @@ def load_perm_disp(cfg, R, P):
         fz = dict(t0=t0, t_end=t0, full=np.nan, n=1, tj=np.array([0.0]), wj=np.array([1.0]),
                   source='assumed: a step at the first displacement window start (no usable piston_pressure)')
     elif fz.get('forcing') == 'measured':
-        fz['source'] = (f"MEASURED reservoir dP (pressure_feed - pressure_permeate, {cfg.PERM_FORCING_SMOOTH}-sample smoothing): "
+        fz['source'] = (f"MEASURED reservoir dP (pressure_feed - pressure_permeate, {cfg.PERM_FORCING_SMOOTH}-sample smoothing; "
+                        f"linear rise over {fz['n_ramp_prefix']} increments to the first sample): "
                         f"steady {fz['full']:.4f}, peak {fz['dp_meas_max']:.4f} at step {int(fz['step_meas_max'])} "
                         f"(applied {fz['dp_applied_full']:.4f})")
     else:
