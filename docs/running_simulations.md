@@ -101,6 +101,9 @@ For `shear_slab_two_pist`, `NSTEPS` is likewise the hold per strain level and th
 # SSH into the cluster, then:
 cd ~/Documents/lammps_work/simulations/triaxial_compression_two_pist
 sbatch triaxial_compression_two_pist.batch   # Expanse (the two-piston decks have Expanse batch files only)
+# variants in the same folder: _half / _quarter (thinner gels cut from the same slab) and _fine (2026-10-09: run 7's
+# level 0.10 with DISP_FINE_NFREQ=5000, a flat 10M-step hold and UNLOAD=1: plates back to the seated gap + a 25M-step
+# free re-swelling hold tagged _u0.10 -- the one-job D_c test; knobs UNLOAD / UNLOAD_STEPS / UNLOAD_MARGIN)
 # Bridges-2 / Pod variants exist for shear_slab, slab_with_support, … (<name>_bridges.batch / <name>_pod.batch)
 ```
 

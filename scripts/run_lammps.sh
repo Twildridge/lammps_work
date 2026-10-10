@@ -29,6 +29,7 @@ if [ $# -lt 4 ]; then
     echo "  env knobs: PISTON_TRANSPARENT BARO_MODE (slab_with_support); STRAINS / COMPRESSIONS (sweeps);"
     echo "             DP_PISTON PISTON_MASS C_PIST_FRAC NPT_PISTON_STEPS SETTLE_HALT (triaxial_*_two_pist)"
     echo "             DRIVE_SPLIT (triaxial_compression*: piston share of the gap closure, 0.5 = symmetric)"
+    echo "             UNLOAD / UNLOAD_STEPS / UNLOAD_MARGIN (triaxial_compression_two_pist: re-swelling hold after each level)"
     echo "             compress_slab reads the two-piston knobs too, plus SEAT_MODE (rg|bb) and HOLD_AUTO (1|0)"
     exit 1
 fi
@@ -66,6 +67,9 @@ PERM_STRESS_CURVES=${PERM_STRESS_CURVES:-10}
 DISP_NFREQ=${DISP_NFREQ:-50000}
 DISP_FINE_NFREQ=${DISP_FINE_NFREQ:-0}       # triaxial_compression_two_pist: block length (steps) of the fine-cadence
 DISP_FINE_BIN=${DISP_FINE_BIN:-1.0}         # hold displacement profile disp_z_polymer_fine and its bin width; 0 = off
+UNLOAD=${UNLOAD:-0}                         # triaxial_compression_two_pist (2026-10-09): 1 = after every level's hold drive the
+UNLOAD_STEPS=${UNLOAD_STEPS:-0}             # plates back to the seated gap and record a free re-swelling hold of UNLOAD_STEPS
+UNLOAD_MARGIN=${UNLOAD_MARGIN:-0.0}         # (0 = the level's hold length), each plate UNLOAD_MARGIN sigma beyond its seat
 CALIB_FRAMES=${CALIB_FRAMES:-5}          # calibration-dump frames near run end (polymer_pure /
 CALIB_DUMP_EVERY=${CALIB_DUMP_EVERY:-2000}  # solvent_pure only; other engines ignore these vars)
 # PRERELAXED=1 tells polymer_pure to skip its Stage 0 harmonic pre-relaxation:
@@ -301,6 +305,9 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var drive_split "$DRIVE_SPLIT" \
     -var disp_fine_nfreq "$DISP_FINE_NFREQ" \
     -var disp_fine_bin "$DISP_FINE_BIN" \
+    -var unload "$UNLOAD" \
+    -var unload_steps "$UNLOAD_STEPS" \
+    -var unload_margin "$UNLOAD_MARGIN" \
     -var n_ramp "$N_RAMP" \
     -var ramp_steps "$RAMP_STEPS" \
     -var perm_stress_curves "$PERM_STRESS_CURVES" \

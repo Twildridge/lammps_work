@@ -64,6 +64,7 @@ from scipy import stats
 from scipy.optimize import minimize_scalar, curve_fit
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
+from matplotlib.ticker import NullFormatter, FormatStrFormatter
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
@@ -318,6 +319,35 @@ class Config:
                                           # prescribes is that of D_c = 0.17/4 = 0.0425 (2026-09-28; the factor 4 is the
                                           # held slab's L/2 drainage path, not a second D_c convention -- 2026-10-03)
     DC_TARGET_RESID: float = 0.01
+    # ---- D_c: fit window, stability scan, stress-trace D_c (2026-10-09) ----
+    DC_FIT_TAU1: float = 6.0              # fit_Dc fits the FIRST DC_FIT_TAU1 x tau_1 of the hold, tau_1 = L^2/(4 pi^2 D_c) of the
+                                          # fit itself (iterated to self-consistency), and keeps the whole-hold fit as F['Dc_all'].
+                                          # 0 = fit the DC_FRAC_EARLY fraction of the hold (the pre-2026-10-09 behaviour).  Why:
+                                          # the quarter gel's hold (comp_3 level 0.30, fine file) is a poroelastic transient at
+                                          # D_c = 0.109 over its first ~6 tau_1 and then a SLOWER process (+0.012 extra interior
+                                          # strain = 20 % of the transient, -8 % load-piston stress, from ~1000 tau); fitted whole
+                                          # with poroelastic modes only, D_c halves to 0.054 and the fit becomes unstable in the
+                                          # number of modes (N = 8: 0.021) and the trim.  Run 7's coarse file hides the same split
+                                          # inside its first 2120-tau block (profile 0.053 vs its stress trace 0.073 at eps 0.10).
+    DC_STABILITY: bool = True             # refit at 1, 2, 4, 10 tau_1 and the whole hold, and with 3 and 8 modes at the chosen
+                                          # window -> F['stab'] (one line in load_level); |Dc_all/Dc - 1| > DC_STAB_FLAG is flagged
+    DC_STAB_FLAG: float = 0.20
+    DC_STRESS: bool = True                # D_c from the load-piston stress trace as well (fit_Dc_stress; piston_force_avg at
+                                          # the volume_freq cadence, 25 tau): the held-slab series with a Gaussian-skin hold-onset
+                                          # state from DC_STRESS_TMIN, and a single exponential on the tail from
+                                          # DC_STRESS_TAIL_TAU1 x tau_1.  Independent of the profile binning, trim and window
+                                          # averaging, and the only resolved transient of runs without a fine displacement file.
+    DC_STRESS_TMIN: float = 250.0         # tau after the hold onset left out of the series fit (ramp ringing; modes faster than a block)
+    DC_STRESS_TAIL_TAU1: float = 1.0      # the tail exponential starts this many tau_1 (of the series fit) into the hold
+    # ---- unload / free re-swelling (2026-10-09; deck Phase 2c, -var unload 1) ----
+    DC_UNLOAD: bool = True                # load the level's _u<lvl> files when they exist and fit the re-swelling D_c
+                                          # (fit_Dc_unload): the skin-free control of the hold's D_c, same gel, same strain
+    UNLOAD_L: str = 'hold'                # the L in tau_1 = L^2/(pi^2 D_c) of the unload fits: 'hold' (the compressed thickness,
+                                          # the hold's own L -- so hold and unload D_c compare like for like), 'ref' (the swollen
+                                          # reference thickness; D_c then reads (L_ref/L_hold)^2 larger) or 'mean'
+    UNLOAD_TRACE_SKIP: float = 0.0        # tau after the retraction start left out of the thickness-trace fit (0 = none: the
+                                          # faces detach from the retracting plates within a few tau)
+    UNLOAD_N_MODES: int = 0               # modes of the unload profile fit (0 -> DC_N_MODES)
     # ---- Expanse ---------------------------------------------------------
     EXPANSE_HOST: str = 'login.expanse.sdsc.edu'
     EXPANSE_USER: str = 'dpollard'
@@ -391,6 +421,12 @@ class Config:
 
     def path(self, name, lvl=None, ext='dat'):
         return self.DATA_DIR / f'{name}_{self.stem(lvl)}.{ext}'
+
+    def upath(self, name, lvl, ext='dat'):
+        """the level's UNLOAD file (deck Phase 2c, 2026-10-09): <name>_<DATANAME>_<INTERACTION>_<tag>_u<lvl>.<ext>,
+        the tag being the level's hold tag."""
+        t = self.tag_for(lvl)
+        return self.DATA_DIR / f'{name}_{self.DATANAME}_{self.INTERACTION}_{t if t is not None else "*"}_u{lvl}.{ext}'
 
     def traj(self, name, lvl=None):
         return self.TRAJ_DIR / f'{name}_{self.stem(lvl)}.lammpstrj'
@@ -1452,7 +1488,14 @@ def fit_Dc(cfg, R, disp):
 
     The snapshots are ave/chunk block averages over the whole output interval, so each
     mode's decay is averaged over that window (DC_WINDOW_AVG, 2026-10-03); F['W'] is the
-    window in LJ time and the model curves (F['T'], F['u_model']) are averaged the same way."""
+    window in LJ time and the model curves (F['T'], F['u_model']) are averaged the same way.
+
+    Fit window (2026-10-09): F['Dc'] is fitted on the first DC_FIT_TAU1 x tau_1 of the hold
+    (tau_1 of the fit itself, iterated), because a real hold is not one poroelastic transient:
+    a slower process follows it and, fitted whole with these modes, pulls D_c down (quarter gel:
+    0.109 over 6 tau_1, 0.054 whole).  F['Dc_all'] is the whole-hold value, F['stab'] a scan
+    over windows and mode counts, F['stab_flag'] marks a > DC_STAB_FLAG disagreement.  The
+    stress-trace D_c (fit_Dc_stress) is the independent check load_level prints next to it."""
     if disp is None or not np.isfinite(R['z_support']):
         return None
     ts, z, Nc = disp['ts'], disp['z'], disp['Nc']
@@ -1480,8 +1523,8 @@ def fit_Dc(cfg, R, disp):
         idx = idx[n_trim:-n_trim]
     zf = zeta[idx]
     t_lj = (ts - disp['t_hold']) * cfg.dt_lj
-    early = np.where(t_lj <= cfg.DC_FRAC_EARLY * t_lj[-1])[0]
-    if len(early) < 2:
+    early_all = np.where(t_lj <= cfg.DC_FRAC_EARLY * t_lj[-1])[0]
+    if len(early_all) < 2:
         return None
     if np.nanmax(np.abs(disp['uz'][:, idx])) > 0.5 * DL:
         print('  WARNING: |u_dat| ~ DL -- the disp file does not look hold-referenced.')
@@ -1490,45 +1533,195 @@ def fit_Dc(cfg, R, disp):
               'modes (2026-09-28); fitting free amplitudes')
     kk = 2.0 * np.arange(1, cfg.DC_N_MODES + 1)            # even wavenumbers: m = 1..N, 2N amplitudes (sin + cos blocks)
     W = float(np.min(np.diff(ts))) * cfg.dt_lj if (cfg.DC_WINDOW_AVG and len(ts) > 1) else 0.0
+    Y = uhat[:, idx]                                       # (n_snap, n_bins) data
 
-    def decay(Dc, t):                                      # per mode, window-averaged like the data
-        return window_decay((np.pi * kk) ** 2 * Dc / L ** 2, t, W)
+    def decay(Dc, t, k=kk):                                # per mode, window-averaged like the data; t scalar or array
+        return _decay_mat((np.pi * k) ** 2 * Dc / L ** 2, t, W)
 
-    def design(Dc, t):
-        return _w_modes(zf, kk) * (np.tile(decay(Dc, t), 2) - 1.0)[None, :]
+    def _fit(sel, k):
+        """(Dc, A, R2) of the modal fit (wavenumbers k) to the snapshots `sel`: amplitudes by linear least
+        squares at each trial D_c, D_c by bounded Brent on the residual."""
+        Wm = _w_modes(zf, k)                               # (n_bins, 2K)
+        y = Y[sel].ravel()
 
-    def amps(Dc):
-        X = np.vstack([design(Dc, t_lj[i]) for i in early])
-        y = np.concatenate([uhat[i][idx] for i in early])
-        return np.linalg.lstsq(X, y, rcond=None)[0]
+        def X(Dc):
+            d = np.tile(decay(Dc, t_lj[sel], k), (1, 2)) - 1.0      # (n_sel, 2K)
+            return (Wm[None, :, :] * d[:, None, :]).reshape(-1, Wm.shape[1])
 
-    def resid(Dc):
-        A = amps(Dc)
-        return float(sum(np.sum((design(Dc, t_lj[i]) @ A - uhat[i][idx]) ** 2) for i in early))
+        def resid(Dc):
+            Xd = X(Dc)
+            return float(np.sum((Xd @ np.linalg.lstsq(Xd, y, rcond=None)[0] - y) ** 2))
 
-    Dc = float(minimize_scalar(resid, bounds=cfg.DC_BOUNDS, method='bounded').x)
-    A = amps(Dc)
-    y_all = np.concatenate([uhat[i][idx] for i in early])
-    p_all = np.concatenate([design(Dc, t_lj[i]) @ A for i in early])
-    ss_t = np.sum((y_all - np.mean(y_all)) ** 2)
-    R2 = float(1.0 - np.sum((y_all - p_all) ** 2) / ss_t) if ss_t > 1e-30 else np.nan
+        # coarse log grid first (short windows have secondary minima), then bounded Brent in the best cell
+        grid = np.geomspace(cfg.DC_BOUNDS[0], cfg.DC_BOUNDS[1], 61)
+        j = int(np.argmin([resid(g) for g in grid]))
+        Dc = float(minimize_scalar(resid, bounds=(grid[max(j - 1, 0)], grid[min(j + 1, len(grid) - 1)]), method='bounded').x)
+        Xd = X(Dc)
+        A = np.linalg.lstsq(Xd, y, rcond=None)[0]
+        ss_t = np.sum((y - np.mean(y)) ** 2)
+        R2 = float(1.0 - np.sum((Xd @ A - y) ** 2) / ss_t) if ss_t > 1e-30 else np.nan
+        return Dc, A, R2
+
+    def _window(Dc, n_tau):
+        """snapshots within the first n_tau tau_1 of the hold (at least 3, never beyond early_all)"""
+        sel = early_all[t_lj[early_all] <= n_tau * L ** 2 / (4.0 * np.pi ** 2 * Dc)]
+        return early_all[:3] if len(sel) < 3 else sel
+
+    # ---- the whole-hold fit (the pre-2026-10-09 result) and the self-consistent early window ----
+    Dc_all, A_all, R2_all = _fit(early_all, kk)
+    n_tau = float(cfg.DC_FIT_TAU1)
+    early, Dc, A, R2 = early_all, Dc_all, A_all, R2_all
+    if n_tau > 0:
+        seen = {len(early_all)}
+        for _ in range(12):
+            sel = _window(Dc, n_tau)
+            if len(sel) == len(early) and np.array_equal(sel, early):
+                break
+            if len(sel) in seen:                           # oscillating between two window lengths: keep the current fit
+                break
+            seen.add(len(sel))
+            early, (Dc, A, R2) = sel, _fit(sel, kk)
+    tau1 = L ** 2 / (4.0 * np.pi ** 2 * Dc)
+    stab = []
+    if cfg.DC_STABILITY:
+        for nt in (1.0, 2.0, 4.0, 10.0):
+            sel = _window(Dc, nt)
+            d, _, r = _fit(sel, kk)
+            stab.append(dict(what=f'{nt:g} tau_1', n=int(len(sel)), N=int(cfg.DC_N_MODES), Dc=d, R2=r))
+        stab.append(dict(what='whole hold', n=int(len(early_all)), N=int(cfg.DC_N_MODES), Dc=Dc_all, R2=R2_all))
+        for N in (3, 8):
+            if N != cfg.DC_N_MODES:
+                d, _, r = _fit(early, 2.0 * np.arange(1, N + 1))
+                stab.append(dict(what=f'window, {N} modes', n=int(len(early)), N=N, Dc=d, R2=r))
+    stab_flag = bool(n_tau > 0 and len(early) < len(early_all) and abs(Dc_all / Dc - 1.0) > cfg.DC_STAB_FLAG)
 
     def T(zh, t):                                          # window-averaged like the snapshots; instantaneous at t = 0 (the IC)
-        return _w_modes(zh, kk) @ (A * np.tile(decay(Dc, t), 2))
+        return _w_modes(zh, kk) @ (A * np.tile(decay(Dc, t)[0], 2))
+
+    def T_all(zh, t):
+        return _w_modes(zh, kk) @ (A_all * np.tile(decay(Dc_all, t)[0], 2))
 
     # absolute u_z/L (referenced to the pre-drive state): affine end state
     # (DL/L)(f_sup - zeta) -- the support face moved UP by DL_sup, the piston face
     # DOWN by DL_pist -- plus the fitted transient
     u_model = lambda zh, t: (DL / L) * (f_sup - zh) + T(zh, t)
     u_IC = lambda zh: u_model(zh, 0.0)
+    u_tr = lambda zh, t: T(zh, t) - T(zh, 0.0)             # u_z/L since the hold onset: what the file holds
+    u_tr_all = lambda zh, t: T_all(zh, t) - T_all(zh, 0.0)
     beta = np.nan
     hold_T = float(t_lj[-1])
     return dict(Dc=Dc, A=A, beta=beta, R2=R2, L=L, DL=DL, DL_pist=DL_pist, DL_sup=DL_sup, f_sup=f_sup,
                 gap=gap, z_perm=z_perm, z_feed=z_feed, z_sup=z_sup, z_pist=disp['z_pist_held'],
-                zeta=zeta, idx=idx, zf=zf, uhat=uhat, early=early, t_lj=t_lj, ts=ts,
-                T=T, u_model=u_model, u_IC=u_IC, kk=kk, hold_T=hold_T, W=W, fine=bool(disp.get('fine', False)),
+                zeta=zeta, idx=idx, zf=zf, uhat=uhat, early=early, t_lj=t_lj, ts=ts, t_hold=float(disp['t_hold']),
+                T=T, u_model=u_model, u_IC=u_IC, u_tr=u_tr, u_tr_all=u_tr_all, kk=kk, hold_T=hold_T, W=W,
+                fine=bool(disp.get('fine', False)),
                 shown=early[::max(1, int(np.ceil(len(early) / max(cfg.DC_PLOT_MAX, 1))))],
+                # 2026-10-09: the fit window, the whole-hold fit and the stability scan
+                fit_tau1=n_tau, tau1=tau1, window_T=float(t_lj[early[-1]]), n_tau1_fit=float(t_lj[early[-1]] / tau1),
+                early_all=early_all, Dc_all=Dc_all, A_all=A_all, R2_all=R2_all, stab=stab, stab_flag=stab_flag,
                 hold_check=hold_adequacy(cfg, L, hold_T, Dc))
+
+
+def _decay_mat(lam, t, W):
+    """window_decay for an array of times: (len(t), len(lam))."""
+    lam = np.asarray(lam, float)[None, :]
+    t = np.atleast_1d(np.asarray(t, float))[:, None]
+    w = np.minimum(W, t)
+    inst = np.exp(-lam * t)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        avg = (np.exp(-lam * (t - w)) - inst) / (lam * w)
+    return np.where(w > 0, avg, inst)
+
+
+def interior_strain(F, U):
+    """-d(u_z/L)/d zeta over the fit domain by least squares, per snapshot: the interior strain change since
+    the hold onset (compression positive).  U: (n_snap, n_bins) of u_z/L on F['zf']."""
+    m1 = F['zf'] - F['zf'].mean()
+    return -(np.atleast_2d(U) * m1[None, :]).sum(axis=1) / np.sum(m1 ** 2)
+
+
+def fit_Dc_stress(cfg, steps, P, L, t_hold):
+    """D_c from the load-piston stress trace of a hold (2026-10-09), independent of the displacement profiles.
+    The load piston is solvent-transparent, so P = F_load/A is the network stress at the held face, M eps(L, t);
+    in the held slab eps(L, t) - eps_bar relaxes in the cos(2 m pi zeta) modes, every one at 4 m^2 pi^2 D_c/L^2:
+        P(t) = P_inf + a sum_m g_m exp(-4 m^2 pi^2 D_c t/L^2),   g_m = exp(-(2 m pi delta/L)^2 / 2),
+    the hold-onset state being a Gaussian skin of width delta at each face (the ramp compresses the faces only).
+    (a) the series (300 modes) is fitted for (P_inf, a, D_c, delta) on t >= DC_STRESS_TMIN; (b) a single
+    exponential P_inf + B exp(-t/tau) on the tail t >= DC_STRESS_TAIL_TAU1 x tau_1, where only m = 1 survives
+    whatever the onset state.  Standard errors are scaled by the residual autocorrelation time.  Returns a dict;
+    ok = False with `why` when the trace cannot resolve tau_1 (too few blocks, or tau_1 shorter than 2 blocks or
+    2 DC_STRESS_TMIN -- the quarter gel)."""
+    steps = np.asarray(steps, float)
+    P = np.asarray(P, float)
+    t = (steps - t_hold) * cfg.dt_lj
+    keep = (t > 0) & np.isfinite(P)
+    t, P = t[keep], P[keep]
+    out = dict(ok=False, why='', tail_ok=False, t=t, P=P, L=L, t_min=float(cfg.DC_STRESS_TMIN))
+    if len(t) < 40:
+        out['why'] = 'fewer than 40 stress blocks in the hold'
+        return out
+    block = float(np.median(np.diff(t)))
+    out['block'] = block
+    w = t >= cfg.DC_STRESS_TMIN
+    if w.sum() < 40:
+        out['why'] = f'fewer than 40 blocks after t_min = {cfg.DC_STRESS_TMIN:.0f} tau'
+        return out
+    m = np.arange(1, 301, dtype=float)
+
+    def series(tt, P_inf, a, Dc, delta):
+        g = np.exp(-0.5 * (2.0 * m * np.pi * delta / L) ** 2)
+        return P_inf + a * (np.exp(-4.0 * (m[None, :] ** 2) * np.pi ** 2 * Dc * np.atleast_1d(tt)[:, None] / L ** 2) * g[None, :]).sum(axis=1)
+
+    P_end = float(np.mean(P[t >= 0.75 * t[-1]]))
+    p0 = (P_end, max(float(P[w][0] - P_end), 1e-4), cfg.DC_SLOW_REF / 4.0, 2.0)
+    try:
+        popt, pcov = curve_fit(series, t[w], P[w], p0=p0, maxfev=20000,
+                               bounds=((-np.inf, 0.0, 1e-4, 0.3), (np.inf, np.inf, 10.0, 0.5 * L)))
+    except (RuntimeError, ValueError) as e:
+        out['why'] = f'series fit did not converge ({e})'
+        return out
+    res = P[w] - series(t[w], *popt)
+    tau_ac = autocorr_time(res)
+    se = np.sqrt(np.abs(np.diag(pcov))) * np.sqrt(max(tau_ac, 1.0))
+    Dc, delta = float(popt[2]), float(popt[3])
+    tau1 = L ** 2 / (4.0 * np.pi ** 2 * Dc)
+    out.update(P_inf=float(popt[0]), a=float(popt[1]), Dc=Dc, Dc_se=float(se[2]), delta=delta, delta_se=float(se[3]),
+               tau1=tau1, rms=float(np.sqrt(np.mean(res ** 2))), n=int(w.sum()), tau_ac=float(tau_ac),
+               model=lambda tt, p=popt: series(tt, *p))
+    # resolved only if the fitted mode is slower than the blocks AND most of the relaxation is still to come at
+    # t_min: on the quarter gel (tau_1 ~ 160 tau) the trace has relaxed before t_min and the series would fit the
+    # slower secondary process instead
+    P_0 = float(np.mean(P[:2]))
+    frac_after = float((series(np.array([cfg.DC_STRESS_TMIN]), *popt)[0] - popt[0]) / max(P_0 - popt[0], 1e-12))
+    out['frac_after_tmin'] = frac_after
+    if tau1 < 2.0 * block or tau1 < 2.0 * cfg.DC_STRESS_TMIN:
+        out['why'] = f'tau_1 = {tau1:.0f} tau is not resolved (block {block:.0f} tau, t_min {cfg.DC_STRESS_TMIN:.0f} tau)'
+        return out
+    if frac_after < 0.3:
+        out['why'] = (f'only {frac_after:.0%} of the stress relaxation is left at t_min = {cfg.DC_STRESS_TMIN:.0f} tau '
+                      f'(the transient precedes the fitted window; the series then fits the slower process: tau_1 = {tau1:.0f})')
+        return out
+    out['ok'] = True
+    # ---- the tail: m = 1 only ----
+    t_tail = max(cfg.DC_STRESS_TAIL_TAU1 * tau1, cfg.DC_STRESS_TMIN)
+    wt = t >= t_tail
+    out.update(t_tail=float(t_tail), n_tail=int(wt.sum()))
+    if wt.sum() >= 20 and (t[-1] - t_tail) > 1.5 * tau1:
+        f = lambda tt, P_inf, B, tau: P_inf + B * np.exp(-tt / tau)
+        B0 = float(series(np.array([t_tail]), *popt)[0] - popt[0])
+        try:
+            pt, ct = curve_fit(f, t[wt], P[wt], p0=(popt[0], max(B0, 1e-4), tau1), maxfev=20000,
+                               bounds=((-np.inf, 0.0, block), (np.inf, np.inf, 50.0 * (t[-1] - t_tail))))
+            rt = P[wt] - f(t[wt], *pt)
+            st = np.sqrt(np.abs(np.diag(ct))) * np.sqrt(max(autocorr_time(rt), 1.0))
+            tau_t = float(pt[2])
+            out.update(tau_tail=tau_t, tau_tail_se=float(st[2]), Dc_tail=L ** 2 / (4.0 * np.pi ** 2 * tau_t),
+                       Dc_tail_se=L ** 2 / (4.0 * np.pi ** 2 * tau_t ** 2) * float(st[2]), B_tail=float(pt[1]),
+                       P_inf_tail=float(pt[0]), model_tail=lambda tt, p=pt: f(tt, *p),
+                       tail_ok=bool(np.isfinite(tau_t) and tau_t < (t[-1] - t_tail) and pt[1] > 0))
+        except (RuntimeError, ValueError):
+            pass
+    return out
 
 
 def hold_residual(T, tau1, f):
@@ -1558,6 +1751,200 @@ def hold_adequacy(cfg, L, hold_T, Dc_fit):
         out[tag] = dict(Dc=Dx, tau1=tau1, end=end, avg=avg,
                         need=n_tau_needed(tau1, cfg.DC_TARGET_RESID, cfg.plateau_frac),
                         ok=avg <= cfg.DC_TARGET_RESID)
+    return out
+
+
+# ---------------------------------------------------------------------------
+#  Unload / free re-swelling (deck Phase 2c, -var unload 1; 2026-10-09): the skin-free control
+#
+#  After a level's hold the plates go back to the seated gap and the gel re-swells with BOTH
+#  faces free: zero network stress there = zero displacement slope = DIRICHLET strain,
+#  modes sin(k pi zeta) at k^2 pi^2 D_c/L^2, tau_1 = L^2/(pi^2 D_c) -- FOUR times the hold's
+#  tau_1 at the same D_c (the hold only redistributes solvent between the ramp's compressed
+#  skins and the interior with no flux through the plates; here solvent has to come in from
+#  the reservoirs and fill the half thickness).  The initial state is the UNIFORM equilibrated
+#  compression eps_0 = -dL_inf/L, so the solution is known in full:
+#      u(zeta,t) - u(zeta,0) = sum_k B_k cos(k pi zeta) [exp(-lam_k t) - 1]       (free B_k in the fit)
+#      dL(t)/dL_inf          = 1 - sum_{k odd} 8/(k pi)^2 exp(-k^2 pi^2 D_c t/L^2)   (no free amplitude)
+#  and with dL_inf = L_ref - L_hold known from the reference, the thickness trace is a
+#  ONE-parameter fit for D_c.  The faces detach from the retracting plates within a few tau
+#  (the free face moves as 2 eps_0 sqrt(D t/pi), faster than the plates at first), so t = 0 of
+#  the trace is the retraction start; the displacement reference is reset when the plates stop.
+# ---------------------------------------------------------------------------
+def load_unload(cfg, R, lvl, F_hold):
+    """The level's _u<lvl> files -> dict, or None when there is no unload (no displacement file).
+    F_hold: the level's fit_Dc result (its L, face planes and t_hold are the unload's reference)."""
+    if F_hold is None:
+        return None
+    ff, fc = cfg.upath('disp_z_polymer_fine', lvl), cfg.upath('disp_z_polymer', lvl)
+    fine = bool(cfg.DC_USE_FINE and ff.exists())
+    f = ff if fine else fc
+    if not f.exists():
+        return None
+    snaps = read_ave_chunk_file(f)
+    if len(snaps) < 2:
+        return None
+    U = dict(fine=fine, ts=np.array([s[0] for s in snaps], float), z=snaps[0][1][:, 1],
+             Nc=np.array([s[1][:, 2] for s in snaps]), uz=np.array([s[1][:, 3] for s in snaps]))
+    fp = cfg.upath('piston_position', lvl)
+    if not fp.exists():
+        return None
+    pp = np.atleast_2d(np.loadtxt(fp, comments='#'))
+    U['t_retract'] = float(pp[0, 0])                                   # the loggers start with the retraction
+    U['z_pist_free'] = float(pp[-1, 1])
+    U['t_free'] = float(pp[np.argmax(np.isclose(pp[:, 1], pp[-1, 1], atol=1e-6)), 0])   # plates stopped: the reset
+    fs = cfg.upath('support_position', lvl)
+    if fs.exists():
+        sp = np.atleast_2d(np.loadtxt(fs, comments='#'))
+        U['z_supp_free'] = float(sp[-1, 1])
+    fb = cfg.upath('gel_dimensions_bb', lvl)
+    if fb.exists():
+        bb = np.atleast_2d(np.loadtxt(fb, comments='#'))
+        U['bb_step'], U['bb_L'] = bb[:, 0], bb[:, 3]
+    fcm = cfg.upath('polymer_com', lvl)
+    if fcm.exists():
+        cm = np.atleast_2d(np.loadtxt(fcm, comments='#'))
+        U['com_step'], U['com_z'] = cm[:, 0], cm[:, 3]
+    fpa = cfg.upath('piston_force_avg', lvl)
+    if fpa.exists():
+        pfa = read_print_file(fpa, ['step', 'Fz'])
+        U['pfa_step'], U['pfa_F'] = pfa['step'], pfa['Fz']
+    # reference (swollen) thickness: the level's own bb file starts at the seated reference state (the
+    # unload design compresses every level from the reference), else the reference profile edges
+    fl = cfg.path('gel_dimensions_bb', lvl)
+    if fl.exists():
+        bl = np.atleast_2d(np.loadtxt(fl, comments='#'))
+        U['L_ref'], U['L_ref_src'] = float(np.median(bl[:3, 3])), "level bb file, first rows (seated reference)"
+    else:
+        U['L_ref'], U['L_ref_src'] = float(R['z_gel_hi'] - R['z_gel_lo'] + cfg.binWidth), 'reference stress-profile edges'
+    U['L_hold'] = float(F_hold['L'])
+    U['Z_bot'], U['Z_top'] = float(F_hold['z_perm']), float(F_hold['z_feed'])     # face planes at the end of the hold
+    return U
+
+
+def _unload_series(t, Dc, L, n=60):
+    """dL(t)/dL_inf of the free re-swelling from a uniform strain: 1 - sum_odd 8/(k pi)^2 exp(-k^2 pi^2 Dc t/L^2)."""
+    k = 2.0 * np.arange(1, n + 1) - 1.0
+    t = np.atleast_1d(np.asarray(t, float))[:, None]
+    return 1.0 - (8.0 / (k * np.pi) ** 2 * np.exp(-(k * np.pi / L) ** 2 * Dc * np.clip(t, 0.0, None))).sum(axis=1)
+
+
+def fit_Dc_unload(cfg, R, U, F_hold):
+    """D_c of the free re-swelling (see the section comment): (a) the thickness trace L_bb(t) against the
+    exact uniform-IC series, dL_inf FIXED at L_ref - L_hold (one parameter) and free (two); (b) the
+    displacement profiles since the reset in the Lagrangian frame of the compressed gel, modes
+    cos(k pi zeta) with free amplitudes, the COM drift removed, the same self-consistent window and
+    stability scan as fit_Dc but with tau_1 = L^2/(pi^2 D_c).  Returns a dict or None."""
+    if U is None:
+        return None
+    Lh, Lr = U['L_hold'], U['L_ref']
+    L = {'hold': Lh, 'ref': Lr, 'mean': 0.5 * (Lh + Lr)}.get(cfg.UNLOAD_L, Lh)
+    dL_inf0 = Lr - Lh
+    out = dict(L=L, L_hold=Lh, L_ref=Lr, L_ref_src=U['L_ref_src'], dL_inf_ref=dL_inf0, t_retract=U['t_retract'],
+               t_free=U['t_free'], retract_T=(U['t_free'] - U['t_retract']) * cfg.dt_lj, fine=U['fine'], trace=None, prof=None)
+    # ---- (a) the thickness trace ----
+    if 'bb_L' in U and dL_inf0 > 0:
+        tt = (U['bb_step'] - U['t_retract']) * cfg.dt_lj
+        dL = U['bb_L'] - Lh
+        w = tt >= cfg.UNLOAD_TRACE_SKIP
+        if w.sum() >= 20:
+            T = dict(t=tt, dL=dL, fit=w)
+            try:
+                p1, c1 = curve_fit(lambda t_, Dc: dL_inf0 * _unload_series(t_, Dc, L), tt[w], dL[w],
+                                   p0=(cfg.DC_SLOW_REF / 4.0,), bounds=((1e-5,), (10.0,)), maxfev=20000)
+                r1 = dL[w] - dL_inf0 * _unload_series(tt[w], p1[0], L)
+                T.update(Dc=float(p1[0]), Dc_se=float(np.sqrt(c1[0, 0]) * np.sqrt(max(autocorr_time(r1), 1.0))),
+                         rms=float(np.sqrt(np.mean(r1 ** 2))), tau1=L ** 2 / (np.pi ** 2 * float(p1[0])),
+                         R2=float(1.0 - np.sum(r1 ** 2) / max(np.sum((dL[w] - dL[w].mean()) ** 2), 1e-30)),
+                         model=lambda t_, D=float(p1[0]): dL_inf0 * _unload_series(t_, D, L))
+                p2, c2 = curve_fit(lambda t_, A, Dc: A * _unload_series(t_, Dc, L), tt[w], dL[w],
+                                   p0=(dL_inf0, float(p1[0])), bounds=((0.0, 1e-5), (np.inf, 10.0)), maxfev=20000)
+                r2 = dL[w] - p2[0] * _unload_series(tt[w], p2[1], L)
+                s2 = np.sqrt(np.abs(np.diag(c2))) * np.sqrt(max(autocorr_time(r2), 1.0))
+                T.update(Dc_free=float(p2[1]), Dc_free_se=float(s2[1]), dL_inf_free=float(p2[0]), dL_inf_free_se=float(s2[0]),
+                         model_free=lambda t_, A=float(p2[0]), D=float(p2[1]): A * _unload_series(t_, D, L),
+                         relaxed=float(_unload_series(tt[-1], float(p1[0]), L)[0]))
+                out['trace'] = T
+            except (RuntimeError, ValueError) as e:
+                print(f'  NOTE: unload thickness-trace fit failed ({e})')
+    # ---- (b) the profiles: Lagrangian zeta of the compressed gel, COM drift removed ----
+    ts, z, Nc, uz = U['ts'], U['z'], U['Nc'], U['uz']
+    t_lj = (ts - U['t_free']) * cfg.dt_lj
+    keep = t_lj > 0
+    ts, Nc, uz, t_lj = ts[keep], Nc[keep], uz[keep], t_lj[keep]
+    if len(ts) >= 2:
+        if 'com_z' in U:
+            com = np.interp(ts, U['com_step'], U['com_z']) - np.interp(U['t_free'], U['com_step'], U['com_z'])
+        else:
+            com = np.zeros(len(ts))
+        W = float(np.min(np.diff(ts))) * cfg.dt_lj if (cfg.DC_WINDOW_AVG and len(ts) > 1) else 0.0
+        n_trim = int(round(cfg.DC_TRIM_BINS * cfg.binWidth / abs(float(z[1] - z[0])))) if len(z) > 1 else cfg.DC_TRIM_BINS
+        N = int(cfg.UNLOAD_N_MODES) or int(cfg.DC_N_MODES)
+        k = np.arange(1, N + 1, dtype=float)
+        zl, yl = [], []
+        for i in range(len(ts)):
+            p_ = np.where(Nc[i] > cfg.Ncount_min)[0]
+            if n_trim and len(p_) > 2 * n_trim + 4:
+                p_ = p_[n_trim:-n_trim]
+            zi = (z[p_] - uz[i][p_] - U['Z_bot']) / Lh                 # material coordinate of the bin's atoms
+            yi = (uz[i][p_] - com[i]) / L
+            ok = (zi > 0) & (zi < 1)
+            zl.append(zi[ok]); yl.append(yi[ok])
+        if min(len(a) for a in zl) >= 4:
+            def _fit(sel, k_):
+                y = np.concatenate([yl[i] for i in sel])
+                Wm = [np.cos(np.pi * np.outer(zl[i], k_)) for i in sel]
+
+                def X(Dc):
+                    d = _decay_mat((np.pi * k_ / L) ** 2 * Dc, t_lj[sel], W) - 1.0
+                    return np.vstack([Wm[n] * d[n][None, :] for n in range(len(sel))])
+
+                def resid(Dc):
+                    Xd = X(Dc)
+                    return float(np.sum((Xd @ np.linalg.lstsq(Xd, y, rcond=None)[0] - y) ** 2))
+
+                grid = np.geomspace(cfg.DC_BOUNDS[0], cfg.DC_BOUNDS[1], 61)
+                j = int(np.argmin([resid(g) for g in grid]))
+                Dc = float(minimize_scalar(resid, bounds=(grid[max(j - 1, 0)], grid[min(j + 1, 60)]), method='bounded').x)
+                Xd = X(Dc)
+                A = np.linalg.lstsq(Xd, y, rcond=None)[0]
+                ss = np.sum((y - y.mean()) ** 2)
+                return Dc, A, float(1.0 - np.sum((Xd @ A - y) ** 2) / ss) if ss > 1e-30 else np.nan
+
+            all_ = np.arange(len(ts))
+
+            def _window(Dc, n_tau):
+                sel = all_[t_lj <= n_tau * L ** 2 / (np.pi ** 2 * Dc)]
+                return all_[:3] if len(sel) < 3 else sel
+
+            Dc_all, A_all, R2_all = _fit(all_, k)
+            early, Dc, A, R2 = all_, Dc_all, A_all, R2_all
+            n_tau = float(cfg.DC_FIT_TAU1)
+            if n_tau > 0:
+                seen = {len(all_)}
+                for _ in range(12):
+                    sel = _window(Dc, n_tau)
+                    if len(sel) == len(early) and np.array_equal(sel, early):
+                        break
+                    if len(sel) in seen:
+                        break
+                    seen.add(len(sel))
+                    early, (Dc, A, R2) = sel, _fit(sel, k)
+            tau1 = L ** 2 / (np.pi ** 2 * Dc)
+            stab = []
+            if cfg.DC_STABILITY:
+                for nt in (0.5, 1.0, 2.0, 4.0):
+                    sel = _window(Dc, nt)
+                    d, _, r = _fit(sel, k)
+                    stab.append(dict(what=f'{nt:g} tau_1', n=int(len(sel)), Dc=d, R2=r))
+                stab.append(dict(what='whole unload', n=int(len(all_)), Dc=Dc_all, R2=R2_all))
+            out['prof'] = dict(Dc=Dc, A=A, R2=R2, Dc_all=Dc_all, R2_all=R2_all, early=early, n_all=int(len(all_)), tau1=tau1,
+                               n_tau1_fit=float(t_lj[early[-1]] / tau1), stab=stab, t_lj=t_lj, ts=ts, zl=zl, yl=yl, k=k, W=W, com=com,
+                               stab_flag=bool(n_tau > 0 and len(early) < len(all_) and abs(Dc_all / Dc - 1.0) > cfg.DC_STAB_FLAG),
+                               u_model=lambda zh, t, A_=A, D_=Dc: np.cos(np.pi * np.outer(np.atleast_1d(zh), k)) @ (A_ * (_decay_mat((np.pi * k / L) ** 2 * D_, t, W)[0] - 1.0)),
+                               shown=early[::max(1, int(np.ceil(len(early) / max(cfg.DC_PLOT_MAX, 1))))])
+    if out['trace'] is None and out['prof'] is None:
+        return None
     return out
 
 
@@ -1872,14 +2259,58 @@ def load_level(cfg, R, lvl, verbose=True):
     else:
         F = L['Dc']
         say(f"  D_c = {F['Dc']:.4e} sigma^2/tau  (R^2 = {F['R2']:.3f};  L = {F['L']:.2f}, "
-            f"DL/L = {F['DL'] / F['L']:.4f} [support share {F['f_sup']:.2f}], hold = {F['hold_T']:.0f} tau; "
-            f"{len(F['early'])} {'FINE' if F['fine'] else 'coarse'} snapshots, first at {F['t_lj'][F['early'][0]]:.0f} tau, block {F['W']:.0f} tau)")
+            f"DL/L = {F['DL'] / F['L']:.4f} [support share {F['f_sup']:.2f}], hold = {F['hold_T']:.0f} tau = {F['hold_T'] / F['tau1']:.1f} tau_1; "
+            f"fitted: first {F['n_tau1_fit']:.1f} tau_1 = {len(F['early'])} of {len(F['early_all'])} {'FINE' if F['fine'] else 'coarse'} snapshots, "
+            f"first at {F['t_lj'][F['early'][0]]:.0f} tau, block {F['W']:.0f} tau)")
+        if F['fit_tau1'] > 0 and len(F['early']) < len(F['early_all']):
+            say(f"      whole hold: D_c = {F['Dc_all']:.4e} (R^2 = {F['R2_all']:.3f})"
+                + (f"   <-- {F['Dc'] / F['Dc_all']:.2f}x the windowed value: a slower process after the poroelastic transient "
+                   f"(fig_Dc panel c); kappa below uses the windowed D_c" if F['stab_flag'] else '   (consistent)'))
+        if F.get('stab'):
+            say('      stability: ' + '   '.join(f"{s['what']} ({s['n']} snaps): {s['Dc']:.3e}" for s in F['stab']))
         L['kappa'] = {}
         for key, Mk in (('net', 'M_net'), ('pist', 'M_pist')):
             if Mk in L:
                 L['kappa'][key] = dict(k=F['Dc'] / L[Mk], lo=F['Dc'] / L[Mk + '_hi'], hi=F['Dc'] / L[Mk + '_lo'])
         say('  kappa = D_c/M:  ' + '   '.join(f"{k}: {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]"
                                              for k, v in L['kappa'].items()))
+        # ---- the stress trace: an independent D_c (2026-10-09) ----
+        L['Dc_stress'] = None
+        if cfg.DC_STRESS and 'pfa_P' in L:
+            S = fit_Dc_stress(cfg, L['pfa_step'], L['pfa_P'], F['L'], F['t_hold'])
+            L['Dc_stress'] = S
+            if S['ok']:
+                say(f"  D_c (stress trace) = {S['Dc']:.4e} +/- {S['Dc_se']:.1e}  (held-slab series from {S['t_min']:.0f} tau, "
+                    f"{S['n']} blocks of {S['block']:.0f} tau, skin {S['delta']:.1f} sigma, rms {S['rms']:.4f}; tau_1 = {S['tau1']:.0f} tau)"
+                    + (f";  tail exponential from {S['t_tail']:.0f} tau: tau = {S['tau_tail']:.0f} +/- {S['tau_tail_se']:.0f} "
+                       f"-> D_c = {S['Dc_tail']:.4e}" if S['tail_ok'] else ';  tail exponential not credible')
+                    + f"   [profile/stress = {F['Dc'] / S['Dc']:.2f}]")
+                L['kappa_stress'] = {key: S['Dc'] / L[Mk] for key, Mk in (('net', 'M_net'), ('pist', 'M_pist')) if Mk in L}
+                say('      kappa from the stress-trace D_c:  ' + '   '.join(f"{k}: {v:.4e}" for k, v in L['kappa_stress'].items()))
+            else:
+                say(f"  D_c (stress trace): not resolved -- {S['why']}")
+        # ---- the unload / free re-swelling (deck Phase 2c), the skin-free control (2026-10-09) ----
+        L['unload'] = None
+        if cfg.DC_UNLOAD:
+            Uf = fit_Dc_unload(cfg, R, load_unload(cfg, R, lvl, F), F)
+            L['unload'] = Uf
+            if Uf is not None:
+                T, Pf = Uf['trace'], Uf['prof']
+                say(f"  UNLOAD (free re-swelling after the hold; retraction {Uf['retract_T']:.0f} tau; L = {Uf['L']:.2f} = {cfg.UNLOAD_L!r} "
+                    f"[hold {Uf['L_hold']:.2f}, reference {Uf['L_ref']:.2f}: {Uf['L_ref_src']}]; tau_1 = L^2/(pi^2 D_c), faces free)")
+                if T is not None:
+                    say(f"    D_c (thickness trace, dL_inf fixed = {Uf['dL_inf_ref']:.2f} sigma) = {T['Dc']:.4e} +/- {T['Dc_se']:.1e}  "
+                        f"(R^2 {T['R2']:.3f}, rms {T['rms']:.3f} sigma; tau_1 = {T['tau1']:.0f} tau, {T['t'][-1] / T['tau1']:.1f} tau_1 recorded, "
+                        f"{100 * T['relaxed']:.1f}% relaxed);  free asymptote: D_c = {T['Dc_free']:.4e} +/- {T['Dc_free_se']:.1e}, "
+                        f"dL_inf = {T['dL_inf_free']:.2f} +/- {T['dL_inf_free_se']:.2f}")
+                if Pf is not None:
+                    say(f"    D_c (profiles, first {Pf['n_tau1_fit']:.1f} tau_1 = {len(Pf['early'])} of {Pf['n_all']} {'FINE' if Uf['fine'] else 'coarse'} snapshots) = "
+                        f"{Pf['Dc']:.4e} (R^2 {Pf['R2']:.3f});  whole unload {Pf['Dc_all']:.4e}"
+                        + ('   <-- differ' if Pf['stab_flag'] else '') + ('   stability: ' + '  '.join(f"{x['what']} ({x['n']}): {x['Dc']:.3e}" for x in Pf['stab']) if Pf['stab'] else ''))
+                ref = T['Dc'] if T is not None else Pf['Dc']
+                say(f"    vs the hold:  windowed profile {F['Dc'] / ref:.2f}x,  whole hold {F['Dc_all'] / ref:.2f}x"
+                    + (f",  stress trace {L['Dc_stress']['Dc'] / ref:.2f}x" if (L.get('Dc_stress') or {}).get('ok') else '')
+                    + "  the unload trace D_c  (1.0 = the hold's transient is the same D_c; < 1 = the hold reads slower, e.g. skin-throttled)")
     return L
 
 
@@ -2264,7 +2695,7 @@ def _psd_state(cfg, R, frames, ts, z_lo, z_hi, interior, label=''):
         cnt = np.array([h[mask].sum(axis=0) for h in hists])
         with np.errstate(invalid='ignore', divide='ignore'):
             Dm = (cnt * Dc).sum(axis=1) / cnt.sum(axis=1)
-        S['D_reg'][name] = tuple(float(v) for v in mean_ci(Dm[:, None], cfg.ci_level))
+        S['D_reg'][name] = tuple(float(np.ravel(v)[0]) for v in mean_ci(Dm[:, None], cfg.ci_level))   # 1-element arrays (numpy >= 2)
     return S
 
 
@@ -2413,6 +2844,10 @@ _REQUIRED_PROD = ('sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z', 'st
 _TWO_PIST_DAT = ('piston_pressure', 'permeation', 'pressure_reservoirs')
 # fine-cadence hold displacement profile (DISP_FINE_NFREQ > 0 in the batch, 2026-10-05): optional, most runs have none
 _TWO_PIST_OPT = ('disp_z_polymer_fine',)
+# unload / free re-swelling files (deck Phase 2c, -var unload 1, 2026-10-09): optional, tagged _<tag>_u<lvl>
+_UNLOAD_DAT = ('disp_z_polymer', 'disp_z_polymer_fine', 'gel_dimensions_bb', 'gel_dimensions_rg', 'piston_position',
+               'support_position', 'piston_force_avg', 'piston_pressure', 'permeation', 'strain_piston', 'polymer_com',
+               'gel_edges', 'pressure_reservoirs', 'sigmazz_polymer', 'sigmazz_solvent')
 _PERM_DAT = ('sigmazz_polymer', 'sigmazz_solvent', 'sigmaxx_polymer', 'sigmaxx_solvent',
              'sigmayy_polymer', 'sigmayy_solvent', 'solvent_density_z', 'disp_z_polymer', 'strain_zz',
              'piston_position', 'piston_velocity', 'piston_force', 'piston_force_avg', 'piston_pressure',
@@ -2445,6 +2880,8 @@ def sync_files(cfg, levels=None):
         return data, traj, req
     for l in levels:
         data += [cfg.path(n, l) for n in _PROD_DAT + ((_TWO_PIST_DAT + _TWO_PIST_OPT) if cfg.two_pist else ())]
+        if cfg.two_pist:
+            data += [cfg.upath(n, l) for n in _UNLOAD_DAT]
         traj += [cfg.traj('traj_stress', l)]
         req += [cfg.path(n, l) for n in _REQUIRED_PROD]
     return data, traj, req
@@ -2460,6 +2897,7 @@ def sync_from_expanse(cfg, levels=None, force=False):
     data_files, traj_files, required = sync_files(cfg, levels)
     optional = {cfg.path(n).name for n in _REF_DAT_OPT}
     optional |= {cfg.path(n, l).name for n in _TWO_PIST_DAT + _TWO_PIST_OPT for l in ([None] + list(cfg.COMP_LEVELS))}
+    optional |= {cfg.upath(n, l).name for n in _UNLOAD_DAT for l in cfg.COMP_LEVELS}
     sync_pull(cfg, data_files, traj_files, required, optional, force,
               refresh=lambda: sync_files(cfg, levels))
 
@@ -3922,8 +4360,114 @@ def fig_G(cfg, R, L):
     return _save(fig, cfg, 'G_estimate', L['lvl'])
 
 
+def _dc_time_panels(cfg, axc, axd, F, S, title_lvl=''):
+    """The two time-scale panels of fig_Dc (2026-10-09).  (c) the interior strain change since the hold
+    onset -- every snapshot, the windowed fit and the whole-hold fit; (d) the load-piston stress trace with
+    the held-slab series and the tail exponential (fit_Dc_stress), or why it is absent."""
+    t, zf = F['t_lj'], F['zf']
+    s_dat = interior_strain(F, F['uhat'][:, F['idx']])
+    td = np.geomspace(max(t[0] / 5.0, 1.0), t[-1], 300)       # starts before the first snapshot: the model's early shape
+    s_win = np.array([interior_strain(F, F['u_tr'](zf, ti))[0] for ti in td])
+    axc.semilogx(t, s_dat, 'o', color='k', ms=4 if len(t) < 60 else 2.5, alpha=0.7, label='snapshots (all)')
+    axc.semilogx(td, s_win, '-', color=WONG['vermillion'], lw=2.4,
+                 label=rf"fit to the first {F['n_tau1_fit']:.1f} $\tau_1$ ({len(F['early'])} snaps): $D_c={sig(F['Dc'])}$, $\tau_1={F['tau1']:.0f}\,\tau$")
+    if F['fit_tau1'] > 0 and len(F['early']) < len(F['early_all']):
+        s_all = np.array([interior_strain(F, F['u_tr_all'](zf, ti))[0] for ti in td])
+        axc.semilogx(td, s_all, '--', color=WONG['blue'], lw=2.2,
+                     label=rf"fit to the whole hold ({len(F['early_all'])} snaps): $D_c={sig(F['Dc_all'])}$")
+        axc.axvspan(t[0], F['window_T'], color=WONG['vermillion'], alpha=0.07)
+    axc.set(xlabel=r'hold time  ($\tau$)', ylabel=r'interior strain change  $-\partial(u_z/L)/\partial\zeta$')
+    axc.xaxis.set_minor_formatter(NullFormatter())
+    axc.set_title(r'(c) the transient in time' + (' -- two time scales' if F['stab_flag'] else ''), fontsize=14,
+                  color=WONG['vermillion'] if F['stab_flag'] else 'k')
+    axc.grid(alpha=0.3)
+    smart_legend(axc, fontsize=10)
+    if S is None:
+        axd.text(0.5, 0.5, 'no load-piston trace (piston_force_avg) or DC_STRESS off', ha='center', va='center', transform=axd.transAxes)
+        axd.set_title('(d) load-piston stress trace', fontsize=14)
+        return
+    tt, P = S['t'], S['P']
+    axd.loglog(tt, P, '.', color='0.6', ms=3, label=f"$F_\\mathrm{{load}}/A$, blocks of {S.get('block', np.nan):.0f} $\\tau$")
+    if S['ok']:
+        axd.loglog(td[td >= S['t_min']], S['model'](td[td >= S['t_min']]), '-', color=WONG['reddishpurple'], lw=2.4,
+                   label=rf"held-slab series from {S['t_min']:.0f} $\tau$: $D_c={sig(S['Dc'])}\pm{sig(S['Dc_se'], 1)}$, $\tau_1={S['tau1']:.0f}\,\tau$")
+        if S['tail_ok']:
+            tt2 = td[td >= S['t_tail']]
+            axd.loglog(tt2, S['model_tail'](tt2), '-', color=WONG['skyblue'], lw=2.4,
+                       label=rf"tail from {S['t_tail']:.0f} $\tau$: $\tau={S['tau_tail']:.0f}\pm{S['tau_tail_se']:.0f}$ $\to$ $D_c={sig(S['Dc_tail'])}$")
+        # the profile fit's tau_1 on the same tail, amplitude fitted: is the stress slower or faster than the profiles?
+        wt = tt >= S.get('t_tail', S['t_min'])
+        if wt.sum() >= 10:
+            Xp = np.column_stack([np.ones(wt.sum()), np.exp(-tt[wt] / F['tau1'])])
+            Ap = np.linalg.lstsq(Xp, P[wt], rcond=None)[0]
+            tt3 = td[td >= tt[wt][0]]
+            axd.loglog(tt3, Ap[0] + Ap[1] * np.exp(-tt3 / F['tau1']), ':', color=WONG['vermillion'], lw=2.2,
+                       label=rf"decaying at the profile fit's $\tau_1={F['tau1']:.0f}\,\tau$ (amplitude fitted)")
+        lo = np.nanpercentile(P, 0.5)
+        axd.set_ylim(max(lo * 0.8, 1e-4), np.nanpercentile(P[tt < max(10 * S['t_min'], tt[0])], 99.5) * 1.3)
+        axd.set_title(rf"(d) stress trace: $D_c={sig(S['Dc'])}$ vs profiles {sig(F['Dc'])}  (ratio {F['Dc'] / S['Dc']:.2f})", fontsize=14)
+    else:
+        axd.set_title('(d) stress trace: $\\tau_1$ not resolved by this trace', fontsize=14)
+        annotate_box(axd, S['why'].replace('; ', ';\n').replace(' (', '\n('), loc='lower left', fontsize=10, color='0.3')
+    axd.set(xlabel=r'hold time  ($\tau$)', ylabel=r'$F_\mathrm{load}/A$  (LJ)')
+    axd.xaxis.set_minor_formatter(NullFormatter())
+    axd.yaxis.set_minor_formatter(NullFormatter())
+    ylo, yhi = axd.get_ylim()
+    axd.set_yticks([v for v in (0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0, 2.0) if ylo <= v <= yhi])
+    axd.yaxis.set_major_formatter(FormatStrFormatter('%g'))
+    axd.grid(alpha=0.3, which='both')
+    axd.legend(loc='upper right', fontsize=10)
+
+
+def _unload_panels(cfg, axe, axf, F, Uf, S):
+    """The unload row of fig_Dc (2026-10-09): (e) the thickness trace with the one-parameter series fit, the
+    free-asymptote fit and the series drawn at the hold's D_c values; (f) the re-swelling profiles and the
+    modal fit in the compressed gel's material coordinate."""
+    T, Pf, L = Uf['trace'], Uf['prof'], Uf['L']
+    if T is not None:
+        tt, dL = T['t'], T['dL']
+        td = np.geomspace(max(tt[tt > 0][0], 1.0), tt[-1], 400)
+        axe.semilogx(tt[tt > 0], dL[tt > 0], '.', color='0.6', ms=2, label=r'$L_\mathrm{bb}(t) - L_\mathrm{hold}$ (every print)')
+        axe.semilogx(td, T['model'](td), '-', color=WONG['vermillion'], lw=2.6,
+                     label=rf"series, $\Delta L_\infty$ fixed = {Uf['dL_inf_ref']:.2f} $\sigma$: $D_c={sig(T['Dc'])}\pm{sig(T['Dc_se'], 1)}$, $\tau_1={T['tau1']:.0f}\,\tau$")
+        axe.semilogx(td, T['model_free'](td), '--', color=WONG['blue'], lw=2.0,
+                     label=rf"series, $\Delta L_\infty$ free = {T['dL_inf_free']:.2f}: $D_c={sig(T['Dc_free'])}$")
+        for D_, lab, ls in ((F['Dc'], "hold, windowed profile", ':'), (F['Dc_all'], "hold, whole-hold profile", '-.')):
+            axe.semilogx(td, Uf['dL_inf_ref'] * _unload_series(td, D_, L), ls, color='0.3', lw=1.6, label=rf"series at the {lab} $D_c={sig(D_)}$")
+        if S is not None and S.get('ok'):
+            axe.semilogx(td, Uf['dL_inf_ref'] * _unload_series(td, S['Dc'], L), ls='--', color=WONG['green'], lw=1.6,
+                         label=rf"series at the hold's stress-trace $D_c={sig(S['Dc'])}$")
+        axe.axhline(Uf['dL_inf_ref'], color='k', lw=0.8, alpha=0.5)
+        axe.axvline(Uf['retract_T'], color='k', lw=0.8, ls=':', alpha=0.6)
+        axe.text(Uf['retract_T'] * 1.1, 0.93 * Uf['dL_inf_ref'], 'plates stopped', fontsize=9, color='0.3')
+        axe.set(xlabel=r'time since retraction start  ($\tau$)', ylabel=r'$\Delta L = L_\mathrm{bb}(t) - L_\mathrm{hold}$  ($\sigma$)')
+        axe.xaxis.set_minor_formatter(NullFormatter())
+        axe.set_title(rf"(e) unload re-swelling ($\tau_1=L^2/\pi^2 D_c$): trace $D_c={sig(T['Dc'])}$ vs hold {sig(F['Dc'])}, ratio {F['Dc'] / T['Dc']:.2f}", fontsize=14)
+        axe.grid(alpha=0.3)
+        axe.legend(loc='lower right', fontsize=9)
+    else:
+        axe.text(0.5, 0.5, 'no thickness trace (gel_dimensions_bb_*_u<lvl>)', ha='center', va='center', transform=axe.transAxes)
+    if Pf is not None:
+        zff = np.linspace(0.0, 1.0, 300)
+        norm = Normalize(vmin=Pf['ts'][Pf['early'][0]], vmax=Pf['ts'][Pf['early'][-1]])
+        cmap = plt.cm.viridis
+        for i in Pf['shown']:
+            c = cmap(norm(Pf['ts'][i]))
+            axf.plot(Pf['zl'][i], Pf['yl'][i], 'o', color=c, ms=2.5, alpha=0.4)
+            axf.plot(zff, Pf['u_model'](zff, Pf['t_lj'][i]), '-', color=c, lw=1.6)
+        axf.set(xlabel=r'$\zeta$ (material coordinate of the compressed gel)',
+                ylabel=r'$u_z/L$ since the plates stopped')
+        axf.set_title(rf"(f) unload profiles ($\cos k\pi\zeta$, COM removed): $D_c={sig(Pf['Dc'])}$ over {Pf['n_tau1_fit']:.1f} $\tau_1$, whole {sig(Pf['Dc_all'])}",
+                      fontsize=13, color=WONG['vermillion'] if Pf['stab_flag'] else 'k')
+        axf.grid(alpha=0.3)
+        axf._tri_has_colorbar = True
+    else:
+        axf.text(0.5, 0.5, 'no unload displacement file', ha='center', va='center', transform=axf.transAxes)
+
+
 def fig_Dc(cfg, R, L):
-    """Consolidation fit of u_z(zeta,t)/L: data (left) and data + model (right)."""
+    """Consolidation fit of u_z(zeta,t)/L: (a) data, (b) data + model; (c) the interior strain change vs hold
+    time with the windowed and the whole-hold fits; (d) the load-piston stress trace and its own D_c."""
     F = L.get('Dc')
     if F is None:
         print('D_c figure skipped (no fit)')
@@ -3932,7 +4476,13 @@ def fig_Dc(cfg, R, L):
     dlL = F['DL'] / F['L']
     u0f = F['u_IC'](zff)
     u0_b = F['u_IC'](F['zf'])
-    fig, (axl, axr) = plt.subplots(1, 2, figsize=(18, 7), constrained_layout=True)
+    Uf = L.get('unload')
+    if Uf is not None:
+        fig, ((axl, axr), (axc, axd), (axe, axf)) = plt.subplots(3, 2, figsize=(18, 19), constrained_layout=True)
+        _unload_panels(cfg, axe, axf, F, Uf, L.get('Dc_stress'))
+    else:
+        fig, ((axl, axr), (axc, axd)) = plt.subplots(2, 2, figsize=(18, 13), constrained_layout=True)
+    _dc_time_panels(cfg, axc, axd, F, L.get('Dc_stress'))
     norm = Normalize(vmin=F['ts'][F['early'][0]], vmax=F['ts'][F['early'][-1]])
     cmap = plt.cm.viridis
     for i in F['shown']:
@@ -3953,9 +4503,9 @@ def fig_Dc(cfg, R, L):
         ax.set(xlabel=flip_hint(R, r'$\zeta=(z-z_\mathrm{perm})/L$'), ylabel=r'$u_z/L$', xlim=_zlim(R))
         ax.grid(alpha=0.3)
         smart_legend(ax, fontsize=11)
-    axl.set_title(r'$u_z(\zeta,t)/L$ -- hold snapshots (data + fitted IC offset)', fontsize=15)
+    axl.set_title(r'(a) $u_z(\zeta,t)/L$ -- fitted hold snapshots (data + fitted IC offset)', fontsize=15)
     lbl = '' if cfg.DC_FREE_AMPS else rf"$\beta=p_0/M={sig(F['beta'])}$, "
-    axr.set_title(rf"Consolidation fit: $D_c={sig(F['Dc'])}\ \sigma^2/\tau$, " + lbl + rf"$R^2={sig(F['R2'])}$", fontsize=15)
+    axr.set_title(rf"(b) consolidation fit, first {F['n_tau1_fit']:.1f} $\tau_1$: $D_c={sig(F['Dc'])}\ \sigma^2/\tau$, " + lbl + rf"$R^2={sig(F['R2'])}$", fontsize=15)
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     fig.colorbar(sm, ax=[axl, axr], fraction=0.015, pad=0.04).set_label('timestep')
@@ -4474,11 +5024,19 @@ def fig_Dc_sweep(cfg, R, levels):
     ax = axes[0]
     e = np.array([L['eps'] for L in hd])
     v = np.array([L['Dc']['Dc'] for L in hd])
-    ax.plot(e, v, 'o-', color=WONG['reddishpurple'], lw=2, ms=8)
+    ax.plot(e, v, 'o-', color=WONG['reddishpurple'], lw=2, ms=8,
+            label=rf"profile fit, first {cfg.DC_FIT_TAU1:g} $\tau_1$ of the hold" if cfg.DC_FIT_TAU1 > 0 else 'profile fit')
     for L in hd:   # R^2 label under each point, clipped inside the axes
         ax.annotate(f"$R^2$={sig(L['Dc']['R2'])}", (L['eps'], L['Dc']['Dc']), textcoords='offset points',
                     xytext=(0, -12), ha='center', va='top', fontsize=10, color='0.35',
                     annotation_clip=True)
+    if cfg.DC_FIT_TAU1 > 0:            # 2026-10-09: the whole-hold fit and the stress-trace D_c alongside
+        ax.plot(e, [L['Dc']['Dc_all'] for L in hd], 'o:', mfc='none', color=WONG['reddishpurple'], lw=1.5, ms=8,
+                label='profile fit, whole hold')
+    hs = [L for L in hd if (L.get('Dc_stress') or {}).get('ok')]
+    if hs:
+        ax.errorbar([L['eps'] for L in hs], [L['Dc_stress']['Dc'] for L in hs], yerr=[L['Dc_stress']['Dc_se'] for L in hs],
+                    fmt='^--', color=WONG['green'], lw=1.8, ms=9, capsize=5, label='load-piston stress trace (held-slab series)')
     ax.margins(x=0.12, y=0.15)
     ax.axhline(cfg.DC_SLOW_REF / 4.0, color='0.4', ls=':', lw=1.5,
                label=f"deck hold-sizing $D_c$ = {sig(cfg.DC_SLOW_REF / 4)}  ($Dc_{{est}}$ = {sig(cfg.DC_SLOW_REF)} in the deck's $L^2/\\pi^2 D_c$ formula)")
@@ -4521,8 +5079,14 @@ def fig_kappa_sweep(cfg, R, levels):
             continue
         e = np.array([L['eps'] for L in Ls])
         k = np.array([L['kappa'][key]['k'] for L in Ls])
-        ax.errorbar(e, k, yerr=[k - [L['kappa'][key]['lo'] for L in Ls], [L['kappa'][key]['hi'] for L in Ls] - k],
+        lo = k - np.array([L['kappa'][key]['lo'] for L in Ls])
+        hi = np.array([L['kappa'][key]['hi'] for L in Ls]) - k
+        ax.errorbar(e, k, yerr=[np.clip(lo, 0, None), np.clip(hi, 0, None)],      # an M CI through zero makes hi < 0
                     fmt=mk + '-', ms=10, lw=2, color=col, capsize=6, label=lab)
+    hs = [L for L in hk if 'net' in (L.get('kappa_stress') or {})]
+    if hs:
+        ax.plot([L['eps'] for L in hs], [L['kappa_stress']['net'] for L in hs], '^--', ms=10, lw=1.8, color=WONG['green'],
+                label=r'$D_c^\mathrm{stress\ trace}/M_\mathrm{network}$')
     ax.set_xlabel(r'applied strain  $\varepsilon$')
     ax.set_ylabel(r'$\kappa = D_c/M$  (LJ)')
     ax.set_title(r'Hydraulic permeability $\kappa = D_c/M$ vs strain', fontsize=15)
@@ -4545,7 +5109,10 @@ def print_hold_check(cfg, levels):
     for L in hd:
         F = L['Dc']
         print(f"  level _c{L['lvl']}:  L = {F['L']:.1f} sigma   hold T = {F['hold_T']:.0f} tau "
-              f"= {F['hold_T'] / cfg.dt_lj / 1e6:.2f}M steps")
+              f"= {F['hold_T'] / cfg.dt_lj / 1e6:.2f}M steps   (D_c fitted on the first {F['n_tau1_fit']:.1f} tau_1 = "
+              f"{len(F['early'])} of {len(F['early_all'])} snapshots; whole hold {F['Dc_all']:.3e}"
+              + (f"; stress trace {L['Dc_stress']['Dc']:.3e}" if (L.get('Dc_stress') or {}).get('ok') else '')
+              + (f"; unload trace {L['unload']['trace']['Dc']:.3e}" if (L.get('unload') or {}).get('trace') else '') + ')')
         for tag, h in F['hold_check'].items():
             flag = '' if h['ok'] else '   <-- TOO SHORT'
             print(f"     {tag:<4s} D_c={h['Dc']:.3f}:  tau_1 = {h['tau1']:.0f} tau = {h['tau1'] / cfg.dt_lj / 1e6:.2f}M steps"
@@ -5202,7 +5769,7 @@ def print_summary(cfg, levels):
     print(f'\nSUMMARY  ({cfg.sim_name}; {ci}% CIs; {how})')
     if cfg.RELAX_SYS:
         how += '; M lower bounds include delta_sys (unrelaxed-hold excess, last column)'
-    print(f"{'eps':>6s} {'eps_M':>9s} {'M_net':>18s} {'M_pist':>18s} {'G_x':>18s} {'G_y':>18s} {'D_c':>10s} {'kappa_net':>10s} {'kappa_pist':>10s} {'delta_sys':>10s}")
+    print(f"{'eps':>6s} {'eps_M':>9s} {'M_net':>18s} {'M_pist':>18s} {'G_x':>18s} {'G_y':>18s} {'D_c':>10s} {'D_c_all':>10s} {'D_c_stress':>10s} {'D_c_unload':>10s} {'kappa_net':>10s} {'kappa_pist':>10s} {'delta_sys':>10s}")
     for L in levels:
         def ci_(v, lo, hi):
             return f'{v:.3f} [{lo:.3f},{hi:.3f}]'
@@ -5212,12 +5779,20 @@ def print_summary(cfg, levels):
         mp = ci_(L['M_pist'], L['M_pist_lo'], L['M_pist_hi']) if 'M_pist' in L else 'n/a'
         gx = ci_(L['G']['xx']['G'], L['G']['xx']['lo'], L['G']['xx']['hi']) if 'xx' in L['G'] else 'n/a'
         gy = ci_(L['G']['yy']['G'], L['G']['yy']['lo'], L['G']['yy']['hi']) if 'yy' in L['G'] else 'n/a'
-        dc = f"{L['Dc']['Dc']:.3e}" if L.get('Dc') else 'n/a'
+        dc = f"{L['Dc']['Dc']:.3e}" + (' !' if L['Dc'].get('stab_flag') else '') if L.get('Dc') else 'n/a'
+        da = f"{L['Dc']['Dc_all']:.3e}" if L.get('Dc') else 'n/a'
+        S = L.get('Dc_stress')
+        dst = f"{S['Dc']:.3e}" if (S and S.get('ok')) else 'n/a'
+        Uf = L.get('unload')
+        dun = f"{Uf['trace']['Dc']:.3e}" if (Uf and Uf.get('trace')) else (f"{Uf['prof']['Dc']:.3e}p" if (Uf and Uf.get('prof')) else 'n/a')
         kn = f"{L['kappa']['net']['k']:.3e}" if L.get('kappa', {}).get('net') else 'n/a'
         kp = f"{L['kappa']['pist']['k']:.3e}" if L.get('kappa', {}).get('pist') else 'n/a'
         print(f"{L['eps']:6.3f} {em:>9s} {ci_(L['M_net'], L['M_net_lo'], L['M_net_hi']):>18s} {mp:>18s} {gx:>18s} {gy:>18s} "
-              f"{dc:>10s} {kn:>10s} {kp:>10s} {ds_s:>10s}")
+              f"{dc:>10s} {da:>10s} {dst:>10s} {dun:>10s} {kn:>10s} {kp:>10s} {ds_s:>10s}")
     print('  eps_M = the strain M, G and kappa divide by (M_STRAIN): d = steady displacement-profile slope, r = Rg, a = applied')
+    print(f'  D_c = profile fit over the first {cfg.DC_FIT_TAU1:g} tau_1 of the hold (kappa uses it; ! = the whole-hold fit D_c_all differs by '
+          f'more than {cfg.DC_STAB_FLAG:.0%}: a slower process after the transient);  D_c_stress = the load-piston trace, held-slab series;  '
+          f'D_c_unload = the free re-swelling after the hold, thickness trace (p: profile fit), tau_1 = L^2/(pi^2 D_c)')
     if cfg.RELAX_SYS:
         print('  delta_sys = (piston plateau - fitted tail asymptote) / eps;  * = larger than the M_net bootstrap half-width')
     print_hold_check(cfg, levels)

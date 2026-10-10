@@ -13,12 +13,18 @@ with the PHYSICAL boundary conditions of each experiment, and both fitters read 
                  (same bath pressure at both faces -> same network stress, total stress uniform)
     permeation   u(0) = 0 (support);  u'(L) = 0 (free feed face, sigma' = 0);
                  u'(0) = -dP(t)/M (the support carries the whole pressure drop from t = 0+)
+    unload       u'(0) = u'(L) = s (both faces free after the plates retract: the network stress
+                 there is zero, i.e. the strain returns to the reference value, s = dL_inf/L above
+                 the uniform compressed state);  mean u = 0 (the gel's COM stays)   [2026-10-09]
 
 q(t) is the extra unknown that the third condition fixes.  Eigenmodes in ONE convention
 (L = the FULL thickness between the faces in both problems, never a half-thickness):
 
     held slab    strain modes cos/sin(2 m pi z/L)   rate 4 m^2 pi^2 D_c/L^2   tau_1 = L^2/(4 pi^2 D_c)
     permeation   strain modes sin(k pi z/L)         rate   k^2 pi^2 D_c/L^2   tau_1 = L^2/(  pi^2 D_c)
+    unload       strain modes sin(k pi z/L)         rate   k^2 pi^2 D_c/L^2   tau_1 = L^2/(  pi^2 D_c)
+                 (the SAME class as the permeation transient: strain pinned at the faces, solvent crossing
+                 them; the hold is the other class -- no flux through the plates, strain free at the faces)
 
 The factor 4 between the two tau_1 is physical (drainage path L/2 against L), not a convention:
 both fits return the D_c of the equation above, and D_c = kappa M in both.  The test asserts that
@@ -54,12 +60,17 @@ def solve(D, L, n, steps, mode, drive, dt=0.5):
         A[i, n + 1] = -1.0
     lo = np.array([-3.0, 4.0, -1.0]) / (2 * h)       # one-sided u'(0)
     hi = np.array([1.0, -4.0, 3.0]) / (2 * h)        # one-sided u'(L)
-    A[0, 0] = 1.0                                    # u(0) prescribed in both problems
+    if mode == 'free':                               # unload: u'(0) = u'(L) = s(t), mean u = 0 fixes q
+        A[0, 0:3] = lo
+        A[n, n - 2:n + 1] = hi
+        A[n + 1, 0:n + 1] = 1.0 / (n + 1)
+    else:
+        A[0, 0] = 1.0                                # u(0) prescribed in both problems
     if mode == 'held':
         A[n, n] = 1.0                                # u(L) prescribed
         A[n + 1, 0:3] = lo                           # u'(0) - u'(L) = 0
         A[n + 1, n - 2:n + 1] -= hi
-    else:
+    elif mode == 'perm':
         A[n, n - 2:n + 1] = hi                       # u'(L) = 0
         A[n + 1, 0:3] = lo                           # u'(0) = -dP(t)/M
     Ai = np.linalg.inv(A)
@@ -73,6 +84,8 @@ def solve(D, L, n, steps, mode, drive, dt=0.5):
         rhs[1:n] = x[1:n] / dt
         if mode == 'held':
             rhs[0], rhs[n] = drive(t)
+        elif mode == 'free':
+            rhs[0] = rhs[n] = drive(t)
         else:
             rhs[n + 1] = -drive(t)
         x = Ai @ rhs
@@ -178,6 +191,28 @@ def permeation(D, rigid_drop=3.0, L0=126.4, dP=0.1, M=0.42, onset=1_000_000, n_r
     return F, L0 ** 2 / (np.pi ** 2 * D)
 
 
+def unload(D, L_hold=113.6, s=0.11, retract=60_000, hold=25_000_000, stride=25_000, noise=0.01, seed=3):
+    """The unload of the fine batch: plates retract over `retract` steps (the faces are free from the start,
+    they detach within a few tau), then a re-swelling hold of `hold` steps; the thickness trace every SAMPLE
+    steps from the retraction start, the displacement profile every `stride` steps reset when the plates
+    stop.  Returns (fit, tau_1 of the equation)."""
+    rng = np.random.default_rng(seed)
+    Z, S, U, _ = solve(D, L_hold, 400, retract + hold, 'free', lambda t: s)
+    i_free = int(np.argmax(S >= retract))
+    assert abs((U[-1][-1] - U[-1][0]) / (s * L_hold) - 1.0) < 0.01, 'unload not relaxed to the reference thickness'
+    z_bot = 31.0                                              # bottom face of the compressed gel at the end of the hold
+    zc = np.arange(0.5 * BIN, z_bot + L_hold * (1.0 + s) + 20.0, BIN)
+    ends = retract + stride * np.arange(1, hold // stride + 1)
+    uz, Nc = window_snapshots(zc, z_bot, Z, S, U, ends, stride, ref=U[i_free])
+    uz = uz + np.where(Nc > 0, rng.normal(0.0, noise, uz.shape), 0.0)
+    Ud = dict(fine=True, ts=ends.astype(float), z=zc, Nc=Nc, uz=uz, t_retract=0.0, t_free=float(retract), z_pist_free=np.nan,
+              bb_step=S.astype(float), bb_L=L_hold + U[:, -1] - U[:, 0] + rng.normal(0.0, 3 * noise, len(S)),
+              L_ref=L_hold * (1.0 + s), L_ref_src='synthetic', L_hold=L_hold, Z_bot=z_bot, Z_top=z_bot + L_hold)
+    cfg = _cfg(mode='compression', COMP_LEVELS=['0.10'], DC_N_MODES=5, DC_TRIM_BINS=2)
+    F_hold = dict(L=L_hold, z_perm=z_bot, z_feed=z_bot + L_hold, Dc=D, Dc_all=D)
+    return tri.fit_Dc_unload(cfg, dict(z_support=z_bot - 1.0), Ud, F_hold), L_hold ** 2 / (np.pi ** 2 * D)
+
+
 def main(D=0.10, tol=0.10):
     print(f'consolidation equation du/dt = q(t) + D_c u\'\' solved by finite differences with D_c = {D} sigma^2/tau')
     print(f'solver check (permeation steady state): u_F = -dP L/(2M) within 1%, |q|/[(D_c/M) dP/L] = {solver_check(D):.4f}\n')
@@ -197,10 +232,19 @@ def main(D=0.10, tol=0.10):
         print(f"permeation (fit_perm_Dc), rigid drop {drop} sigma (PERM_RIGID = {F['rigid']}):  profile D_c = {F['Dc']:.4f}  "
               f"({F['Dc'] / D:.3f} x true, R^2 {F['R2']:.4f});  trace D_c = {T['Dc']:.4f}  ({T['Dc'] / D:.3f} x true, R^2 {T['R2']:.4f});  "
               f"L_0 = {F['L0']:.1f} (full thickness), tau_1 = L_0^2/(pi^2 D_c) = {tau1:.0f} tau")
+    Fu, tau1 = unload(D)
+    T, Pf = Fu['trace'], Fu['prof']
+    out['unload trace (dL_inf fixed)'] = T['Dc']
+    out['unload trace (dL_inf free)'] = T['Dc_free']
+    out['unload profile'] = Pf['Dc']
+    print(f"unload (fit_Dc_unload):  thickness trace D_c = {T['Dc']:.4f} ({T['Dc'] / D:.3f} x true, R^2 {T['R2']:.4f}; dL_inf free: "
+          f"{T['Dc_free']:.4f}, dL_inf {T['dL_inf_free']:.2f} vs {Fu['dL_inf_ref']:.2f});  profile D_c = {Pf['Dc']:.4f} "
+          f"({Pf['Dc'] / D:.3f} x true, R^2 {Pf['R2']:.4f}, first {Pf['n_tau1_fit']:.1f} tau_1; whole {Pf['Dc_all']:.4f});  "
+          f"L = {Fu['L']:.1f} (compressed thickness), tau_1 = L^2/(pi^2 D_c) = {tau1:.0f} tau")
     bad = {k: v for k, v in out.items() if abs(v / D - 1.0) > tol}
     print(f"\nlargest deviation from the true D_c: {max(abs(v / D - 1.0) for v in out.values()):.1%}  (tolerance {tol:.0%})")
     assert not bad, f'fitters off by more than {tol:.0%}: {bad}'
-    print('PASS: both fitters return the D_c of the same equation -- no factor between their conventions')
+    print('PASS: all three fitters return the D_c of the same equation -- no factor between their conventions')
 
 
 if __name__ == '__main__':

@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=triax_comp2p_fine
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=0
+#SBATCH --time=48:00:00
+#SBATCH --output=%x.o%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (must run BEFORE COMPRESSIONS is defined below).  sbatch
+# submits whatever copy of this file is on disk; if it is stale the sweep list
+# is wrong and run_lammps.sh's own git pull is too late (COMPRESSIONS is already
+# exported).  Pull first, then re-exec the fresh batch.  (Mirrors
+# triaxial_compression.batch / shear_slab.batch.)
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${TRIAX_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining COMPRESSIONS..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export TRIAX_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/triaxial_compression_two_pist/triaxial_compression_two_pist_fine.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (TRIAX_BATCH_SYNCED=1)"
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# FULL GEL, ONE LEVEL, FINE CADENCE, WITH UNLOAD (2026-10-09): the D_c test in one job.
+#
+# Why: run 7 (this data file) gives D_c = 0.053 at eps 0.10 from the hold displacement profiles,
+# i.e. kappa = D_c/M = 0.13, against the permeation Darcy kappa 0.24-0.32 (two independent flux
+# readings agree).  Re-fitting the raw files (2026-10-09) showed the hold is not one poroelastic
+# transient: on the quarter gel (fine file) the first ~6 tau_1 follow D_c = 0.109 (kappa 0.22, at
+# the Darcy value) and a slower process (+20 % interior strain, -8 % stress) follows; fitted whole,
+# D_c halves.  Run 7's coarse profile file cannot resolve the split (first block ends 0.6 tau_1 into
+# the hold), but its 25-tau load-piston stress trace decays with D_c = 0.073, 1.4x the profile
+# fit.  The suspect is the ramp: at v_piston_prod = 0.04 the faces are compressed into thin skins
+# of very low permeability that throttle the early relaxation.
+#
+# What this run measures, on ONE gel at ONE strain (eps = 0.10 applied, ~0.08 network):
+#   HOLD   (10M steps = 50,000 tau, ~11 tau_1 at D_c 0.07): the profile D_c over the first 6 tau_1,
+#          over the whole hold, and the stress-trace D_c (lib/triaxial.py fit_Dc / fit_Dc_stress).
+#   UNLOAD (25M steps = 125,000 tau, ~6 tau_1 at D_c 0.07, ~4 at 0.05): both plates back to the seated
+#          gap at the drive speeds, then free re-swelling from the UNIFORM equilibrated state -- no
+#          ramp, no skins.  Faces free = zero network stress = Dirichlet strain, tau_1 = L^2/(pi^2 D_c),
+#          4x the hold's at the same D_c, hence the long hold.  D_c from the thickness trace against
+#          the exact series with dL_inf = L_ref - L_hold known (ONE free parameter) and from the fine
+#          profiles (fit_Dc_unload).  If the hold's early D_c and the unload's agree at ~0.07-0.11,
+#          the "factor 2" was the whole-hold fit absorbing the skin relaxation; if the unload alone
+#          reads high, the skins throttle even the hold's early phase; if both read ~0.05, the
+#          discrepancy with permeation is physics, not fitting.
+#
+# What differs from triaxial_compression_two_pist.batch (run 7):
+#   * STRAIN_TARGETS=(0.10): one level (the Darcy comparison point); the budget goes into resolution.
+#   * DISP_FINE_NFREQ=5000 / DISP_FINE_BIN=1.0: hold AND unload displacement profiles every 25 tau
+#     on 1-sigma bins (disp_z_polymer_fine_*_c0.10 and _u0.10; load_disp / load_unload prefer them).
+#   * HOLD_AUTO=0, NSTEPS=10000000: a flat 10M-step hold (run 7's auto hold was 8.5M).
+#   * UNLOAD=1, UNLOAD_STEPS=25000000, UNLOAD_MARGIN=0: Phase 2c of the deck (new 2026-10-09):
+#     retraction to exactly the seated reference gap (the gel returns to the reference state, the
+#     plates at the WCA cutoff from its faces), then the 25M-step re-swelling hold tagged _u0.10.
+#
+# WALL TIME: ~36.5M steps on ~290k atoms (settle 1.2M + ramp + 10M + retraction + 25M); run 7 did
+# ~55M in 48 h (>= 1.1M steps/h) -> ~32 h expected, 48 h requested.  The deck has no restart /
+# chaining, so if the queue limit is a problem cut UNLOAD_STEPS to 15M (3.5 tau_1 at 0.07; the
+# one-parameter trace fit does not need full relaxation) for ~24 h.
+# Analysis: triaxial_compression_single_two_pist.ipynb (or the sweep notebook) with this DATANAME, a
+#   new RUN_ID (e.g. two_pist_rho04_14M_10M_comp_4_fine_unload), LEVEL "0.10": load_level prints the
+#   windowed / whole-hold / stress-trace / unload D_c side by side and fig_Dc draws all of them.
+#
+# DATANAME is the CONVERTER output (scripts/slab_two_pistons.ipynb) of the 2026-09-07
+# piston-transparent slab; it is already in ~/Documents/lammps_data/input_data/ (run 7 used it).
+# =======================================================================
+FOLDER="triaxial_compression_two_pist"
+DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist"
+INTERACTION="1.0_1.0"   # epsSS_epsSP
+# NSTEPS: with HOLD_AUTO=0 this is the FLAT hold length AND the tag of every level file
+# (..._10000000_c0.10.dat, ..._10000000_u0.10.dat); the notebooks resolve the tag (NSTEPS=None).
+NSTEPS=10000000         # compression hold: 50,000 tau
+TYPE=""
+PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run
+
+# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var) -----
+export PISTON_MASS=1000       # mass per piston bead (types 5/6/7)
+export C_PIST_FRAC=1.0        # damping / critical damping (the .lmp prints C_crit and the period)
+export NPT_PISTON_STEPS=1000000   # Phase-1 settle of the wet pistons (replaces the 2M aniso NPH Phase 0)
+export SETTLE_HALT=0          # 1 = end the settle early once both pistons are at rest
+export HOLD_AUTO=0            # flat hold of NSTEPS steps (see the header)
+export DISP_FINE_NFREQ=5000   # fine-cadence displacement profiles (hold and unload): block length in steps (25 tau); 0 = off
+export DISP_FINE_BIN=1.0      # their z-bin width (sigma)
+export UNLOAD=1               # Phase 2c: after the hold, plates back to the seated gap + free re-swelling hold
+export UNLOAD_STEPS=25000000  # re-swelling hold: 125,000 tau (~6 tau_1 = L^2/(pi^2 D_c) at D_c 0.07)
+export UNLOAD_MARGIN=0.0      # retract exactly to the seated reference positions
+
+# -----------------------------------------------------------------------
+# Strain target(s): one level here.  With UNLOAD=1 every level is followed by its unload and the
+# next level (if any) compresses from the reference again.
+# NOTE: the list must be exported as a SCALAR string (bash does not export arrays).
+# -----------------------------------------------------------------------
+STRAIN_TARGETS=(0.10)
+export COMPRESSIONS="${STRAIN_TARGETS[*]}"
+export DRIVE_SPLIT=0.5        # load-piston share of the gap closure (0.5 = symmetric drive, as run 7)
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"
