@@ -63,6 +63,7 @@ Knobs exported by the `*_two_pist.batch` files and forwarded by `run_lammps.sh` 
 Deck-only knobs (`-var` override, index-style): `K_solv` (bulk modulus for the damping estimate, 10),
 `min_iter`, `phase0_steps`, `ref_avg_steps`, `ref_nfreq`, `ramp_steps`, `t_seat`, `nsteps_settle`,
 `v_piston_prod`, `volume_freq`, `thermo_freq`, `strain_freq`, `flux_freq` — handy for short smoke tests.
+Local smoke test of `triaxial_compression_two_pist` including the Phase 2c unload (verified 2026-10-09 with the LAMMPS GUI `lmp -sf omp -pk omp 8` on the 290k-atom file, 28 min; the first attempt caught a formula error in the never-executed unload block, so run it after ANY edit to a block the production runs have not reached yet): `-var phase0_steps 200 -var npt_piston_steps 400 -var min_iter 50 -var t_seat 1000 -var nsteps_settle 400 -var ref_avg_steps 400 -var ref_nfreq 200 -var nsteps 2000 -var compressions 0.02 -var hold_auto 0 -var unload 1 -var unload_steps 2000 -var disp_fine_nfreq 500` (plus the usual `dataname` / `interaction` / `epsSS` / `epsSP` / `press_target` / `vel_seed` / `skip_widom` / `compressions_list` and the `piston_mass` / `c_pist_frac` / `settle_halt` / `drive_split` / `disp_fine_bin` / `unload_margin` vars `run_lammps.sh` forwards; work dir with `data_files/<dataname>.data`, `traj_files/` and the `output_files/*` subfolders). Pass: 15 `_<hold>_u0.02` files (all the level loggers plus `disp_z_polymer{,_fine}`), the log's `[unload 0.02] retraction done` line with the gap back at `L0_gap` and the fine profile files with one block per `disp_fine_nfreq` steps of hold. LAMMPS gotcha the error came from: `${...}` is NOT expanded inside an immediate `$(...)`, so write such lines as plain `equal` variables or use `v_` references inside the `$()`.
 `DRIVE_SPLIT` (env, default 0.5; forwarded as `-var drive_split`) sets the piston's share of each compression level's
 gap closure in both compression decks: 0.5 = symmetric drive (piston down + support up), 1.0 = the old top-only drive.
 The archived one-piston `archive/simulations/triaxial_compression/triaxial_compression.lmp` exposes the same kind of knobs since 2026-09-18 (`drive_split`,
@@ -103,7 +104,8 @@ cd ~/Documents/lammps_work/simulations/triaxial_compression_two_pist
 sbatch triaxial_compression_two_pist.batch   # Expanse (the two-piston decks have Expanse batch files only)
 # variants in the same folder: _half / _quarter (thinner gels cut from the same slab) and _fine (2026-10-09: run 7's
 # level 0.10 with DISP_FINE_NFREQ=5000, a flat 10M-step hold and UNLOAD=1: plates back to the seated gap + a 25M-step
-# free re-swelling hold tagged _u0.10 -- the one-job D_c test; knobs UNLOAD / UNLOAD_STEPS / UNLOAD_MARGIN)
+# free re-swelling hold tagged _u0.10 -- the one-job D_c test; knobs UNLOAD / UNLOAD_STEPS / UNLOAD_MARGIN;
+# Phase 2c smoke-tested locally 2026-10-09, see 5b')
 # Bridges-2 / Pod variants exist for shear_slab, slab_with_support, … (<name>_bridges.batch / <name>_pod.batch)
 ```
 

@@ -1210,7 +1210,8 @@ variable unload_len   equal (${unload_steps}>0)*${unload_steps}+(${unload_steps}
 variable unload_tag   string ${hold_tag}_u${compressions}
 variable unload_gap   equal ${L0_gap}+2.0*${unload_margin}
 # cap on the retraction run: 1.2 x the travel back (closure + margins) at v_piston_prod
-variable unload_cap   equal $(ceil(1.2*(${compressions}*${L0_bb}+2.0*${unload_margin})/(${v_piston_prod}*${timestep_prod}))+1000)
+# (plain equal variable: ${...} is NOT expanded inside an immediate $(...) -- smoke test 2026-10-09)
+variable unload_cap   equal ceil(1.2*(${compressions}*${L0_bb}+2.0*${unload_margin})/(${v_piston_prod}*${timestep_prod}))+1000
 
 # ----- loggers spanning the retraction + the re-swelling hold (same columns as the level files) -----
 fix uout_piston_pos all print ${strain_freq} "$(step) $(v_z_load) $(v_z_feed) $(v_z_perm)" &
