@@ -18,7 +18,7 @@ ulimit -n 2048 # gives more headroom for number of open file descriptors
 
 # Set simulation parameters
 FOLDER="pure_solvent"
-DATANAME="solvent_box_rho6_02"
+DATANAME="solvent_box_rho10_02"   # renamed 2026-10-11: this box is rho = 1.0 (was misnamed rho6); copy the renamed file to input_data/ before resubmitting
 INTERACTION="1.5_1.4"
 NSTEPS=20000
 TYPE="stress"             # Options: stress, volume, stressvol, or leave empty (just type "")

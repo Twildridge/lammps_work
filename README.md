@@ -12,6 +12,8 @@
 
 # LAMMPS Hydrogel Simulation
 
+> **Want to build LAMMPS yourself?** The build script for the Expanse binary these jobs use (`22Jul2025_update3`, MPI + OpenMP, CMake), the SLURM log of that build and the package list are in [`lammps_build/`](lammps_build/README.md).
+
 Coarse-grained molecular dynamics simulations of tetrahedral hydrogel slabs (Kremer–Grest bead-spring model, LAMMPS), used to extract poroelastic observables directly from MD trajectories: pore pressure, volume fraction profiles, cooperative diffusivity, and elastic moduli (longitudinal M, shear G, bulk K).
 
 **Physical analog:** PEG-based hydrogel membranes used in filtration, drug delivery, and soft robotics.
@@ -31,11 +33,12 @@ Everything else in this README is a short index into deeper reference material f
 ```
 lammps_work/
 ├── simulations/    ← One folder per simulation type — see running_simulations.md
-├── scripts/        ← Notebooks (build input files, analyze output) + shell scripts (run jobs, sync, post-process)
+├── scripts/        ← CURRENT notebooks (build input files, analyze output) + the job-runner / sync / post-process shell scripts — see scripts/README.md
 │   └── lib/        ← ALL the Python: analysis modules (triaxial/shear/bulk/volfrac/psd), converters, CLI plotters (since 2026-10-01)
+├── lammps_build/   ← How the Expanse LAMMPS binary was built (sbatch script + its log)
 ├── docs/           ← Everything below this point in more depth (start with getting_started.md)
 ├── lammps_data/    ← Reserved for small committed .data files (usually empty — see building_data_files.md)
-├── archive/        ← Superseded, unmaintained: one-piston triaxial decks (2026-09-22), volmix/Widom tools (2026-08) — see archive/README.md
+├── archive/        ← Superseded, unmaintained: one-piston triaxial decks (2026-09-22), volmix/Widom tools (2026-08), one-piston notebooks + old builders, Pod / Bridges-2 runners + batches (2026-10-11) — see archive/README.md
 └── *.md            ← A few standalone reference docs (unit cheat sheet, cluster guides — indexed below)
 ```
 
@@ -56,7 +59,7 @@ Full annotated tree, including every notebook/script and what it's for: [docs/re
 | **Cross-deck comparison** (2026-10-03): `cross_deck_comparison.ipynb` + `scripts/lib/compare.py` — figures built from more than one deck's run (compression sweep + permeation: D_c(φ_s), κ(φ_s), the equation-of-state and flux closures). Opening figures (2026-10-08, permeation deck): the normalised thermodynamic pressure with the two `ΔP_th = (4/3)(G/M) ΔP_ext` guides (`G_shear` = 0.2 from the shear decks, `G_comp` = 0.05 from the compression holds), and the **three solvent measures** of the steady membrane — concentration `c_s = φ_s^cal ρ_s,0/M_s` (λ-calibrated Voronoi; `M_s` = 1, so `c_s = φ_s^cal ρ_s,0` in beads/σ³), the mass (= number) fraction `ρ_s/ρ_s,0`, and the probe porosity `ε_g` (`lib/psd.py`, PoreBlazer-style as in Marioni et al.). **Why `r_probe` = 0.45 σ there** (the permeation notebook keeps 0.5): `psd.py` measures the grid distance from the bead *surface*, `d = r_nn − σ_bead/2`, and calls a point void when `d ≥ r_probe`, so the probe's centre must clear a polymer bead centre by `0.5 + r_probe` σ. With 0.5 that is 1.0 σ, the LJ zero-crossing; a thermal solvent bead at kT = ε actually reaches `U_LJ(r) = kT` at `r = 0.97 σ`, so 0.45 (clearance 0.95 σ) is the solvent-bead-sized probe, and 0.5 slightly over-excludes. The choice shifts `ε_g` by a few hundredths, not its ~0.16 gap below `φ_s^cal` (the excluded shell around every bead), which is the point of the figure | [analysis.md §7b](docs/analysis.md#7b-jupyter-analysis-notebooks) |
 | Shear modulus G: `scripts/lib/slab_shear_plates.py` (periodic slab → plates on its z-faces, 2026-09-22) → `shear_slab` deck (plates driven ±x, z = gap; laid out like the triaxial decks) → `shear_analysis_{single,sweep}.ipynb` (`lib/shear.py`, the G estimators mirror the compression M/G machinery); compare with G = (σ′_zz − σ′_xx)/2ε from the two-piston compression sweep | [running_simulations.md §5b](docs/running_simulations.md#5b-simulation-types) · [analysis.md §7b](docs/analysis.md#7b-jupyter-analysis-notebooks) |
 | Shear modulus G **on the two-piston system** (2026-10-03): `shear_slab_two_pist` deck — reads the compression deck's `*_two_pist.data` file unchanged (no plates, no converter step), both reservoirs held at P* by the NPT-pistons, and the polymer beads of the gel's two face layers act as the plates — rigid in x/y (prescribed translation, +x top, −x bottom; free in z) — through the **same strain sweep as `shear_slab`** (drive until the target γ, then hold; `_g<strain>` files) → the same `shear_analysis_{single,sweep}.ipynb` with `DECK = "shear_slab_two_pist"` in Config. In both shear decks G divides by the network strain (`G_STRAIN`: steady u_x(z) profile slope), as M does in compression | [running_simulations.md §5b](docs/running_simulations.md#5b-simulation-types) · [analysis.md §7b](docs/analysis.md#7b-jupyter-analysis-notebooks) |
-| One-piston triaxial decks (`triaxial_compression`, `triaxial_permeation`) — **archived 2026-09-22** to `archive/simulations/`; their existing runs are still read by `triaxial_compression_{single,sweep}.ipynb` / `triaxial_permeation.ipynb` | [archive/README.md](archive/README.md) · [docs/analysis.md §7b](docs/analysis.md#7b-jupyter-analysis-notebooks) |
+| One-piston triaxial decks (`triaxial_compression`, `triaxial_permeation`) — **archived 2026-09-22** to `archive/simulations/`; their existing runs are still read by `archive/scripts/triaxial_compression_{single,sweep}.ipynb` / `archive/scripts/triaxial_permeation.ipynb` (archived 2026-10-11; open them from `scripts/`) | [archive/README.md](archive/README.md) · [docs/analysis.md §7b](docs/analysis.md#7b-jupyter-analysis-notebooks) |
 | `lsync` / GitHub sync, credentials, SSH keys, merge conflicts | [docs/github_sync.md](docs/github_sync.md) |
 | First-time cluster account setup (SSH, Python env, `.data` transfer) | [docs/cluster_setup.md](docs/cluster_setup.md) |
 | Cluster login nodes, partitions, walltimes, scratch paths | [docs/cluster_reference.md](docs/cluster_reference.md) |
@@ -65,8 +68,8 @@ Full annotated tree, including every notebook/script and what it's for: [docs/re
 | Full annotated repo tree | [docs/repository_layout.md](docs/repository_layout.md) |
 
 **Standalone reference docs** (repo root, unchanged):
-[`lj_units_cheat_sheet.md`](lj_units_cheat_sheet.md) · [`expanse_lammps_guide.md`](expanse_lammps_guide.md) · [`slurm_commands_and_compiling.md`](slurm_commands_and_compiling.md) · [`slab_data_file_info.md`](slab_data_file_info.md) · [`documenting_pod_runs.md`](documenting_pod_runs.md)
+[`lj_units_cheat_sheet.md`](lj_units_cheat_sheet.md) · [`expanse_lammps_guide.md`](expanse_lammps_guide.md) · [`slurm_commands_and_compiling.md`](slurm_commands_and_compiling.md) · [`slab_data_file_info.md`](slab_data_file_info.md) · [`archive/pod_bridges/documenting_pod_runs.md`](archive/pod_bridges/documenting_pod_runs.md)
 
 ---
 
-*Last updated: 2026-10-08 (cross-deck comparison row: opening figures + the `r_probe` = 0.45 σ justification; 2026-10-01: every `.py` moved from `scripts/` into `scripts/lib/`). For questions, contact Dylan Pollard (pollard@ucsb.edu).*
+*Last updated: 2026-10-11 (Pod and Bridges-2 runners, batches and benchmarks → `archive/pod_bridges/`; scripts/ reorganised: one-piston notebooks and old builders → `archive/scripts/`, LAMMPS build → `lammps_build/`, `scripts/README.md` added; 2026-10-08: cross-deck comparison row: opening figures + the `r_probe` = 0.45 σ justification; 2026-10-01: every `.py` moved from `scripts/` into `scripts/lib/`). For questions, contact Dylan Pollard (pollard@ucsb.edu).*

@@ -597,3 +597,33 @@ Two-piston data file with a THINNED gel  [2026-10-06 10:14, slab_two_pistons.cut
   z: perm piston 35.00 | support 46.00 | gel BB [47.70, 79.30] (L_bb 31.60, L_rg 29.34) | load piston 86.17 | feed piston 109.04 | zhi 124.04
   Crosslinks: 3643   Chain beads: 21344   Solvent: 60739   Support: 23316   Feed piston: 23316   Permeate piston: 23316   Load piston: 23316
   Total atoms: 178990   Total bonds: 28276   Output: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist_quarter_perm.data
+
+## 2026-10-11  slab_with_support.ipynb -- TALL ISOLATED GEL (no walls), for slab_with_support_isolated_tall.batch
+(9 x 9 x 21 cells = the July-8 tall gel, pre_swell 1.10 = equilibrium a 5.28, rhoSolv 0.40 = bath 0.48 at P* = 1.5, 15 sigma of bath each side; BARO_MODE=iso, PIN_GEL=1)
+Generated tetrahedral gel slab (isolated, include_walls=False):
+
+  Unit cells: 9 x 9 x 21
+  Beads per chain: 5
+  Gel dimensions: 47.52 x 47.52 x 110.88
+  Box dimensions: 77.52 x 77.52 x 140.88
+  Side thickness (x/y):  15.00
+  Below thickness (z):   7.00
+  Top thickness (z):     15.00
+  Gel top z:          125.8800
+  Piston z:           137.8800  (piston_height=0.80 of gel top -> box top)
+  Piston exclusion:   +/-0.10 sigma around piston plane
+  Crosslinks: 14562
+  Chains: 27216
+  Polymer beads: 96210
+  NO support / piston atoms (include_walls=False); 5 atom types still declared
+  Solvent beads: 338638 (density: 0.40)
+  Total atoms: 434848
+  Total bonds: 108864
+  Output: ../../lammps_data_files_local/slab_support_5beads_tall_rho04_new_04_nowalls.data
+
+## 2026-10-11  lammps_data_files_local reorganised + two density renames
+Catalog: lammps_data_files_local/README.md (active files at the top level, obsolete lineages in archive/<date>_<lineage>/).
+Renamed (the generator's nominal density was wrong in the name):
+  slab_support_5beads_tall_rho04_new_03_nowalls.data -> slab_support_5beads_tall_rho10_new_03_nowalls.data   (rhoSolv = 1.0)
+  solvent_box_rho6_02.data -> solvent_box_rho10_02.data   (rho = 1.0, 8 M atoms)
+Expanse copies and the outputs of runs already submitted keep the old stems.

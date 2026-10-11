@@ -26,7 +26,7 @@ module load python/3.8.12
 
 ---
 
-### Bridges-2 (PSC) — `run_lammps_bridges.sh`
+### Bridges-2 (PSC) — `archive/pod_bridges/run_lammps_bridges.sh` (not in use since 2026-10-11; runner + batches archived)
 
 | Setting | Value |
 |---------|-------|
@@ -54,14 +54,14 @@ module load LAMMPS/22Jul25-gcc
 
 ---
 
-### Pod (CNSI, UCSB) — `run_lammps_pod.sh`
+### Pod (CNSI, UCSB) — `archive/pod_bridges/run_lammps_pod.sh` (not in use since 2026-10-11; runner + batches archived)
 
 | Setting | Value |
 |---------|-------|
 | Login node | `pod-login1.cnsi.ucsb.edu` |
 | Cores/node | 40 (optimal) |
 | Internode bandwidth | 100 Gb/s (half of Bridges-2's 200 Gb/s — avoid multi-node for large systems) |
-| Note | GPUs available (L40S); check [`documenting_pod_runs.md`](../documenting_pod_runs.md) for benchmarks |
+| Note | GPUs available (L40S); check [`archive/pod_bridges/documenting_pod_runs.md`](../archive/pod_bridges/documenting_pod_runs.md) for benchmarks |
 
 > **Pod requires the UCSB campus VPN.** You must be connected before you can SSH in. Download and install Ivanti Secure Access from [it.ucsb.edu/ivanti-secure-access-campus-vpn/get-connected-campus-vpn](https://it.ucsb.edu/ivanti-secure-access-campus-vpn/get-connected-campus-vpn), then connect to the UCSB VPN before running `ssh pod-login1.cnsi.ucsb.edu`. Expanse and Bridges-2 do not require a VPN.
 

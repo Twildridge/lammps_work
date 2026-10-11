@@ -1,6 +1,6 @@
 #!/bin/bash
 # Shared best-effort "pull lammps_work on the compute node" helper.
-# Sourced by run_lammps.sh / run_lammps_pod.sh / run_lammps_bridges.sh.
+# Sourced by run_lammps.sh (and by the archived run_lammps_pod.sh / run_lammps_bridges.sh in archive/pod_bridges/).
 # Requires LAMMPS_WORK_DIR to be set by the caller.
 
 # ── Pull latest scripts from GitHub before running ────────────────────────────

@@ -12,10 +12,10 @@ under `simulations/` and `scripts/`.
 | `simulations/triaxial_compression/` | `simulations/triaxial_compression/` | One-piston axial compression: periodic slab, single velocity-controlled piston + support, aniso-NPH Phase 0, cumulative strain sweep with auto-sized holds. Superseded by **`simulations/triaxial_compression_two_pist/`**, which keeps the strain sweep, hold sizing, observables and file conventions but holds both reservoirs at the bath pressure with NPT-pistons (drained consolidation at constant P). Contains the Expanse/Bridges/Pod batch files and `chain_after_slab.batch`. |
 | `simulations/triaxial_permeation/` | `simulations/triaxial_permeation/` | One-piston permeation: force-controlled piston pushing solvent through the slab at constant volume. Superseded by **`simulations/triaxial_permeation_two_pist/`** (feed/permeate NPT-pistons, primary flux from the permeate-piston displacement). |
 
-* The runs these decks produced are still analysed by the one-piston notebooks
-  (`scripts/triaxial_compression_{single,sweep}.ipynb`, `scripts/triaxial_permeation.ipynb`,
-  `scripts/triaxial_compression.ipynb`), which stay in `scripts/` — `lib/triaxial.py`
-  handles one- and two-piston runs alike.
+* The runs these decks produced are still analysed by the one-piston notebooks, which
+  moved to `archive/scripts/` on 2026-10-11 (`triaxial_compression_{single,sweep}.ipynb`,
+  `triaxial_permeation.ipynb`, `triaxial_compression.ipynb`) — `lib/triaxial.py` handles
+  one- and two-piston runs alike. Open them from `scripts/` (their paths assume that folder).
 * `continue_sim.sh` still knows these folders (`final_tricomp` / `final_triperm`
   prefixes, `_c<level>` sweep tag); it works from a folder that holds the original
   SLURM output file next to the archived `.lmp` / `.batch`.
@@ -25,6 +25,35 @@ under `simulations/` and `scripts/`.
 * `shear_slab.lmp` was re-laid-out on 2026-09-22 to follow these decks' section
   structure and conventions (see its header), so the archived compression deck is
   also the reference for reading the shear deck.
+
+## Archived (2026-10-11): one-piston notebooks, old data-file builders, headless runner → `archive/scripts/`
+
+`scripts/` was reduced to what the current pipeline uses (`scripts/README.md`). Moved here as they were:
+
+| File | Why it is here |
+|---|---|
+| `scripts/triaxial_compression.ipynb` | Long-form one-piston analysis (the single/sweep notebooks were distilled from it 2026-09-02). |
+| `scripts/triaxial_compression_single.ipynb`, `scripts/triaxial_compression_sweep.ipynb` | One-piston compression analysis; superseded by `scripts/triaxial_compression_{single,sweep}_two_pist.ipynb`. |
+| `scripts/triaxial_permeation.ipynb` | One-piston permeation analysis; superseded by `scripts/triaxial_permeation_single_two_pist.ipynb`. |
+| `scripts/add_walls_to_slab.ipynb`, `scripts/add_walls_with_angles.ipynb` | Built the `walled_*` inputs of `slab_with_flow` / the one-piston triaxial decks (Jan–Jun 2026). |
+| `scripts/slab_with_support_angled.ipynb` | Angled-bond slab generator (Feb 2026 lineage; no current deck uses angle terms). |
+| `scripts/isolate_gel.ipynb`, `scripts/split_gel_slab.ipynb` | Notebook front-ends of `lib/isolate_gel.py` / `lib/split_gel.py`, which stay (used by `calibration_sweep` and `slab_shear_plates.py`). |
+| `scripts/add_plates_to_gel.ipynb` | Notebook front-end of `lib/add_plates_to_gel.py`, which stays (used by `slab_shear_plates.py`); it built the 2026-04 isolated-cube shear input. |
+| `scripts/run_analysis_notebook.sh` | Headless notebook runner (2026-08-06); nothing calls it, `scripts/tests/run_notebook_tests.sh` covers the need. |
+
+* All notebooks here use paths relative to `scripts/` (`lib`, `../../lammps_data_files_local/`, `../flow_data_local/`): copy one back to `scripts/` or open it from there to run it.
+* The data files these builders produced are in `lammps_data_files_local/archive/` (catalog: `lammps_data_files_local/README.md`).
+
+## Archived (2026-10-11): Pod and Bridges-2 → `archive/pod_bridges/`
+
+Expanse is the only cluster in use. The Pod (CNSI, UCSB) and Bridges-2 (PSC) job runners,
+every `*_pod.batch` / `*_bridges.batch` of the current decks (kept under
+`archive/pod_bridges/simulations/<folder>/`, so they do not collide with the one-piston
+decks' own Pod/Bridges batches in `archive/simulations/`), and the Pod benchmark notes
+`documenting_pod_runs.md` are here as they were. `docs/cluster_reference.md` still describes
+both machines. To run on one again: copy its runner back to `scripts/` and its batch back to
+`simulations/<folder>/` — the batch `cd`s to `scripts/` and calls `./run_lammps_<cluster>.sh`,
+and both runners still source `scripts/node_git_sync.sh`.
 
 ## Archived tools (2026-08): the volume-of-mixing / cavity-Widom pipeline
 

@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=slab_isolated_tall
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=128 # was 32, 128
+#SBATCH --cpus-per-task=1     # was 4, 1
+#SBATCH --mem=0
+#SBATCH --time=48:00:00
+#SBATCH --output=%x.o%j.%N
+# #SBATCH --error=%x.e%j.%N
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# TALL ISOLATED GEL (2026-10-11): the 9 x 9 x 21-cell block of the July-8 run
+# (slab_support_5beads_tall_rho04_new), rebuilt by scripts/slab_with_support.ipynb with
+# includeWalls = False, pre_swell 1.10, rhoSolv 0.40, 15 sigma of bath on every side
+# (slab_support_5beads_tall_rho04_new_04_nowalls.data, ~0.50 M atoms).  Free swelling of
+# a finite gel in its bath at P* = 1.5; the result feeds compress_slab (bulk modulus K)
+# through scripts/add_more_plates_to_gel.ipynb.  Same deck and knobs as the cube run
+# (slab_with_support_isolated.batch, _03_nowalls), with three differences:
+#
+#   BARO_MODE=iso.  The July-8 run of this gel (support + visible piston, nph aniso)
+#   collapsed laterally: the sheets' wall tension lowers the box-averaged lateral
+#   pressure, aniso contracts x, y and stretches z at constant volume, and a bath with
+#   a FREE inclusion has no restoring force on the box shape (62 x 62 x 122 ->
+#   48 x 47 x 212 in 10 M steps, the gel touching its image in x, y).  Its frozen
+#   support was also carried ~26 sigma away from the gel by the barostat's default
+#   `dilate all`.  Without sheets the drive is gone but the shape still random-walks
+#   under the pressure noise (see the cube batch); `iso` scales the three edges
+#   together, so the 15-sigma pads of the data file stay 15 sigma.  The gel's own
+#   shape is free either way: read its anisotropy from stress_aniso_*.dat and the
+#   Rg edges in gel_dimensions_*.dat, not from the box.
+#
+#   pre_swell 1.10 (a = 5.28 sigma; the cube used the same value) and NOT the 1.2
+#   first proposed for this run: the equilibrium lattice constant of this gel at P* = 1.5, 1.0_1.0 is 5.30 +/- 0.03
+#   (14000002 periodic slab: lx/9 = 5.33 in-plane, 5.26 along z), so the network
+#   starts at its swollen size and only the solvent redistributes (bath 0.48, gel
+#   interior 0.22 solvent + 0.37 polymer).
+#
+#   Expected steady read-outs: box_dimensions ~ 77 x 77 x 141 (iso: aspect ratio of
+#   the data file, 77.5 x 77.5 x 140.9, kept; the volume moves by a few %);
+#   gel_dimensions (bounding box) ~ 52 x 52 x 115-116 (lattice 47.5 x 47.5 x 110.9
+#   plus ~4-5 sigma of outermost-bead excursions per axis, as the local mini smoke
+#   test of 2026-10-11 and the periodic slab's z bbox both show).  NOT 121 along z:
+#   that is the July-8 z/cell of 5.67, a stretched box-collapse state, not an
+#   equilibrium (its x, y were box-limited at 5.3/cell).
+#
+# SMOKE TEST FIRST (a few hundred thousand steps, e.g. NSTEPS=300000 with
+# --time=02:00:00): box_dimensions must keep the initial aspect ratio to the 4th
+# digit (iso) and gel_dimensions must sit in the range above and drift by < 1 sigma
+# per 100k steps after the first ~50k; c_mobile_temp 1.00; the log prints
+# ">>> barostat coupling: baro_mode = iso" and ">>> gel pinned".  The deck path
+# (no-walls file, iso, pin_gel, empty support/piston groups) was run locally on a
+# 3 x 3 x 7-cell version of this file 2026-10-11 (LAMMPS GUI lmp, 30 s): aspect
+# ratio constant to 5 digits, T 1.00, P 1.52, bbox = lattice + 4-5 sigma.
+#
+# COST: ~0.50 M atoms (0.40 M solvent, 0.09 M polymer) x 8 M steps; at the 78 Matom-
+# step/s the periodic slab got on 4 nodes that is ~15 h, inside the 48 h limit, so
+# CHAIN=1 should not fire -- it stays armed in case the throughput is lower
+# (docs/running_simulations.md 5e).  Deck-side the cont=1 path was smoke-tested
+# 2026-09-30.  The file holds no chainless crosslink bead (generator fix 2026-09-29)
+# and NO vacuum frame (the generator ignores pistonMargin without walls since
+# 2026-10-11; the _03_nowalls cube carries a 5-sigma frame, xlo = -5).
+# =======================================================================
+FOLDER="slab_with_support"
+DATANAME="slab_support_5beads_tall_rho04_new_04_nowalls"
+INTERACTION="1.0_1.0"   # the interaction of the triaxial runs, so that K, M and G belong to the same gel
+NSTEPS=8000000
+TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
+PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
+SEED=12345          # RNG seed for create_velocity / langevin
+
+export BARO_MODE=iso          # one scale factor for x, y, z: the data file's aspect ratio is KEPT (see above);
+                              # aniso (the deck's default) has no restoring force on the box shape of an isolated gel
+export PIN_GEL=1              # zero the gel's linear + angular momentum every 100 steps: a free 48 x 48 x 111 block
+                              # would turn ~14 deg in 10M steps, and the plates of compress_slab are parked along
+                              # the box axes (see slab_with_support.lmp)
+export PISTON_TRANSPARENT=1   # no piston in this file: irrelevant, kept so a file WITH a piston is safe too
+export CHAIN=1                # chain continuation jobs until all NSTEPS are done (see WALL LIMIT above)
+export WALL_MARGIN=2400       # seconds before the SLURM limit at which the deck stops (final write_data,
+                              # teardown, chain submission and post-processing all fit in 40 min)
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET VEL_SEED
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET" "$SEED"

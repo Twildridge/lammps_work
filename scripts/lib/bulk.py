@@ -40,7 +40,7 @@ the compression notebooks estimate M:
     relaxes in sin(2 l pi zeta_a) times the transverse cos(2 m pi zeta_b) cos(2 n pi zeta_c)
     modes, all at 4 pi^2 D_c (l^2/L_a^2 + m^2/L_b^2 + n^2/L_c^2); one D_c is fitted to the
     three column profiles at once; kappa = D_c / M; the wet-piston bath check and the
-    solvent expelled -- as in the triaxial notebooks;
+    (no 'solvent expelled' reading: the plates are solvent-transparent, the pistons do not move);
   * network anisotropy: sigma'_ii / Pi in the gel interior over every hold (fig_ratio) and
     the whole-run polymer partial-stress ratios sig_p,xx / sig_p,zz, sig_p,yy / sig_p,zz of
     stress_aniso (fig_anisotropy_run; the same file slab_with_support writes, so the free
@@ -776,10 +776,9 @@ def load_level(cfg, R, lvl, verbose=True):
         say('  bath (wet pistons, plateau means): ' + '  '.join(
             f"{k}: {W['plat'][k]:.4f}" for k in ('P_feed_meas', 'P_perm_meas') if k in W['plat'])
             + (f"   applied {W['plat'].get('P_feed_app', np.nan):.3f}" if 'P_feed_app' in W['plat'] else ''))
-        if W.get('dV_total') is not None:
-            L['eps_expelled'] = float(W['dV_total'][-1] / R['V0_gap'])
-            say(f"  solvent expelled dV_total = {W['dV_total'][-1]:.1f} sigma^3 = {L['eps_expelled']:.4f} of the volume the seated "
-                f"plates enclosed (plate strain {L['strain']['plate']:.4f})")
+        # NO 'solvent expelled' reading here (dropped 2026-10-11): the six plates are solvent-transparent, so the
+        # solvent squeezed out of the gel redistributes inside the same bath and the wet pistons do not move --
+        # dV_total ~ 0 by construction (the two-piston compression deck's piston is NOT transparent).
 
     # ---- D_c: the held-cube fit (one D_c, three axes) + the 1-D per-axis fits as a check ----
     L['disp'] = {a: _load_disp(cfg, a, lvl, Pt, R) for a in axs}
@@ -998,7 +997,26 @@ def fig_volfrac_sweep(cfg, R, levels, axes=None):
 
 
 def fig_wet_pistons_sweep(cfg, R, levels):
-    return _each_axis_sweep(cfg, R, levels, tri.fig_wet_pistons_sweep, ('z',))
+    """Bath check per level only (the triaxial version's 'solvent expelled' panel is meaningless here:
+    the six plates are solvent-transparent, so the wet pistons do not move when the gel is compressed)."""
+    hw = [L for L in levels if L.get('wet') is not None]
+    if not hw:
+        print('wet-piston sweep figure skipped (no wet-piston files)')
+        return None
+    fig, axP = plt.subplots(figsize=(11, 6), constrained_layout=True)
+    for L in hw:
+        W = L['wet']
+        for nm, ls in (('P_feed_meas', '-'), ('P_perm_meas', '--')):
+            if nm in W:
+                axP.plot(W['step'], tri.rolling_mean(W[nm], cfg.roll_win), ls, color=tri.level_color(levels.index(L)), lw=2.0, alpha=0.9)
+    axP.axhline(cfg.P_BARO, color='k', ls=':', lw=1.0, alpha=0.6, label=f'$P_{{\\rm target}}={sig(cfg.P_BARO)}$')
+    axP.set_xlabel('time step'); axP.set_ylabel(r'$P_{\rm bath}$ on the wet pistons  (LJ)')
+    axP.set_title('bath check per level: feed (solid), permeate (dashed), rolling means', fontsize=13)
+    axP.grid(alpha=0.3)
+    h = tri.level_handles(levels) + [Line2D([0], [0], color='0.3', ls='-', lw=2, label='feed'),
+                                     Line2D([0], [0], color='0.3', ls='--', lw=2, label='permeate')]
+    smart_legend(axP, handles=h, fontsize=11)
+    return tri._save(fig, cfg, 'sweep_wet_pistons')
 
 
 # ===========================================================================
@@ -1197,29 +1215,11 @@ def fig_isotropy(cfg, R, L):
 
 
 def fig_solvent_expelled(cfg, R, L):
-    """Solvent expelled (wet-piston displacement) next to the volume the plates closed."""
-    W = L.get('wet')
-    if W is None or W.get('dV_total') is None:
-        print('solvent-expelled figure skipped (no permeation_<level> file)')
-        return None
-    fig, ax = plt.subplots(figsize=(11, 6), constrained_layout=True)
-    st = W['exp_step']
-    ax.plot(st, W['dV_total'], '-', color=WONG['green'], lw=2.4, label=r'expelled  $A\,(\Delta z_{\rm feed}-\Delta z_{\rm perm})$')
-    ax.plot(st, W['dV_feed'], '--', color=WONG['vermillion'], lw=1.6, label='taken up on the feed side')
-    ax.plot(st, W['dV_perm'], '--', color=WONG['blue'], lw=1.6, label='taken up on the permeate side')
-    S = L.get('strain_tab')
-    if S:
-        ax.plot(S['step'], S['eps_vol_plate'] * R['V0_gap'], ':', color='k', lw=2.0,
-                label=r'volume closed by the plates  $\varepsilon_{vol}\,V_0$')
-    ax.axhline(0, color='k', ls=':', lw=1, alpha=0.5)
-    ax.set_xlabel('time step')
-    ax.set_ylabel(r'volume  ($\sigma^3$)')
-    ax.set_title(f"Solvent expelled since seating, $\\varepsilon_{{vol}}={L['lvl']}$  |  final {sig(W['dV_total'][-1])} $\\sigma^3$ "
-                 f"= {sig(W['dV_total'][-1] / R['V0_gap'])} of $V_0$ (plates closed {sig(L['strain']['plate'])})", fontsize=13)
-    ax.grid(alpha=0.3)
-    smart_legend(ax, fontsize=12)
-    return _save(fig, cfg, 'solvent_expelled', L['lvl'])
-
+    """Dropped 2026-10-11: with solvent-transparent plates the expelled solvent stays in the same bath and the
+    wet pistons do not move, so A*dz reads ~0 regardless of the strain.  Kept as a stub for old notebooks."""
+    print("solvent-expelled figure dropped (2026-10-11): the six plates are solvent-transparent, the wet pistons do not "
+          "move when the gel is compressed -- the bath check (fig_wet_pistons) is the meaningful wet-piston figure")
+    return None
 
 def _dc_panel(ax, F, a, title, legend=True):
     zff = np.linspace(0.0, 1.0, 300)

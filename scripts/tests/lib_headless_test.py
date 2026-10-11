@@ -101,7 +101,6 @@ for L in LB:
         assert abs(L['ax'][a]['K'] - K_TRUE) < 0.10 * K_TRUE, f"K along {a} = {L['ax'][a]['K']:.4f}"
     assert L['dev_rel'] < 0.2, 'isotropic synthetic stress reads as anisotropic'
     assert L['wet'] is not None and abs(L['wet']['plat']['P_feed_meas'] - 1.5) < 0.02
-    assert abs(L['eps_expelled'] - float(L['lvl'])) < 0.2 * float(L['lvl'])
     assert L['Dc'] is not None and set(L['Dc']['ax']) == {'x', 'y', 'z'}, 'the held-cube D_c fit is missing an axis'
     assert abs(L['Dc']['Dc'] - B_DC) < 0.15 * B_DC and L['Dc']['R2'] > 0.9, f"cube D_c = {L['Dc']['Dc']:.4f} (R^2 {L['Dc']['R2']:.3f}), built from {B_DC}"
     for a, F in L['Dc_axis'].items():
@@ -113,7 +112,7 @@ for f in (bulk.fig_volfrac, bulk.fig_total_stress, bulk.fig_partial_stress, bulk
           bulk.fig_osmotic_pressure):
     f(cfgb, Rb, Lb, axes=cfgb.AXES)
     plt.close('all')
-for f in (bulk.fig_plates, bulk.fig_K, bulk.fig_isotropy, bulk.fig_Dc, bulk.fig_closure, bulk.fig_wet_pistons, bulk.fig_solvent_expelled, bulk.fig_ratio):
+for f in (bulk.fig_plates, bulk.fig_K, bulk.fig_isotropy, bulk.fig_Dc, bulk.fig_closure, bulk.fig_wet_pistons, bulk.fig_ratio):
     assert f(cfgb, Rb, Lb) is not None, f.__name__
     plt.close('all')
 bulk.fig_strain(cfgb, Rb, LB, stem='sweep_strain_diagnostic')

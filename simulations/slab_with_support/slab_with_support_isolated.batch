@@ -69,7 +69,11 @@ module load python/3.8.12
 # docs/running_simulations.md 5e.
 # =======================================================================
 FOLDER="slab_with_support"
-DATANAME="slab_support_5beads_tall_rho04_new_03_nowalls"
+DATANAME="slab_support_5beads_tall_rho10_new_03_nowalls"   # renamed 2026-10-11: this cube is rhoSolv = 1.0, not 0.4
+                        # (the local file was slab_support_5beads_tall_rho04_new_03_nowalls.data until then; the run submitted
+                        # under the OLD stem keeps it on Expanse: final_config_slab_support_5beads_tall_rho04_new_03_nowalls_*,
+                        # which is what compress_slab.batch and add_more_plates_to_gel.ipynb name).  Copy the renamed file to
+                        # input_data/ before any resubmission.
 INTERACTION="1.0_1.0"   # the interaction of the triaxial runs, so that K, M and G belong to the same gel
 NSTEPS=8000000
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")

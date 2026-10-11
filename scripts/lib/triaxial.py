@@ -1,7 +1,8 @@
 """triaxial.py -- shared analysis library for the triaxial-compression notebooks.
 
-Used by  scripts/triaxial_compression_single.ipynb  (one strain level)  and
-         scripts/triaxial_compression_sweep.ipynb   (every level of a sweep).
+Used by  scripts/triaxial_compression_single_two_pist.ipynb  (one strain level)  and
+         scripts/triaxial_compression_sweep_two_pist.ipynb   (every level of a sweep);
+         the one-piston notebooks of the same names (archive/scripts/, 2026-10-11) still import it.
 
 Everything the two notebooks need lives here so the definitions cannot drift
 between them: file readers, the Terzaghi network/pore split, the plateau
