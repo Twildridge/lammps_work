@@ -1473,7 +1473,7 @@ def window_decay(lam, t, W):
     return (np.exp(-lam * (t - w)) - np.exp(-lam * t)) / (lam * w)
 
 
-def fit_Dc(cfg, R, disp):
+def fit_Dc(cfg, R, disp, free_offset=False):
     """Consolidation fit of D_c to u_z/L on the polymer domain during a hold between two
     drained plates: modes sin(2 m pi zeta), cos(2 m pi zeta) - 1 at 4 m^2 pi^2 D_c/L^2, free
     amplitudes (see _w_modes and the D_c notes in the notebooks).  Returns a dict or None.
@@ -1495,7 +1495,13 @@ def fit_Dc(cfg, R, disp):
     a slower process follows it and, fitted whole with these modes, pulls D_c down (quarter gel:
     0.109 over 6 tau_1, 0.054 whole).  F['Dc_all'] is the whole-hold value, F['stab'] a scan
     over windows and mode counts, F['stab_flag'] marks a > DC_STAB_FLAG disagreement.  The
-    stress-trace D_c (fit_Dc_stress) is the independent check load_level prints next to it."""
+    stress-trace D_c (fit_Dc_stress) is the independent check load_level prints next to it.
+
+    free_offset (2026-10-09, fig_v0_check): project the per-snapshot rigid translation out of the data
+    and the modes (centre both over the fit bins) -- algebraically the fit of the STRAIN PDE
+    d eps/dt = D_c d2 eps/dz2, in which the barycentric velocity v0(t) = phi_s v_s + phi_p v_p
+    (uniform in z) has dropped out, against the displacement fit above, whose modes fix v0(t)
+    through the pinned-face boundary conditions."""
     if disp is None or not np.isfinite(R['z_support']):
         return None
     ts, z, Nc = disp['ts'], disp['z'], disp['Nc']
@@ -1542,7 +1548,11 @@ def fit_Dc(cfg, R, disp):
         """(Dc, A, R2) of the modal fit (wavenumbers k) to the snapshots `sel`: amplitudes by linear least
         squares at each trial D_c, D_c by bounded Brent on the residual."""
         Wm = _w_modes(zf, k)                               # (n_bins, 2K)
-        y = Y[sel].ravel()
+        if free_offset:                                    # strain-PDE fit: rigid translation projected out
+            Wm = Wm - Wm.mean(axis=0, keepdims=True)
+            y = (Y[sel] - Y[sel].mean(axis=1, keepdims=True)).ravel()
+        else:
+            y = Y[sel].ravel()
 
         def X(Dc):
             d = np.tile(decay(Dc, t_lj[sel], k), (1, 2)) - 1.0      # (n_sel, 2K)
@@ -1619,6 +1629,7 @@ def fit_Dc(cfg, R, disp):
                 # 2026-10-09: the fit window, the whole-hold fit and the stability scan
                 fit_tau1=n_tau, tau1=tau1, window_T=float(t_lj[early[-1]]), n_tau1_fit=float(t_lj[early[-1]] / tau1),
                 early_all=early_all, Dc_all=Dc_all, A_all=A_all, R2_all=R2_all, stab=stab, stab_flag=stab_flag,
+                free_offset=bool(free_offset), u_mean=Y.mean(axis=1),           # <u>/L over the fit bins, every snapshot
                 hold_check=hold_adequacy(cfg, L, hold_T, Dc))
 
 
@@ -4516,6 +4527,61 @@ def fig_Dc(cfg, R, L):
     return _save(fig, cfg, 'Dc_consolidation_fit', L['lvl'])
 
 
+def fig_v0_check(cfg, R, L, disp=None):
+    """TEMPORARY diagnostic (2026-10-09; delete once the D_c discrepancy is resolved).  Does the barycentric velocity
+    v0(t) = phi_s v_s + phi_p v_p = q_s + q_p bias the hold's D_c?  The displacement equation du/dt = v0(t) + D_c u''
+    becomes the strain equation d eps/dt = D_c eps'' with v0 gone (uniform in z); the displacement fit (fit_Dc) keeps
+    u and lets its pinned-face modes fix v0(t) -- the solvent shuttle of the antisymmetric block.  Here the same fit
+    is run with the per-snapshot rigid translation projected out (= the strain-PDE fit) and the two D_c are compared
+    over every fit window; (b) shows the mean displacement over the fit bins, whose rate IS v0(t) in the hold
+    (d<u>/dt = v0 + D_c [eps(1) - eps(0)]/L with equal face strains), data against the displacement model."""
+    F = L.get('Dc')
+    if F is None:
+        print('v0 check skipped (no D_c fit)')
+        return None
+    disp = load_disp(cfg, R, L['lvl']) if disp is None else disp
+    F2 = fit_Dc(cfg, R, disp, free_offset=True)
+    if F2 is None:
+        print('v0 check skipped (strain fit failed)')
+        return None
+    fig, (axa, axb) = plt.subplots(1, 2, figsize=(17, 6.5), constrained_layout=True)
+    # (a) D_c over the fit windows, both fits
+    labs = [x['what'] for x in F['stab'] if 'modes' not in x['what']] + [f"fit ({F['n_tau1_fit']:.1f} tau_1)"]
+    v1 = [x['Dc'] for x in F['stab'] if 'modes' not in x['what']] + [F['Dc']]
+    v2 = [x['Dc'] for x in F2['stab'] if 'modes' not in x['what']] + [F2['Dc']]
+    xi = np.arange(len(labs))
+    axa.plot(xi, v1, 'o-', color=WONG['blue'], ms=10, lw=2, label=r'displacement fit: $v^0(t)$ from the pinned-face modes (fit_Dc)')
+    axa.plot(xi, v2, 's--', color=WONG['vermillion'], ms=9, lw=2, mfc='none', mew=2, label=r'strain-PDE fit: rigid translation projected out ($v^0$ drops out)')
+    S = L.get('Dc_stress')
+    if S is not None and S.get('ok'):
+        axa.axhline(S['Dc'], color=WONG['green'], ls=':', lw=2, label=f"load-piston stress trace: {sig(S['Dc'])}")
+    axa.set_xticks(xi)
+    axa.set_xticklabels([l.replace(' tau_1', r' $\tau_1$') for l in labs], rotation=20, fontsize=11)
+    axa.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
+    axa.set_title(rf"(a) level _c{L['lvl']}: $D_c$ with and without $v^0$ -- {sig(F['Dc'])} vs {sig(F2['Dc'])} (ratio {F2['Dc'] / F['Dc']:.3f})", fontsize=14)
+    axa.grid(alpha=0.3)
+    smart_legend(axa, fontsize=10)
+    # (b) the rigid part: <u> over the fit bins, data vs the displacement model
+    t, zf, Lh = F['t_lj'], F['zf'], F['L']
+    um_data = F['u_mean'] * Lh
+    um_model = np.array([F['u_tr'](zf, ti).mean() for ti in t]) * Lh
+    axb.semilogx(t, um_data, '.', color='k', ms=4 if len(t) < 60 else 2.5, label=r'data: $\langle u_z\rangle$ over the fit bins')
+    axb.semilogx(t, um_model, '-', color=WONG['blue'], lw=2.2, label='displacement model (its own rigid part = the modal solvent shuttle)')
+    axb.semilogx(t, um_data - um_model, '-', color=WONG['vermillion'], lw=1.8, alpha=0.9, label=r'difference = translation the modes cannot represent, $\int v^0_\mathrm{extra}\,dt$')
+    axb.axhline(0, color='k', lw=0.8)
+    amp = float(np.nanmax(np.abs(F['uhat'][:, F['idx']]))) * Lh
+    axb.set(xlabel=r'hold time  ($\tau$)', ylabel=r'mean displacement  ($\sigma$)')
+    axb.xaxis.set_minor_formatter(NullFormatter())
+    axb.set_title(rf"(b) rigid translation during the hold  (transient amplitude for scale: {amp:.2f} $\sigma$)", fontsize=14)
+    axb.grid(alpha=0.3)
+    smart_legend(axb, fontsize=10)
+    fig.suptitle(f'TEMPORARY v0 check  |  {cfg.sim_name}  |  d u/dt = v0(t) + D_c u\'\' vs d eps/dt = D_c eps\'\'', fontsize=12, fontweight='bold')
+    print(f"  v0 check (level {L['lvl']}): D_c displacement fit {F['Dc']:.4e} (whole hold {F['Dc_all']:.4e})  |  strain-PDE fit {F2['Dc']:.4e} "
+          f"(whole hold {F2['Dc_all']:.4e})  ->  ratio {F2['Dc'] / F['Dc']:.3f};  rms rigid translation data - model = {np.sqrt(np.mean((um_data - um_model) ** 2)):.3f} sigma "
+          f"(transient amplitude {amp:.2f} sigma)")
+    return _save(fig, cfg, 'v0_check', L['lvl'])
+
+
 def fig_kappa(cfg, R, L):
     """kappa = D_c / M for the network and the piston M (CI propagated from M)."""
     K = L.get('kappa')
@@ -6659,7 +6725,7 @@ def load_perm_disp(cfg, R, P):
     return d
 
 
-def fit_perm_Dc(cfg, R, P, disp):
+def fit_perm_Dc(cfg, R, P, disp, free_offset=False):
     """One-sided consolidation fit of a permeation run (see the section comment):
     D_c from the displacement profiles (free amplitudes) and from the feed-face
     thickness trace (exact zero-IC series), M from the steady thickness change,
@@ -6749,7 +6815,12 @@ def fit_perm_Dc(cfg, R, P, disp):
     n_modes = int(cfg.PERM_DC_N_MODES) or int(cfg.DC_N_MODES)
     mu = _perm_mu(n_modes)
     modes_l = [_perm_phi(zl[i], mu) for i in range(n_snap)]          # (points_i, modes)
-    y_all = np.concatenate([yl[i] for i in early])
+    if free_offset:                                                   # strain-PDE fit (fig_perm_v0_check): the per-snapshot
+        modes_l = [m - m.mean(axis=0, keepdims=True) for m in modes_l]    # rigid translation projected out of data and modes
+        yl_fit = [y - y.mean() for y in yl]
+    else:
+        yl_fit = yl
+    y_all = np.concatenate([yl_fit[i] for i in early])
 
     def dH(Dc):
         """H_k(t_i) - H_k(t_reset) for the fitted snapshots: (n_early, modes)"""
@@ -6800,7 +6871,7 @@ def fit_perm_Dc(cfg, R, P, disp):
 
     tau1 = L0 ** 2 / (np.pi ** 2 * Dc)                         # first-mode time (mu_1 = pi: Dirichlet strain at both faces)
     T_prod = float(t_lj[-1])
-    F = dict(Dc=Dc, A=A, R2=R2, L0=L0, L0_ci=L0_ci, L0_source=L0_source, L0_bb=L0_bb, L0_bb_ci=L0_bb_ci,
+    F = dict(Dc=Dc, A=A, R2=R2, L0=L0, L0_ci=L0_ci, L0_source=L0_source, L0_bb=L0_bb, L0_bb_ci=L0_bb_ci, free_offset=bool(free_offset),
              z_P=z_P, z_F=z_F, Z_P=Z_P, Z_F=Z_F,
              u0=u0, u0_sd=u0_sd, u0_ss=u0_ss, rigid=cfg.PERM_RIGID, pin_nbins=nb, lagr=lagr, n_modes=n_modes,
              t_onset=t_on, forcing=fz, t_reset=disp['t_reset'], t_reset_lj=t_reset_lj, reset_mode=disp['reset_mode'],
@@ -7185,6 +7256,87 @@ def perm_flux_model(cfg, R, P):
         out['Q_trace'] = A * ((T['Dc'] / M) * dP_t / L0 - dudt)
         out['Q_trace_ss'] = float(A * (T['Dc'] / M) * dP_full / L0)
     return out
+
+
+def fig_perm_v0_check(cfg, R, P):
+    """TEMPORARY diagnostic (2026-10-09; delete once the D_c discrepancy is resolved).  The permeation counterpart of
+    fig_v0_check: (a) D_c from the displacement profile fit (v0(t) fixed by the modes vanishing at the support), from
+    the same fit with the per-snapshot rigid translation projected out (the strain-PDE fit), the thickness-trace fit
+    and the Darcy kappa M; (b) the rigid motion the standard fit removes by measurement (the contact layer u_0(t))
+    against what the strain fit would add to it; (c) v0 at the support: the measured permeate flux Q/A against the
+    flux the displacement fit implies (perm_flux_model) -- v0(t) is NOT constant during a permeation transient, and
+    this is the direct test of whether the fit's v0 is the real one."""
+    F, disp = P.get('Dc'), P.get('disp')
+    if F is None or disp is None:
+        print('permeation v0 check skipped (no displacement fit)')
+        return None
+    F2 = fit_perm_Dc(cfg, R, P, disp, free_offset=True)
+    if F2 is None:
+        print('permeation v0 check skipped (strain fit failed)')
+        return None
+    fig, (axa, axb, axc) = plt.subplots(1, 3, figsize=(21, 6.5), constrained_layout=True)
+    # (a) the D_c readings
+    names = [r'profile fit' + '\n' + r'($v^0$ from the modes)', r'strain-PDE fit' + '\n' + r'($v^0$ projected out)']
+    vals, cols = [F['Dc'], F2['Dc']], [WONG['blue'], WONG['vermillion']]
+    T = F.get('trace')
+    if T is not None:
+        names.append('thickness trace\n(zero-IC series)'); vals.append(T['Dc']); cols.append(WONG['skyblue'])
+    kd = (P.get('flux') or {}).get('k', {}).get('N_measured') or (P.get('flux') or {}).get('k', {}).get('N_applied')
+    Mp = P.get('M_perm')
+    if kd and Mp and Mp.get('primary'):
+        names.append(r'Darcy $\kappa\,M$' + f"\n(M = {Mp[Mp['primary']]['M']:.3f})"); vals.append(kd['k'] * Mp[Mp['primary']]['M']); cols.append(WONG['green'])
+    axa.bar(np.arange(len(vals)), vals, color=cols, alpha=0.85)
+    for i, v in enumerate(vals):
+        axa.text(i, v, f' {sig(v)}', ha='center', va='bottom', fontsize=12)
+    axa.set_xticks(np.arange(len(vals)))
+    axa.set_xticklabels(names, fontsize=10)
+    axa.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
+    axa.set_title(rf"(a) $D_c$: with $v^0$ {sig(F['Dc'])} vs without {sig(F2['Dc'])} (ratio {F2['Dc'] / F['Dc']:.3f})", fontsize=14)
+    axa.grid(alpha=0.3, axis='y')
+    # (b) rigid motion: the measured contact-layer u_0(t), and <u> over the fit points (after u_0) -- data vs the
+    #     displacement model, whose own rigid part is what the support-pinned modes allow
+    t = F['t_lj']
+    forcing = (F['forcing']['tj'], F['forcing']['wj'])
+    um_data = np.array([np.mean(F['yl'][i]) for i in range(len(t))]) * F['L0']
+    um_model = np.array([np.mean(_perm_phi(F['zl'][i], F['mu']) @ (F['A'] * (_perm_H(F['mu'], F['Dc'], F['L0'], t[i], forcing, F['W'])[0] - F['H_reset'])))
+                         for i in range(len(t))]) * F['L0']
+    off = um_data - um_model
+    axb.plot(t, F['u0'], '-', color='k', lw=2, label=r'contact layer $u_0(t)$ (measured, subtracted before both fits)')
+    axb.plot(t, um_data, '.', color='0.45', ms=4, label=r'data: $\langle u_z\rangle$ over the fit points (after $u_0$)')
+    axb.plot(t, um_model, '-', color=WONG['blue'], lw=2.2, label='displacement model (its own rigid part)')
+    axb.plot(t, off, '-', color=WONG['vermillion'], lw=1.8, label='difference = translation the modes cannot represent')
+    axb.axhline(0, color='k', lw=0.8)
+    axb.axvline((F['t_reset'] - F['t_onset']) * cfg.dt_lj, color='0.5', ls=':', lw=1)
+    axb.set(xlabel=r'time from the ramp start  ($\tau$)', ylabel=r'rigid displacement  ($\sigma$)')
+    axb.set_title('(b) rigid motion of the network', fontsize=14)
+    axb.grid(alpha=0.3)
+    smart_legend(axb, fontsize=10)
+    # (c) v0 at the support: measured permeate flux / A vs the flux the displacement fit implies
+    Q = perm_flux_model(cfg, R, P)
+    Fx = P.get('flux') or {}
+    A = P.get('area', np.nan)
+    if Fx.get('Q') is not None and Fx.get('step') is not None:
+        tq = (Fx['step'] - F['t_onset']) * cfg.dt_lj
+        ok = tq > 0
+        axc.plot(tq[ok], Fx['Q'][ok] / A, '.', color='0.6', ms=3, label=r'measured: permeate-piston $Q/A$ (block averages)')
+        qs = Fx.get('Q_N')
+        if qs:
+            axc.axhline(qs['mean'] / A, color='k', ls='--', lw=1.5, label=f"measured steady $Q/A$ ({qs['mean'] / A:.2e})")
+    if Q is not None:
+        axc.plot(Q['t_lj'], Q['Q_prof'] / A, '-', color=WONG['blue'], lw=2.2, label=r'implied by the displacement fit: $v^0 = (D_c/M)\,\Delta P/L_0 - d\langle u\rangle/dt$')
+        if 'Q_trace' in Q:
+            axc.plot(Q['t_lj'], Q['Q_trace'] / A, '-', color=WONG['skyblue'], lw=1.6, label='implied by the trace fit')
+    axc.set(xlabel=r'time from the ramp start  ($\tau$)', ylabel=r'$v^0 = Q/A$  ($\sigma/\tau$)')
+    axc.set_title(r'(c) $v^0(t)$ at the support: measured vs implied', fontsize=14)
+    axc.grid(alpha=0.3)
+    if axc.get_legend_handles_labels()[0]:
+        smart_legend(axc, fontsize=10)
+    else:
+        axc.text(0.5, 0.5, 'no flux data / no M (perm_flux_model)', ha='center', va='center', transform=axc.transAxes)
+    fig.suptitle(f'TEMPORARY v0 check (permeation)  |  {cfg.sim_name}', fontsize=12, fontweight='bold')
+    print(f"  v0 check (permeation): D_c profile fit {F['Dc']:.4e}  |  strain-PDE fit {F2['Dc']:.4e}  ->  ratio {F2['Dc'] / F['Dc']:.3f}"
+          + (f"  |  trace {T['Dc']:.4e}" if T is not None else '') + f";  rms translation data - displacement model {np.sqrt(np.mean(off ** 2)):.3f} sigma")
+    return _save(fig, cfg, 'perm_v0_check')
 
 
 def fig_perm_flux_check(cfg, R, P):
