@@ -17,7 +17,7 @@ Rule (same as `lammps_data_files_local/`): a notebook or script lives here while
 
 | Notebook | Role |
 |---|---|
-| `slab_with_support.ipynb` | Finite gel block in a bath, with or without sheets (`includeWalls`). Current: the tall isolated gel (`_04_nowalls`). |
+| `slab_with_support.ipynb` | Finite gel block in a bath, with or without sheets (`includeWalls`). Current: the tall isolated gel (`tall_rho04_nowalls`). |
 | `slab_with_support_periodic.ipynb` | The x/y-periodic slab — the reference 14000002 state comes from it. |
 | `slab_two_pistons.ipynb` | Equilibrated periodic slab → two-piston (feed / permeate) file for `triaxial_*_two_pist` and `shear_slab_two_pist`. |
 | `add_more_plates_to_gel.ipynb` | Equilibrated isolated gel → six plates + two wet pistons for `compress_slab`. |

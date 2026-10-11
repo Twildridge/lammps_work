@@ -619,11 +619,16 @@ Generated tetrahedral gel slab (isolated, include_walls=False):
   Solvent beads: 338638 (density: 0.40)
   Total atoms: 434848
   Total bonds: 108864
-  Output: ../../lammps_data_files_local/slab_support_5beads_tall_rho04_new_04_nowalls.data
+  Output: ../../lammps_data_files_local/slab_support_5beads_tall_rho04_nowalls.data
 
 ## 2026-10-11  lammps_data_files_local reorganised + two density renames
 Catalog: lammps_data_files_local/README.md (active files at the top level, obsolete lineages in archive/<date>_<lineage>/).
 Renamed (the generator's nominal density was wrong in the name):
-  slab_support_5beads_tall_rho04_new_03_nowalls.data -> slab_support_5beads_tall_rho10_new_03_nowalls.data   (rhoSolv = 1.0)
+  slab_support_5beads_tall_rho04_new_03_nowalls.data -> slab_support_5beads_square_rho10_nowalls.data   (rhoSolv = 1.0)
   solvent_box_rho6_02.data -> solvent_box_rho10_02.data   (rho = 1.0, 8 M atoms)
 Expanse copies and the outputs of runs already submitted keep the old stems.
+
+## 2026-10-11 (later)  two more renames in lammps_data_files_local
+  slab_support_5beads_tall_rho10_new_03_nowalls.data -> slab_support_5beads_square_rho10_nowalls.data   (12^3 cube, rho 1.0; Expanse run outputs keep the original rho04_new_03_nowalls stem)
+  slab_support_5beads_tall_rho04_new_04_nowalls.data -> slab_support_5beads_tall_rho04_nowalls.data   (9x9x21 tall gel, rho 0.4; not yet submitted)
+(the entries above were rewritten to the new names)
