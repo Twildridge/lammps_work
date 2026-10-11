@@ -632,3 +632,11 @@ Expanse copies and the outputs of runs already submitted keep the old stems.
   slab_support_5beads_tall_rho10_new_03_nowalls.data -> slab_support_5beads_square_rho10_nowalls.data   (12^3 cube, rho 1.0; Expanse run outputs keep the original rho04_new_03_nowalls stem)
   slab_support_5beads_tall_rho04_new_04_nowalls.data -> slab_support_5beads_tall_rho04_nowalls.data   (9x9x21 tall gel, rho 0.4; not yet submitted)
 (the entries above were rewritten to the new names)
+
+Converted six-plate + two-wet-piston data file  [2026-10-11 16:10, add_more_plates_to_gel.py]:
+  Input: final_config_slab_support_5beads_square_rho10_nowalls_1.0_1.0_8000000.data
+  Box: 99.5583 x 98.8924 x 127.701   (bath cropped: x,y margin 12.0, z reservoir 15.0 sigma; 605474 solvent cropped, 1476 removed at the seam)
+  Gel: L_bb 69.56 x 68.89 x 69.70, L_rg 63.92 x 64.32 x 63.98; bath rho = 0.4683
+  Plates: parked 3.0 sigma outside the BB faces, overhang 6.0, spacing 0.5 (160720 beads in six plates); wet pistons 22686 beads each, z = 10.00 / 117.70, vacuum margins 10.0 / 10.0
+  Crosslinks: 14721   Chain beads: 82944   Solvent: 422491   Plates (4,7-11): 160720   Feed piston: 22686   Permeate piston: 22686
+  Total atoms: 726248   Total bonds: 110592   Output: final_config_slab_support_5beads_square_rho10_nowalls_1.0_1.0_8000000_six_plates.data

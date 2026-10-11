@@ -57,9 +57,9 @@ module load python/3.8.12
 # ~/Documents/lammps_data/input_data/.
 # =======================================================================
 FOLDER="compress_slab"
-DATANAME="final_config_slab_support_5beads_tall_rho04_new_03_nowalls_1.0_1.0_8000000_six_plates"   # <- SET THIS to the converter's
-                        # output stem (the notebook prints "DATANAME for the batch files"); this one is a placeholder
-                        # for the new_03 cube equilibrated by slab_with_support_isolated.batch
+DATANAME="final_config_slab_support_5beads_square_rho10_nowalls_1.0_1.0_8000000_six_plates"   # <- SET THIS to the converter's
+                        # output stem (add_more_plates_to_gel.py; 2026-10-11 conversion of the rho10 12^3 cube -- the same gel
+                        # Jordan ran under the old ..._tall_rho04_new_03_nowalls stem; copy it to ~/Documents/lammps_data/input_data/)
 INTERACTION="1.0_1.0"   # epsSS_epsSP
 # NSTEPS: (a) FALLBACK hold length with HOLD_AUTO=0 and (b) the tag of the
 # setup-phase files only.  Every reference/production file is tagged with its
