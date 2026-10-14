@@ -1,8 +1,8 @@
 """
-add_plates_to_gel.py
+add_plates_to_gel_periodic.py
 
-(Extracted verbatim from add_plates_to_gel.ipynb on 2026-09-22 so that
-slab_shear_plates.py -- the periodic-slab -> shear input converter -- can reuse
+(Extracted verbatim from add_plates_to_gel_periodic.ipynb on 2026-09-22 so that
+slab_shear_plates_periodic.py -- the periodic-slab -> shear input converter -- can reuse
 it; the notebook now imports this module.  Additions: the `box_buffer`
 parameter (default 0.5 = the old hard-coded value) and `axis` (default 'x' =
 the isolated-cube geometry; 'z' plates the faces of the periodic slab).)
@@ -39,7 +39,7 @@ Pair coeff for plate (type 4) — add to shear_slab.lmp:
 
 Usage
 -----
-    python add_plates_to_gel.py \\
+    python add_plates_to_gel_periodic.py \\
         --input  /path/to/isolated_gel.data \\
         --output /path/to/gel_with_plates.data \\
         [--spacing 1.5] [--offset 0.5] [--cutoff 2.5] [--surface-depth 4.0]
@@ -261,7 +261,7 @@ def add_plates(input_file, output_file,
                solvent_delete=0.0):
 
     print("=" * 60)
-    print(f"add_plates_to_gel.py")
+    print(f"add_plates_to_gel_periodic.py")
     print(f"  Input  : {input_file}")
     print(f"  Output : {output_file}")
     print(f"  Lattice spacing : {spacing} σ")
@@ -353,7 +353,7 @@ def add_plates(input_file, output_file,
     # 14000002 slab with nothing deleted).  Removing the solvent beads whose
     # centres lie within `solvent_delete` of a plate atom (periodic images in the
     # in-plane directions included) gives that volume back; the radius is
-    # calibrated by the bulk pressure in the shear hold (see slab_shear_plates.py).
+    # calibrated by the bulk pressure in the shear hold (see slab_shear_plates_periodic.py).
     n_del = 0
     if solvent_delete > 0.0:
         a1, a2 = OTHER_AXES[axis]

@@ -52,7 +52,7 @@ module load python/3.8.12
 # variables and its files follow triaxial_compression_two_pist; analysis in
 # scripts/bulk_modulus_analysis_{single,sweep}.ipynb (lib/bulk.py).
 #
-# DATANAME is the CONVERTER output (scripts/add_more_plates_to_gel.ipynb) of an
+# DATANAME is the CONVERTER output (scripts/lib/add_more_plates_to_gel.py) of an
 # equilibrated slab_with_support snapshot of the ISOLATED gel; copy it to
 # ~/Documents/lammps_data/input_data/.
 # =======================================================================

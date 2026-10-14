@@ -20,6 +20,6 @@ rsync -avPz <username>@data.bridges2.psc.edu:\
 # Drop the 'z' flag if the file is already gzip-compressed
 ```
 
-> **Trajectory files are large** (often 1–50 GB). Only download if you need to analyze atom positions directly (e.g. volume fraction profiles). The `.dat` output files are much smaller and contain pre-computed quantities.
+Trajectory files are 1–50 GB. Download one only when the analysis needs atom positions (volume fraction profiles, for example). The `.dat` files are small and hold the quantities the deck already computed.
 
 ---

@@ -12,7 +12,7 @@ Trajectory files ended up in your home directory. Verify the symlink: `ls -la ~/
 This is a cluster-side issue. Contact PSC support.
 
 **Simulation diverged ("gel evaporated")**
-Check that `epsSP` and `epsSS` are physically reasonable. Verify you're reading the correct data file. Ensure `timestep = 0.005` (larger timesteps can cause FENE bond divergence).
+Check that `epsSP` and `epsSS` are reasonable, that the right data file is being read, and that `timestep = 0.005` (a larger timestep can blow up the FENE bonds).
 
 **`Invalid syntax in variable formula` on first run of `shear_slab.lmp`**
 This was caused by `xztilt`/`yztilt` not being valid LAMMPS thermo keywords — the correct keywords are `xz` and `yz`. Already fixed in the current script.
@@ -21,7 +21,7 @@ This was caused by `xztilt`/`yztilt` not being valid LAMMPS thermo keywords — 
 `norm none` requires LAMMPS ≥ March 2020. On older builds, replace the `prof_z_polymer/solvent` fixes with an equivalent `compute reduce` + `fix ave/time` approach (see git history for `slab_with_flow.lmp` pre-2026-08-06 removal for a worked example).
 
 **`git pull` fails on cluster ("merge conflict")**
-Run `git stash` to set aside local changes, then `git pull`, then `git stash pop` to restore them. If conflicts persist, resolve them manually or ask for help.
+Run `git stash` to set the local changes aside, then `git pull`, then `git stash pop` to put them back. If the conflict remains, resolve it by hand ([github_sync.md](github_sync.md)) or ask.
 
 ---
 

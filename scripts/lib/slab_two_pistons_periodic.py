@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-slab_two_pistons.py
+slab_two_pistons_periodic.py
 ===================
 CONVERTER: an equilibrated slab_with_support PERIODIC snapshot  ->  a two-piston
 (feed / permeate) data file for triaxial_permeation_two_pist.lmp and
@@ -50,11 +50,11 @@ Velocities section, 7 atom types and a fully documented first line.
 
 Usage (CLI)
 -----------
-  python3 slab_two_pistons.py --input <final_config_...data> [--output <...>]
+  python3 slab_two_pistons_periodic.py --input <final_config_...data> [--output <...>]
         [--permeate-thickness 10] [--feed-thickness None] [--margin-perm auto]
         [--margin-feed 15] [--piston-clearance 1.0] [--load-piston-frac 0.5]
         [--sheet-source support|hex] [--sheet-spacing 0.2] [--seed 42] [--no-log]
-  python3 slab_two_pistons.py --cut-existing <..._two_pist.data> [--gel-keep-frac 0.5] [--output <...>]
+  python3 slab_two_pistons_periodic.py --cut-existing <..._two_pist.data> [--gel-keep-frac 0.5] [--output <...>]
         [--feed-add <sigma>] [--margin-perm <sigma>]
         thins the gel of an existing two-piston file (cut_two_pist; -> <stem>_half.data); --feed-add /
         --margin-perm enlarge the feed reservoir / the permeate vacuum for permeation on the thin gel
@@ -425,7 +425,7 @@ def convert(cfg: Config):
         raise FileNotFoundError(f'input data file not found: {inp}')
     is_smoke = inp.name.endswith('_14000000.data')
     print('=' * 78)
-    print(f'slab_two_pistons converter  ({t_start:%Y-%m-%d %H:%M})')
+    print(f'slab_two_pistons_periodic converter  ({t_start:%Y-%m-%d %H:%M})')
     print(f'  input : {inp}')
     print(f'  output: {cfg.output_file}')
     if is_smoke:
@@ -656,7 +656,7 @@ def convert(cfg: Config):
 
     # ---- write -----------------------------------------------------------------
     cfgs = ' '.join(f'{k}={v}' for k, v in asdict(cfg).items())
-    header = (f'two-piston (feed/permeate) data file from {inp.name} via slab_two_pistons.py on {info["date"]}; '
+    header = (f'two-piston (feed/permeate) data file from {inp.name} via slab_two_pistons_periodic.py on {info["date"]}; '
               f'types 1 xl 2 chain 3 solv 4 support 5 feed_piston 6 perm_piston 7 load_piston; '
               f'{cfgs}; z: support={info["support_z"]:.3f} gel_bb=[{info["gel_bb"][0]:.3f},{info["gel_bb"][1]:.3f}] '
               f'gel_rg=[{info["gel_rg"][0]:.3f},{info["gel_rg"][1]:.3f}] perm_piston={info["z_perm_piston"]:.3f} '
@@ -839,7 +839,7 @@ def info_log_entry(info):
     c = info['counts']
     cfg = info['config']
     lines = [
-        f'Converted two-piston (feed/permeate) data file  [{info["date"]}, slab_two_pistons.py]:',
+        f'Converted two-piston (feed/permeate) data file  [{info["date"]}, slab_two_pistons_periodic.py]:',
         f'  Input: {Path(info["input_file"]).name}' + ('   (SMOKE-TEST input: 14000000 snapshot, not the production 14000002)' if info['smoke_test_input'] else ''),
         f'  Box: {info["lx"]:.4f} x {info["ly"]:.4f} x {info["box_out"]["zhi"]:.3f}   (lx, ly unchanged from the input; zlo = 0)',
         f'  z: perm piston {info["z_perm_piston"]:.2f} | support {info["support_z"]:.2f} | gel BB [{info["gel_bb"][0]:.2f}, {info["gel_bb"][1]:.2f}] '
@@ -1045,7 +1045,7 @@ def cut_two_pist(input_file, output_file=None, keep_frac=0.5, log_info=True, fee
     extra = (f' feed +{feed_add:g} sigma ({n_feed_added} solvent added);' if n_feed_added else '') + \
             (f' permeate margin {margin_perm:g} sigma (z shift {z_shift:+.3f});' if margin_perm is not None else '')
     header = (f'two-piston data file with the gel cut to the bottom {keep_frac:g} of its thickness, from {inp.name} via '
-              f'slab_two_pistons.cut_two_pist on {info["date"]};{extra} types 1 xl 2 chain 3 solv 4 support 5 feed_piston 6 perm_piston 7 load_piston; '
+              f'slab_two_pistons_periodic.cut_two_pist on {info["date"]};{extra} types 1 xl 2 chain 3 solv 4 support 5 feed_piston 6 perm_piston 7 load_piston; '
               f'z: support={info["support_z"]:.3f} gel_bb=[{G["bb_lo"]:.3f},{G["bb_hi"]:.3f}] perm_piston={info["z_perm_piston"]:.3f} '
               f'load_piston={info["z_load_piston"]:.3f} feed_piston={info["z_feed_piston"]:.3f}; cut plane {z_cut:.3f}, {D:.3f} sigma excised')
     write_two_pist_data(output_file, header, np.arange(1, len(ids_k) + 1), mols_k, typ_k, xyz_k, vel, bonds, new_box, img=img)
@@ -1054,7 +1054,7 @@ def cut_two_pist(input_file, output_file=None, keep_frac=0.5, log_info=True, fee
     print(f'  wrote {len(ids_k)} atoms, {len(bonds)} bonds -> {output_file}')
     c = info['counts']
     entry = '\n'.join([
-        f'Two-piston data file with a THINNED gel  [{info["date"]}, slab_two_pistons.cut_two_pist, keep_frac {keep_frac:g}'
+        f'Two-piston data file with a THINNED gel  [{info["date"]}, slab_two_pistons_periodic.cut_two_pist, keep_frac {keep_frac:g}'
         + (f', feed +{feed_add:g} sigma' if n_feed_added else '') + (f', margin_perm {margin_perm:g}' if margin_perm is not None else '') + ']:',
         f'  Input: {inp.name}   (lx, ly unchanged; everything below the cut plane untouched)'
         + (f'; {n_feed_added} solvent beads added to the feed reservoir at rho {rho_bulk:.4f}' if n_feed_added else '')

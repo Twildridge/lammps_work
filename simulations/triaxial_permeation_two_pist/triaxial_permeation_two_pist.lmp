@@ -8,7 +8,7 @@
 # same as triaxial_permeation.lmp.  The compression counterpart lives in
 # ../triaxial_compression_two_pist/.
 #
-# Input: a data file from scripts/slab_two_pistons.ipynb (CONVERTER of an
+# Input: a data file from scripts/slab_two_pistons_periodic.ipynb (CONVERTER of an
 # equilibrated slab_with_support periodic snapshot).  WHY a converter and not a
 # fresh lattice (2026-09-16): the NPT-piston scheme controls pressure in z ONLY
 # (lx, ly are fixed for the whole run), so it can never swell a fresh lattice

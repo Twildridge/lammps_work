@@ -54,11 +54,15 @@ with contextlib.redirect_stdout(io.StringIO()):
     ns['generate_gel_slab'](5, 3, 3, 3, 0.45, 9.0, 3.0, 9.0, 3.0, 0.5, 0.0, 0.1, 0.8, root + '/cube_input.data', pre_swell=1.0)
 print('  generated', root + '/cube_input.data')
 PYEOF
-run_nb add_more_plates_to_gel.ipynb "s = s.replace('input_file = \"../../lammps_data_files_local/final_config_slab_support_5beads_tall_rho04_new_03_nowalls_1.0_1.0_14000000.data\"', 'input_file = \"' + root + '/cube_input.data\"').replace('log_info       = True,', 'log_info       = False,').replace('bath_margin_xy = 12.0,', 'bath_margin_xy = 5.0,').replace('reservoir_z    = 15.0,', 'reservoir_z    = 5.0,').replace('plate_overhang = 6.0,', 'plate_overhang = 3.0,')"
+echo "  add_more_plates_to_gel.py (CLI, six_plates + x_plates on the generated cube)"
+for LAY in six_plates x_plates; do
+    $PY "$SCRIPTS/lib/add_more_plates_to_gel.py" --input "$ROOT/cube_input.data" --layout $LAY --bath-margin-xy 5 --reservoir-z 5 --plate-overhang 3 --no-log --no-png > "$ROOT/amp_$LAY.log" 2>&1 \
+        && echo "  OK   add_more_plates_to_gel.py --layout $LAY" || { echo "  FAIL add_more_plates_to_gel.py --layout $LAY (see $ROOT/amp_$LAY.log)"; fail=1; }
+done
 # the converter notebook runs the real converter (needs a slab file); skipped when absent
 if [ -f "$SCRIPTS/../../lammps_data_files_local/final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000.data" ]; then
-    run_nb slab_two_pistons.ipynb "s = s.replace('log_info           = True,', 'log_info           = False,').replace('output_file        = None,', 'output_file        = \"' + root + '/converter_test.data\",')"
+    run_nb slab_two_pistons_periodic.ipynb "s = s.replace('log_info           = True,', 'log_info           = False,').replace('output_file        = None,', 'output_file        = \"' + root + '/converter_test.data\",')"
 else
-    echo "  SKIP slab_two_pistons.ipynb (no slab data file on this machine)"
+    echo "  SKIP slab_two_pistons_periodic.ipynb (no slab data file on this machine)"
 fi
 [ $fail = 0 ] && echo "NOTEBOOK TESTS: OK" || { echo "NOTEBOOK TESTS: FAILED"; exit 1; }

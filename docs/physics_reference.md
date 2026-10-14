@@ -90,7 +90,7 @@ not a convention factor.
 
 ## NPT-piston reservoirs (two-piston sequence)
 
-*(2026-09-16; `triaxial_permeation_two_pist`, `triaxial_compression_two_pist`, converter `slab_two_pistons.ipynb`.)*
+*(2026-09-16; `triaxial_permeation_two_pist`, `triaxial_compression_two_pist`, converter `slab_two_pistons_periodic.ipynb`.)*
 
 **Piston law.** Marioni et al., *J. Membr. Sci.* 738 (2026) 124837 ("Non-equilibrium simulations of hydraulic
 permeation: role of mechanical boundary conditions in dense membranes") hold each solvent reservoir at a prescribed

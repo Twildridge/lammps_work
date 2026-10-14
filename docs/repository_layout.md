@@ -32,8 +32,7 @@ lammps_work/                    ← This git repository
 │   │   # ── data-file builders / converters (notebooks; converter code in lib/) ──
 │   ├── slab_with_support.ipynb         ← Finite gel block in a bath, with or without sheets (includeWalls); current input: the tall isolated gel
 │   ├── slab_with_support_periodic.ipynb ← xy-periodic crosslinked slab (bonds wrap x,y only; finite-z; p p p; one support+piston per z-period). The reference 14000002 slab
-│   ├── slab_two_pistons.ipynb          ← CONVERTER notebook (code: lib/slab_two_pistons.py): equilibrated periodic slab → two-piston (feed/permeate) data file (input for triaxial_*_two_pist, shear_slab_two_pist)
-│   ├── add_more_plates_to_gel.ipynb    ← CONVERTER notebook (code: lib/add_more_plates_to_gel.py) — six plates + two wet pistons, input for compress_slab
+│   ├── slab_two_pistons_periodic.ipynb          ← CONVERTER notebook (code: lib/slab_two_pistons_periodic.py): equilibrated periodic slab → two-piston (feed/permeate) data file (input for triaxial_*_two_pist, shear_slab_two_pist)
 │   ├── pure_polymer.ipynb              ← Build pure polymer data file (polymer_phase)
 │   ├── pure_solvent_1.ipynb            ← Build pure solvent data file (solvent_phase)
 │   │
@@ -58,10 +57,10 @@ lammps_work/                    ← This git repository
 │   │   ├── volfrac.py                       ← Voronoi volume fraction + λ calibration (shared with calibration_analysis.ipynb)
 │   │   ├── psd.py                           ← geometric porosity + pore-size distribution (2026-09-24)
 │   │   │   # data-file converters / CLI tools (imported by the converter notebooks, or run as `python scripts/lib/<tool>.py`)
-│   │   ├── slab_two_pistons.py              ← CONVERTER: equilibrated periodic slab → two-piston (feed/permeate) data file
-│   │   ├── add_more_plates_to_gel.py        ← CONVERTER (2026-09-29): isolated gel → six plates + two wet pistons (compress_slab input); imports slab_two_pistons
-│   │   ├── slab_shear_plates.py             ← CONVERTER (2026-09-22): periodic slab → isolate + z-normal plates on its faces = shear_slab input; imports isolate_gel + add_plates_to_gel
-│   │   ├── add_plates_to_gel.py             ← plate builder (module extracted from the notebook 2026-09-22)
+│   │   ├── slab_two_pistons_periodic.py              ← CONVERTER: equilibrated periodic slab → two-piston (feed/permeate) data file
+│   │   ├── add_more_plates_to_gel.py        ← CONVERTER (2026-09-29, layouts 2026-10-14): isolated gel → plates by layout + two wet pistons (compress_slab / shear_slab_two_pist inputs); imports slab_two_pistons_periodic
+│   │   ├── slab_shear_plates_periodic.py             ← CONVERTER (2026-09-22): periodic slab → isolate + z-normal plates on its faces = shear_slab input; imports isolate_gel + add_plates_to_gel_periodic
+│   │   ├── add_plates_to_gel_periodic.py             ← plate builder (module extracted from the notebook 2026-09-22)
 │   │   ├── isolate_gel.py                   ← CLI: strip bath/walls and define interior control volume (calibration_sweep, archived volmix_sweep)
 │   │   ├── adjust_solvent.py                ← CLI: set N_f of an isolated gel exactly (calibration_sweep)
 │   │   ├── split_gel.py                     ← CLI: split isolated gel into polymer-only / solvent-only (calibration_sweep, archived volmix_sweep)
@@ -76,9 +75,6 @@ lammps_work/                    ← This git repository
 │   └── tests/                  ← lint_lmp.py (deck linter), make_fixtures.py + run_plot_tests.sh + run_notebook_tests.sh + lib_headless_test.py
 │
 ├── lammps_build/               ← build_lammps.sh (Expanse: 22Jul2025_update3, MPI+OpenMP, CMake) + the SLURM log of the build in use + README (2026-10-11; was scripts/)
-│
-├── lammps_data/                ← Reserved for small committed .data files (currently empty;
-│                                  input_data/ lives outside the repo — see building_data_files.md)
 │
 ├── docs/                       ← Everything below this repo-layout page: setup, running,
 │                                  analysis, cluster reference, troubleshooting (see README.md)

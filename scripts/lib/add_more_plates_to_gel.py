@@ -3,10 +3,27 @@
 add_more_plates_to_gel.py
 =========================
 CONVERTER: an equilibrated slab_with_support snapshot of an ISOLATED gel (a finite
-network floating in its solvent bath, not touching its periodic image)  ->  the
-six-plate + two-wet-piston data file for compress_slab.lmp   (2026-09-29).
+network floating in its solvent bath, not touching its periodic image)  ->  a
+plated + two-wet-piston data file for one of the isolated-gel decks  (2026-09-29;
+LAYOUTS 2026-10-14).  Which load plates are added is the `layout`:
 
-The bulk-modulus counterpart of slab_two_pistons.py, laid out like it.  It replaces
+    layout        plates (types)                        deck / use                       suffix
+    six_plates    z-lo 4, z-hi 7, x-lo 8, x-hi 9,       compress_slab.lmp (bulk modulus)  _six_plates
+                  y-lo 10, y-hi 11
+    x_plates      x-lo 8, x-hi 9                        shear_slab_two_pist.lmp: the two   _x_plates
+                                                        grip plates it seats on the gel's
+                                                        x-faces and drives -/+z
+    z_plates      z-lo 4 (support), z-hi 7 (load)       the isolated-gel input of a        _z_plates
+                                                        triaxial-style deck (the two-piston
+                                                        decks' type map; those decks are
+                                                        written for PERIODIC slabs)
+    no_plates     none                                  gel + bath + wet pistons only      _no_plates
+
+The feed (5) and permeate (6) wet pistons are always added.  The type table is
+FIXED at 11 types whatever the layout (absent plates simply have no atoms), so every
+deck reads every layout and a deck that needs fewer plates deletes the extra ones.
+
+The isolated-gel counterpart of slab_two_pistons_periodic.py (the periodic-slab converter), laid out like it.  It replaces
 the notebook-only add_more_plates_to_gel code of 2026-07/08, which put the six
 plates ON the faces of the periodic box and deleted every polymer bead within
 1 sigma of them (the network was cut to fit the box).  Here nothing is cut:
@@ -15,24 +32,25 @@ plates ON the faces of the periodic box and deleted every polymer bead within
   * the bath is CROPPED to the margins asked for, so the production run does not
     carry the large equilibration bath (x, y stay periodic; the solvent pairs the
     new periodic seam brings closer than overlap_min are removed);
-  * six solvent-TRANSPARENT load plates are PARKED plate_park_gap outside the six
-    bounding-box faces of the gel -- compress_slab.lmp seats them onto the gel
-    (Phase 1.25) exactly as triaxial_compression_two_pist.lmp seats its load
-    piston and support;
+  * the layout's solvent-TRANSPARENT load plates are PARKED plate_park_gap outside
+    the bounding-box faces of the gel they load -- the deck seats them onto the gel
+    (compress_slab Phase 1.25, shear_slab_two_pist Phase 1.25) exactly as
+    triaxial_compression_two_pist.lmp seats its load piston and support;
   * z is closed by two wet NPT-pistons (feed above, permeate below) with vacuum
     margins, so the bath is held at P_target for the whole run and the solvent the
     gel expels is measured by the piston displacement.
 
-Geometry produced (z from bottom to top; x and y are periodic, bath all round):
+Geometry produced (z from bottom to top; x and y are periodic, bath all round;
+plates in [] only in the layouts that have them):
 
     zlo = 0
     | vacuum margin (margin_perm)
     | permeate piston (type 6)                        full-width sheet
-    | bath (reservoir_z)
-    |   plate z-lo (type 4)   <- the "support" of the two-piston decks
-    |   gel, with plates x-lo/x-hi (8/9) and y-lo/y-hi (10/11) on its sides
-    |   plate z-hi (type 7)   <- the "load piston" of the two-piston decks
-    | bath (reservoir_z)
+    | bath (reservoir_perm, default reservoir_z)
+    |   [plate z-lo (type 4)]   <- the "support" of the two-piston decks
+    |   gel, [plates x-lo/x-hi (8/9)] and [y-lo/y-hi (10/11)] on its sides
+    |   [plate z-hi (type 7)]   <- the "load piston" of the two-piston decks
+    | bath (reservoir_feed, default reservoir_z)
     | feed piston (type 5)                            full-width sheet
     | vacuum margin (margin_feed)
     zhi
@@ -45,13 +63,40 @@ lib/triaxial.py reads the z planes of a compress_slab trajectory unchanged.
 One type per plate: the deck groups them by type (the old mol-ID lookup returned
 EMPTY groups whenever leftover wall atoms carried higher mol IDs than the gel).
 
+HOW TO RUN IT ON THE LAPTOP (no notebook: this script IS the converter, 2026-10-14)
+----------------------------------------------------------------------------------
+1. Open a terminal.  Either the Mac Terminal app, or inside JupyterLab: File > New >
+   Terminal (that terminal already has the Python that runs your notebooks).
+2. Go to this folder (quote the path, it has spaces):
+       cd "<your lammps_work folder>/scripts/lib"
+3. Run the converter on the final configuration of the isolated-gel run, which sits in
+   lammps_data_files_local next to lammps_work.  For the shear deck:
+       python add_more_plates_to_gel.py --layout x_plates \
+           --input ../../../lammps_data_files_local/final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000.data
+   For compress_slab use --layout six_plates.  `python` must be the Anaconda Python that
+   runs JupyterLab (on Dylan's Mac /opt/anaconda3/bin/python; `which python` shows which one
+   is active, `conda activate base` switches to it).  In a notebook cell the same line works
+   with a leading `!` (and the path relative to the notebook: `!python lib/add_more_plates_to_gel.py ...`).
+4. Read the output: it prints the geometry, the validation ("RESULT: OK" or the problems and
+   nothing is written), the gel-unchanged check, the info-log entry, and the last line
+   "DATANAME for the batch file: <stem>".  Next to the input it writes <stem>.data, the
+   <stem>.data.info.json sidecar and <stem>_profiles.png (density profiles: open it and check
+   the gel sits between the plates / pistons).  Copy the .data file to
+   ~/Documents/lammps_data/input_data/ on the cluster and put the stem in the deck's batch
+   (shear_slab_two_pist.batch for x_plates, compress_slab.batch for six_plates).
+   `python add_more_plates_to_gel.py --help` lists every option.
+
 Usage (CLI)
 -----------
-  python3 add_more_plates_to_gel.py --input <final_config_...data> [--output <...>]
-        [--bath-margin-xy 12] [--reservoir-z 15] [--plate-park-gap 3]
-        [--plate-overhang 6] [--plate-spacing 0.5] [--piston-spacing 0.5]
+  python add_more_plates_to_gel.py --input <final_config_...data> [--output <...>]
+        [--layout six_plates|x_plates|z_plates|no_plates]
+        [--bath-margin-xy 12] [--reservoir-z 15] [--reservoir-feed R] [--reservoir-perm R]
+        [--plate-park-gap 3] [--plate-overhang 6] [--plate-spacing 0.5] [--piston-spacing 0.5]
         [--margin-feed 10] [--margin-perm 10] [--no-log] [--no-png]
   --self-check-only <file> validates an existing output file without rewriting it.
+  From Python (a notebook cell or another script):
+        import sys; sys.path.insert(0, 'lib'); import add_more_plates_to_gel as amp
+        info = amp.convert(amp.Config(input_file=..., layout='x_plates'))
 """
 from __future__ import annotations
 
@@ -68,7 +113,7 @@ import numpy as np
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
-import slab_two_pistons as s2p  # noqa: E402  (hex sheet, json helper, info log)
+import slab_two_pistons_periodic as s2p  # noqa: E402  (hex sheet, json helper, info log)
 
 try:
     from scipy.spatial import cKDTree
@@ -91,6 +136,15 @@ AX = {'x': 0, 'y': 1, 'z': 2}
 TYPE_NAMES = {1: 'crosslink', 2: 'chain bead', 3: 'solvent', 4: 'plate z-lo', 5: 'feed piston',
               6: 'permeate piston', 7: 'plate z-hi', 8: 'plate x-lo', 9: 'plate x-hi',
               10: 'plate y-lo', 11: 'plate y-hi'}
+# layout -> the plates it adds (the output stem is <input stem>_<layout>)
+LAYOUTS = {
+    'six_plates': ('zlo', 'zhi', 'xlo', 'xhi', 'ylo', 'yhi'),   # compress_slab.lmp
+    'x_plates':   ('xlo', 'xhi'),                               # shear_slab_two_pist.lmp (grip plates)
+    'z_plates':   ('zlo', 'zhi'),                               # triaxial-style support + load plate
+    'no_plates':  (),                                           # wet pistons only
+}
+LAYOUT_DECK = {'six_plates': 'compress_slab.lmp', 'x_plates': 'shear_slab_two_pist.lmp',
+               'z_plates': 'a triaxial-style isolated-gel deck (none written yet)', 'no_plates': 'any two-piston deck without load plates'}
 
 
 # ---------------------------------------------------------------------------
@@ -100,11 +154,15 @@ TYPE_NAMES = {1: 'crosslink', 2: 'chain bead', 3: 'solvent', 4: 'plate z-lo', 5:
 class Config:
     """Every knob of the converter (the notebook's Config cell builds one)."""
     input_file: str
-    output_file: str = None            # None -> <input stem>_six_plates.data next to the input
-    bath_margin_xy: float = 12.0       # sigma of bath between a PARKED side plate and the periodic box face
-                                       # (the gel sees its image across 2*(park gap + margin))
-    reservoir_z: float = 15.0          # sigma of bath between a parked z plate and its wet piston
-    plate_park_gap: float = 3.0        # plates are parked this far outside the gel bounding-box faces
+    layout: str = 'six_plates'         # which load plates to add: six_plates | x_plates | z_plates | no_plates (LAYOUTS)
+    output_file: str = None            # None -> <input stem>_<layout>.data next to the input
+    bath_margin_xy: float = 12.0       # sigma of bath between a PARKED side plate (or the plane where one would be) and
+                                       # the periodic box face (the gel sees its image across 2*(park gap + margin))
+    reservoir_z: float = 15.0          # sigma of bath between a parked z plate (or its plane) and its wet piston
+    reservoir_feed: float = None       # the same, feed side only (None -> reservoir_z); e.g. a deeper feed reservoir
+    reservoir_perm: float = None       # the same, permeate side only (None -> reservoir_z)
+    plate_park_gap: float = 3.0        # plates are parked this far outside the gel bounding-box faces (every margin is
+                                       # measured from the parked plane, with or without a plate on that face)
     plate_overhang: float = 6.0        # each plate extends this far beyond the gel BB in its two in-plane directions
     plate_spacing: float = 0.5         # square-lattice spacing of the load plates (snapped to the plate size)
     piston_spacing: float = 0.5        # hex spacing of the wet pistons (snapped to tile lx, ly)
@@ -119,12 +177,24 @@ class Config:
     make_png: bool = True
 
     def __post_init__(self):
+        if self.layout not in LAYOUTS:
+            raise ValueError(f'layout must be one of {list(LAYOUTS)} (got {self.layout!r})')
         if self.output_file is None:
             p = Path(self.input_file)
-            self.output_file = str(p.with_name(p.stem + '_six_plates.data'))
+            self.output_file = str(p.with_name(p.stem + '_' + self.layout + '.data'))
+        if self.reservoir_feed is None:
+            self.reservoir_feed = self.reservoir_z
+        if self.reservoir_perm is None:
+            self.reservoir_perm = self.reservoir_z
         self.drop_types = tuple(int(t) for t in self.drop_types)
-        assert self.plate_overhang < self.plate_park_gap + min(self.bath_margin_xy, self.reservoir_z), \
-            'plate_overhang must be smaller than plate_park_gap + the bath margin (plates must stay inside the box)'
+        if self.plates:
+            assert self.plate_overhang < self.plate_park_gap + min(self.bath_margin_xy, self.reservoir_feed, self.reservoir_perm), \
+                'plate_overhang must be smaller than plate_park_gap + the bath margin (plates must stay inside the box)'
+
+    @property
+    def plates(self):
+        """The plate faces of this layout, in PLATE_ORDER."""
+        return tuple(f for f in PLATE_ORDER if f in LAYOUTS[self.layout])
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +383,7 @@ def convert(cfg: Config):
         raise FileNotFoundError(f'input data file not found: {inp}')
     print('=' * 78)
     print(f'add_more_plates_to_gel converter  ({t_start:%Y-%m-%d %H:%M})')
+    print(f'  layout: {cfg.layout} -> plates {list(cfg.plates) or "none"} + feed/permeate wet pistons  ({LAYOUT_DECK[cfg.layout]})')
     print(f'  input : {inp}')
     print(f'  output: {cfg.output_file}')
     print('=' * 78)
@@ -381,17 +452,20 @@ def convert(cfg: Config):
         print('  WARNING: the gel is within 3 sigma of its periodic image -- it was NOT swelling freely in the input')
 
     # ---- (c) crop the bath ------------------------------------------------------
-    half_want = 0.5 * L_bb + cfg.plate_park_gap + np.array([cfg.bath_margin_xy, cfg.bath_margin_xy, cfg.reservoir_z])
-    half = np.minimum(half_want, 0.5 * L)
-    cropped = half_want < 0.5 * L - 1e-9
+    # wanted half-extents from the BB centre, per side (the feed / permeate reservoirs may differ)
+    want_lo = 0.5 * L_bb + cfg.plate_park_gap + np.array([cfg.bath_margin_xy, cfg.bath_margin_xy, cfg.reservoir_perm])
+    want_hi = 0.5 * L_bb + cfg.plate_park_gap + np.array([cfg.bath_margin_xy, cfg.bath_margin_xy, cfg.reservoir_feed])
+    # the solvent is folded around the gel: at most half the input box is available on each side
+    half_lo, half_hi = np.minimum(want_lo, 0.5 * L), np.minimum(want_hi, 0.5 * L)
+    cropped = (want_lo < 0.5 * L - 1e-9) & (want_hi < 0.5 * L - 1e-9)
     for k, d in enumerate('xyz'):
         if not cropped[k]:
             print(f'  NOTE: the input box is too small in {d} for the margin asked for '
-                  f'({2 * half_want[k]:.2f} > {L[k]:.2f}): keeping the whole input length '
-                  f'(margin {0.5 * (L[k] - L_bb[k]) - cfg.plate_park_gap:.2f} sigma instead)')
+                  f'({want_lo[k] + want_hi[k]:.2f} > {L[k]:.2f}): keeping the whole input length '
+                  f'(margin {0.5 * (L[k] - L_bb[k]) - cfg.plate_park_gap:.2f} sigma per side instead)')
     # solvent is folded around the COM, the crop is centred on the BB centre: refold around it
     xyz[is_solv] -= L * np.round((xyz[is_solv] - ctr) / L)
-    inside = np.all(np.abs(xyz - ctr) < half, axis=1) | is_poly
+    inside = np.all((xyz > ctr - half_lo) & (xyz < ctr + half_hi), axis=1) | is_poly
     n_crop = int((~inside).sum())
     rho_in = float(is_solv.sum()) / float(np.prod(L))
     sel = np.flatnonzero(inside)
@@ -401,11 +475,12 @@ def convert(cfg: Config):
     bonds_idx = remap[bonds_idx]
     assert bonds_idx.min() >= 0, 'a polymer bead was cropped -- this cannot happen'
     is_poly, is_solv = np.isin(typ, POLYMER_TYPES), typ == T_SOLVENT
-    print(f'  bath cropped to {2 * half[0]:.2f} x {2 * half[1]:.2f} x {2 * half[2]:.2f}: removed {n_crop} solvent beads '
+    half2 = half_lo + half_hi                      # the cropped box lengths
+    print(f'  bath cropped to {half2[0]:.2f} x {half2[1]:.2f} x {half2[2]:.2f}: removed {n_crop} solvent beads '
           f'({int(is_solv.sum())} kept)')
-    xyz = xyz - (ctr - half)                       # box origin at 0: gel centred, x,y in [0, 2 half)
-    bb_lo, bb_hi = bb_lo - (ctr - half), bb_hi - (ctr - half)
-    lx, ly = 2.0 * half[0], 2.0 * half[1]
+    xyz = xyz - (ctr - half_lo)                    # box origin at 0: gel centred in x, y
+    bb_lo, bb_hi = bb_lo - (ctr - half_lo), bb_hi - (ctr - half_lo)
+    lx, ly = half2[0], half2[1]
 
     # ---- (d) the new periodic seam --------------------------------------------
     n_seam = 0
@@ -427,13 +502,13 @@ def convert(cfg: Config):
 
     # ---- bath density away from the gel --------------------------------------------
     out_gel = is_solv & np.any((xyz < bb_lo - cfg.density_window) | (xyz > bb_hi + cfg.density_window), axis=1)
-    v_tot = float(np.prod(2.0 * half))
-    v_in = float(np.prod(np.minimum(L_bb + 2.0 * cfg.density_window, 2.0 * half)))
+    v_tot = float(np.prod(half2))
+    v_in = float(np.prod(np.minimum(L_bb + 2.0 * cfg.density_window, half2)))
     rho_bulk = float(out_gel.sum()) / max(v_tot - v_in, 1e-9)
     print(f'  bath number density ({cfg.density_window:g} sigma clear of the gel BB): rho = {rho_bulk:.4f} /sigma^3 '
           f'(input box average incl. the gel: {rho_in:.4f})')
 
-    # ---- (e) wet pistons + six plates ----------------------------------------------
+    # ---- (e) wet pistons + the layout's plates --------------------------------------
     sz = xyz[is_solv, 2]
     z_perm, z_feed = float(sz.min()) - cfg.piston_clearance, float(sz.max()) + cfg.piston_clearance
     sheet, (nx, ny, sdx, sdy) = s2p.make_sheet_hex(lx, ly, cfg.piston_spacing)
@@ -447,14 +522,14 @@ def convert(cfg: Config):
     print(f'  wet pistons: hex sheet {nx} x {ny} = {len(sheet)} beads each (dx={sdx:.4f}, row pitch={sdy:.4f}); '
           f'permeate z={z_perm:.3f}, feed z={z_feed:.3f}')
     planes, n_plate = {}, {}
-    for face in PLATE_ORDER:
+    for face in cfg.plates:
         p, plane = make_plate(face, bb_lo, bb_hi, cfg)
         planes[face], n_plate[face] = float(plane), len(p)
         new_pos.append(p)
         new_typ.append(np.full(len(p), PLATE_TYPE[face]))
         new_mol.append(np.full(len(p), mol_next))
         mol_next += 1
-    print('  load plates (parked): ' + '  '.join(f'{f} @ {planes[f]:.2f} ({n_plate[f]})' for f in PLATE_ORDER))
+    print('  load plates (parked): ' + ('  '.join(f'{f} @ {planes[f]:.2f} ({n_plate[f]})' for f in cfg.plates) if cfg.plates else 'none'))
 
     n_old = len(typ)
     all_xyz = np.vstack([xyz] + new_pos)
@@ -481,13 +556,16 @@ def convert(cfg: Config):
     V_bb = float(np.prod(L_bb))
     info = dict(
         input_file=str(inp), output_file=str(cfg.output_file), date=t_start.strftime('%Y-%m-%d %H:%M'),
+        layout=cfg.layout, plate_faces=list(cfg.plates),
         config=asdict(cfg), box_in=dict(box), box_out=new_box, lx=lx, ly=ly, area=A,
         gel_bb_lo=bb_lo_o.tolist(), gel_bb_hi=bb_hi_o.tolist(), L_bb=L_bb.tolist(), L_rg=L_rg.tolist(),
         V_bb=V_bb, V_rg=float(np.prod(L_rg)), image_gap_in=gap_img.tolist(),
         plates=planes_o, n_plate=n_plate, z_feed_piston=zs(z_feed), z_perm_piston=zs(z_perm),
         n_sheet=len(sheet), rho_bulk=rho_bulk, n_fragments_removed=n_frag, n_fragment_beads_removed=n_frag_beads, n_cropped=n_crop, n_seam_removed=n_seam, n_walls_dropped=n_dropped,
-        bath_margin_xy_actual=float(half[0] - 0.5 * L_bb[0] - cfg.plate_park_gap),
-        reservoir_z_actual=float(half[2] - 0.5 * L_bb[2] - cfg.plate_park_gap),
+        bath_margin_xy_actual=float(half_lo[0] - 0.5 * L_bb[0] - cfg.plate_park_gap),
+        reservoir_z_actual=float(min(half_lo[2], half_hi[2]) - 0.5 * L_bb[2] - cfg.plate_park_gap),
+        reservoir_perm_actual=float(half_lo[2] - 0.5 * L_bb[2] - cfg.plate_park_gap),
+        reservoir_feed_actual=float(half_hi[2] - 0.5 * L_bb[2] - cfg.plate_park_gap),
         n_atoms=int(len(all_typ)), n_bonds=int(len(bonds)),
         counts={int(t): int((all_typ == t).sum()) for t in range(1, N_TYPES + 1)},
         # the wet pistons back out by (expelled solvent)/A: the largest VOLUMETRIC strain the two
@@ -496,16 +574,16 @@ def convert(cfg: Config):
     )
 
     # ---- (f) validate BEFORE writing ------------------------------------------------
-    val = validate(all_typ, all_xyz, bonds, new_box, n_old, cfg.overlap_min)
+    val = validate(all_typ, all_xyz, bonds, new_box, n_old, cfg.overlap_min, plates=cfg.plates)
     info['validation'] = val
     if not val['ok']:
         raise RuntimeError('validation FAILED -- file not written:\n  ' + '\n  '.join(val['problems']))
 
     cfgs = ' '.join(f'{k}={v}' for k, v in asdict(cfg).items() if k not in ('input_file', 'output_file'))
-    header = (f'six-plate + two-wet-piston data file from {inp.name} via add_more_plates_to_gel.py on {info["date"]}; '
-              'types 1 xl 2 chain 3 solv 4 plate_zlo 5 feed_piston 6 perm_piston 7 plate_zhi 8 plate_xlo 9 plate_xhi '
-              f'10 plate_ylo 11 plate_yhi; {cfgs}; gel_bb_lo={bb_lo_o.round(3).tolist()} gel_bb_hi={bb_hi_o.round(3).tolist()} '
-              f'rho_bulk={rho_bulk:.4f}')
+    header = (f'{cfg.layout} + two-wet-piston data file from {inp.name} via add_more_plates_to_gel.py on {info["date"]}; '
+              f'plates {list(cfg.plates) or "none"}; types 1 xl 2 chain 3 solv 4 plate_zlo 5 feed_piston 6 perm_piston 7 plate_zhi '
+              f'8 plate_xlo 9 plate_xhi 10 plate_ylo 11 plate_yhi (fixed table, absent plates empty); {cfgs}; '
+              f'gel_bb_lo={bb_lo_o.round(3).tolist()} gel_bb_hi={bb_hi_o.round(3).tolist()} rho_bulk={rho_bulk:.4f}')
     write_data(cfg.output_file, header, new_ids, all_mol, all_typ, all_xyz, all_vel, bonds, new_box)
     with open(str(cfg.output_file) + '.info.json', 'w') as f:
         json.dump(s2p._jsonable(info), f, indent=1)
@@ -525,13 +603,14 @@ def convert(cfg: Config):
 # ---------------------------------------------------------------------------
 # Validation (also the CLI self-check)
 # ---------------------------------------------------------------------------
-def validate(typ, xyz, bonds, box, n_old=0, overlap_min=0.8, verbose=True):
+def validate(typ, xyz, bonds, box, n_old=0, overlap_min=0.8, verbose=True, plates=PLATE_ORDER):
     """Checks: (1) no INTERACTING pair closer than overlap_min that the CONVERSION made --
     a pair with a new wall bead (index >= n_old) or a pair of mobile beads that is close
     only through the new x,y periodicity; solvent-plate and wall-wall pairs are off in the
     deck and exempt, and pairs already that close in the input are reported, not failed
     (the deck's Phase 0 minimises); (2) every bond shorter than the
-    FENE limit with NO periodic wrap (the gel is whole); (3) all eleven types present;
+    FENE limit with NO periodic wrap (the gel is whole); (3) the gel, the two wet pistons
+    and exactly the layout's plates (`plates`) present;
     (4) solvent and polymer between the wet pistons; (5) every plate inside the box
     and outside the gel; (6) no atom outside the box.  Returns dict(ok, problems, ...)."""
     say = print if verbose else (lambda *a, **k: None)
@@ -558,9 +637,10 @@ def validate(typ, xyz, bonds, box, n_old=0, overlap_min=0.8, verbose=True):
             n_pre = int((~wall & ~solv_plate & ~is_new & ~seam).sum())
             n_close = int(rel.sum())
             if n_close:
-                d = np.linalg.norm(p[pairs[rel, 0]] - p[pairs[rel, 1]], axis=1)
-                d = np.minimum(d, 1e9)
-                worst = float(d.min())
+                dv = p[pairs[rel, 0]] - p[pairs[rel, 1]]
+                dv[:, 0] -= lx * np.round(dv[:, 0] / lx)        # minimum image in x, y (seam pairs)
+                dv[:, 1] -= ly * np.round(dv[:, 1] / ly)
+                worst = float(np.linalg.norm(dv, axis=1).min())
                 problems.append(f'{n_close} interacting pair(s) closer than {overlap_min} sigma (closest {worst:.3f}); e.g. types '
                                 + ', '.join(f'{typ[i]}-{typ[j]}' for i, j in pairs[rel][:5]))
         say(f'  interacting pairs closer than {overlap_min} made by the conversion: {n_close}'
@@ -573,10 +653,13 @@ def validate(typ, xyz, bonds, box, n_old=0, overlap_min=0.8, verbose=True):
         if d.max() > FENE_R0_MAX:
             problems.append(f'{int((d > FENE_R0_MAX).sum())} bond(s) longer than {FENE_R0_MAX} sigma without wrapping')
     counts = {int(t): int((typ == t).sum()) for t in range(1, N_TYPES + 1)}
-    say('  type counts: ' + ', '.join(f'{t} {TYPE_NAMES[t]}={n}' for t, n in counts.items()))
+    say('  type counts: ' + ', '.join(f'{t} {TYPE_NAMES[t]}={n}' for t, n in counts.items() if n))
+    expected = {1, 2, 3, T_FEED, T_PERM} | {PLATE_TYPE[f] for f in plates}
     for t in range(1, N_TYPES + 1):
-        if counts[t] == 0:
+        if t in expected and counts[t] == 0:
             problems.append(f'no atoms of type {t} ({TYPE_NAMES[t]})')
+        elif t not in expected and counts[t]:
+            problems.append(f'{counts[t]} atoms of type {t} ({TYPE_NAMES[t]}) which the layout does not have')
     if counts[T_FEED] and counts[T_PERM]:
         z_feed, z_perm = float(xyz[typ == T_FEED, 2].mean()), float(xyz[typ == T_PERM, 2].mean())
         mz = xyz[typ <= 3, 2]
@@ -596,6 +679,8 @@ def validate(typ, xyz, bonds, box, n_old=0, overlap_min=0.8, verbose=True):
         if poly.any() and pl.any():
             lo, hi = xyz[poly].min(axis=0), xyz[poly].max(axis=0)
             for face, t in PLATE_TYPE.items():
+                if not counts[t]:
+                    continue
                 k = AX[face[0]]
                 c = float(xyz[typ == t, k].mean())
                 gap = (c - hi[k]) if face.endswith('hi') else (lo[k] - c)
@@ -616,11 +701,16 @@ def print_layout(info):
     b = info['box_out']
     print(f"  box  {b['xhi']:.3f} x {b['yhi']:.3f} x {b['zhi']:.3f}   (x, y periodic bath; z closed by the wet pistons)")
     lo, hi = info['gel_bb_lo'], info['gel_bb_hi']
+    pl = info['plates']
+    print(f"  layout {info.get('layout', '?')}: plates {info.get('plate_faces') or 'none'}")
     for k, d in enumerate('xyz'):
-        print(f"  {d}: plate {d}lo {info['plates'][d + 'lo']:8.3f} | gel BB [{lo[k]:8.3f}, {hi[k]:8.3f}] "
-              f"(L_bb {info['L_bb'][k]:.2f}, L_rg {info['L_rg'][k]:.2f}) | plate {d}hi {info['plates'][d + 'hi']:8.3f}")
+        p_lo = f"plate {d}lo {pl[d + 'lo']:8.3f}" if (d + 'lo') in pl else f"(no {d}lo plate)   "
+        p_hi = f"plate {d}hi {pl[d + 'hi']:8.3f}" if (d + 'hi') in pl else f"(no {d}hi plate)"
+        print(f"  {d}: {p_lo} | gel BB [{lo[k]:8.3f}, {hi[k]:8.3f}] "
+              f"(L_bb {info['L_bb'][k]:.2f}, L_rg {info['L_rg'][k]:.2f}) | {p_hi}")
     print(f"  z: permeate piston {info['z_perm_piston']:.3f} | feed piston {info['z_feed_piston']:.3f} | "
-          f"bath margin x,y {info['bath_margin_xy_actual']:.2f}, reservoir z {info['reservoir_z_actual']:.2f} sigma")
+          f"bath margin x,y {info['bath_margin_xy_actual']:.2f}, reservoir z {info.get('reservoir_perm_actual', info['reservoir_z_actual']):.2f} (perm) / "
+          f"{info.get('reservoir_feed_actual', info['reservoir_z_actual']):.2f} (feed) sigma")
     print(f"  the vacuum margins absorb the solvent expelled up to a VOLUMETRIC strain of ~{info['max_strain_vol_margins']:.2f}; "
           'raise margin_feed / margin_perm for deeper sweeps')
 
@@ -645,7 +735,8 @@ def plot_profiles(typ, xyz, box, info, out_png):
             h, _ = np.histogram(xyz[col & np.isin(typ, t), k], bins=edges)
             ax.plot(zc, h / (area * 0.5), color=c, lw=1.3, label=lab)
         for f in (d + 'lo', d + 'hi'):
-            ax.axvline(info['plates'][f], color='k', ls='--', lw=1.5)
+            if f in info['plates']:
+                ax.axvline(info['plates'][f], color='k', ls='--', lw=1.5)
         if d == 'z':
             ax.axvline(info['z_feed_piston'], color='tab:green', ls='-', lw=2, label='feed piston')
             ax.axvline(info['z_perm_piston'], color='tab:purple', ls='-', lw=2, label='permeate piston')
@@ -665,8 +756,10 @@ def plot_profiles(typ, xyz, box, info, out_png):
 def info_log_entry(info):
     c, cfg, b = info['counts'], info['config'], info['box_out']
     n_pl = sum(info['n_plate'].values())
+    faces = info.get('plate_faces') or []
     return '\n'.join([
-        f'Converted six-plate + two-wet-piston data file  [{info["date"]}, add_more_plates_to_gel.py]:',
+        f'Converted {info.get("layout", "six_plates")} + two-wet-piston data file  [{info["date"]}, add_more_plates_to_gel.py]'
+        f'  (plates: {", ".join(faces) if faces else "none"}):',
         f'  Input: {Path(info["input_file"]).name}'
         + (f'   ({info["n_fragment_beads_removed"]} free polymer bead(s) not bonded to the network removed)'
            if info['n_fragment_beads_removed'] else ''),
@@ -675,9 +768,9 @@ def info_log_entry(info):
         f"  Gel: L_bb {info['L_bb'][0]:.2f} x {info['L_bb'][1]:.2f} x {info['L_bb'][2]:.2f}, "
         f"L_rg {info['L_rg'][0]:.2f} x {info['L_rg'][1]:.2f} x {info['L_rg'][2]:.2f}; bath rho = {info['rho_bulk']:.4f}",
         f"  Plates: parked {cfg['plate_park_gap']} sigma outside the BB faces, overhang {cfg['plate_overhang']}, spacing "
-        f"{cfg['plate_spacing']} ({n_pl} beads in six plates); wet pistons {info['n_sheet']} beads each, "
+        f"{cfg['plate_spacing']} ({n_pl} beads in {len(faces)} plate(s)); wet pistons {info['n_sheet']} beads each, "
         f"z = {info['z_perm_piston']:.2f} / {info['z_feed_piston']:.2f}, vacuum margins {cfg['margin_perm']} / {cfg['margin_feed']}",
-        f'  Crosslinks: {c[1]}   Chain beads: {c[2]}   Solvent: {c[3]}   Plates (4,7-11): {n_pl}   '
+        f'  Crosslinks: {c[1]}   Chain beads: {c[2]}   Solvent: {c[3]}   Plates: {n_pl}   '
         f'Feed piston: {c[5]}   Permeate piston: {c[6]}',
         f'  Total atoms: {info["n_atoms"]}   Total bonds: {info["n_bonds"]}   Output: {Path(info["output_file"]).name}',
         '',
@@ -690,8 +783,9 @@ def self_check(path, overlap_min=0.8):
     assert np.array_equal(D['ids'][order], np.arange(1, len(order) + 1)), 'atom ids are not 1..N'
     typ = D['typ'][order]
     n_mob = int((typ <= 3).sum())
-    assert np.all(typ[:n_mob] <= 3), 'mobile beads must come first in a six-plate data file'
-    return validate(typ, D['xyz'][order], D['bonds'][:, 1:4], D['box'], n_old=n_mob, overlap_min=overlap_min)
+    assert np.all(typ[:n_mob] <= 3), 'mobile beads must come first in a plated data file'
+    present = tuple(f for f in PLATE_ORDER if (typ == PLATE_TYPE[f]).any())   # the layout is read off the file
+    return validate(typ, D['xyz'][order], D['bonds'][:, 1:4], D['box'], n_old=n_mob, overlap_min=overlap_min, plates=present)
 
 
 def check_gel_unchanged(input_file, output_file, drop_types=(4, 5)):
@@ -718,12 +812,16 @@ def check_gel_unchanged(input_file, output_file, drop_types=(4, 5)):
 # CLI
 # ---------------------------------------------------------------------------
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description='Convert an equilibrated isolated-gel snapshot into the six-plate + '
-                                             'two-wet-piston data file for compress_slab.lmp.')
+    ap = argparse.ArgumentParser(description='Convert an equilibrated isolated-gel snapshot into a plated + '
+                                             'two-wet-piston data file (layout: six_plates for compress_slab, '
+                                             'x_plates for shear_slab_two_pist, z_plates, no_plates).')
     ap.add_argument('--input')
     ap.add_argument('--output', default=None)
+    ap.add_argument('--layout', choices=list(LAYOUTS), default='six_plates')
     ap.add_argument('--bath-margin-xy', type=float, default=12.0)
     ap.add_argument('--reservoir-z', type=float, default=15.0)
+    ap.add_argument('--reservoir-feed', type=float, default=None, help='feed-side reservoir (default reservoir-z)')
+    ap.add_argument('--reservoir-perm', type=float, default=None, help='permeate-side reservoir (default reservoir-z)')
     ap.add_argument('--plate-park-gap', type=float, default=3.0)
     ap.add_argument('--plate-overhang', type=float, default=6.0)
     ap.add_argument('--plate-spacing', type=float, default=0.5)
@@ -735,18 +833,21 @@ if __name__ == '__main__':
                     help='refuse (instead of deleting) polymer not bonded to the main network')
     ap.add_argument('--no-log', action='store_true', help='do not append to slab_data_file_info.md')
     ap.add_argument('--no-png', action='store_true')
-    ap.add_argument('--self-check-only', metavar='DATAFILE', help='validate an existing six-plate data file and exit')
+    ap.add_argument('--self-check-only', metavar='DATAFILE', help='validate an existing plated data file and exit (layout read off the file)')
     args = ap.parse_args()
     if args.self_check_only:
         sys.exit(0 if self_check(args.self_check_only)['ok'] else 1)
     if not args.input:
         ap.error('--input is required')
-    cfg = Config(input_file=args.input, output_file=args.output, bath_margin_xy=args.bath_margin_xy,
-                 reservoir_z=args.reservoir_z, plate_park_gap=args.plate_park_gap, plate_overhang=args.plate_overhang,
+    cfg = Config(input_file=args.input, layout=args.layout, output_file=args.output, bath_margin_xy=args.bath_margin_xy,
+                 reservoir_z=args.reservoir_z, reservoir_feed=args.reservoir_feed, reservoir_perm=args.reservoir_perm,
+                 plate_park_gap=args.plate_park_gap, plate_overhang=args.plate_overhang,
                  plate_spacing=args.plate_spacing, piston_spacing=args.piston_spacing,
                  piston_clearance=args.piston_clearance, margin_feed=args.margin_feed, margin_perm=args.margin_perm,
                  drop_fragments=not args.keep_fragments, log_info=not args.no_log, make_png=not args.no_png)
     convert(cfg)
     ok, msg = check_gel_unchanged(cfg.input_file, cfg.output_file)
     print(('  gel-unchanged check: OK -- ' if ok else '  gel-unchanged check: FAILED -- ') + msg)
+    if ok:
+        print(f'\nDATANAME for the batch file: {Path(cfg.output_file).stem}')
     sys.exit(0 if ok else 1)

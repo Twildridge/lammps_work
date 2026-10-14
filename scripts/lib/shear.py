@@ -132,8 +132,10 @@ class Config:
     DECK: str = 'shear_slab'              # 'shear_slab' (plate-driven) | 'shear_slab_two_pist' (two-piston system,
                                           # rigid-in-plane face layers, laterally periodic slab; deck file
                                           # shear_slab_two_pist_periodic.lmp since 2026-10-13) |
-                                          # 'shear_slab_two_pist_iso' (2026-10-13: ISOLATED gel in the two-piston bath,
-                                          # rigid x-face grips driven -/+z -- x is the GAP and z the SHEAR direction;
+                                          # 'shear_slab_two_pist_iso' (2026-10-13/14: ISOLATED gel in the two-piston bath,
+                                          # grip plates seated on the x-faces (plate + 3 sigma of polymer = one rigid grip)
+                                          # driven -/+z -- x is the GAP and z the SHEAR direction; plate_pressure cols 2-3
+                                          # are the plates' seat planes;
                                           # the readers relabel x <-> z so every figure and number below is in the
                                           # notebooks' usual frame: "z" = gap axis = the deck's x, "u_x" = the deck's
                                           # u_z, sigma_xz unchanged, N1 = sigma_shear - sigma_gap as before; the files

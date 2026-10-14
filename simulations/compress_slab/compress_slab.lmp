@@ -8,7 +8,7 @@
 # This deck REPLACES the 2026-08 fixed-volume staged deck (archive/simulations/
 # compress_slab/): see "What changed" at the end of this header.
 #
-# Input: a data file from scripts/add_more_plates_to_gel.ipynb (CONVERTER of an
+# Input: a data file from scripts/lib/add_more_plates_to_gel.py (CONVERTER of an
 # equilibrated slab_with_support snapshot of the isolated gel: gel made whole,
 # bath cropped, six load plates PARKED outside the gel faces, two wet pistons).
 # Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,

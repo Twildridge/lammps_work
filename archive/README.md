@@ -37,8 +37,8 @@ under `simulations/` and `scripts/`.
 | `scripts/triaxial_permeation.ipynb` | One-piston permeation analysis; superseded by `scripts/triaxial_permeation_single_two_pist.ipynb`. |
 | `scripts/add_walls_to_slab.ipynb`, `scripts/add_walls_with_angles.ipynb` | Built the `walled_*` inputs of `slab_with_flow` / the one-piston triaxial decks (Jan–Jun 2026). |
 | `scripts/slab_with_support_angled.ipynb` | Angled-bond slab generator (Feb 2026 lineage; no current deck uses angle terms). |
-| `scripts/isolate_gel.ipynb`, `scripts/split_gel_slab.ipynb` | Notebook front-ends of `lib/isolate_gel.py` / `lib/split_gel.py`, which stay (used by `calibration_sweep` and `slab_shear_plates.py`). |
-| `scripts/add_plates_to_gel.ipynb` | Notebook front-end of `lib/add_plates_to_gel.py`, which stays (used by `slab_shear_plates.py`); it built the 2026-04 isolated-cube shear input. |
+| `scripts/isolate_gel.ipynb`, `scripts/split_gel_slab.ipynb` | Notebook front-ends of `lib/isolate_gel.py` / `lib/split_gel.py`, which stay (used by `calibration_sweep` and `slab_shear_plates_periodic.py`). |
+| `scripts/add_plates_to_gel.ipynb` | Notebook front-end of `lib/add_plates_to_gel.py` (renamed `lib/add_plates_to_gel_periodic.py` on 2026-10-14, used by `slab_shear_plates_periodic.py`); it built the 2026-04 isolated-cube shear input. |
 | `scripts/run_analysis_notebook.sh` | Headless notebook runner (2026-08-06); nothing calls it, `scripts/tests/run_notebook_tests.sh` covers the need. |
 
 * All notebooks here use paths relative to `scripts/` (`lib`, `../../lammps_data_files_local/`, `../flow_data_local/`): copy one back to `scripts/` or open it from there to run it.

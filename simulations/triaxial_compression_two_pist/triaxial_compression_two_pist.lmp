@@ -8,7 +8,7 @@
 # of triaxial_compression.lmp.  The permeation counterpart lives in
 # ../triaxial_permeation_two_pist/.
 #
-# Input: a data file from scripts/slab_two_pistons.ipynb (CONVERTER of an
+# Input: a data file from scripts/slab_two_pistons_periodic.ipynb (CONVERTER of an
 # equilibrated slab_with_support periodic snapshot).  WHY a converter (2026-09-16):
 # the NPT-piston scheme controls pressure in z only (lx, ly fixed), so it cannot
 # swell a fresh lattice laterally; the converter inherits lx, ly, gel dimensions

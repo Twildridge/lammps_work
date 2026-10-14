@@ -2,7 +2,7 @@
 
 [← back to README](../README.md)
 
-> **What is a cluster?** A cluster is a collection of powerful computers ("nodes") you access remotely. You write a script describing your job (how many CPUs, how long), submit it to a queue manager called SLURM, and SLURM runs it when resources are available. You don't interact with the job while it runs.
+A cluster is a set of computers (nodes) used remotely. A job is a script that says how many CPUs it needs and for how long; the queue manager, SLURM, runs it when the nodes are free. Nobody interacts with a job while it runs.
 
 SSH into the cluster, then clone the repo:
 
@@ -17,9 +17,7 @@ cd lammps_work
 chmod +x scripts/*.sh
 ```
 
-**Activate the Python environment** (required for post-processing scripts):
-
-The run scripts load Python differently depending on the cluster. No extra steps are needed on Expanse or Bridges-2 — `module load anaconda3/...` is called automatically inside `run_lammps.sh`. On **Pod**, you need to activate a conda environment once before submitting jobs:
+**Python for the post-processing scripts.** On Expanse and Bridges-2 nothing needs doing: `run_lammps.sh` runs `module load anaconda3/...` itself. On Pod a conda environment has to be activated before submitting jobs:
 
 ```bash
 # Pod only — one-time setup (and any time you open a new terminal):
@@ -34,7 +32,7 @@ conda create -n lammps_analysis python=3.11 numpy scipy matplotlib pandas -y
 conda activate lammps_analysis
 ```
 
-**Configure git credentials** (so `git pull` works without a password prompt):
+**Git credentials**, so that `git pull` does not prompt for a password every time:
 ```bash
 git config --global user.name "Twildridge"
 git config --global user.email "semiinfiniteslab@icloud.com"
@@ -42,7 +40,7 @@ git config --global credential.helper store
 # Then do: git pull  — it'll ask for your GitHub PAT once, then store it
 ```
 
-> A **Personal Access Token (PAT)** replaces your GitHub password for command-line use. Generate one at github.com → Settings → Developer settings → Personal access tokens → Tokens (classic). Check the `repo` scope, copy it, and paste it when prompted by `git pull`.
+A Personal Access Token (PAT) stands in for the GitHub password on the command line. Generate one at github.com → Settings → Developer settings → Personal access tokens → Tokens (classic) with the `repo` scope checked, and paste it when `git pull` asks.
 
 **Copy your .data files to the cluster:**
 ```bash
@@ -51,4 +49,4 @@ scp ~/Documents/lammps_data/input_data/your_file.data \
     <username>@data.expanse.sdsc.edu:~/Documents/lammps_data/input_data/
 ```
 
-Full details for each cluster are in [`expanse_lammps_guide.md`](../expanse_lammps_guide.md) and [`slurm_commands_and_compiling.md`](../slurm_commands_and_compiling.md).
+Cluster-specific detail is in [`expanse_lammps_guide.md`](../expanse_lammps_guide.md) and [`slurm_commands_and_compiling.md`](../slurm_commands_and_compiling.md).

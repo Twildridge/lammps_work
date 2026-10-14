@@ -1,4 +1,4 @@
-# ===== Shear Modulus, ISOLATED gel in a two-piston bath, displacement-driven xz shear  (2026-10-13) =====
+# ===== Shear Modulus, ISOLATED gel in a two-piston bath, displacement-driven xz shear  (2026-10-13; grip plates 2026-10-14) =====
 # SHEAR MODE ONLY, on a gel that is NOT periodic in any direction: a finite block
 # (the tall 9 x 9 x 21-cell gel equilibrated free in its bath by slab_with_support,
 # BARO_MODE=iso) floating in a solvent bath that the two wet NPT-pistons of the
@@ -22,16 +22,16 @@
 #   DECK = "shear_slab_two_pist_iso": it relabels x <-> z at read time (file names
 #   stress_profile_x_* / disp_z_polymer_* -> the notebooks' "z"/"u_x" frame).
 #
-# Input: <stem>_six_plates.data from scripts/add_more_plates_to_gel.ipynb
-#   (lib/add_more_plates_to_gel.py): the CONVERTER of an equilibrated ISOLATED-gel
-#   snapshot -- gel made whole and centred, bath cropped to bath_margin_xy / reservoir_z,
-#   two full-width wet pistons (types 5 feed above, 6 permeate below) with vacuum
-#   margins, and six solvent-transparent load plates PARKED 3 sigma outside the gel's
-#   bounding-box faces (types 4, 7, 8-11) for compress_slab.  THIS DECK DELETES THE
-#   SIX PLATES right after read_data (delete_atoms, IDs kept): the shear needs no
-#   plates -- the polymer face layers are the grips -- and the file is then the same
-#   gel + bath + two wet pistons as every two-piston deck.  A 7-type file without
-#   plates (types 4 and 7 empty or absent) is read the same way.
+# Input: <stem>_x_plates.data from scripts/lib/add_more_plates_to_gel.py
+#   (lib/add_more_plates_to_gel.py, layout = x_plates): the CONVERTER of an equilibrated
+#   ISOLATED-gel snapshot -- gel made whole and centred, bath cropped to bath_margin_xy /
+#   reservoir_z, two full-width wet pistons (types 5 feed above, 6 permeate below) with
+#   vacuum margins, and TWO solvent-transparent GRIP PLATES (types 8 x-lo, 9 x-hi) PARKED
+#   plate_park_gap (3 sigma) outside the gel's x bounding-box faces.  This deck SEATS the
+#   two plates onto the gel's x-faces (Phase 1.25, compress_slab's seating) and drives
+#   them -/+z: plate + the polymer layer it rests on = one rigid grip.  Any OTHER load
+#   plate in the file (a six_plates file: types 4, 7, 10, 11) is deleted right after
+#   read_data (delete_atoms, IDs kept), so the compress_slab input works here too.
 # Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,
 #   strains (+ strains_list), press_target, piston_mass, c_pist_frac,
 #   npt_piston_steps, settle_halt.  No cont / continue_sim.sh support (as every
@@ -42,10 +42,12 @@
 #    -var nsteps_shear 6000 -var num_dump_frames 1 -var strains 0.005 0.01 -var nsteps 2000):
 #   phase0_steps, npt_piston_steps, min_iter, ref_avg_steps, ref_nfreq, series_freq,
 #   stress_freq, thermo_freq, nsteps_shear_base, nsteps_shear, layer_thick,
-#   track_thick, core_margin_y, core_margin_z, pin_gel_every, num_dump_frames
+#   track_thick, core_margin_y, core_margin_z, pin_gel_every, num_dump_frames,
+#   seat_mode (rg|bb), t_seat, seat_settle_steps
 #
-# Atom types (the converter's): 1=crosslink, 2=chain bead, 3=solvent, 5=feed piston,
-#   6=permeate piston; 4, 7, 8, 9, 10, 11 = the six load plates (DELETED here).
+# Atom types (the converter's fixed table): 1=crosslink, 2=chain bead, 3=solvent, 5=feed
+#   piston, 6=permeate piston, 8=plate x-lo (LEFT grip), 9=plate x-hi (RIGHT grip);
+#   4, 7, 10, 11 = compress_slab's other load plates (deleted here if present).
 #
 # GEOMETRY (z from bottom to top; boundary p p p -- the BATH is periodic in x and y,
 # the GEL touches nothing; box orthogonal and never changed):
@@ -56,13 +58,22 @@
 #   The two pistons close ONE connected bath; both at P_target they are redundant
 #   and harmless (P_feed_meas = P_perm_meas = the bath pressure, logged).
 #
-# DRIVEN LAYERS = the GRIPS (static groups, fixed bead sets, defined after the piston settle):
-#   poly_l = polymer beads with x <  x_face_l + layer_thick   (x_face_l = Rg left face)
-#   poly_r = polymer beads with x >  x_face_r - layer_thick   (x_face_r = Rg right face)
+# GRIPS = PLATE + the polymer layer it is seated on (static groups, fixed bead sets, defined
+# after the seating):
+#   grip_l = plate_l (type 8) + poly_l = polymer with x <  x_face_l + layer_thick
+#   grip_r = plate_r (type 9) + poly_r = polymer with x >  x_face_r - layer_thick
+#   where x_face_l/r = the plate's SEAT PLANE = plate x +/- contact_gap (the Rg x-face it was
+#   seated on, seat_mode rg; or the outermost bead, seat_mode bb).  The plates are
+#   solvent-TRANSPARENT (pair 3-8 / 3-9 off, as compress_slab's plates), so solvent drains
+#   through the gripped faces and nothing is trapped between plate and gel.  A grip is
 #   RIGID IN ALL THREE DIRECTIONS (fix setforce 0 0 0 + velocity set; fix nve only
-#   integrates the prescribed velocity; no thermostat on them):
+#   integrates the prescribed velocity; no thermostat on it):
 #       velocity set 0 0 +/-vshear   -- drive: uniform z-translation, +z right, -z left
-#       velocity set 0 0 0           -- hold / reference: the layer is frozen where it is
+#       velocity set 0 0 0           -- hold / reference: the grip is frozen where it is
+#   The plate is a hard WCA wall for the polymer beyond the seat plane (the rough outer
+#   shell the seating folded in) and, carried with the layer, it holds the gel's x-width;
+#   the layer beads bonded into the network transmit the shear.  (Equivalent to a plate
+#   perfectly bonded to the face layer; no bonds are added.)
 #   WHY fully rigid and not "free along the gap" as in the periodic deck: a finite
 #   block gripped on two opposite faces has a RIGID-ROTATION mode about y (dz = -theta x,
 #   dx = +theta z) that reproduces the prescribed +/-dz of the two faces EXACTLY with
@@ -74,8 +85,10 @@
 #   traction (S_r, S_l = sigma_xz at each grip), its x part / face area the normal
 #   traction the grips carry (N_r, N_l; the Poynting-type normal stress and any x
 #   swelling drive -- expected small).
-#   Before the layers exist (Phase 0 + the piston settle) the free gel is kept from
-#   drifting and turning by fix momentum on the polymer (linear + angular, every
+#   N_* are the NET x-forces (polymer + solvent); Np_* in plate_pressure_* are the
+#   polymer-only x-forces on the plates (compress_slab's seated preload).
+#   Before the grips exist (Phase 0, the piston settle and the seating) the free gel is
+#   kept from drifting and turning by fix momentum on the polymer (linear + angular, every
 #   pin_gel_every steps -- the PIN_GEL of the slab_with_support isolated runs).
 #
 # MEASUREMENT CORE (the "bulk" of the periodic deck, now a 3-D block inside the gel):
@@ -106,10 +119,15 @@
 #   cumulative displacement profile (disp_z_polymer_cum), as the periodic deck.
 #
 # Behaviour:
-#   - Phase 0:   read, delete the plates, brief minimize + short Langevin NVT, pistons frozen, gel pinned.
+#   - Phase 0:   read, delete any extra plates, brief minimize + short Langevin NVT, pistons and
+#                grip plates frozen, gel pinned.
 #   - Phase 1:   NPT-PISTON SETTLE of both wet pistons at P_target (the compression deck's
 #                Phase 1, verbatim).  The wet pistons stay live to the end.
-#   - Phase 1.5: gamma = 0 REFERENCE window (_ref files), layers frozen at their settled positions.
+#   - Phase 1.25: SEATING: the two grip plates travel over t_seat to contact_gap short of the
+#                gel x-face they load (seat_mode rg = the Rg face, bb = the outermost bead),
+#                then seat_settle_steps with the plates fixed (Langevin).  The grips are
+#                defined from the seated plates; the plate x-forces are the seated preload.
+#   - Phase 1.5: gamma = 0 REFERENCE window (_ref files), grips frozen at their seated positions.
 #   - Phase 2/3: STRAIN SWEEP over ${strains} (cumulative).  For each target:
 #                  2. DRIVE -- layers translate at -/+vshear (left -z, right +z) until gamma >= target (fix halt);
 #                  3. HOLD  -- layers frozen, gel NVT for nsteps; the relaxed shear stress is MEASURED.
@@ -134,7 +152,8 @@
 #   volume_data/{box_dimensions,box_bounds,gel_dimensions_rg,gel_volume_rg,gel_volume_bb}_${stem}.dat
 #   stress_data/shear_strain_${stem}.dat                (from the reference on)
 #   stress_data/shear_strain_rg_${stem}.dat             step Rg_xx^2 Rg_xz  (Rg-based shear strain: z -> z + gamma x changes Rg_xz by gamma Rg_xx^2)
-#   piston_data/plate_pressure_${stem}.dat              step x_face_r x_face_l P_feed P_perm S_r S_l N_r N_l
+#   piston_data/plate_pressure_${stem}.dat              step x_face_r x_face_l P_feed P_perm S_r S_l N_r N_l Np_r Np_l
+#                                                       (x_face_* = the plates' seat planes, live from step 0: the seating travel is in the file)
 #                                                       (gel Rg x-faces; wet-piston pressures; grip shear tractions; grip normal tractions)
 #   piston_data/piston_pressure_${stem}.dat, piston_position_run_${stem}.dat   (as the compression deck; no load piston -> z_load = 0)
 
@@ -163,7 +182,14 @@ variable settle_tol_z     equal 0.05
 variable settle_min_steps equal 200000
 variable phase0_steps     index 50000
 variable box_guard_gap    equal 2.0       # halt if a wet piston face comes this close to a box face
-variable pin_gel_every    index 100       # free-gel pin (Phase 0 + settle): polymer linear + angular momentum zeroed every N steps
+variable pin_gel_every    index 100       # free-gel pin (Phase 0, settle, seating): polymer linear + angular momentum zeroed every N steps
+
+# ----- Phase 1.25: seating of the two grip plates (compress_slab's seating, x only) -----
+variable contact_gap       equal 1.12     # a plate stops this far (= WCA cutoff) short of the gel face it seats on
+variable seat_mode         index rg       # rg: the Rg-based x-face (com +/- L_rg/2; the outer shell is folded in, default)
+                                          # bb: the outermost polymer bead of each x-face
+variable t_seat            index 100000   # common approach time of both plates (steps)
+variable seat_settle_steps index 200000   # plates fixed, Langevin, before the grips are defined
 
 # ---- STRAIN SWEEP: cumulative shear-strain targets (as shear_slab.lmp) --------
 # `strains` is an index-style variable supplied by run_lammps.sh as
@@ -204,7 +230,7 @@ variable series_nfreq   equal v_series_nevery*v_series_nrepeat
 # ----- Trajectory dump frame budget -----
 variable num_dump_frames index 30
 variable dump_freq_prod  equal floor(${nsteps}/v_num_dump_frames)
-variable setup_span      equal v_phase0_steps+v_npt_piston_steps+v_ref_avg_steps
+variable setup_span      equal v_phase0_steps+v_npt_piston_steps+v_t_seat+v_seat_settle_steps+v_ref_avg_steps
 variable dump_freq_setup equal floor(v_setup_span/v_num_dump_frames)
 
 # ----- Time Averaging (stress): nfreq = nevery * nrepeat, ~num_stress_curves blocks per hold -----
@@ -219,7 +245,7 @@ variable nrepeat_stress equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepea
 variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
-print ">>> Mode: SHEAR, ISOLATED GEL in a two-piston bath (rigid x-face grips driven -/+z; wet pistons hold the bath at P_target)"
+print ">>> Mode: SHEAR, ISOLATED GEL in a two-piston bath (grip plates seated on the x-faces, driven -/+z; wet pistons hold the bath at P_target)"
 
 # ----- Spatial Binning -----
 variable binWidth   equal 2.0   # bin width (sigma) along x (gap profiles) and z (end-zone profiles); lib/shear.py Config.binWidth
@@ -247,7 +273,7 @@ mass 6 ${piston_mass}
 comm_modify cutoff 5.0
 
 print "========================================"
-print "Shear, ISOLATED gel (rigid x-face grips driven -/+z), two-piston bath: ${dataname}"
+print "Shear, ISOLATED gel (grip plates seated on the x-faces, driven -/+z), two-piston bath: ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
 print "P_target=${P_target}  piston_mass=${piston_mass}  c_pist_frac=${c_pist_frac}  settle=${npt_piston_steps}"
 print "Hold steps per strain level: ${nsteps};  first strain target = ${strains}"
@@ -255,32 +281,41 @@ print "========================================"
 
 
 # ==========================================================================
-#                 GROUP DEFINITIONS + DELETION OF THE SIX LOAD PLATES
+#        GROUP DEFINITIONS + DELETION OF ANY LOAD PLATE THAT IS NOT A GRIP PLATE
 # ==========================================================================
+variable n_types equal extract_setting(ntypes)
+if "${n_types} < 9" then &
+    "print 'ERROR: the data file has only ${n_types} atom types -- no grip plates (types 8, 9). Convert with add_more_plates_to_gel layout = x_plates.'" &
+    "quit 1"
 group polymer     type 1 2
 group solvent     type 3
 group piston_feed type 5
 group piston_perm type 6
+group plate_l     type 8          # grip plate on the gel's x-lo (LEFT) face
+group plate_r     type 9          # grip plate on the gel's x-hi (RIGHT) face
+group plates      union plate_l plate_r
 group mobile      type 1 2 3
-group gel_system  type 1 2 3 5 6
+group gel_system  type 1 2 3 5 6 8 9
 
-# the converter's six parked load plates (compress_slab's) are not used here: delete them,
+# compress_slab's other load plates (a six_plates file) are not used here: delete them,
 # keeping the atom IDs of everything else (compress no) so dumps and the data file agree.
-variable n_types equal extract_setting(ntypes)
 if "${n_types} >= 11" then &
-    "group plates type 4 7 8 9 10 11" &
-elif "${n_types} >= 7" &
-    "group plates type 4 7" &
+    "group plates_extra type 4 7 10 11" &
 else &
-    "group plates empty"
-variable N_plates equal count(plates)
-print ">>> load plates in the file (types 4, 7, 8-11): ${N_plates} beads -> deleted (IDs kept)"
-delete_atoms group plates compress no
-group plates delete
+    "group plates_extra type 4 7"
+variable N_extra equal count(plates_extra)
+print ">>> other load plates in the file (types 4, 7, 10, 11): ${N_extra} beads -> deleted (IDs kept)"
+delete_atoms group plates_extra compress no
+group plates_extra delete
 
 variable N_feed equal count(piston_feed)
 variable N_perm equal count(piston_perm)
-print ">>> sheets: feed ${N_feed}  permeate ${N_perm};  atoms now $(atoms)"
+variable N_pl_l equal count(plate_l)
+variable N_pl_r equal count(plate_r)
+if "${N_pl_l} == 0 || ${N_pl_r} == 0" then &
+    "print 'ERROR: grip plates missing (type 8: ${N_pl_l} beads, type 9: ${N_pl_r} beads). Convert with add_more_plates_to_gel layout = x_plates.'" &
+    "quit 1"
+print ">>> sheets: feed ${N_feed}  permeate ${N_perm};  grip plates: left ${N_pl_l}  right ${N_pl_r};  atoms now $(atoms)"
 
 
 # ==========================================================================
@@ -299,6 +334,17 @@ pair_coeff 3 6 1.0 ${sigma} 1.122
 pair_coeff 5 5 0.0 ${sigma} 0.0
 pair_coeff 5 6 0.0 ${sigma} 0.0
 pair_coeff 6 6 0.0 ${sigma} 0.0
+# grip plates: WCA wall for the polymer (* * above), TRANSPARENT to solvent (compress_slab's
+# plates: the gel drains through the gripped faces), nothing between walls
+pair_coeff 3 8 0.0 ${sigma} 0.0
+pair_coeff 3 9 0.0 ${sigma} 0.0
+pair_coeff 5 8 0.0 ${sigma} 0.0
+pair_coeff 5 9 0.0 ${sigma} 0.0
+pair_coeff 6 8 0.0 ${sigma} 0.0
+pair_coeff 6 9 0.0 ${sigma} 0.0
+pair_coeff 8 8 0.0 ${sigma} 0.0
+pair_coeff 8 9 0.0 ${sigma} 0.0
+pair_coeff 9 9 0.0 ${sigma} 0.0
 
 bond_coeff * 30.0 1.5 1.0 1.0
 special_bonds fene
@@ -306,6 +352,15 @@ special_bonds fene
 neigh_modify exclude type 5 5
 neigh_modify exclude type 5 6
 neigh_modify exclude type 6 6
+neigh_modify exclude type 3 8
+neigh_modify exclude type 3 9
+neigh_modify exclude type 5 8
+neigh_modify exclude type 5 9
+neigh_modify exclude type 6 8
+neigh_modify exclude type 6 9
+neigh_modify exclude type 8 8
+neigh_modify exclude type 8 9
+neigh_modify exclude type 9 9
 
 # MPI load balance across the vacuum margins
 balance 1.05 shift z 20 1.05
@@ -313,12 +368,15 @@ fix lb all balance 1000 1.05 shift z 20 1.05
 
 
 # ==========================================================================
-#        WET PISTONS parked (frozen) until the settle; the free gel is PINNED
+#   WET PISTONS parked (frozen) until the settle, GRIP PLATES parked until the seating;
+#   the free gel is PINNED
 # ==========================================================================
 velocity piston_feed set 0.0 0.0 0.0
 velocity piston_perm set 0.0 0.0 0.0
-fix freeze_feed piston_feed setforce 0.0 0.0 0.0
-fix freeze_perm piston_perm setforce 0.0 0.0 0.0
+velocity plates      set 0.0 0.0 0.0
+fix freeze_feed   piston_feed setforce 0.0 0.0 0.0
+fix freeze_perm   piston_perm setforce 0.0 0.0 0.0
+fix freeze_plates plates      setforce 0.0 0.0 0.0     # not integrated until the seating: immobile
 # an isolated block in a bath drifts and turns under the pressure noise (the slab_with_support
 # PIN_GEL): zero the polymer's linear + angular momentum until the rigid grips take over
 fix pin_gel polymer momentum ${pin_gel_every} linear 1 1 1 angular
@@ -345,11 +403,24 @@ compute fp_perm piston_perm group/group mobile
 variable area        equal lx*ly
 variable P_feed_meas equal  c_fp_feed[3]/v_area
 variable P_perm_meas equal -c_fp_perm[3]/v_area
-# grip tractions: 0 until the driven layers exist (redefined in the characterisation)
+# grip tractions: 0 until the grips exist (redefined in the characterisation)
 variable S_r equal 0.0
 variable S_l equal 0.0
 variable N_r equal 0.0
 variable N_l equal 0.0
+# grip plates: positions (unwrapped COM) and the polymer-only x-force on each (the seated
+# preload of compress_slab; + = the polymer pushes the plate OUTWARD = compressive on the gel)
+compute pl_l_com plate_l com
+compute pl_r_com plate_r com
+compute fp_pl_l plate_l group/group polymer
+compute fp_pl_r plate_r group/group polymer
+variable x_pl_l  equal c_pl_l_com[1]
+variable x_pl_r  equal c_pl_r_com[1]
+variable seat_l  equal c_pl_l_com[1]+v_contact_gap      # the plates' seat planes = the gripped faces once seated
+variable seat_r  equal c_pl_r_com[1]-v_contact_gap
+variable area_face equal 1.0                             # redefined (Rg face area) in the characterisation
+variable Np_l equal -c_fp_pl_l[1]/v_area_face
+variable Np_r equal  c_fp_pl_r[1]/v_area_face
 
 compute feed_com piston_feed com
 compute perm_com piston_perm com
@@ -410,8 +481,8 @@ fix trk_vol_rg all print ${stress_freq} "$(step) $(v_gel_vol_rg)" &
     file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${nsteps}.dat screen no
 fix trk_vol_bb all print ${stress_freq} "$(v_gel_vol_bb)" &
     file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${nsteps}.dat screen no
-fix trk_plates all print ${stress_freq} "$(step) $(v_gel_xr_rg) $(v_gel_xl_rg) $(v_P_feed_meas) $(v_P_perm_meas) $(v_S_r) $(v_S_l) $(v_N_r) $(v_N_l)" &
-    title "# step x_face_r x_face_l P_feed P_perm S_r S_l N_r N_l   (gel Rg x-faces = the gripped faces; wet-piston pressures; S_* = constraint z-force on each grip / face area = sigma_xz at that grip; N_* = x-force of the gel ON each grip / face area, + = gel pushing outward)" &
+fix trk_plates all print ${stress_freq} "$(step) $(v_seat_r) $(v_seat_l) $(v_P_feed_meas) $(v_P_perm_meas) $(v_S_r) $(v_S_l) $(v_N_r) $(v_N_l) $(v_Np_r) $(v_Np_l)" &
+    title "# step x_face_r x_face_l P_feed P_perm S_r S_l N_r N_l Np_r Np_l   (x_face_* = grip-plate seat planes = plate x -/+ contact_gap, the gripped faces once seated; wet-piston pressures; S_* = constraint z-force on each grip / face area = sigma_xz at that grip; N_* = net x-force of the gel ON each grip / face area, + = gel pushing outward; Np_* = polymer-only x-force on each PLATE / face area, + = compressive preload)" &
     file output_files/piston_data/plate_pressure_${dataname}_${interaction}_${nsteps}.dat screen no
 
 
@@ -419,7 +490,7 @@ fix trk_plates all print ${stress_freq} "$(step) $(v_gel_xr_rg) $(v_gel_xl_rg) $
 #                    PHASE 0: MINIMIZE + LANGEVIN NVT (pistons frozen)
 # ==========================================================================
 print "========================================"
-print "Phase 0: minimize + Langevin NVT (${phase0_steps} steps), pistons frozen, gel pinned"
+print "Phase 0: minimize + Langevin NVT (${phase0_steps} steps), pistons + grip plates frozen, gel pinned"
 print "========================================"
 reset_timestep 0
 timestep ${timestep_prod}
@@ -514,6 +585,47 @@ unfix settle_win
 print ">>> settle end (step $(step)): z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  vz_feed=$(v_vz_feed:%.2e) vz_perm=$(v_vz_perm:%.2e)"
 print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f) (applied ${P_target})  T=$(c_mobile_temp:%.4f)"
 
+
+# ==========================================================================
+#   PHASE 1.25: SEATING -- the two grip plates onto the gel's x-faces (compress_slab's seating)
+# ==========================================================================
+# Both plates travel v = d/t over the COMMON time t_seat to contact_gap short of the
+# x-face they load, so neither arrives early and shoves the gel sideways (the gel is
+# still pinned); ballistic translation (nve + setforce 0 + set velocity), stopped by
+# zeroing the velocity.  Transparent to solvent, the plates slide through the bath.
+# Then seat_settle_steps with the plates fixed (Langevin on the mobile atoms) before
+# the grips are defined from the seated plates.
+print "========================================"
+print "Phase 1.25: seating of the two grip plates (seat_mode ${seat_mode}, t_seat ${t_seat}) + ${seat_settle_steps} settle steps"
+print "========================================"
+if "${seat_mode} == bb" then &
+    "variable face_xlo equal $(c_minx)" &
+    "variable face_xhi equal $(c_maxx)" &
+elif "${seat_mode} == rg" &
+    "variable face_xlo equal $(v_gel_xl_rg)" &
+    "variable face_xhi equal $(v_gel_xr_rg)" &
+else &
+    "print 'ERROR: seat_mode must be rg or bb (got ${seat_mode})'" &
+    "quit 1"
+variable d_xlo  equal $(v_face_xlo-v_x_pl_l-v_contact_gap)
+variable d_xhi  equal $(v_x_pl_r-v_face_xhi-v_contact_gap)
+variable seat_T equal $(v_t_seat*v_timestep_prod)
+print ">>> seat_mode = ${seat_mode}: gel x-faces ${face_xlo} / ${face_xhi}   (Rg $(v_gel_xl_rg:%.2f) / $(v_gel_xr_rg:%.2f), BB $(c_minx:%.2f) / $(c_maxx:%.2f))"
+print ">>> plates parked at x = $(v_x_pl_l:%.3f) / $(v_x_pl_r:%.3f);  seating travel ${d_xlo} / ${d_xhi} sigma over ${t_seat} steps"
+if "${d_xlo} <= 0.0 || ${d_xhi} <= 0.0" then &
+    "print 'ERROR: a grip plate is already inside its seat plane (travel ${d_xlo} / ${d_xhi}): the gel swelled into a parked plate -- raise plate_park_gap in the converter'" &
+    "quit 1"
+fix nve_plates plates nve
+velocity plate_l set $(v_d_xlo/v_seat_T) 0.0 0.0
+velocity plate_r set $(-v_d_xhi/v_seat_T) 0.0 0.0
+run ${t_seat}
+velocity plates set 0.0 0.0 0.0
+unfix nve_plates
+print ">>> plates seated at x = $(v_x_pl_l:%.3f) / $(v_x_pl_r:%.3f) (seat planes $(v_seat_l:%.3f) / $(v_seat_r:%.3f));  settling ${seat_settle_steps} steps..."
+run ${seat_settle_steps}
+print ">>> seated (step $(step)):  gel Rg x $(v_gel_xl_rg:%.2f) .. $(v_gel_xr_rg:%.2f), BB x $(c_minx:%.2f) .. $(c_maxx:%.2f);  polymer x-force on the plates (raw): left $(c_fp_pl_l[1]:%.3f) right $(c_fp_pl_r[1]:%.3f)"
+print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)  T=$(c_mobile_temp:%.4f)"
+
 # ----- end of the Langevin stages.  The production integrators are created in the
 # characterisation below, once the grips exist (they are integrated apart from the
 # thermostatted atoms).  No steps run in between.
@@ -530,9 +642,11 @@ run 0
 # ==========================================================================
 #      GEL CHARACTERISATION: faces, grips, tracking slabs, measurement core   [ONCE]
 # ==========================================================================
-# Everything here is frozen to numbers from the settled configuration ($(...)).
-variable x_face_l       equal $(v_gel_xl_rg)
-variable x_face_r       equal $(v_gel_xr_rg)
+# Everything here is frozen to numbers from the seated configuration ($(...)).
+# The gripped faces are the plates' SEAT PLANES (plate x +/- contact_gap), not the live Rg
+# faces: the grips are defined relative to the plates they move with.
+variable x_face_l       equal $(v_seat_l)
+variable x_face_r       equal $(v_seat_r)
 variable y_face_lo      equal $(v_gel_ylo_rg)
 variable y_face_hi      equal $(v_gel_yhi_rg)
 variable z_face_lo      equal $(v_gel_bot_rg)
@@ -541,7 +655,7 @@ variable gel_xlo        equal $(c_minx)
 variable gel_xhi        equal $(c_maxx)
 variable gel_gap        equal $(v_gel_xhi - v_gel_xlo)       # polymer bounding-box width in x (diagnostic)
 variable gel_lx_initial equal $(v_gel_lx_rg)                 # Rg x-width (diagnostic; column 2 of shear_strain)
-variable area_face      equal $(v_gel_ly_rg*v_gel_lz_rg)     # Rg face area of a gripped x-face (traction denominator)
+variable area_face      equal $(v_gel_ly_rg*v_gel_lz_rg)     # Rg face area of a gripped x-face (traction denominator; also Np_*)
 
 variable x_drv_l equal $(v_x_face_l + v_layer_thick)         # grips: x < x_drv_l (left) / x > x_drv_r (right)
 variable x_drv_r equal $(v_x_face_r - v_layer_thick)
@@ -567,57 +681,63 @@ group all_trk_r delete
 variable N_l equal $(count(poly_l))
 variable N_r equal $(count(poly_r))
 group poly_drv  union    poly_l poly_r
+group grip_l    union    plate_l poly_l               # the rigid grips: plate + the layer it is seated on
+group grip_r    union    plate_r poly_r
+group grips     union    grip_l grip_r
 group poly_free subtract mobile poly_l poly_r         # everything the thermostat acts on
 
-# ----- the rigid grips take over from the momentum pin -----
+# ----- the rigid grips take over from the momentum pin and the plate freeze -----
 unfix pin_gel
+unfix freeze_plates
 
 # ----- production integrators -----
 # poly_free: full 3-D Nose-Hoover (the compression deck's choice; nothing streams once a
 # hold has settled) + x/y COM-momentum zeroing of the bath + free network (left over from the
 # Langevin stages; nothing else holds the bath in x, y).  z is left alone (the wet pistons exchange it).
-# poly_drv: plain nve -- all three components are PRESCRIBED below (setforce 0 0 0 + velocity set),
-# so nve only integrates the prescribed uniform velocity; a thermostat on these beads would
-# rescale it, so none is applied.
+# grips (plate + layer): plain nve -- all three components are PRESCRIBED below (setforce 0 0 0
+# + velocity set), so nve only integrates the prescribed uniform velocity; a thermostat on
+# these beads would rescale it, so none is applied.
 fix nvt_prod poly_free nvt temp ${temp_target} ${temp_target} 1.0
 fix mom_prod poly_free momentum 100 linear 1 1 0
-fix nve_drv  poly_drv  nve
+fix nve_drv  grips     nve
 # rigid from here to the end of the run: no force reaches a grip bead, so the velocity set
 # below is kept exactly (0 in the reference and every hold, -/+vshear in a drive).  setforce
 # must come AFTER every other force-modifying fix on these atoms (it does: nothing else touches them).
-velocity poly_l set 0.0 0.0 0.0
-velocity poly_r set 0.0 0.0 0.0
-fix shear_l poly_l setforce 0.0 0.0 0.0
-fix shear_r poly_r setforce 0.0 0.0 0.0
+velocity grip_l set 0.0 0.0 0.0
+velocity grip_r set 0.0 0.0 0.0
+fix shear_l grip_l setforce 0.0 0.0 0.0
+fix shear_r grip_r setforce 0.0 0.0 0.0
 
-compute drv_l_com poly_l     com      # unwrapped COMs
-compute drv_r_com poly_r     com
-compute trk_l_com poly_trk_l com
+# strain from the PLATE positions (rigid, well-defined; the layer moves with its plate)
+compute trk_l_com poly_trk_l com      # unwrapped COMs
 compute trk_r_com poly_trk_r com
 run 0
 
-variable W_drv  equal $(c_drv_r_com[1] - c_drv_l_com[1])     # prescribed-strain denominator (the plate_sep of shear_slab.lmp)
+variable W_drv  equal $(v_x_drv_r - v_x_drv_l)               # prescribed-strain denominator: the gel between the grip layers (the plate_sep of shear_slab.lmp)
 variable W_trk  equal $(c_trk_r_com[1] - c_trk_l_com[1])     # interior-strain denominator
-variable z_drv0 equal $(c_drv_r_com[3] - c_drv_l_com[3])
+variable z_drv0 equal $(c_pl_r_com[3] - c_pl_l_com[3])
 variable z_trk0 equal $(c_trk_r_com[3] - c_trk_l_com[3])
-variable gamma     equal (c_drv_r_com[3] - c_drv_l_com[3] - v_z_drv0) / v_W_drv
+variable gamma     equal (c_pl_r_com[3] - c_pl_l_com[3] - v_z_drv0) / v_W_drv
 variable gamma_trk equal (c_trk_r_com[3] - c_trk_l_com[3] - v_z_trk0) / v_W_trk
 
 print "Rg:  Lx=$(v_gel_lx_rg) Ly=$(v_gel_ly_rg) Lz=$(v_gel_lz_rg)   BB:  Lx=$(v_gel_lx_bb) Ly=$(v_gel_ly_bb) Lz=$(v_gel_lz_bb)"
-print ">>> Gripped faces (Rg): x_l = ${x_face_l}  x_r = ${x_face_r};  polymer BB x-extent ${gel_xlo} to ${gel_xhi};  face area (Rg) ${area_face}"
+print ">>> Gripped faces (plate seat planes): x_l = ${x_face_l}  x_r = ${x_face_r}  (plates at $(v_x_pl_l:%.3f) / $(v_x_pl_r:%.3f); live Rg faces $(v_gel_xl_rg:%.2f) / $(v_gel_xr_rg:%.2f));  polymer BB x-extent ${gel_xlo} to ${gel_xhi};  face area (Rg) ${area_face}"
 print ">>> Free faces (Rg): y ${y_face_lo} .. ${y_face_hi};  z ${z_face_lo} .. ${z_face_hi}"
-print ">>> Grips (${layer_thick} sigma inside each x-face + everything beyond): left ${N_l} beads (x < ${x_drv_l}), right ${N_r} beads (x > ${x_drv_r});  W_drv = ${W_drv} sigma (strain denominator)"
+print ">>> Grips = plate + polymer ${layer_thick} sigma inside each seat plane (+ everything beyond): left ${N_pl_l} plate + ${N_l} polymer beads (x < ${x_drv_l}), right ${N_pl_r} plate + ${N_r} polymer beads (x > ${x_drv_r});  W_drv = ${W_drv} sigma (strain denominator)"
 print ">>> Tracking slabs (${track_thick} sigma): left $(count(poly_trk_l)) beads, right $(count(poly_trk_r)) beads;  W_trk = ${W_trk} sigma"
-print ">>> Thermostatted atoms (poly_free): $(count(poly_free));  rigid grip beads (poly_drv, nve): $(count(poly_drv))"
+print ">>> Thermostatted atoms (poly_free): $(count(poly_free));  rigid grip beads (grips, nve): $(count(grips))"
+print ">>> Seated preload (polymer-only x-force on each plate / face area): left $(v_Np_l:%.5f)  right $(v_Np_r:%.5f)"
 
 # ----- grip tractions from the constraint force -----
-# f_shear_*[k] = total force on the grip BEFORE setforce zeroed it = the force the gel
-# (pair + bond) exerts on the grip.  The constraint supplies the opposite, so
-# sigma_xz at each face = the external z-force on the grip / face area (+ for gamma > 0:
-# the right grip moves +z and the gel pulls it back -z):
+# f_shear_*[k] = total force on the grip (plate + layer) BEFORE setforce zeroed it = the
+# force the rest of the system exerts on the grip (plate-layer forces are internal and
+# cancel).  The constraint supplies the opposite, so sigma_xz at each face = the external
+# z-force on the grip / face area (+ for gamma > 0: the right grip moves +z and the gel
+# pulls it back -z):
 variable S_r equal -f_shear_r[3]/v_area_face
 variable S_l equal  f_shear_l[3]/v_area_face
-# normal traction the grips carry: x-force of the gel ON the grip / face area, + = gel pushing outward
+# normal traction the grips carry: net x-force (polymer + solvent) ON the grip / face area,
+# + = gel pushing outward (the polymer-only part on the plate is Np_*)
 variable N_r equal  f_shear_r[1]/v_area_face
 variable N_l equal -f_shear_l[1]/v_area_face
 
@@ -787,7 +907,7 @@ unfix ref_prof_p
 unfix ref_tensor_s
 unfix ref_tensor_p
 print ">>> Reference recording done.  step=$(step)  gamma=$(v_gamma:%.5f)  gamma_trk=$(v_gamma_trk:%.5f)  sigma_p,xz(core)=$(v_stress_p_xz:%.5f)"
-print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)  S_r=$(v_S_r:%.5f) S_l=$(v_S_l:%.5f)  N_r=$(v_N_r:%.5f) N_l=$(v_N_l:%.5f)"
+print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)  S_r=$(v_S_r:%.5f) S_l=$(v_S_l:%.5f)  N_r=$(v_N_r:%.5f) N_l=$(v_N_l:%.5f)  Np_r=$(v_Np_r:%.5f) Np_l=$(v_Np_l:%.5f)"
 
 
 # ==========================================================================
@@ -798,7 +918,7 @@ variable movie_open equal 1
 print "############################################################"
 print ">>> STRAIN SWEEP LIST (raw from run_lammps.sh): ${strains_list}"
 print ">>>   first target=${strains}   drive cap=${nsteps_shear}   hold=${nsteps} steps per level"
-print ">>>   W_drv = ${W_drv} sigma (strain denominator);  vshear = ${vshear} sigma/tau (+z right grip, -z left grip)"
+print ">>>   W_drv = ${W_drv} sigma (strain denominator);  vshear = ${vshear} sigma/tau (+z right grip, -z left grip);  seated preload Np_l/Np_r = $(v_Np_l:%.4f) / $(v_Np_r:%.4f)"
 print ">>>   If the list reads 'STALE-run_lammps.sh...', only ONE strain will run -- update run_lammps.sh on the cluster and resubmit."
 print "############################################################"
 
@@ -836,8 +956,8 @@ fix out_polymer_com all print ${stress_freq} &
 
 # ----- PHASE 2: drive -- the grips translate at -/+vshear (left -z, right +z) until gamma >= ${strains} -----
 # (all forces on the grips are zeroed by setforce, so the velocity set here persists unchanged)
-velocity poly_r set 0.0 0.0  ${vshear}
-velocity poly_l set 0.0 0.0 -${vshear}
+velocity grip_r set 0.0 0.0  ${vshear}
+velocity grip_l set 0.0 0.0 -${vshear}
 fix halt_shear all halt ${stress_freq} v_gamma >= ${strains} error continue
 variable drive_dump_freq equal floor(${nsteps_shear_base}*1.1/5)
 if "${movie_open} == 1" then "dump_modify traj_setup every ${drive_dump_freq}"
@@ -849,8 +969,8 @@ if "${movie_open} == 1" then &
     "variable movie_open delete" &
     "variable movie_open equal 0"
 # freeze the grips where the halt left them (the frozen plates of the hold)
-velocity poly_r set 0.0 0.0 0.0
-velocity poly_l set 0.0 0.0 0.0
+velocity grip_r set 0.0 0.0 0.0
+velocity grip_l set 0.0 0.0 0.0
 print ">>> [strain=${strains}] drive done: gamma = $(v_gamma:%.4f)  (target ${strains});  tracking-slab strain = $(v_gamma_trk:%.4f)  step=$(step)"
 
 # ----- reset the displacement reference to the held state (u_z(x,0) = 0 at the hold onset, for D_c) -----
@@ -939,7 +1059,7 @@ jump SELF strain_loop
 #                            FINAL STATE
 # ==========================================================================
 print "========================================"
-print "Shear, isolated gel (rigid x-face grips driven -/+z) strain sweep complete"
+print "Shear, isolated gel (grip plates seated on the x-faces, driven -/+z) strain sweep complete"
 print "  Final gamma: $(v_gamma:%.4f)   tracking-slab strain: $(v_gamma_trk:%.4f)"
 print "  W_drv: ${W_drv}  W_trk: ${W_trk}  gel_gap (BB, x): ${gel_gap}  gel_lx_initial: ${gel_lx_initial}"
 print "========================================"

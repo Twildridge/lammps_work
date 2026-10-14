@@ -56,26 +56,28 @@ module load python/3.8.12
 # 5 sigma inside the gripped faces, 6 sigma inside the free y faces and 20 sigma
 # inside the free z faces (core_margin_y / core_margin_z, -var knobs in the deck).
 #
-# DATANAME: the SIX-PLATE converter output of the equilibrated isolated gel --
-#   scripts/add_more_plates_to_gel.ipynb (lib/add_more_plates_to_gel.py) on
+# DATANAME: the converter output (layout = x_plates) of the equilibrated isolated gel --
+#   scripts/lib/add_more_plates_to_gel.py (lib/add_more_plates_to_gel.py) on
 #   final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000.data
-#   -> ..._six_plates.data  (the compress_slab input format; this deck DELETES the six
-#   parked plates after read_data and keeps the gel, the bath and the two wet pistons).
+#   -> ..._x_plates.data: gel + bath + two wet pistons + TWO grip plates (types 8, 9)
+#   parked 3 sigma outside the gel's x-faces.  The deck seats the plates onto the Rg
+#   x-faces (Phase 1.25, SEAT_MODE rg|bb as compress_slab) and drives them -/+z; a
+#   six_plates file works too (the deck deletes the other four plates).
 #   Copy the file to ~/Documents/lammps_data/input_data/ before sbatch.
 # The laterally periodic version of this run is shear_slab_two_pist_periodic.batch.
 # Analyse with DECK = "shear_slab_two_pist_iso" in the shear notebooks.
 # =======================================================================
 FOLDER="shear_slab_two_pist"
-DATANAME="final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000_six_plates"   # <- SET THIS to the converter's
+DATANAME="final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000_x_plates"   # <- SET THIS to the converter's
                         # output stem (the notebook prints "DATANAME for the batch files")
 INTERACTION="1.0_1.0"   # epsSS_epsSP
 # NSTEPS: Phase 3 production HOLD per strain level (flat; also the output-file tag).
 # Other phase lengths are index knobs in shear_slab_two_pist.lmp (-var):
 #   Phase 0 (Langevin NVT) 50000, Phase 1 (piston settle) NPT_PISTON_STEPS,
+#   Phase 1.25 (plate seating) t_seat 100000 + seat_settle_steps 200000,
 #   Phase 1.5 (gamma = 0 reference) 150000,
 #   Phase 2 (shear drive) halts at each strain target (~260k steps per 0.10, cap 570000).
-# The gel is ~52 x 52 x 115 sigma, ~0.6 M atoms after the bath crop (the six_plates file
-# holds 160k plate beads more, deleted at read time).
+# The gel is ~52 x 52 x 115 sigma; the x_plates file holds 0.53 M atoms (69k in the two plates).
 NSTEPS=9000000
 TYPE=""
 PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run

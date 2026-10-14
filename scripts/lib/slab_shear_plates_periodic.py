@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-slab_shear_plates.py -- CONVERTER: equilibrated PERIODIC slab -> shear_slab input (2026-09-22)
+slab_shear_plates_periodic.py -- CONVERTER: equilibrated PERIODIC slab -> shear_slab input (2026-09-22)
 
 Turns a slab_with_support periodic snapshot (network percolating in x and y,
 finite in z, support + piston + bath solvent present) into the plated geometry
@@ -13,7 +13,7 @@ axes as the compression decks:
      the ORIGINAL box and periodicity (the network wraps them); z is re-boxed to
      the full polymer span + `clearance`.  Every bond is validated against the
      FENE limit under the new box.
-  2. PLATE    (add_plates_to_gel.py with axis='z'): square-lattice sheets
+  2. PLATE    (add_plates_to_gel_periodic.py with axis='z'): square-lattice sheets
      (type 4) `offset` outside each 1-percentile polymer surface in z, spanning
      the full periodic x-y box, harmonic-bonded to the nearest surface polymer
      bead; the z box is extended `box_buffer` beyond each plate.  Solvent beads
@@ -47,7 +47,7 @@ Note:   image flags and the Velocities section of the input are dropped (the
         deck's `boundary p p p` handles, and shear_slab.lmp creates velocities.
 
 Usage:
-  python slab_shear_plates.py [--input F] [--output F] [--clearance 0.5]
+  python slab_shear_plates_periodic.py [--input F] [--output F] [--clearance 0.5]
         [--spacing 1.5] [--offset 0.5] [--cutoff 2.5] [--box-buffer 2.0] [--no-log]
 """
 import argparse
@@ -59,7 +59,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import isolate_gel as ig            # noqa: E402
-import add_plates_to_gel as apg     # noqa: E402
+import add_plates_to_gel_periodic as apg     # noqa: E402
 
 DATA_DIR = HERE.parent.parent.parent / 'lammps_data_files_local'   # scripts/lib -> lammps/
 DEFAULT_CLEARANCE = 4.0    # sigma of bath solvent kept beyond the polymer span per face -> ~7 sigma film behind each
@@ -131,7 +131,7 @@ def main():
     ig.write_lammps_data(str(iso), atoms, bonds, box, masses)
     print(f"  Wrote isolated slab -> {iso}")
 
-    print("=" * 60); print("2. PLATE   (add_plates_to_gel.py, axis='z')")
+    print("=" * 60); print("2. PLATE   (add_plates_to_gel_periodic.py, axis='z')")
     apg.add_plates(str(iso), str(out), spacing=args.spacing, offset=args.offset,
                    cutoff=args.cutoff, box_buffer=args.box_buffer, axis='z',
                    solvent_delete=args.solvent_delete)
@@ -150,7 +150,7 @@ def main():
     print(f"  plate-to-box-face clearance: {s['plate_z'][0]-s['box']['zlo']:.2f} / {s['box']['zhi']-s['plate_z'][-1]:.2f} sigma")
     if not args.no_log:
         t = s['types']
-        entry = (f"\nShear input from the PERIODIC slab  [{info['date']}, slab_shear_plates.py]:\n"
+        entry = (f"\nShear input from the PERIODIC slab  [{info['date']}, slab_shear_plates_periodic.py]:\n"
                  f"  Input: {inp.name}\n"
                  f"  Steps: isolate (support/piston/bath solvent removed; x,y periodic kept; z = polymer span + {args.clearance}) "
                  f"-> plates NORMAL TO z on the slab faces (driven +/-x in shear_slab.lmp)\n"

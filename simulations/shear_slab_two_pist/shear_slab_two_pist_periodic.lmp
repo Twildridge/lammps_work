@@ -27,7 +27,7 @@
 # removes -- / (lx*ly) is the shear stress the gel transmits to the boundary
 # (S_top, S_bot), exactly the plate x-force of shear_slab.lmp.
 #
-# Input: <stem>_two_pist.data from scripts/slab_two_pistons.ipynb (the compression
+# Input: <stem>_two_pist.data from scripts/slab_two_pistons_periodic.ipynb (the compression
 #   deck's input, same gel state).
 # Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,
 #   strains (+ strains_list), press_target, piston_mass, c_pist_frac,

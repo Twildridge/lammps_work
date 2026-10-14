@@ -53,7 +53,7 @@ module load python/3.8.12
 # Two thicknesses cannot tell; on this gel (L_bb 31.6) the two readings are a factor 2 apart:
 #     pure L^2:              fitted D_c ~0.05   (tau_1 ~ 450 tau)
 #     linear boundary term:  fitted D_c ~0.026  (tau_1 ~ 900 tau)
-# Data file: scripts/lib/slab_two_pistons.py --cut-existing <..._two_pist.data>
+# Data file: scripts/lib/slab_two_pistons_periodic.py --cut-existing <..._two_pist.data>
 #   --gel-keep-frac 0.25 --output <..._two_pist_quarter.data>   (cut_two_pist; 161,635 atoms)
 #
 # What differs from the half-thickness batch, and why:
@@ -84,7 +84,7 @@ module load python/3.8.12
 # _c<strain> tags, auto-sized holds, sweep notebook).  This is the ONLY sweep in
 # the two-piston sequence (it generates the stress-strain curve).
 #
-# DATANAME is the CONVERTER output (scripts/slab_two_pistons.ipynb) of the
+# DATANAME is the CONVERTER output (scripts/slab_two_pistons_periodic.ipynb) of the
 # 2026-09-07 piston-transparent slab; copy it to ~/Documents/lammps_data/input_data/.
 # =======================================================================
 FOLDER="triaxial_compression_two_pist"
@@ -115,7 +115,7 @@ export DISP_FINE_BIN=1.0      # its z-bin width (sigma)
 # by the compression raises the FEED PISTON by ~strain*L0: the converter's
 # margin_feed (default 15 sigma ~ strain 0.10 on the rho04 slab) must cover the
 # deepest level or the box-face halt ends the run -- rebuild the data file with
-# a larger margin_feed for deeper sweeps (slab_two_pistons.ipynb prints the limit).
+# a larger margin_feed for deeper sweeps (slab_two_pistons_periodic.ipynb prints the limit).
 #
 # WALL TIME: as triaxial_compression.batch (~7-10M steps per level with auto
 # holds) plus the settle; ~290k atoms.  Do a SHORT trial first

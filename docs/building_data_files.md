@@ -2,13 +2,11 @@
 
 [← back to README](../README.md)
 
-Before running a gel simulation you need a `.data` file — a text file describing every atom's position, bond topology, and atom types. These are generated on your MacBook using Jupyter notebooks in `scripts/`.
+A gel simulation starts from a `.data` file: a text file with every atom's position and type and the bond topology. The files are built on the Mac with the Jupyter notebooks in `scripts/` (a notebook is a Python document run one cell at a time; `jupyter lab` in a terminal opens them) or with the converter scripts in `scripts/lib/`. They are kept in `lammps_data_files_local/` next to the repo, catalogued in its `README.md`, and copied to `~/Documents/lammps_data/input_data/` on the cluster.
 
-> **What is a Jupyter notebook?** An interactive Python document where you run code cells one at a time and see results immediately. Open JupyterLab from your terminal with `jupyter lab`, then navigate to the file.
+### Which notebook or script to use
 
-### Which notebook to use
-
-The notebooks live in `scripts/`; the Python modules they import (converters, plate builder, CLI tools) all live in `scripts/lib/` (since 2026-10-01) — the notebooks add that folder to `sys.path` themselves.
+The notebooks live in `scripts/`; the Python modules they import (converters, plate builder, CLI tools) live in `scripts/lib/` (since 2026-10-01), which the notebooks add to `sys.path` themselves.
 
 | Notebook | What it builds | When to use |
 |----------|---------------|-------------|
@@ -16,18 +14,42 @@ The notebooks live in `scripts/`; the Python modules they import (converters, pl
 | `archive/scripts/add_walls_with_angles.ipynb` | Same for the angled-bond slabs | **Archived 2026-10-11** |
 | `slab_with_support.ipynb` | Finite gel block (diamond lattice) in a solvent bath, optionally with a frozen support sheet and a piston sheet. `includeWalls = False` (2026-09-30) writes an **isolated gel** (no sheets; 5 atom types still declared) and since 2026-10-11 ignores `pistonMargin` (a margin without sheets only wrote a vacuum frame round the box, as in the `square_rho10_nowalls` cube). Current inputs (2026-10-11): the **tall isolated gel** `slab_support_5beads_tall_rho04_nowalls.data` — 9 × 9 × 21 cells (the July-8 gel), `preSwell = 1.10` (a = 5.28 σ = the equilibrium lattice constant of this gel at P* = 1.5, 1.0_1.0, measured on the 14000002 slab: 5.33 in-plane, 5.26 along z), `rhoSolv = 0.40` over the whole box (the bath at P* = 1.5 is 0.48, the gel interior 0.22 solvent + 0.37 polymer, so a uniform 0.40 leaves the 15 σ pads 15 σ), 15 σ of bath on every side (`belowThickness + 2·supportThickness` is the bottom pad), 435 k atoms. Run it with `slab_with_support_isolated_tall.batch` (`BARO_MODE=iso`, `PIN_GEL=1`). | Isolated-gel equilibration for `compress_slab` (K); older walled geometries |
 | `archive/scripts/slab_with_support_angled.ipynb` | Angled-bond slab generator (Feb 2026 lineage) | **Archived 2026-10-11** |
-| `archive/scripts/isolate_gel.ipynb` | Extracts the swollen gel from a finished slab run (the CLI twin `lib/isolate_gel.py` stays: `calibration_sweep`, `slab_shear_plates.py`) | **Archived 2026-10-11** |
-| `archive/scripts/add_plates_to_gel.ipynb` (notebook archived 2026-10-11; `lib/add_plates_to_gel.py` stays, used by `slab_shear_plates.py`) | Attaches rigid shear plates (atom type 4, harmonic-bonded to surface polymer) on the faces normal to `axis` (`'x'` = the isolated-cube geometry, `'z'` = the periodic slab; `slab_shear_plates.py` calls it with `'z'`) | Plate builder behind the shear input |
-| `add_more_plates_to_gel.ipynb` (+ `lib/add_more_plates_to_gel.py`) | Converter (2026-09-29): equilibrated **isolated-gel** snapshot → gel made whole, free beads removed, bath cropped, six plates parked outside the gel faces, two wet pistons closing z | **Required input for `compress_slab.lmp`** (bulk modulus K). Input must come from a `slab_with_support` run with `BARO_MODE=iso`, `PISTON_TRANSPARENT=1` (`slab_with_support_isolated.batch`) |
+| `archive/scripts/isolate_gel.ipynb` | Extracts the swollen gel from a finished slab run (the CLI twin `lib/isolate_gel.py` stays: `calibration_sweep`, `slab_shear_plates_periodic.py`) | **Archived 2026-10-11** |
+| `archive/scripts/add_plates_to_gel_periodic.ipynb` (notebook archived 2026-10-11; `lib/add_plates_to_gel_periodic.py` stays, used by `slab_shear_plates_periodic.py`) | Attaches rigid shear plates (atom type 4, harmonic-bonded to surface polymer) on the faces normal to `axis` (`'x'` = the isolated-cube geometry, `'z'` = the periodic slab; `slab_shear_plates_periodic.py` calls it with `'z'`) | Plate builder behind the shear input |
+| `lib/add_more_plates_to_gel.py` (**script only, no notebook** since 2026-10-14; run it from the Terminal, see below) | Converter (2026-09-29; **layouts** 2026-10-14): equilibrated **isolated-gel** snapshot → gel made whole, free beads removed, bath cropped, two wet pistons closing z, plus the load plates of the chosen `layout`, parked 3 σ outside the gel faces: `six_plates` (all six faces → `compress_slab`), `x_plates` (the two x-face grip plates → `shear_slab_two_pist`), `z_plates` (support + load plate, a triaxial-style isolated-gel input; no deck yet), `no_plates`. Output stem `<input>_<layout>`; the 11-type table is fixed, absent plates are empty, so any deck reads any layout. `reservoir_feed` / `reservoir_perm` set the two reservoirs separately (a deeper feed side, more room under the permeate piston) | **Required input for `compress_slab.lmp`** (`six_plates`) and `shear_slab_two_pist.lmp` (`x_plates`). Input must come from a `slab_with_support` run with `BARO_MODE=iso`, `PISTON_TRANSPARENT=1` (`slab_with_support_isolated*.batch`) |
 | `archive/scripts/split_gel_slab.ipynb` | Splits a slab into polymer-only and solvent-only files (CLI twin `lib/split_gel.py` stays: `calibration_sweep`) | **Archived 2026-10-11** |
 | `pure_polymer.ipynb` | Pure polymer box (no solvent) | EOS and baseline runs |
 | `pure_solvent_1.ipynb` | Pure solvent box | EOS and solvent calibration |
-| `lib/slab_shear_plates.py` (CLI only) | **CONVERTER**: an *equilibrated* periodic slab snapshot → shear input: isolates it (`isolate_gel.py`, x/y periodicity kept, bath solvent trimmed in z), then plates its two free faces with plates **normal to z** (`add_plates_to_gel.py`, `axis='z'`) and deletes the solvent beads within `--solvent-delete` (0.87 σ, calibrated 2026-09-22) of a plate atom so the plates' excluded volume does not compress the gel (bulk gel pressure in the shear hold 1.50 instead of 1.53); the deck drives them ±x. Writes `<stem>_with_plates.data`, an `_isolated.data` intermediate, an `.info.json` sidecar and a `slab_data_file_info.md` entry | **Required input for `shear_slab.lmp` from the periodic slab** (2026-09-22): same 14000002 input as the two-piston converter, so the shear G and the compression G come from the same gel state |
-| `slab_two_pistons.ipynb` (+ `lib/slab_two_pistons.py`) | **CONVERTER**: an *equilibrated* `slab_with_support` periodic snapshot → the two-piston (feed / permeate) geometry: old piston deleted, permeate reservoir padded to ~10 σ, three new sheets (feed piston type 5, permeate piston type 6, load piston type 7), vacuum margins, 7 atom types | **Required input for `triaxial_permeation_two_pist` / `triaxial_compression_two_pist`** (2026-09-16) |
+| `lib/slab_shear_plates_periodic.py` (CLI only) | **CONVERTER**: an *equilibrated* periodic slab snapshot → shear input: isolates it (`isolate_gel.py`, x/y periodicity kept, bath solvent trimmed in z), then plates its two free faces with plates **normal to z** (`add_plates_to_gel_periodic.py`, `axis='z'`) and deletes the solvent beads within `--solvent-delete` (0.87 σ, calibrated 2026-09-22) of a plate atom so the plates' excluded volume does not compress the gel (bulk gel pressure in the shear hold 1.50 instead of 1.53); the deck drives them ±x. Writes `<stem>_with_plates.data`, an `_isolated.data` intermediate, an `.info.json` sidecar and a `slab_data_file_info.md` entry | **Required input for `shear_slab.lmp` from the periodic slab** (2026-09-22): same 14000002 input as the two-piston converter, so the shear G and the compression G come from the same gel state |
+| `slab_two_pistons_periodic.ipynb` (+ `lib/slab_two_pistons_periodic.py`) | **CONVERTER**: an *equilibrated* `slab_with_support` periodic snapshot → the two-piston (feed / permeate) geometry: old piston deleted, permeate reservoir padded to ~10 σ, three new sheets (feed piston type 5, permeate piston type 6, load piston type 7), vacuum margins, 7 atom types | **Required input for `triaxial_permeation_two_pist` / `triaxial_compression_two_pist`** (2026-09-16) |
+
+### Running the isolated-gel converter from the Terminal (2026-10-14)
+
+`lib/add_more_plates_to_gel.py` has no notebook: run the script. If you only ever use JupyterLab, the easiest
+terminal is the one inside it (**File → New → Terminal**); it already has the Python that runs your notebooks.
+
+```bash
+cd "<your lammps_work folder>/scripts/lib"            # quote the path, it has spaces
+python add_more_plates_to_gel.py --layout x_plates \
+    --input ../../../lammps_data_files_local/final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000.data
+```
+
+`--layout six_plates` builds the `compress_slab` file, `--help` lists every option (bath margins, reservoirs,
+plate park gap and overhang, `--no-log`, `--no-png`). `python` must be the Anaconda Python that runs JupyterLab
+(`which python` shows which is active; `conda activate base` switches to it; on Dylan's Mac it is
+`/opt/anaconda3/bin/python`). The same line works in a notebook cell with a leading `!`, with the path relative to
+the notebook (`!python lib/add_more_plates_to_gel.py ...`). The script prints the geometry, the validation
+(`RESULT: OK`, or the problems and nothing is written), the gel-unchanged check, the `slab_data_file_info.md` entry
+it appended, and last `DATANAME for the batch file: <stem>`. Next to the input it writes `<stem>.data`, the
+`<stem>.data.info.json` sidecar and `<stem>_profiles.png` (density profiles along z and x: check that the gel sits
+between the plates and pistons). Copy the `.data` file to `~/Documents/lammps_data/input_data/` on the cluster and
+put the stem in the deck's batch (`shear_slab_two_pist.batch` for `x_plates`, `compress_slab.batch` for
+`six_plates`). The periodic-slab converters (`slab_two_pistons_periodic.py`, `slab_shear_plates_periodic.py`) run
+the same way; `slab_two_pistons_periodic.ipynb` is kept as their notebook front-end.
 
 ### The two-piston converter (2026-09-16)
 
-`slab_two_pistons.ipynb` is not a lattice generator: it **starts from the equilibrated**
+`slab_two_pistons_periodic.ipynb` is not a lattice generator: it **starts from the equilibrated**
 `final_config_slab_support_periodic_…_14000002.data` (the 2026-09-07 piston-transparent rerun) and only
 re-arranges the box.  The reason is physical: the two-piston decks hold each reservoir at its pressure with
 the NPT-piston scheme of Marioni et al. (J. Membr. Sci. 738 (2026) 124837, Eq. 3), which acts in *z only* —
@@ -44,18 +66,18 @@ compression, so raise it for sweeps beyond ε ≈ 0.10; the converter prints the
 at `sheet_spacing`).  If the 14000002 file is not on your Mac the notebook falls back to the 14000000 snapshot
 as a **smoke-test input only** and says so.
 
-`shear_slab_two_pist` — two decks since 2026-10-13. The **isolated-gel deck** (`shear_slab_two_pist.lmp`) reads the **six-plate converter file** of an equilibrated isolated gel (`add_more_plates_to_gel.ipynb` on the `slab_with_support_isolated_tall.batch` final config → `<stem>_six_plates.data`, the `compress_slab` input) and deletes the six parked plates itself, so no shear-specific converter exists: build the `compress_slab` file once and both decks share it. The **periodic deck** (`shear_slab_two_pist_periodic.lmp`, 2026-10-03) needs **no data file of its own**: it reads the `<stem>_two_pist.data` file of `slab_two_pistons.ipynb` unchanged (the support and the load piston stay parked, the shear is applied through the polymer face layers), so anything built for `triaxial_compression_two_pist` can be sheared as is.
+`shear_slab_two_pist` — two decks since 2026-10-13. The **isolated-gel deck** (`shear_slab_two_pist.lmp`) reads the **`x_plates` layout** of `lib/add_more_plates_to_gel.py` (on the `slab_with_support_isolated_tall.batch` final config → `<stem>_x_plates.data`: gel, bath, wet pistons and the two grip plates parked outside the x-faces, which the deck seats and drives); the same notebook with `layout = "six_plates"` builds the `compress_slab` file, and that file runs in the shear deck too (it deletes the four plates it does not use). The **periodic deck** (`shear_slab_two_pist_periodic.lmp`, 2026-10-03) needs **no data file of its own**: it reads the `<stem>_two_pist.data` file of `slab_two_pistons_periodic.ipynb` unchanged (the support and the load piston stay parked, the shear is applied through the polymer face layers), so anything built for `triaxial_compression_two_pist` can be sheared as is.
 
-Shear-modulus pipeline **from the periodic slab (current, 2026-09-22)**: `python scripts/lib/slab_shear_plates.py` (defaults point at the 14000002 slab in `lammps_data_files_local/`; knobs `--clearance 0.5 --spacing 1.5 --offset 0.5 --cutoff 2.5 --box-buffer 2.0`) → copy the `*_with_plates.data` it writes to `~/Documents/lammps_data/input_data/` on the cluster → `sbatch shear_slab.batch` (its `DATANAME` already names this file). The plates sit on the slab's z-faces (z = gap, x = shear, the same axes as the compression decks), so the shear gap is the slab thickness (plate separation ~120 σ) and the sheared membrane is laterally periodic (48 × 48 σ). The older isolated-cube pipeline (`isolate_gel.ipynb` → `add_plates_to_gel.ipynb`, plates on the x-faces of a finite gel driven ±z, 2026-04-28) needs the pre-2026-09-22 revision of `shear_slab.lmp` and the pre-2026-09-23 `shear_analysis.ipynb` (git history).
+Shear-modulus pipeline **from the periodic slab (current, 2026-09-22)**: `python scripts/lib/slab_shear_plates_periodic.py` (defaults point at the 14000002 slab in `lammps_data_files_local/`; knobs `--clearance 0.5 --spacing 1.5 --offset 0.5 --cutoff 2.5 --box-buffer 2.0`) → copy the `*_with_plates.data` it writes to `~/Documents/lammps_data/input_data/` on the cluster → `sbatch shear_slab.batch` (its `DATANAME` already names this file). The plates sit on the slab's z-faces (z = gap, x = shear, the same axes as the compression decks), so the shear gap is the slab thickness (plate separation ~120 σ) and the sheared membrane is laterally periodic (48 × 48 σ). The older isolated-cube pipeline (`isolate_gel.ipynb` → `add_plates_to_gel_periodic.ipynb`, plates on the x-faces of a finite gel driven ±z, 2026-04-28) needs the pre-2026-09-22 revision of `shear_slab.lmp` and the pre-2026-09-23 `shear_analysis.ipynb` (git history).
 
-### Typical workflow for a new slab
+### Workflow for a new gel
 
-1. Open `add_walls_to_slab.ipynb`
-2. Set the unit cell dimensions (e.g. `10×10×8`), beads per chain, solvent density
-3. Run all cells → generates a `.data` file in `../lammps_data_files_local/`
-4. The output filename encodes all key parameters (e.g. `slab_support_5beads_tall_3.data`)
-5. Copy to `~/Documents/lammps_data/input_data/` and then to the cluster
+1. Open `slab_with_support.ipynb` (isolated gel) or `slab_with_support_periodic.ipynb` (x/y-periodic slab).
+2. Set the unit-cell count, beads per chain, pre-swell and solvent density.
+3. Run all cells. The `.data` file lands in `../../lammps_data_files_local/`; its name encodes the parameters.
+4. Copy it to `~/Documents/lammps_data/input_data/` on the cluster and run the equilibration batch.
+5. Convert the equilibrated final configuration with the converter the production deck needs (table above).
 
-Generated file specs are logged in [`slab_data_file_info.md`](../slab_data_file_info.md) so you can always look up what was built and when. **The folder itself is catalogued in `lammps_data_files_local/README.md`** (2026-10-11): one row per file with measured solvent density, provenance, the batch that used it and its status; active files stay at the top level, obsolete lineages live in `archive/<date>_<lineage>/`. Note that `rho` in a raw file's name is the generator's nominal density and was wrong for some files (`rho6` = 1.0; the cubes `new_02` = 0.6, `new_03` = 1.0): the two current ones were renamed to `rho10` (= 1.0) on 2026-10-11.
+Every generated file gets an entry in [`slab_data_file_info.md`](../slab_data_file_info.md), and the folder is catalogued in `lammps_data_files_local/README.md` (2026-10-11): one row per file with the measured solvent density, provenance, the batch that used it and its status. Active files stay at the top level; obsolete lineages are in `archive/<date>_<lineage>/`. The `rho` in a raw file's name is the generator's nominal density and was wrong for some files (`rho6` = 1.0; the cubes `new_02` = 0.6, `new_03` = 1.0): the two current ones were renamed to `rho10` (= 1.0) on 2026-10-11.
 
 ---

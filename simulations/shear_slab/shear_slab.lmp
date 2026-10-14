@@ -17,10 +17,10 @@
 # keep the velocities written by the original run.
 #
 # Input: the equilibrated PERIODIC slab with shear plates on its two free faces
-#   (slab_with_support run -> scripts/lib/slab_shear_plates.py -> <stem>_with_plates.data
+#   (slab_with_support run -> scripts/lib/slab_shear_plates_periodic.py -> <stem>_with_plates.data
 #    in ~/Documents/lammps_data/input_data/).  Plates are NORMAL TO z and driven
 #   +/-x, so z = gap, x = shear, y = neutral -- the compression decks' axes.  The
-#   2026-04-28 isolated-cube input (isolate_gel -> add_plates_to_gel, plates on the
+#   2026-04-28 isolated-cube input (isolate_gel -> add_plates_to_gel_periodic, plates on the
 #   x-faces driven +/-z) needs the pre-2026-09-22 revision of this deck.
 # Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,
 #   strains (+ strains_list); continue_sim.sh adds cont=1 and a single strain.
@@ -31,7 +31,7 @@
 #    -var min_iter 100 -var nsteps_shear_base 30000 -var strains 0.005 0.01 -var nsteps 4000)
 #
 # Atom types: 1=polymer (chain bead), 2=crosslinker, 3=solvent, 4=plate.
-#             (add_plates_to_gel.ipynb convention -- the triaxial decks number
+#             (add_plates_to_gel_periodic.ipynb convention -- the triaxial decks number
 #             1=crosslink, 2=chain bead; both are group `polymer`.)
 # Bond types: 1=FENE (polymer-polymer), 2=harmonic (plate-polymer, k=30, r0=1)
 #
@@ -58,7 +58,7 @@
 #   - Phase 1a:  SKIPPED by default (phase1a_mode = 0) for the periodic-slab input:
 #                it is the P* = 1.5 aniso-NPH slab (bulk gel P = 1.50 at step 0),
 #                and the converter deletes the solvent beads the plate atoms
-#                displace (add_plates_to_gel --solvent-delete, calibrated so the
+#                displace (add_plates_to_gel_periodic --solvent-delete, calibrated so the
 #                bulk P in the hold is 1.50; without it the plates' excluded
 #                volume in a box the gel cannot drain from read +0.03).
 #                phase1a_mode = 1 runs the isolated-cube protocol's box NPT with
@@ -94,7 +94,7 @@
 #   plate_sep the plate-to-plate distance in z and the plate COMs from compute com
 #   (unwrapped).  Both are PRESCRIBED by fix move, so gamma is exact.  Before
 #   2026-09-22 the denominator was the polymer bounding-box gap and the numerator
-#   the COM of the outermost 1 % of backbone beads: add_plates_to_gel puts each
+#   the COM of the outermost 1 % of backbone beads: add_plates_to_gel_periodic puts each
 #   plate at the 1-percentile surface, i.e. ~1-3 sigma INSIDE the outermost beads,
 #   so the BB gap overstated the sheared thickness by ~5 % (126.4 vs 120.4 sigma
 #   on the 14000002 slab; 51.2 vs 48.9 on the isolated cube) and the tracked beads
