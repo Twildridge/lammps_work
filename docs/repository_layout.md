@@ -11,8 +11,9 @@ lammps_work/                    ← This git repository
 │   ├── triaxial_permeation_two_pist/   ← STANDARD permeation workflow (two-piston): feed/permeate NPT-pistons, one constant-dP drive (no sweep)
 │   │                              (the one-piston triaxial_compression/ and triaxial_permeation/ moved to archive/simulations/ on 2026-09-22)
 │   ├── shear_slab/             ← Shear modulus measurement (plate-driven xz shear; current G workflow; deck laid out like the triaxial decks since 2026-09-22)
-│   ├── shear_slab_two_pist/    ← Shear modulus on the two-piston system (2026-10-03): reads the *_two_pist.data file unchanged, reservoirs at P*, x-force on the
-│   │                              polymer face layers (COM-steered, strain-controlled like shear_slab); same notebooks with DECK = "shear_slab_two_pist"
+│   ├── shear_slab_two_pist/    ← Shear modulus on the two-piston system. shear_slab_two_pist.lmp (2026-10-13) = ISOLATED gel from the six-plate converter file (plates
+│   │                              deleted), rigid x-face grips driven -/+z, core stresses; shear_slab_two_pist_periodic.lmp (2026-10-03) = laterally periodic slab, z-face
+│   │                              layers rigid in x/y driven +/-x (DECK_FILE in its .batch). Same notebooks, DECK = "shear_slab_two_pist_iso" / "shear_slab_two_pist"
 │   ├── compress_slab/          ← Bulk modulus K: six plates + two wet pistons, on the template of triaxial_compression_two_pist (2026-09-29)
 │   ├── solvent_phase/          ← Pure solvent equation of state sweep
 │   ├── solvent_pure/           ← Single-state pure solvent run

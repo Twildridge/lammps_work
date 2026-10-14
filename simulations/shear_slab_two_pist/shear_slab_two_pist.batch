@@ -44,25 +44,38 @@ module load openmpi/4.1.3
 module load python/3.8.12
 
 # =======================================================================
-# TWO-PISTON SHEAR (2026-10-03): the shear_slab protocol on the two-piston system.
-# Both reservoirs are held at PRESS_TARGET by the NPT-pistons for the whole run;
-# in place of plates, the polymer beads of the gel's top / bottom face layers are
-# rigid in x and y (prescribed translation +x / -x, free in z; 2026-10-05 -- the first
-# version applied a COM-steering force and left the beads thermally free in x, which
-# swamped the D_c displacement profiles).  Strain-controlled like shear_slab.batch:
-# each level shears until gamma reaches its target, then holds; G = sigma_xz / gamma.
+# ISOLATED-GEL SHEAR (2026-10-13): shear_slab_two_pist.lmp on a gel that is periodic
+# in NO direction -- the tall 9 x 9 x 21-cell block equilibrated free in its bath by
+# slab_with_support_isolated_tall.batch (BARO_MODE=iso, PIN_GEL=1), floating in a bath
+# that the two wet NPT-pistons hold at PRESS_TARGET.  The grips are the polymer beads
+# within 3 sigma of the gel's LEFT and RIGHT (x) faces -- its long sides -- rigid in
+# all three directions and driven -z (left) / +z (right): x is the gap, z the shear
+# direction (the transpose of the periodic deck's axes).  Strain-controlled like
+# shear_slab.batch: each level shears until gamma reaches its target, then holds;
+# G = sigma_xz(core) / gamma_network.  Stresses are measured in a core that stops
+# 5 sigma inside the gripped faces, 6 sigma inside the free y faces and 20 sigma
+# inside the free z faces (core_margin_y / core_margin_z, -var knobs in the deck).
 #
-# DATANAME is the compression deck's input, unchanged (scripts/slab_two_pistons.ipynb
-# output; already in ~/Documents/lammps_data/input_data/ for the compression runs).
+# DATANAME: the SIX-PLATE converter output of the equilibrated isolated gel --
+#   scripts/add_more_plates_to_gel.ipynb (lib/add_more_plates_to_gel.py) on
+#   final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000.data
+#   -> ..._six_plates.data  (the compress_slab input format; this deck DELETES the six
+#   parked plates after read_data and keeps the gel, the bath and the two wet pistons).
+#   Copy the file to ~/Documents/lammps_data/input_data/ before sbatch.
+# The laterally periodic version of this run is shear_slab_two_pist_periodic.batch.
+# Analyse with DECK = "shear_slab_two_pist_iso" in the shear notebooks.
 # =======================================================================
 FOLDER="shear_slab_two_pist"
-DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist"
+DATANAME="final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000_six_plates"   # <- SET THIS to the converter's
+                        # output stem (the notebook prints "DATANAME for the batch files")
 INTERACTION="1.0_1.0"   # epsSS_epsSP
 # NSTEPS: Phase 3 production HOLD per strain level (flat; also the output-file tag).
 # Other phase lengths are index knobs in shear_slab_two_pist.lmp (-var):
 #   Phase 0 (Langevin NVT) 50000, Phase 1 (piston settle) NPT_PISTON_STEPS,
 #   Phase 1.5 (gamma = 0 reference) 150000,
 #   Phase 2 (shear drive) halts at each strain target (~260k steps per 0.10, cap 570000).
+# The gel is ~52 x 52 x 115 sigma, ~0.6 M atoms after the bath crop (the six_plates file
+# holds 160k plate beads more, deleted at read time).
 NSTEPS=9000000
 TYPE=""
 PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run

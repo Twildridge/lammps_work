@@ -133,8 +133,12 @@ if [ ! -d "$SIM_DIR" ]; then
     exit 1
 fi
 
-# Check if LAMMPS file exists
-LAMMPS_FILE="$SIM_DIR/${FOLDER}.lmp"
+# Check if LAMMPS file exists.  DECK_FILE (optional, 2026-10-13) names an alternative
+# deck INSIDE the same folder, without the .lmp extension: e.g. the shear_slab_two_pist
+# folder keeps the laterally periodic deck as shear_slab_two_pist_periodic.lmp, run with
+#   export DECK_FILE=shear_slab_two_pist_periodic   (shear_slab_two_pist_periodic.batch).
+# Output folders, file names and every other convention still key on FOLDER.
+LAMMPS_FILE="$SIM_DIR/${DECK_FILE:-$FOLDER}.lmp"
 if [ ! -f "$LAMMPS_FILE" ]; then
     echo "Error: $LAMMPS_FILE not found"
     exit 1

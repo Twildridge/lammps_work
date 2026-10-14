@@ -349,6 +349,10 @@ class Config:
     UNLOAD_TRACE_SKIP: float = 0.0        # tau after the retraction start left out of the thickness-trace fit (0 = none: the
                                           # faces detach from the retracting plates within a few tau)
     UNLOAD_N_MODES: int = 0               # modes of the unload profile fit (0 -> DC_N_MODES)
+    UNLOAD_FIGS: bool = True              # 2026-10-12: when the level has unload (_u<lvl>) files, every single-level figure that
+                                          # has the same quantity recorded over the unload draws it as a '(b)' companion
+                                          # (strain, total / partial / network sigma_zz, load piston, wet pistons, solvent
+                                          # expelled; fig_Dc has its own unload row).  load_level builds L['U'] (load_unload_state).
     # ---- Expanse ---------------------------------------------------------
     EXPANSE_HOST: str = 'login.expanse.sdsc.edu'
     EXPANSE_USER: str = 'dpollard'
@@ -420,7 +424,10 @@ class Config:
         t = self.tag_for(lvl)
         return f'{self.DATANAME}_{self.INTERACTION}_{t if t is not None else "*"}{self.csuf(lvl)}'
 
-    def path(self, name, lvl=None, ext='dat'):
+    def path(self, name, lvl=None, ext='dat', phase='c'):
+        """the level's production file (phase 'c', the ramp + hold) or, phase = 'u', its UNLOAD file (upath)."""
+        if phase == 'u':
+            return self.upath(name, lvl, ext)
         return self.DATA_DIR / f'{name}_{self.stem(lvl)}.{ext}'
 
     def upath(self, name, lvl, ext='dat'):
@@ -872,11 +879,12 @@ def fmt_mu(vals):
 # ===========================================================================
 #  4. REFERENCE STATE  (eps = 0; shared by every level)
 # ===========================================================================
-def _component_stacks(cfg, comp, lvl=None, ref=False):
-    """sigma<comp>_{polymer,solvent}[_ref] files -> dict(ts, bins, p, s, t) or None."""
+def _component_stacks(cfg, comp, lvl=None, ref=False, phase='c'):
+    """sigma<comp>_{polymer,solvent}[_ref] files -> dict(ts, bins, p, s, t) or None.
+    phase = 'u': the level's unload files (deck Phase 2c; zz only)."""
     suffix = '_ref' if ref else ''
-    fp = cfg.path(f'sigma{comp}_polymer{suffix}', None if ref else lvl)
-    fs = cfg.path(f'sigma{comp}_solvent{suffix}', None if ref else lvl)
+    fp = cfg.path(f'sigma{comp}_polymer{suffix}', None if ref else lvl, phase=phase)
+    fs = cfg.path(f'sigma{comp}_solvent{suffix}', None if ref else lvl, phase=phase)
     if not (fp.exists() and fs.exists()):
         return None
     sp, ss = read_ave_time_file(fp), read_ave_time_file(fs)
@@ -1144,8 +1152,8 @@ def load_reference(cfg):
 # ===========================================================================
 #  5. ONE STRAIN LEVEL
 # ===========================================================================
-def _piston_z_func(cfg, R, lvl):
-    f = cfg.path('piston_position', lvl)
+def _piston_z_func(cfg, R, lvl, phase='c'):
+    f = cfg.path('piston_position', lvl, phase=phase)
     if f.exists():
         pp = np.atleast_2d(np.loadtxt(f, comments='#'))
         pt, pz = pp[:, 0], pp[:, 1]
@@ -1153,11 +1161,11 @@ def _piston_z_func(cfg, R, lvl):
     return (lambda t: R['z_piston']), None
 
 
-def _support_z_func(cfg, R, lvl):
+def _support_z_func(cfg, R, lvl, phase='c'):
     """z(t) of the support plate over one level.  Runs since the 2026-09-18 SYMMETRIC
     drive (piston down + support up, half the closure each) write support_position_*;
     older top-only runs have none, and the support is then its fixed reference plane."""
-    f = cfg.path('support_position', lvl)
+    f = cfg.path('support_position', lvl, phase=phase)
     if f.exists():
         sp = np.atleast_2d(np.loadtxt(f, comments='#'))
         if sp.size and sp.shape[1] >= 2:
@@ -1166,13 +1174,13 @@ def _support_z_func(cfg, R, lvl):
     return (lambda t: R['z_support']), None
 
 
-def _wet_piston_z_funcs(cfg, R, lvl=None):
+def _wet_piston_z_funcs(cfg, R, lvl=None, phase='c'):
     """z(t) of the feed and permeate pistons from piston_position[_c<lvl>] (columns
     z_feed / z_perm of the two-piston decks); the reference planes when the file or
     the columns are absent (one-piston runs).  Returns {feed_at, perm_at, feed_track,
     perm_track}; a track is (step, z) or None."""
     out = {}
-    names, tab = read_piston_table(cfg.path('piston_position', lvl))
+    names, tab = read_piston_table(cfg.path('piston_position', lvl, phase=phase))
     for lab in ('feed', 'perm'):
         col = table_col(names, tab, f'z_{lab}') if tab.size else None
         z0 = float(R.get(f'z_{lab}', np.nan))
@@ -1540,6 +1548,7 @@ def fit_Dc(cfg, R, disp, free_offset=False):
               'modes (2026-09-28); fitting free amplitudes')
     kk = 2.0 * np.arange(1, cfg.DC_N_MODES + 1)            # even wavenumbers: m = 1..N, 2N amplitudes (sin + cos blocks)
     W = float(np.min(np.diff(ts))) * cfg.dt_lj if (cfg.DC_WINDOW_AVG and len(ts) > 1) else 0.0
+    W = float(disp.get('W', W))                            # a subsampled snapshot set keeps the deck's averaging window (fig_Dc_skin)
     Y = uhat[:, idx]                                       # (n_snap, n_bins) data
 
     def decay(Dc, t, k=kk):                                # per mode, window-averaged like the data; t scalar or array
@@ -1890,6 +1899,7 @@ def fit_Dc_unload(cfg, R, U, F_hold):
         else:
             com = np.zeros(len(ts))
         W = float(np.min(np.diff(ts))) * cfg.dt_lj if (cfg.DC_WINDOW_AVG and len(ts) > 1) else 0.0
+        W = float(U.get('W', W))                                   # see fit_Dc
         n_trim = int(round(cfg.DC_TRIM_BINS * cfg.binWidth / abs(float(z[1] - z[0])))) if len(z) > 1 else cfg.DC_TRIM_BINS
         N = int(cfg.UNLOAD_N_MODES) or int(cfg.DC_N_MODES)
         k = np.arange(1, N + 1, dtype=float)
@@ -1958,6 +1968,106 @@ def fit_Dc_unload(cfg, R, U, F_hold):
     if out['trace'] is None and out['prof'] is None:
         return None
     return out
+
+
+def load_unload_state(cfg, R, lvl, L, verbose=True):
+    """The level's UNLOAD phase (deck Phase 2c, 2026-10-09: both plates back to the seated reference gap at
+    the drive speeds, then a free re-swelling hold with the faces unloaded) as a level-LIKE dict U built
+    from the _u<lvl> files, so that the single-level figures draw the relaxation as their '(b)' companion
+    with the code that draws the hold (2026-10-12).  Keys mirror load_level's where the deck records the
+    quantity in Phase 2c: stress (zz ONLY -- no lateral stress, density or strain_zz file is written in the
+    unload), ts / evol_from, halt_ts / plat (the last plateau_frac of the re-swelling = the 'final' window),
+    plate tracks (piston_z_at, support_z_at, wetz, plates), the Terzaghi split (feed-reservoir baseline),
+    membrane bounds / interior, pfa_* + PF (load piston, block means only), wet (wet pistons + solvent
+    expelled) and the strain series (eps_Rg from gel_dimensions_rg with the hold's L0, eps_BB from
+    gel_dimensions_bb with the hold's seated L_bb, eps_piston).  dP_pist is the HOLD's load increment, so
+    the normalised stress companions read 1 at the start of the unload and relax to 0.
+    None when the level has no unload stress files (runs without -var unload 1)."""
+    say = print if verbose else (lambda *a, **k: None)
+    S = _component_stacks(cfg, 'zz', lvl=lvl, phase='u')
+    if S is None:
+        return None
+    z = R['z']
+    ts = S['ts']
+    U = dict(lvl=lvl, eps=L['eps'], z=z, phase='unload', stress={'zz': S}, ts=ts, final_label='final (re-swollen)',
+             dP_pist=float(L.get('dP_pist', np.nan)), area=float(L.get('area', R['AREA'])))
+    # ---- plates: the Phase 2c loggers start with the retraction; the re-swelling hold begins when they stop ----
+    U['piston_z_at'], U['piston_pos'] = _piston_z_func(cfg, R, lvl, phase='u')
+    U['support_z_at'], U['support_pos'] = _support_z_func(cfg, R, lvl, phase='u')
+    if U['piston_pos'] is not None:
+        pt, pz = U['piston_pos']
+        U['t_retract'] = float(pt[0])
+        U['t_free'] = float(pt[np.argmax(np.isclose(pz, pz[-1], atol=1e-6))])
+    else:
+        U['t_retract'] = U['t_free'] = float(ts[0])
+    t0, t1 = float(U['t_free']), float(ts[-1])
+    U['halt_ts'] = int(t1 - cfg.plateau_frac * (t1 - t0))      # 'final' window = the last plateau_frac of the re-swelling
+    U['evol_from'] = int(ts[0])
+    U['z_pist'] = U['piston_z_at'](t1)
+    U['z_supp'] = U['support_z_at'](t1)
+    spf = np.abs(S['p'][-1])
+    thr = cfg.gel_thresh * float(np.nanmax(spf))
+    mem = spf > thr
+    U['z_mem_lo'] = float(z[mem].min()) if mem.any() else R['z_gel_lo']
+    U['z_mem_hi'] = float(z[mem].max()) if mem.any() else R['z_gel_hi']
+    U['in_mem'] = (z >= U['z_mem_lo']) & (z <= U['z_mem_hi'])
+    U['interior'] = (U['in_mem'] & (z >= U['z_mem_lo'] + cfg.wall_margin) & (z <= U['z_pist'] - cfg.wall_margin))
+    U['wetz'] = _wet_piston_z_funcs(cfg, R, lvl, phase='u')
+    U['plates'] = plate_tracks(R, U)
+    # ---- Terzaghi split of sigma_zz (the only component recorded), feed-reservoir baseline tracking the feed piston ----
+    bw = baseline_masks_at(z, cfg, R, ts, U['wetz']['feed_at'], U['z_mem_hi'])
+    U['bw'] = bw
+    Rs = R['stress'].get('zz')
+    sd_bin = Rs['sd_bin'] if Rs is not None else None
+    if sd_bin is None or Rs['t'].shape[0] < 2 or not np.any(sd_bin > 0):
+        sd_bin = np.full(len(z), float(np.nanstd(S['t'][-1][bw[-1]])))
+    S['net'], S['pore'], S['pore_half'], S['net_half'] = terzaghi_split(S['t'], bw, sd_bin, cfg.ci_level)
+    S['ref_net'] = (Rs['net_interior'] if (cfg.G_SUBTRACT_REF and Rs is not None) else 0.0)
+    S['net_mem'] = np.array([np.nanmean(S['net'][i][U['in_mem']]) for i in range(len(ts))])
+    U['plat'] = ts >= U['halt_ts']
+    if U['plat'].sum() < 1:
+        U['plat'][-1] = True
+    S['net_plat'] = np.nanmean(S['net'][U['plat']], axis=0)
+    S['t_plat'] = np.nanmean(S['t'][U['plat']], axis=0)
+    # ---- strains over the unload, the hold's own zero (the seated reference) ----
+    L0 = None
+    fs = cfg.path('strain_zz', lvl)
+    if fs.exists():
+        arr = load2c(fs, 3)
+        L0 = float(arr[0, 1]) if arr is not None and arr[0, 1] else None
+    rg = load2c(cfg.path('gel_dimensions_rg', lvl, phase='u'), 4)
+    if rg is not None and L0:
+        U['strain_ts'], U['strain_eps'] = rg[:, 0], (L0 - rg[:, 3]) / L0
+        pl = rg[:, 0] >= U['halt_ts']
+        U['eps_rg'] = float(np.mean(U['strain_eps'][pl])) if pl.any() else float(U['strain_eps'][-1])
+    bb0 = load2c(cfg.path('gel_dimensions_bb', lvl), 4)
+    bb = load2c(cfg.path('gel_dimensions_bb', lvl, phase='u'), 4)
+    if bb is not None and bb0 is not None and bb0[0, 3] != 0:
+        U['bb_ts'], U['bb_eps'] = bb[:, 0], (bb0[0, 3] - bb[:, 3]) / bb0[0, 3]
+        pl = bb[:, 0] >= U['halt_ts']
+        U['eps_bb'] = float(np.mean(U['bb_eps'][pl])) if pl.any() else float(U['bb_eps'][-1])
+    ps = load2c(cfg.path('strain_piston', lvl, phase='u'), 4)
+    if ps is not None:
+        U['pist_ts'], U['pist_eps'] = ps[:, 0], ps[:, 3]
+    # ---- load piston: block means only (the deck writes no raw piston_force in Phase 2c) ----
+    ffa = cfg.path('piston_force_avg', lvl, phase='u')
+    if ffa.exists():
+        pfa = read_print_file(ffa, ['step', 'Fz'])
+        U['pfa_step'], U['pfa_P'] = pfa['step'].astype(int), pfa['Fz'] / U['area']
+        m = U['pfa_step'] >= U['t_free']
+        if m.sum() >= 20:
+            U['PF'] = plateau_window(U['pfa_step'][m], U['pfa_P'][m], cfg.plateau_frac_auto, cfg.ci_level)
+            U['PF']['src'] = 'LMP block-avg'
+    # ---- wet pistons + solvent expelled over the unload ----
+    U['wet'] = load_wet_pistons(cfg, R, lvl, plat_from=U['halt_ts'], phase='u')
+    say(f"  UNLOAD figures (L['U']): {len(ts)} sigma_zz snapshots, steps {int(ts[0])} -> {int(t1)}; retraction {int(U['t_retract'])} -> "
+        f"plates stopped {int(U['t_free'])}; final window: steps >= {U['halt_ts']} (last {cfg.plateau_frac:.0%} of the re-swelling)")
+    say('    plates over the unload (start -> end): ' + fmt_plates(U['plates']))
+    say(f"    residual strain in the final window: Rg {U.get('eps_rg', np.nan):+.4f}  BB {U.get('eps_bb', np.nan):+.4f};  "
+        f"network sigma'_zz interior {np.nanmean(S['net_plat'][U['interior']]):+.4f} (hold plateau {np.nanmean(L['stress']['zz']['net_plat'][L['interior']]):+.4f});  "
+        f"pore baseline {S['pore'][-1]:.4f}"
+        + (f";  load piston <P> {U['PF']['mean']:+.4f} [{U['PF']['lo']:+.4f}, {U['PF']['hi']:+.4f}]" if 'PF' in U else ''))
+    return U
 
 
 def load_level(cfg, R, lvl, verbose=True):
@@ -2323,6 +2433,8 @@ def load_level(cfg, R, lvl, verbose=True):
                 say(f"    vs the hold:  windowed profile {F['Dc'] / ref:.2f}x,  whole hold {F['Dc_all'] / ref:.2f}x"
                     + (f",  stress trace {L['Dc_stress']['Dc'] / ref:.2f}x" if (L.get('Dc_stress') or {}).get('ok') else '')
                     + "  the unload trace D_c  (1.0 = the hold's transient is the same D_c; < 1 = the hold reads slower, e.g. skin-throttled)")
+    # ---- the unload as a level-like state for the '(b)' figure companions (2026-10-12) ----
+    L['U'] = load_unload_state(cfg, R, lvl, L, verbose=verbose) if cfg.UNLOAD_FIGS else None
     return L
 
 
@@ -3077,10 +3189,11 @@ def _zx_label(R):
     return rf'$1 - z/L$   ({R["flip_ends"]})' if _flipped(R) else r'$z/L$'
 
 
-def flip_hint(R, label):
+def flip_hint(R, label, nl=False):
     """Append 'left -> right' orientation to the x label of a sigma- or zeta-unit axis that is
-    drawn inverted under FLIP_Z (flip_z_axis / _zlim); the label itself when not flipped."""
-    return f'{label}   [{R["flip_ends"]}, left to right]' if _flipped(R) else label
+    drawn inverted under FLIP_Z (flip_z_axis / _zlim); the label itself when not flipped.
+    nl=True puts the hint on a second line (narrow panels, 2026-10-12: side-by-side labels overlapped)."""
+    return f'{label}{chr(10) if nl else "   "}[{R["flip_ends"]}, left to right]' if _flipped(R) else label
 
 
 def shade_gel(ax, R, L=None):
@@ -3398,7 +3511,7 @@ def plot_evolution(ax, cfg, R, L, z, ts, stack, ylabel, title, ref=None, band=No
                             alpha=(0.20 if last else 0.06), lw=0, zorder=(4 if last else 2))
         ax.plot(zx, stack[i], '-', color=c, lw=(3.5 if last else 1.6),
                 alpha=(1.0 if last else 0.75), zorder=(5 if last else 3),
-                label=('final (plateau)' if last else None))
+                label=(L.get('final_label', 'final (plateau)') if last else None))
     ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
     shade_gel(ax, R, L)
     mark_walls(ax, R, L, ts)
@@ -3462,6 +3575,42 @@ def level_handles(levels, ref=False):
     return h
 
 
+def _is_unload(D):
+    return D is not None and D.get('phase') == 'unload'
+
+
+def _ab(D):
+    """Suptitle prefix of a single-level figure when the level has an unload companion (2026-10-12):
+    '(a) HOLD' on the hold figure, '(b) UNLOAD' on the companion; nothing for levels without _u files."""
+    if _is_unload(D):
+        return '(b) UNLOAD, free re-swelling after the hold  |  '
+    return '(a) HOLD  |  ' if D is not None and D.get('U') is not None else ''
+
+
+def _plat_word(D):
+    return 'steady' if _is_perm(D) else ('final' if _is_unload(D) else 'plateau')
+
+
+def _sup(D, text):
+    """Suptitle text: one line for the wide hold figures; the unload companions are narrower (one panel), so their
+    '  |  '-separated parts go on separate lines instead of stretching the figure."""
+    return text.replace('  |  ', '\n') if _is_unload(D) else text
+
+
+def _comps(D):
+    """Stress components a profile figure draws: all three for a hold (missing ones get a 'not found' panel);
+    only the recorded ones for the unload companion (the deck writes zz alone in Phase 2c)."""
+    return tuple(c for c in COMPONENTS if c in D['stress']) if _is_unload(D) else COMPONENTS
+
+
+def _mark_unload_times(ax, U, label=True):
+    """Time-series axes of an unload companion: retraction start (dotted) and 'plates stopped' (dashed)."""
+    if not _is_unload(U):
+        return
+    ax.axvline(U['t_retract'], color='k', ls=':', lw=1.0, alpha=0.6, label='retraction starts' if label else None)
+    ax.axvline(U['t_free'], color='k', ls='--', lw=1.0, alpha=0.6, label='plates stopped (seated gap): free re-swelling' if label else None)
+
+
 def _save(fig, cfg, stem, lvl=None):
     out = cfg.plot(stem, lvl)
     fig.savefig(out, dpi=150, bbox_inches='tight')
@@ -3473,10 +3622,56 @@ def _save(fig, cfg, stem, lvl=None):
 # ===========================================================================
 #  9. FIGURES -- SINGLE LEVEL
 # ===========================================================================
+def _strain_unload_axis(ax, cfg, levels):
+    """(b) of fig_strain (2026-10-12): the same three strains over the UNLOAD of every level that has one --
+    retraction of both plates to the seated gap, then free re-swelling.  Zero = the seated reference (the
+    hold's own L0), so the curves fall from the applied level towards 0; shaded = the final window."""
+    any_ = False
+    for i, L in enumerate(levels):
+        U = L.get('U')
+        if U is None:
+            continue
+        col = level_color(i) if len(levels) > 1 else WONG['blue']
+        lvl = L['lvl']
+        t_end = float(U['ts'][-1])
+        if 'strain_eps' in U:
+            any_ = True
+            ax.plot(U['strain_ts'], U['strain_eps'], '-', color=col, lw=2.2, label=fr'$\varepsilon_{{Rg}}$ (from {lvl})')
+        if 'bb_eps' in U:
+            any_ = True
+            ax.plot(U['bb_ts'], U['bb_eps'], '--', color=col, lw=1.5, alpha=0.7, label=fr'$\varepsilon_{{BB}}$ (from {lvl})')
+        if 'pist_eps' in U:
+            any_ = True
+            ax.plot(U['pist_ts'], U['pist_eps'], '-', color=col, lw=3.2, alpha=0.30, label=r'$\varepsilon_\mathrm{piston}$ (diag)')
+        ax.axvspan(U['halt_ts'], t_end, color=col, alpha=0.06)
+        ax.axhline(L['eps'], color=col, ls=':', lw=1.0, alpha=0.6)
+        _mark_unload_times(ax, U, label=(i == 0))
+        ax.annotate(f'final: Rg {sig(U.get("eps_rg", np.nan))}  BB {sig(U.get("eps_bb", np.nan))}',
+                    (t_end, U.get('eps_rg', U.get('eps_bb', 0.0))), textcoords='offset points', xytext=(-6, 9), ha='right',
+                    va='bottom', fontsize=10, color=col, bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='none', alpha=0.8))
+    ax.axhline(0.0, color='0.3', ls=':', lw=1.0, alpha=0.8)
+    ax.set_xlabel('time step')
+    ax.set_title('(b) unload: plates back to the seated gap, then free re-swelling\n'
+                 'dotted = applied level and 0 (reference), shaded = final window', fontsize=15)
+    ax.grid(alpha=0.3)
+    if any_:
+        smart_legend(ax, fontsize=10)
+    else:
+        ax.text(0.5, 0.5, 'no unload strain files', ha='center', va='center', transform=ax.transAxes, color='0.4')
+    return any_
+
+
 def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
     """Strain vs step: solid eps_Rg, dashed eps_BB, faint eps_piston (diagnostic);
-    shaded plateau window.  Works for one level or a sweep (colour = level)."""
-    fig, ax = plt.subplots(figsize=(10, 6.5), constrained_layout=True)
+    shaded plateau window.  Works for one level or a sweep (colour = level).
+    Levels with an unload (L['U'], 2026-10-12) get a second panel (b) with the same
+    strains over the retraction + free re-swelling; the hold is then panel (a)."""
+    has_U = any(L.get('U') is not None for L in levels)
+    if has_U:
+        fig, (ax, axU) = plt.subplots(1, 2, figsize=(19, 6.5), sharey=True, constrained_layout=True)
+    else:
+        fig, ax = plt.subplots(figsize=(10, 6.5), constrained_layout=True)
+        axU = None
     any_ = False
     for i, L in enumerate(levels):
         lvl = L['lvl']
@@ -3504,10 +3699,13 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
                     bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='none', alpha=0.8))
     ax.set_xlabel('time step')
     ax.set_ylabel(r'compression strain  $\varepsilon=(L_0-L)/L_0$')
-    ax.set_title('Strain diagnostic: solid $\\varepsilon_{Rg}$, dashed $\\varepsilon_{BB}$,\n'
-                 'dotted = applied target, shaded = plateau window', fontsize=15)
+    ax.set_title(('(a) compression: ramp + hold\n' if has_U else 'Strain diagnostic: ')
+                 + 'solid $\\varepsilon_{Rg}$, dashed $\\varepsilon_{BB}$,'
+                 + ('' if has_U else '\n') + ' dotted = applied target, shaded = plateau window', fontsize=15)
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=10)
+    if axU is not None:
+        _strain_unload_axis(axU, cfg, levels)
     if not any_:
         plt.close(fig)
         print('strain diagnostic skipped (no strain_zz files)')
@@ -3567,13 +3765,16 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
     """1 x 3 evolution panels (zz, xx, yy) for kind='t' (total) or 'net' (network).  With
     cfg.PARTIAL_NORM = 'share' the total-stress figure is followed by (sigma^t - P_ref)/dP
     (_fig_total_norm, saved as <stem>_norm; 2026-10-06)."""
-    fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
-    fig.suptitle(suptitle, fontsize=13, fontweight='bold')
-    for ax, comp in zip(axes, COMPONENTS):
+    comps = _comps(L)
+    fig, axes = plt.subplots(1, len(comps), figsize=(25 if len(comps) == 3 else 11 * len(comps), 6.5),
+                             constrained_layout=True, squeeze=False)
+    axes = axes[0]
+    fig.suptitle(_sup(L, suptitle), fontsize=13, fontweight='bold')
+    for ax, comp in zip(axes, comps):
         S = L['stress'].get(comp)
         Rs = R['stress'].get(comp)
         lab = (r'$\sigma^{t}_{%s}$' % comp) if kind == 't' else (r"$\sigma'_{%s}$" % comp)
-        title = f'({"abc"[COMPONENTS.index(comp)]}) ' + (
+        title = f'({"abc"[comps.index(comp)]}) ' + (
             r'total $\sigma^{t}_{%s}$' % comp if kind == 't' else r"network $\sigma'_{%s}=\sigma^t_{%s}-p_{\rm pore}$" % (comp, comp))
         if S is None:
             ax.text(0.5, 0.5, f'sigma{comp} files\nnot found', ha='center', va='center', transform=ax.transAxes)
@@ -3599,11 +3800,11 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
                         pad=0.45, qlo=2, qhi=100, include_zero=False)
             lo, hi = ax.get_ylim()
             ax.set_ylim(min(lo, 1 - 0.3 * (hi - lo)), max(hi, 1 + 0.3 * (hi - lo)))
-            note = ('steady' if _is_perm(L) else 'plateau') + ' mean in gel interior = ' + fmt_mu(S['t_plat'][L['interior']] / Pb)
+            note = _plat_word(L) + ' mean in gel interior = ' + fmt_mu(S['t_plat'][L['interior']] / Pb)
         if kind == 'net':
             mask = (R['z'] >= L['z_mem_lo'] + cfg.wall_margin)
             robust_ylim(ax, list(ev), zmask=mask, pad=0.15)
-            note = 'plateau mean in gel interior = ' + fmt_mu(S['net_plat'][L['interior']])
+            note = _plat_word(L) + ' mean in gel interior = ' + fmt_mu(S['net_plat'][L['interior']])
         h, lab = ax.get_legend_handles_labels()
         h.append(Patch(alpha=0, label=note))          # the number rides in the legend, never on data
         lab.append(note)
@@ -3653,9 +3854,16 @@ def fig_total_stress(cfg, R, L):
                                   f'Total stress / permeate pressure ($P_{{\\rm perm}}={sig(_p_norm(cfg, L))}$), reference $\\rightarrow$ '
                                   f'permeation drive (production from step {fmt_step(L["evol_from"])}; steady window from '
                                   f'{fmt_step(L["halt_ts"])})  |  {cfg.sim_name}')
-    return _stress_evo_panels(cfg, R, L, 't', 'total_stress_evolution',
-                              f'Total stress / bath pressure ($P_{{\\rm bath}}={sig(cfg.P_BARO)}$), reference $\\rightarrow$ compressed '
-                              f'(hold from step {fmt_step(L["evol_from"])}; plateau from {fmt_step(L["halt_ts"])})  |  {cfg.sim_name}')
+    fig = _stress_evo_panels(cfg, R, L, 't', 'total_stress_evolution',
+                             _ab(L) + f'Total stress / bath pressure ($P_{{\\rm bath}}={sig(cfg.P_BARO)}$), reference $\\rightarrow$ compressed '
+                             f'(hold from step {fmt_step(L["evol_from"])}; plateau from {fmt_step(L["halt_ts"])})  |  {cfg.sim_name}')
+    U = L.get('U')
+    if U is not None:        # (b) the unload: the same panel(s) over the free re-swelling (zz only: the deck records no lateral stress)
+        _stress_evo_panels(cfg, R, U, 't', 'total_stress_evolution_unload',
+                           _ab(U) + f'Total stress / bath pressure ($P_{{\\rm bath}}={sig(cfg.P_BARO)}$), compressed $\\rightarrow$ re-swollen '
+                           f'(retraction from step {fmt_step(U["t_retract"])}, plates stopped at {fmt_step(U["t_free"])}; '
+                           f'final window from {fmt_step(U["halt_ts"])})  |  {cfg.sim_name}')
+    return fig
 
 
 def _scale_mask(cfg, R, L=None, levels=None):
@@ -3712,7 +3920,7 @@ def fig_network_stress(cfg, R, L):
                                [f'({"abc"[i]}) ' + r"network $\sigma'_{%s}$" % c for i, c in enumerate(COMPONENTS)],
                                [r"$\sigma'_{%s}(z)$" % c for c in COMPONENTS], _PORE_NOTE)
     fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
-    fig.suptitle(f"Network stress (Terzaghi $\\sigma'=\\sigma^t-p_{{\\rm pore}}$): reference and final equilibrated state  |  "
+    fig.suptitle(_ab(L) + f"Network stress (Terzaghi $\\sigma'=\\sigma^t-p_{{\\rm pore}}$): reference and final equilibrated state  |  "
                  f"p_pore(final) = {fmt_val_unc(L['stress']['zz']['pore'][-1], L['stress']['zz']['pore_half'][-1])}  |  {cfg.sim_name}",
                  fontsize=13, fontweight='bold')
     for ax, comp in zip(axes, COMPONENTS):
@@ -3728,7 +3936,34 @@ def fig_network_stress(cfg, R, L):
         h.append(Patch(alpha=0, label=note))
         lab.append(note)
         smart_legend(ax, handles=h, labels=lab, fontsize=12)
-    return _save(fig, cfg, 'network_stress_final', L['lvl'])
+    fig = _save(fig, cfg, 'network_stress_final', L['lvl'])
+    if L.get('U') is not None:
+        _network_stress_unload(cfg, R, L, L['U'])
+    return fig
+
+
+def _network_stress_unload(cfg, R, L, U):
+    """(b) of fig_network_stress (2026-10-12): sigma'_zz after the free re-swelling (final window, 95 % band)
+    over the reference (dashed) and the end-of-hold plateau profile (dotted): does the network stress
+    return to the reference?  zz only -- the deck records no lateral stress in Phase 2c."""
+    S = U['stress']['zz']
+    fig, ax = plt.subplots(figsize=(11, 6.5), constrained_layout=True)
+    fig.suptitle(_sup(U, _ab(U) + f"Network stress $\\sigma'_{{zz}}$: reference, end of hold and final re-swollen state  |  "
+                 f"p_pore(final) = {fmt_val_unc(S['pore'][-1], S['pore_half'][-1])}  |  {cfg.sim_name}"), fontsize=13, fontweight='bold')
+    zx = zn(R, R['z'])
+    ax.plot(zx, L['stress']['zz']['net_plat'], ':', color=WONG['vermillion'], lw=2.2, alpha=0.9, zorder=3,
+            label=f'end of hold (plateau, $\\varepsilon={L["eps"]:.2f}$)')
+    m = _net_panel(ax, cfg, R, U, 'zz', r"$\sigma'_{zz}(z)$", r"network $\sigma'_{zz}$ after the unload (zz only)",
+                   label=U['final_label'])
+    robust_ylim(ax, [m, L['stress']['zz']['net_plat']] + ([R['stress']['zz']['net_m']] if 'zz' in R['stress'] else []),
+                zmask=_scale_mask(cfg, R, U), pad=0.2)
+    h, lab = ax.get_legend_handles_labels()
+    note = (f"final mean in gel interior = {fmt_mu(m[U['interior']])}\n"
+            f"end of hold = {fmt_mu(L['stress']['zz']['net_plat'][L['interior']])}")
+    h.append(Patch(alpha=0, label=note))
+    lab.append(note)
+    smart_legend(ax, handles=h, labels=lab, fontsize=12)
+    return _save(fig, cfg, 'network_stress_final_unload', U['lvl'])
 
 
 def _tr3(D, key):
@@ -3849,7 +4084,8 @@ def _partial_evo(ax, cfg, R, L, fam, stack_of, ref_of, zero=True):
         handles.append(Line2D([0], [0], color=base, lw=3, label=lab))
     handles.append(Line2D([0], [0], color='0.4', ls='--', lw=2, label=r'reference ($\varepsilon=0$)'))
     if not _is_perm(L):
-        handles.append(Line2D([0], [0], color='0.4', lw=1.2, alpha=0.6, label='hold (faint = early)'))
+        handles.append(Line2D([0], [0], color='0.4', lw=1.2, alpha=0.6,
+                              label=('unload' if _is_unload(L) else 'hold') + ' (faint = early)'))
     if zero:
         ax.axhline(0, color='k', ls='--', lw=1, alpha=0.5)
     shade_gel(ax, R, L)
@@ -3857,11 +4093,7 @@ def _partial_evo(ax, cfg, R, L, fam, stack_of, ref_of, zero=True):
     return handles, curves
 
 
-def fig_partial_stress(cfg, R, L):
-    """One axis: solvent partial (blues), polymer partial (oranges) and total
-    (greys) sigma_zz evolutions, reference dashed, final curves bold.  With
-    cfg.PARTIAL_NORM = 'share' a second figure follows (partial_stress_evolution_norm,
-    2026-10-06): the same three curves with the back pressure removed, / dP (partial_norm)."""
+def _partial_stress_fig(cfg, R, L, stem):
     zz, Rz = L['stress']['zz'], R['stress']['zz']
     fig, ax = plt.subplots(figsize=(13, 7), constrained_layout=True)
     fam = (('s', r'solvent $\sigma_{s,zz}$', 'Blues'), ('p', r'polymer $\sigma_{p,zz}$', 'Oranges'),
@@ -3869,13 +4101,29 @@ def fig_partial_stress(cfg, R, L):
     handles, _ = _partial_evo(ax, cfg, R, L, fam, lambda k: zz[k], lambda k: Rz[k + '_m'])
     finish_axes(ax, r'$\sigma_{zz}(z,t)$  (LJ)',
                 'Partial and total normal stresses: reference $\\rightarrow$ evolution' if _is_perm(L) else
+                f'Partial and total $\\sigma_{{zz}}$: compressed ($\\varepsilon={L["eps"]:.2f}$) $\\rightarrow$ re-swollen (reference dashed)' if _is_unload(L) else
                 f'Partial and total $\\sigma_{{zz}}$: reference $\\rightarrow$ compressed ($\\varepsilon={L["eps"]:.2f}$)', R=R)
+    if _ab(L):
+        fig.suptitle(_sup(L, _ab(L).rstrip(' |') + f'  |  {cfg.sim_name}'), fontsize=13, fontweight='bold')
     smart_legend(ax, handles=handles, fontsize=12)
-    fig = _save(fig, cfg, 'partial_stress_evolution', L['lvl'])
+    fig = _save(fig, cfg, stem, L['lvl'])
     if cfg.PARTIAL_NORM == 'share':
-        _fig_partial_norm(cfg, R, L, 'zz', 'partial_stress_evolution_norm')
+        _fig_partial_norm(cfg, R, L, 'zz', stem + '_norm')
         if _is_perm(L):
-            _fig_partial_norm_phi(cfg, R, L, 'zz', 'partial_stress_evolution_norm_phi')   # TEST (2026-10-07), see below
+            _fig_partial_norm_phi(cfg, R, L, 'zz', stem + '_norm_phi')   # TEST (2026-10-07), see below
+    return fig
+
+
+def fig_partial_stress(cfg, R, L):
+    """One axis: solvent partial (blues), polymer partial (oranges) and total
+    (greys) sigma_zz evolutions, reference dashed, final curves bold.  With
+    cfg.PARTIAL_NORM = 'share' a second figure follows (partial_stress_evolution_norm,
+    2026-10-06): the same three curves with the back pressure removed, / dP (partial_norm).
+    A level with an unload (L['U'], 2026-10-12) gets the same figure(s) over the free
+    re-swelling as its '(b)' companion (partial_stress_evolution_unload[_norm])."""
+    fig = _partial_stress_fig(cfg, R, L, 'partial_stress_evolution')
+    if L.get('U') is not None:
+        _partial_stress_fig(cfg, R, L['U'], 'partial_stress_evolution_unload')
     return fig
 
 
@@ -4004,12 +4252,16 @@ def _fig_total_norm(cfg, R, L, stem):
         _norm_skip(cfg, L, 'total-stress')
         return None
     pr, dp = _norm_symbols(L)
-    fig, axes = plt.subplots(1, 3, figsize=(25, 6.5), constrained_layout=True)
-    fig.suptitle(f'Total stress with the back pressure removed, $(\\sigma^t-{pr})/{dp}$  ($' + pr + f'={sig(_p_norm(cfg, L))}$, $'
-                 + dp + f'={sig(dP)}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
-    for ax, comp in zip(axes, COMPONENTS):
+    comps = _comps(L)
+    fig, axes = plt.subplots(1, len(comps), figsize=(25 if len(comps) == 3 else 11 * len(comps), 6.5),
+                             constrained_layout=True, squeeze=False)
+    axes = axes[0]
+    fig.suptitle(_sup(L, _ab(L) + f'Total stress with the back pressure removed, $(\\sigma^t-{pr})/{dp}$  ($' + pr + f'={sig(_p_norm(cfg, L))}$, $'
+                 + dp + f'={sig(dP)}$' + (" = the hold's load increment" if _is_unload(L) else '') + f')  |  {cfg.sim_name}'),
+                 fontsize=13, fontweight='bold')
+    for ax, comp in zip(axes, comps):
         lab = rf'$(\sigma^{{t}}_{{{comp}}}-{pr})/{dp}$'
-        title = f'({"abc"[COMPONENTS.index(comp)]}) ' + r'total $\sigma^{t}_{%s}$, back pressure removed' % comp
+        title = f'({"abc"[comps.index(comp)]}) ' + r'total $\sigma^{t}_{%s}$, back pressure removed' % comp
         N = partial_norm(cfg, R, L, comp)
         if N is None:
             ax.text(0.5, 0.5, f'sigma{comp} files\nnot found', ha='center', va='center', transform=ax.transAxes)
@@ -4021,7 +4273,7 @@ def _fig_total_norm(cfg, R, L, stem):
         ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
         plot_evolution(ax, cfg, R, L, R['z'], ts, ev, lab + '$(z,t)$', title, ref=ref, annotate=False, legend=False)
         _norm_ylim(ax, list(ev) + ([ref[0]] if ref is not None else []), _scale_mask(cfg, R, L), pad=0.3)
-        note = (('steady' if _is_perm(L) else 'plateau') + ' mean in gel interior = '
+        note = (_plat_word(L) + ' mean in gel interior = '
                 + fmt_mu(mean_ci(N['t'][L['plat']], cfg.ci_level)[0][L['interior']]))
         h, lb = ax.get_legend_handles_labels()
         h.append(Patch(alpha=0, label=note))
@@ -4121,8 +4373,10 @@ def _fig_partial_norm(cfg, R, L, comp, stem):
                                    lambda k: (None if Nr is None else mean_ci(Nr[k], cfg.ci_level)[0]), zero=False)
     name = (r'Partial and total $P_{th}=-\frac{1}{3}\,\mathrm{tr}(\mathbf{\sigma})$' if comp == 'tr'
             else r'Partial and total $\sigma_{%s}$' % comp)
-    finish_axes(ax, rf'$({sym}-w\,{pr})/{dp}$', name + ', back pressure removed: reference $\\rightarrow$ '
-                + ('evolution' if _is_perm(L) else f'compressed ($\\varepsilon={L["eps"]:.2f}$)'), R=R)
+    finish_axes(ax, rf'$({sym}-w\,{pr})/{dp}$', name + ', back pressure removed: '
+                + ('reference $\\rightarrow$ evolution' if _is_perm(L) else
+                   f'compressed ($\\varepsilon={L["eps"]:.2f}$) $\\rightarrow$ re-swollen' if _is_unload(L) else
+                   f'reference $\\rightarrow$ compressed ($\\varepsilon={L["eps"]:.2f}$)'), R=R)
     _norm_ylim(ax, curves, _scale_mask(cfg, R, L))
     if comp == 'tr':
         hs = _draw_dpth_guide(ax, cfg, R, L, N)
@@ -4131,8 +4385,9 @@ def _fig_partial_norm(cfg, R, L, comp, stem):
             print('  (no dP_th = 4/3 G/M dP guide: set cfg.G_REF / cfg.G_COMP_REF, the shear modulus estimates)')
     smart_legend(ax, handles=handles, fontsize=12)
     num = rf'\mathrm{{tr}}\,\sigma_s/\mathrm{{tr}}\,\sigma^t' if comp == 'tr' else rf'\sigma_{{s,{comp}}}/\sigma^t_{{{comp}}}'
-    fig.suptitle(f'Each species\' share $w$ of the back pressure removed, per bin and snapshot:  $w_s={num}$, $w_p=1-w_s$, $w=1$ for the total\n'
-                 f'(${pr}={sig(N["P_ref"])}$, ${dp}={sig(N["dP"])}$)  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    fig.suptitle(_ab(L) + f'Each species\' share $w$ of the back pressure removed, per bin and snapshot:  $w_s={num}$, $w_p=1-w_s$, $w=1$ for the total\n'
+                 f'(${pr}={sig(N["P_ref"])}$, ${dp}={sig(N["dP"])}$' + (" = the hold's load increment" if _is_unload(L) else '')
+                 + f')  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
     return _save(fig, cfg, stem, L['lvl'])
 
 
@@ -4199,48 +4454,63 @@ def _fig_partial_norm_phi(cfg, R, L, comp, stem):
     return _save(fig, cfg, stem, L['lvl'])
 
 
-def fig_piston(cfg, R, L):
-    """Piston pressure P = F_z/A vs step, linear + log, with the auto plateau window."""
-    if 'pf_P' not in L:
+def _piston_history(cfg, R, L, stem):
+    """The body of fig_piston for a hold (raw samples + rolling mean + block means) or for its unload companion
+    (block means only: the deck writes no raw piston_force in Phase 2c; 2026-10-12)."""
+    raw = 'pf_P' in L
+    if not raw and 'pfa_P' not in L:
         print('piston figure skipped (no piston_force file)')
         return None
-    steps, P = L['pf_step'], L['pf_P']
-    P_roll = rolling_mean(P, cfg.roll_win)
+    steps, P = (L['pf_step'], L['pf_P']) if raw else (L['pfa_step'], L['pfa_P'])
+    rw = cfg.roll_win if raw else max(cfg.roll_win // 10, 3)       # block means are already ~10x smoother than the raw samples
+    P_roll = rolling_mean(P, rw)
     peak = int(steps[int(P.argmax())])
     fig, (axL, axG) = plt.subplots(1, 2, figsize=(17, 6), constrained_layout=True)
-    fig.suptitle(f'Piston pressure history ($A = {sig(L["area"])}\\,\\sigma^2$, $F_z = P\\,A$)  |  {cfg.sim_name}',
+    fig.suptitle(_ab(L) + f'{"Load" if _is_unload(L) else "Piston"} pressure history ($A = {sig(L["area"])}\\,\\sigma^2$, $F_z = P\\,A$)'
+                 + ('  --  retraction + free re-swelling, block means only' if _is_unload(L) else '') + f'  |  {cfg.sim_name}',
                  fontsize=13, fontweight='bold')
+    win_lab = 'final window (auto)' if _is_unload(L) else 'plateau window (auto)'
     for ax in (axL, axG):
-        ax.axvline(peak, color=WONG['blue'], ls='--', lw=1.6, alpha=0.7, label=f'peak $P$ (step {fmt_step(peak)})')
+        if not _is_unload(L):
+            ax.axvline(peak, color=WONG['blue'], ls='--', lw=1.6, alpha=0.7, label=f'peak $P$ (step {fmt_step(peak)})')
+        _mark_unload_times(ax, L, label=(ax is axL))
         if 'PF' in L:
-            ax.axvspan(L['PF']['step0'], float(steps[-1]), color=WONG['green'], alpha=0.10,
-                       label='plateau window (auto)')
+            ax.axvspan(L['PF']['step0'], float(steps[-1]), color=WONG['green'], alpha=0.10, label=win_lab)
         ax.set_xlabel('time step')
         ax.grid(alpha=0.3)
-    axL.plot(steps, P, '-', color=WONG['vermillion'], lw=1.0, alpha=0.30, label=r'$P=F_z/A$ (raw)')
-    axL.plot(steps, P_roll, '-', color=WONG['vermillion'], lw=2.6, alpha=0.95, label=f'rolling mean ({cfg.roll_win})')
-    if 'pfa_P' in L:
+    src = r'$P=F_z/A$ (raw)' if raw else r'$P=F_z/A$ (LMP block-avg)'
+    axL.plot(steps, P, '-', color=WONG['vermillion'], lw=1.0, alpha=0.30, label=src)
+    axL.plot(steps, P_roll, '-', color=WONG['vermillion'], lw=2.6, alpha=0.95, label=f'rolling mean ({rw})')
+    if raw and 'pfa_P' in L:
         axL.plot(L['pfa_step'], L['pfa_P'], '-', color='k', lw=1.8, alpha=0.8, label='LMP block-avg')
     axL.axhline(0, color='k', ls='--', lw=0.8, alpha=0.4)
     axL.set_ylabel(r'$P = F_z/A$  (LJ / $\sigma^2$)')
-    axL.set_title('(a) piston pressure')
+    axL.set_title('(a) load-piston pressure' if _is_unload(L) else '(a) piston pressure')
     smart_legend(axL, fontsize=12)
     pos = P > 0
-    axG.plot(steps[pos], np.log(P[pos]), '-', color=WONG['vermillion'], lw=1.0, alpha=0.30, label=r'$\ln P$ (raw)')
+    axG.plot(steps[pos], np.log(P[pos]), '-', color=WONG['vermillion'], lw=1.0, alpha=0.30, label=r'$\ln P$ ' + ('(raw)' if raw else '(block-avg)'))
     posr = P_roll > 0
-    axG.plot(steps[posr], np.log(P_roll[posr]), '-', color=WONG['vermillion'], lw=2.6, alpha=0.95,
-             label=f'rolling mean ({cfg.roll_win})')
-    if 'pfa_P' in L:
+    axG.plot(steps[posr], np.log(P_roll[posr]), '-', color=WONG['vermillion'], lw=2.6, alpha=0.95, label=f'rolling mean ({rw})')
+    if raw and 'pfa_P' in L:
         posa = L['pfa_P'] > 0
         axG.plot(L['pfa_step'][posa], np.log(L['pfa_P'][posa]), '-', color='k', lw=1.8, alpha=0.8, label='LMP block-avg')
     axG.set_ylabel(r'$\ln P$')
-    axG.set_title('(b) log piston pressure (relaxation view)')
+    axG.set_title('(b) log piston pressure (relaxation view)' + ('  --  the load falls to the seated-contact value' if _is_unload(L) else ''))
     smart_legend(axG, fontsize=12)
     if 'PF' in L:
         p = L['PF']
-        annotate_box(axL, f"plateau $\\langle P\\rangle$ = {fmt_val_unc(p['mean'], 0.5 * (p['hi'] - p['lo']))}\n"
+        annotate_box(axL, f"{_plat_word(L)} $\\langle P\\rangle$ = {fmt_val_unc(p['mean'], 0.5 * (p['hi'] - p['lo']))}\n"
                           f"last {p['frac']:.0%}, n={p['n']}, block={p['block']}", loc='upper right', fontsize=12)
-    return _save(fig, cfg, 'piston_pressure_history', L['lvl'])
+    return _save(fig, cfg, stem, L['lvl'])
+
+
+def fig_piston(cfg, R, L):
+    """Piston pressure P = F_z/A vs step, linear + log, with the auto plateau window.  A level with an
+    unload (L['U'], 2026-10-12) gets the load piston over the retraction + re-swelling as its '(b)' figure."""
+    fig = _piston_history(cfg, R, L, 'piston_pressure_history')
+    if L.get('U') is not None:
+        _piston_history(cfg, R, L['U'], 'piston_pressure_history_unload')
+    return fig
 
 
 def fig_ratio(cfg, R, L):
@@ -4512,7 +4782,7 @@ def fig_Dc(cfg, R, L):
                 label=r'BC: $u_z(0,t)=+\Delta L_\mathrm{sup}/L$ (held support)')
         ax.plot(1, (fs - 1.0) * dlL, 'D', color=WONG['vermillion'], ms=9, zorder=5,
                 label=r'BC: $u_z(1,t)=-\Delta L_\mathrm{pist}/L$ (held piston)')
-        ax.set(xlabel=flip_hint(R, r'$\zeta=(z-z_\mathrm{perm})/L$'), ylabel=r'$u_z/L$', xlim=_zlim(R))
+        ax.set(xlabel=flip_hint(R, r'$\zeta=(z-z_\mathrm{perm})/L$', nl=True), ylabel=r'$u_z/L$', xlim=_zlim(R))
         ax.grid(alpha=0.3)
         smart_legend(ax, fontsize=11)
     axl.set_title(r'(a) $u_z(\zeta,t)/L$ -- fitted hold snapshots (data + fitted IC offset)', fontsize=15)
@@ -4581,6 +4851,98 @@ def fig_v0_check(cfg, R, L, disp=None):
           f"(whole hold {F2['Dc_all']:.4e})  ->  ratio {F2['Dc'] / F['Dc']:.3f};  rms rigid translation data - model = {np.sqrt(np.mean((um_data - um_model) ** 2)):.3f} sigma "
           f"(transient amplitude {amp:.2f} sigma)")
     return _save(fig, cfg, 'v0_check', L['lvl'])
+
+
+def _subsample_snaps(D, stride, dt):
+    """Every `stride`-th snapshot of a displacement dict, with the deck's averaging window W (tau) kept: fit_Dc /
+    fit_Dc_unload read it from the snapshot spacing otherwise."""
+    out = dict(D)
+    out['W'] = float(np.min(np.diff(D['ts']))) * dt
+    if stride <= 1:
+        return out
+    keys = ('ts', 'Nc', 'uz')
+    for k in keys:
+        out[k] = np.asarray(D[k])[::stride]
+    return out
+
+
+def Dc_skin_scan(cfg, R, L, fracs=(0.3, 0.45, 0.6, 0.75, 0.9, 1.0), stride=4, unload=True, verbose=True):
+    """TEMPORARY (2026-10-12): the fitted D_c against the PORTION of the gel the profiles are fitted on -- a centred band
+    of each width in `fracs` (fraction of the thickness), the faces outside it dropped from the fit (DC_TRIM_BINS swept).
+    Same modes, same window rule, same data otherwise.  If the faces (the ramp-end skins) are what sets the hold's D_c,
+    the value moves as they are excluded; a D_c that is a property of the whole slab does not.  The unload profiles get
+    the same scan (uniform IC, faces free) as the control.  Snapshots are subsampled by `stride` for speed (the
+    averaging window is kept).  Returns dict(hold=[(frac_fitted, Dc_win, Dc_all, R2)], unload=[...])."""
+    say = print if verbose else (lambda *a, **k: None)
+    lvl = L['lvl']
+    disp = _subsample_snaps(load_disp(cfg, R, lvl), stride, cfg.dt_lj)
+    F0 = L['Dc']
+    keep = dict(trim=cfg.DC_TRIM_BINS, stab=cfg.DC_STABILITY)
+    cfg.DC_STABILITY = False
+    out = dict(hold=[], unload=[])
+    try:
+        Lh = float(F0['L'])
+        for f in fracs:
+            cfg.DC_TRIM_BINS = max(int(round(0.5 * (1.0 - f) * Lh / cfg.binWidth)), 0)
+            F = fit_Dc(cfg, R, disp)
+            if F is None:
+                continue
+            ff = float(F['zf'][-1] - F['zf'][0])
+            out['hold'].append((ff, F['Dc'], F['Dc_all'], F['R2']))
+            say(f'  hold: fitted {ff:.2f} of L ({len(F["zf"])} bins, trim {cfg.DC_TRIM_BINS}): D_c {F["Dc"]:.4f} (first {F["n_tau1_fit"]:.1f} tau_1), whole {F["Dc_all"]:.4f}, R2 {F["R2"]:.3f}')
+        if unload and cfg.DC_UNLOAD:
+            U = load_unload(cfg, R, lvl, F0)
+            if U is not None:
+                U = _subsample_snaps(U, stride, cfg.dt_lj)
+                for f in fracs:
+                    cfg.DC_TRIM_BINS = max(int(round(0.5 * (1.0 - f) * Lh / cfg.binWidth)), 0)
+                    Uf = fit_Dc_unload(cfg, R, U, F0)
+                    P = (Uf or {}).get('prof')
+                    if P is None:
+                        continue
+                    zl = np.concatenate(P['zl'])
+                    ff = float(zl.max() - zl.min())
+                    out['unload'].append((ff, P['Dc'], P['Dc_all'], P['R2']))
+                    say(f'  unload: fitted {ff:.2f} of L (trim {cfg.DC_TRIM_BINS}): D_c {P["Dc"]:.4f} (first {P["n_tau1_fit"]:.1f} tau_1), whole {P["Dc_all"]:.4f}, R2 {P["R2"]:.3f}')
+    finally:
+        cfg.DC_TRIM_BINS, cfg.DC_STABILITY = keep['trim'], keep['stab']
+    return out
+
+
+def fig_Dc_skin(cfg, R, L, **kw):
+    """TEMPORARY (2026-10-12): D_c vs the fitted portion of the gel (Dc_skin_scan), hold (blue) and unload (vermillion),
+    windowed (filled, solid) and whole-transient (hollow, dashed) fits, against the standard estimates: the unload
+    profile D_c (the re-swelling, uniform IC), the hold's stress-trace D_c and the hold's standard profile D_c."""
+    F = L.get('Dc')
+    if F is None:
+        print('skin scan skipped (no D_c fit)')
+        return None
+    sc = Dc_skin_scan(cfg, R, L, **kw)
+    fig, ax = plt.subplots(figsize=(11, 6.5), constrained_layout=True)
+    for key, col, mk, name in (('hold', WONG['blue'], 'o', 'hold (consolidation from the ramp-end skins)'),
+                               ('unload', WONG['vermillion'], 's', 'unload (free re-swelling from uniform strain)')):
+        rows = sc.get(key)
+        if not rows:
+            continue
+        x, dw, da, _ = (np.array(v) for v in zip(*rows))
+        ax.plot(x, dw, '-', marker=mk, ms=9, color=col, lw=2.0, label=f'{name}: fit to the first {cfg.DC_FIT_TAU1:g} $\\tau_1$')
+        ax.plot(x, da, '--', marker=mk, ms=9, color=col, lw=1.4, mfc='none', alpha=0.8, label=f'{name}: whole transient')
+    Uf = L.get('unload') or {}
+    if Uf.get('prof') is not None:
+        ax.axhline(Uf['prof']['Dc'], color=WONG['vermillion'], ls=':', lw=1.8, label=f"re-swelling profile $D_c$ = {sig(Uf['prof']['Dc'])} (standard fit)")
+    S = L.get('Dc_stress')
+    if S is not None and S.get('ok'):
+        ax.axhline(S['Dc'], color=WONG['green'], ls='--', lw=1.4, label=f"hold stress-trace $D_c$ = {sig(S['Dc'])}")
+    ax.axhline(F['Dc'], color=WONG['blue'], ls=':', lw=1.8, label=f"hold profile $D_c$ = {sig(F['Dc'])} (standard fit, {cfg.DC_TRIM_BINS} bins trimmed per face)")
+    ax.set_xlabel('fitted portion of the gel thickness (centred band; the faces outside it are left out of the fit)')
+    ax.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
+    ax.set_xlim(0.2, 1.02)
+    ax.set_ylim(bottom=0)
+    ax.grid(alpha=0.3)
+    ax.set_title(f'TEMPORARY: does the fitted $D_c$ depend on how much of the faces the fit sees?   |   {cfg.RUN_ID}   |   $\\varepsilon = {L["lvl"]}$',
+                 fontsize=12, fontweight='bold')
+    smart_legend(ax, fontsize=10)
+    return _save(fig, cfg, 'Dc_skin_scan', L['lvl'])
 
 
 def fig_kappa(cfg, R, L):
@@ -5873,14 +6235,15 @@ def print_summary(cfg, levels):
 # compression loaders above keep reading the first value column (= the load
 # piston, the network load), so every one-piston figure works unchanged; the
 # extras below add the wet-piston bath check and the permeation analysis.
-def load_wet_pistons(cfg, R, lvl=None, plat_from=None):
+def load_wet_pistons(cfg, R, lvl=None, plat_from=None, phase='c'):
     """piston_pressure[_c<lvl>] (+ permeation[_c<lvl>] for compression: solvent expelled)
     -> dict(step, P_*_meas/app series, plat means, dV_*) or None when the run is one-piston.
     The MEASURED pressures come from piston_force_avg (fix ave/time block means over
     each volume_freq window, 2026-09-23) when that file exists, divided by l_x l_y;
     the instantaneous fix-print samples of piston_pressure are the fallback.  The
-    applied pressures are interpolated onto the block-mean steps."""
-    names, tab = read_piston_table(cfg.path('piston_pressure', lvl))
+    applied pressures are interpolated onto the block-mean steps.  phase = 'u': the
+    level's unload files (2026-10-12)."""
+    names, tab = read_piston_table(cfg.path('piston_pressure', lvl, phase=phase))
     if tab.size == 0 or names is None:
         return None
     W = dict(step=tab[:, 0], names=names, source='piston_pressure (instantaneous samples)')
@@ -5888,7 +6251,7 @@ def load_wet_pistons(cfg, R, lvl=None, plat_from=None):
         col = table_col(names, tab, nm)
         if col is not None:
             W[nm] = col
-    fn, ft = read_piston_table(cfg.path('piston_force_avg', lvl))
+    fn, ft = read_piston_table(cfg.path('piston_force_avg', lvl, phase=phase))
     if ft.size and fn is not None and np.isfinite(R.get('AREA', np.nan)) and R['AREA'] > 0:
         fmap = {'F_load': ('P_load_meas', 1.0), 'F_fluid_feed': ('P_feed_meas', 1.0), 'F_fluid_perm': ('P_perm_meas', -1.0)}
         st_avg = ft[:, 0]
@@ -5916,7 +6279,7 @@ def load_wet_pistons(cfg, R, lvl=None, plat_from=None):
         if nm in W and nm.endswith('_meas') and plat.sum() >= 4:
             m, lo, hi, *_ = block_bootstrap_ci(W[nm][plat], cfg.ci_level)
             W['plat_ci'][nm] = (m, lo, hi)
-    en, et = read_piston_table(cfg.path('permeation', lvl))
+    en, et = read_piston_table(cfg.path('permeation', lvl, phase=phase))
     if et.size and en is not None and any(n.lower() == 'dv_total' for n in en):
         W['exp_step'] = et[:, 0]
         for key in ('dV_feed', 'dV_perm', 'dV_total', 'z_feed', 'z_perm'):
@@ -5955,27 +6318,37 @@ def _wet_panel(ax, cfg, R, L, col=None, label_prefix='', applied=True, shade=Tru
     return True
 
 
-def fig_wet_pistons(cfg, R, L):
-    """Two-piston compression: bath pressure check over the level -- P_feed and
-    P_perm = F_fluid/(lx ly) on the wet pistons (rolling mean) vs the applied P_target,
-    plus the load-piston load P_load.  Shaded = plateau window."""
+def _wet_pistons_fig(cfg, R, L, stem):
     if L.get('wet') is None:
         print('wet-piston figure skipped (one-piston run: no piston_pressure file)')
         return None
     fig, ax = plt.subplots(figsize=(11, 6), constrained_layout=True)
     _wet_panel(ax, cfg, R, L)
+    _mark_unload_times(ax, L)
     ax.set_xlabel('time step')
     ax.set_ylabel(r'$P = F_{\rm fluid}/(l_x l_y)$  (LJ)')
     ax.set_title(f'Wet pistons hold the bath at $P_{{\\rm target}}={sig(cfg.P_BARO)}$;  '
-                 f'load piston = network load   ($\\varepsilon={L["lvl"]}$)', fontsize=14)
+                 f'load piston = network load   ($\\varepsilon={L["lvl"]}$'
+                 + (', unload: retraction + free re-swelling)' if _is_unload(L) else ')'), fontsize=14)
+    if _ab(L):
+        fig.suptitle(_sup(L, _ab(L).rstrip(' |') + f'  |  {cfg.sim_name}'), fontsize=13, fontweight='bold')
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=11)
-    return _save(fig, cfg, 'wet_piston_pressures', L['lvl'])
+    return _save(fig, cfg, stem, L['lvl'])
 
 
-def fig_solvent_expelled(cfg, R, L):
-    """Two-piston compression: solvent expelled from the gel = A * (feed-piston rise
-    + permeate-piston descent) vs step, next to the applied strain * L0 * A guide."""
+def fig_wet_pistons(cfg, R, L):
+    """Two-piston compression: bath pressure check over the level -- P_feed and
+    P_perm = F_fluid/(lx ly) on the wet pistons (rolling mean) vs the applied P_target,
+    plus the load-piston load P_load.  Shaded = plateau window.  A level with an unload
+    (L['U'], 2026-10-12) gets the same check over the retraction + re-swelling as its '(b)' figure."""
+    fig = _wet_pistons_fig(cfg, R, L, 'wet_piston_pressures')
+    if L.get('U') is not None:
+        _wet_pistons_fig(cfg, R, L['U'], 'wet_piston_pressures_unload')
+    return fig
+
+
+def _solvent_expelled_fig(cfg, R, L, stem):
     W = L.get('wet')
     if W is None or W.get('dV_total') is None:
         print('solvent-expelled figure skipped (no permeation_<level> file)')
@@ -5985,16 +6358,28 @@ def fig_solvent_expelled(cfg, R, L):
     ax.plot(st, W['dV_total'], '-', color=WONG['green'], lw=2.4, label=r'total  $A\,(\Delta z_{\rm feed} - \Delta z_{\rm perm})$')
     ax.plot(st, W['dV_feed'], '--', color=WONG['vermillion'], lw=1.6, label='into the feed reservoir')
     ax.plot(st, W['dV_perm'], '--', color=WONG['blue'], lw=1.6, label='into the permeate reservoir')
-    if 'L_bb' in L.get('Dc', {}) if L.get('Dc') else False:
-        pass
     ax.axhline(0, color='k', ls=':', lw=1, alpha=0.5)
+    _mark_unload_times(ax, L)
     ax.set_xlabel('time step')
     ax.set_ylabel(r'solvent expelled  ($\sigma^3$)')
-    ax.set_title(f'Solvent expelled since seating (wet-piston displacement), $\\varepsilon={L["lvl"]}$'
+    what = 'Solvent expelled since seating (wet-piston displacement)' + (', re-absorbed over the unload' if _is_unload(L) else '')
+    ax.set_title(f'{what}, $\\varepsilon={L["lvl"]}$'
                  f'  |  final {sig(W["dV_total"][-1])} $\\sigma^3$ = {sig(W["dV_total"][-1] / R["AREA"])} $\\sigma$ of feed rise', fontsize=13)
+    if _ab(L):
+        fig.suptitle(_sup(L, _ab(L).rstrip(' |') + f'  |  {cfg.sim_name}'), fontsize=13, fontweight='bold')
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=12)
-    return _save(fig, cfg, 'solvent_expelled', L['lvl'])
+    return _save(fig, cfg, stem, L['lvl'])
+
+
+def fig_solvent_expelled(cfg, R, L):
+    """Two-piston compression: solvent expelled from the gel = A * (feed-piston rise
+    + permeate-piston descent) vs step.  A level with an unload (L['U'], 2026-10-12) gets
+    the same trace over the retraction + re-swelling (the solvent flowing back) as its '(b)' figure."""
+    fig = _solvent_expelled_fig(cfg, R, L, 'solvent_expelled')
+    if L.get('U') is not None:
+        _solvent_expelled_fig(cfg, R, L['U'], 'solvent_expelled_unload')
+    return fig
 
 
 def fig_wet_pistons_sweep(cfg, R, levels):

@@ -130,7 +130,14 @@ class Config:
     STRAINS: list = field(default_factory=list)   # shear-strain targets as STRINGS ("0.1"), = STRAINS_LIST
                                           # in shear_slab.batch / shear_slab_two_pist.batch (files are tagged _g<level>)
     DECK: str = 'shear_slab'              # 'shear_slab' (plate-driven) | 'shear_slab_two_pist' (two-piston system,
-                                          # rigid-in-plane face layers); same strain-controlled protocol and files
+                                          # rigid-in-plane face layers, laterally periodic slab; deck file
+                                          # shear_slab_two_pist_periodic.lmp since 2026-10-13) |
+                                          # 'shear_slab_two_pist_iso' (2026-10-13: ISOLATED gel in the two-piston bath,
+                                          # rigid x-face grips driven -/+z -- x is the GAP and z the SHEAR direction;
+                                          # the readers relabel x <-> z so every figure and number below is in the
+                                          # notebooks' usual frame: "z" = gap axis = the deck's x, "u_x" = the deck's
+                                          # u_z, sigma_xz unchanged, N1 = sigma_shear - sigma_gap as before; the files
+                                          # stress_profile_x_* / disp_z_polymer_* are read under the usual names)
     NSTEPS: object = None                 # the <steps> tag of the file names (= NSTEPS of the batch, one tag for every
                                           # level); None -> resolved from the files on disk, an int pins it
     base_dir: str = '../../flow_data_local'
@@ -189,10 +196,14 @@ class Config:
     sim_name: str = field(init=False)
     mode: str = field(init=False, default='shear')
     two_pist: bool = field(init=False, default=False)
+    iso: bool = field(init=False, default=False)
 
     def __post_init__(self):
-        assert self.DECK in ('shear_slab', 'shear_slab_two_pist'), f"DECK must be 'shear_slab' or 'shear_slab_two_pist' (got {self.DECK!r})"
-        self.two_pist = self.DECK == 'shear_slab_two_pist'
+        assert self.DECK in _DECKS, f"DECK must be one of {_DECKS} (got {self.DECK!r})"
+        self.two_pist = self.DECK.startswith('shear_slab_two_pist')
+        self.iso = self.DECK == 'shear_slab_two_pist_iso'
+        global _AXIS_SWAP                      # module state read by the file readers (one Config per notebook)
+        _AXIS_SWAP = self.iso
         if self.two_pist:
             # the deck's bulk starts layer_thick + track_thick = 5 sigma inside each Rg face
             self.plate_excl = max(self.plate_excl, 5.0)
@@ -215,6 +226,9 @@ class Config:
         print(f'Config (shear, {self.DECK}): {self.sim_name}  |  levels {self.STRAINS}\n'
               f'  data  {self.DATA_DIR}\n  plots {self.PLOT_DIR}\n'
               f'  file tag (NSTEPS): {t if t else "not local yet"}')
+        if self.iso:
+            print("  ISOLATED-GEL deck: axes relabelled at read time -- every 'z' / 'u_x' / 'xx' below is the deck's "
+                  "x (gap) / u_z / zz, and the deck's z (shear direction) appears as 'x' / 'zz'; sigma_xz is itself.")
 
     # ---- <steps> tag: one tag for every file of a shear run --------------
     def _glob_tag(self):
@@ -242,12 +256,29 @@ class Config:
         return f'{self.DATANAME}_{self.INTERACTION}_{t if t is not None else "*"}{self.gsuf(lvl)}'
 
     def path(self, name, lvl=None, ext='dat'):
-        """<name>_<stem>[_g<lvl>].dat; reference files are named with their own '_ref' (lvl=None)."""
+        """<name>_<stem>[_g<lvl>].dat; reference files are named with their own '_ref' (lvl=None).
+        The isolated-gel deck names its gap-axis files by the deck's axes (stress_profile_x_*,
+        disp_z_polymer_*); they are asked for under the usual names and mapped here."""
+        if self.iso:
+            name = name.replace('stress_profile_z', 'stress_profile_x').replace('disp_x_polymer', 'disp_z_polymer')
         return self.DATA_DIR / f'{name}_{self.stem(lvl)}.{ext}'
 
     def plot(self, stem, lvl=None):
         t = self.tag_for() or 'untagged'
         return self.PLOT_DIR / f'{stem}_{self.DATANAME}_{self.INTERACTION}_{t}{self.gsuf(lvl)}.png'
+
+
+_DECKS = ('shear_slab', 'shear_slab_two_pist', 'shear_slab_two_pist_iso')
+_AXIS_SWAP = False          # set by Config.__post_init__ (True for the isolated-gel deck): x <-> z relabelling
+_SWAP6 = (2, 1, 0, 5, 4, 3)  # (xx yy zz xy xz yz) -> (zz yy xx yz xz xy): the tensor with x and z renamed
+
+
+def _relabel6(a6):
+    """Rename the axes x <-> z of a (..., 6)-component stress array when the isolated-gel
+    deck is read (its gap axis is x, its shear direction z): afterwards 'zz' is the normal
+    stress along the gap, 'xx' along the shear direction, exactly as for the other decks."""
+    a = np.array(a6, float)
+    return a[..., list(_SWAP6)] if _AXIS_SWAP else a
 
 
 # ===========================================================================
@@ -268,7 +299,7 @@ def read_tensor(path):
     a = tri.load2c(path, 7)
     if a is None:
         return None, None
-    return a[:, 0].astype(int), _to_convention(a[:, 1:7])
+    return a[:, 0].astype(int), _to_convention(_relabel6(a[:, 1:7]))
 
 
 def read_series(path):
@@ -280,6 +311,9 @@ def read_series(path):
     d = {'step': a[:, 0].astype(int)}
     for j, c in enumerate(SERIES_COLS):
         d[c] = a[:, 1 + j] * SIGN[c[-2:]]
+    if _AXIS_SWAP:                             # isolated-gel deck: rename the axes x <-> z (gap = z in this frame)
+        d['sp_xx'], d['sp_zz'] = d['sp_zz'], d['sp_xx']
+        d['ss_xx'], d['ss_zz'] = d['ss_zz'], d['ss_xx']
     if a.shape[1] >= 11:                       # 2026-09-25 deck: block-averaged plate sigma_xz (S_top S_bot)
         d['S_top'], d['S_bot'] = a[:, 9], a[:, 10]
         d['S_plate'] = 0.5 * (a[:, 9] + a[:, 10])
@@ -301,7 +335,8 @@ def read_profiles(path):
     ts = np.array([s[0] for s in snaps])
     zf = snaps[-1][1][:nb, 1]
     N = np.array([s[1][:nb, 2] for s in snaps])
-    stack = {c: SIGN[c] * np.array([s[1][:nb, 3 + j] for s in snaps]) for j, c in enumerate(COMP)}
+    raw = _relabel6(np.array([s[1][:nb, 3:9] for s in snaps]))      # [n, nb, 6]
+    stack = {c: SIGN[c] * raw[:, :, j] for j, c in enumerate(COMP)}
     return dict(ts=ts, zf=zf, N=N, stack=stack)
 
 
@@ -336,6 +371,8 @@ def _geometry(cfg, R, lvl_for_fallback=None):
         B = tri.load2c(cfg.path('box_dimensions', lvl_for_fallback), 4)
     if B is not None:
         R['LX'], R['LY'], R['LZ'] = float(np.mean(B[-5:, 1])), float(np.mean(B[-5:, 2])), float(np.mean(B[-5:, 3]))
+        if cfg.iso:                            # the gap axis of the isolated-gel deck is the box x
+            R['LX'], R['LZ'] = R['LZ'], R['LX']
     else:
         R['LX'] = R['LY'] = R['LZ'] = np.nan
     R['AREA'] = R['LX'] * R['LY']
@@ -349,7 +386,7 @@ def _geometry(cfg, R, lvl_for_fallback=None):
     if np.isfinite(R['z_top_abs']) and not np.isfinite(R['plate_sep']):
         R['plate_sep'] = R['z_top_abs'] - R['z_bot_abs']
     BB = tri.load2c(cfg.path('box_bounds'), 7)
-    R['zlo_abs'] = float(BB[0, 5]) if BB is not None else np.nan
+    R['zlo_abs'] = float(BB[0, 1 if cfg.iso else 5]) if BB is not None else np.nan   # gap-axis origin (xlo for the isolated deck)
     zf, N = R['zf'], R['N_ref']
     dz = cfg.binWidth / R['LZ'] if np.isfinite(R['LZ']) else (zf[1] - zf[0])
     populated = N.min(axis=0) > cfg.Ncount_min
@@ -498,7 +535,7 @@ def load_reference(cfg, verbose=True):
             raise FileNotFoundError(f'no stress_profile_z_polymer file for the reference or level {first} in {cfg.DATA_DIR}'
                                     ' -- run the sync cell')
     R['zf'], R['N_ref'] = prof['zf'], prof['N']
-    R['plane_label'] = 'face' if cfg.two_pist else 'plate'
+    R['plane_label'] = 'grip' if cfg.iso else ('face' if cfg.two_pist else 'plate')
     _geometry(cfg, R, first)
     sp = read_profiles(cfg.path('stress_profile_z_solvent_ref')) if src == 'reference' else None
     R['film'] = _film_mask(cfg, R, sp)
