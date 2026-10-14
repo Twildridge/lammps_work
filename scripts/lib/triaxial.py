@@ -4798,6 +4798,88 @@ def fig_Dc(cfg, R, L):
     return _save(fig, cfg, 'Dc_consolidation_fit', L['lvl'])
 
 
+def Dc_late_start_scan(cfg, R, L, disp=None, starts=(0, 250, 500, 1000, 2000, 4000, 8000, 16000), stride=4, nblk=4, verbose=True):
+    """TEMPORARY (2026-10-14): the hold's D_c refitted on windows that START later and later into the hold (t0, tau after the
+    onset) and run to its end -- the complement of the window-LENGTH scan of fig_v0_check (a), whose windows all start at the
+    onset and so all contain the skin phase.  Same modes and free amplitudes (the state at the window start is re-fitted), the
+    first DC_FIT_TAU1 rule off (the whole remaining hold is fitted).  If the ramp-end skins set the hold's D_c, the value climbs
+    toward the bulk (re-swelling) D_c once the window starts after they have relaxed.  Error bars: jackknife over `nblk`
+    contiguous time blocks of the window (leave-one-block-out refits), 95 % with the t factor for nblk - 1 degrees of
+    freedom.  Snapshots subsampled by `stride` (averaging window kept).  Returns [dict(t0, Dc, se, ci, n, R2, n_tau1)]."""
+    say = print if verbose else (lambda *a, **k: None)
+    disp = _subsample_snaps(load_disp(cfg, R, L['lvl']) if disp is None else disp, stride, cfg.dt_lj)
+    t_lj = (disp['ts'] - disp['t_hold']) * cfg.dt_lj
+    keep = dict(tau=cfg.DC_FIT_TAU1, stab=cfg.DC_STABILITY)
+    cfg.DC_FIT_TAU1, cfg.DC_STABILITY = 0.0, False
+    tfac = float(stats.t.ppf(0.975, max(nblk - 1, 1)))
+    out = []
+    try:
+        for t0 in starts:
+            sel = np.where(t_lj >= t0)[0]
+            if len(sel) < 4 * nblk:
+                say(f'  late-start scan: t0 = {t0:.0f} tau leaves {len(sel)} snapshots -- stopped')
+                break
+
+            def _sub(ix):
+                d = dict(disp)
+                for k in ('ts', 'Nc', 'uz'):
+                    d[k] = np.asarray(disp[k])[ix]
+                return d
+
+            F = fit_Dc(cfg, R, _sub(sel))
+            if F is None:
+                continue
+            blocks = np.array_split(sel, nblk)
+            jk = []
+            for b in blocks:
+                Fb = fit_Dc(cfg, R, _sub(np.setdiff1d(sel, b)))
+                if Fb is not None:
+                    jk.append(Fb['Dc'])
+            jk = np.array(jk)
+            se = float(np.sqrt((len(jk) - 1) / len(jk) * np.sum((jk - jk.mean()) ** 2))) if len(jk) > 1 else np.nan
+            tau1 = L['Dc']['tau1'] if L.get('Dc') else np.nan
+            out.append(dict(t0=float(t0), Dc=F['Dc'], se=se, ci=tfac * se, n=int(len(sel)), R2=F['R2'], jk=jk,
+                            n_tau1=float(t0 / tau1) if np.isfinite(tau1) else np.nan))
+            say(f'  late-start scan: window from {t0:6.0f} tau ({out[-1]["n_tau1"]:.1f} tau_1 of the standard fit, {len(sel)} snapshots): '
+                f'D_c = {F["Dc"]:.4f} +/- {se:.4f} (jackknife SE, {len(jk)} blocks), R2 {F["R2"]:.3f}')
+    finally:
+        cfg.DC_FIT_TAU1, cfg.DC_STABILITY = keep['tau'], keep['stab']
+    return out
+
+
+def _late_start_panel(ax, cfg, R, L, disp, **kw):
+    """Panel (b) of fig_v0_check (2026-10-14): Dc_late_start_scan with its error bars against the standard hold, stress-trace
+    and re-swelling D_c."""
+    sc = Dc_late_start_scan(cfg, R, L, disp, **kw)
+    if not sc:
+        ax.text(0.5, 0.5, 'late-start scan: too few snapshots', ha='center', va='center', transform=ax.transAxes)
+        return sc
+    t0 = np.array([r['t0'] for r in sc]); dc = np.array([r['Dc'] for r in sc]); ci = np.array([r['ci'] for r in sc])
+    x = np.where(t0 > 0, t0, 0.0)
+    ax.set_xscale('symlog', linthresh=100.0, linscale=0.4)
+    ax.errorbar(x, dc, yerr=np.nan_to_num(ci), fmt='o-', color=WONG['blue'], ms=9, lw=2.0, capsize=5, elinewidth=1.4,
+                label=f'hold: fit from $t_0$ to the end of the hold (95 % jackknife, {len(sc[0]["jk"])} time blocks)')
+    F = L.get('Dc')
+    if F is not None:
+        ax.axhline(F['Dc'], color=WONG['blue'], ls=':', lw=1.8, label=f"standard hold fit (first {F['n_tau1_fit']:.1f} $\\tau_1$): {sig(F['Dc'])}")
+        for k in (1, 2, 4):
+            ax.axvline(k * F['tau1'], color='0.6', lw=0.8, ls='--')
+            ax.text(k * F['tau1'], dc.max() * 1.02, f'{k} $\\tau_1$', fontsize=9, color='0.4', ha='center', va='bottom')
+    S = L.get('Dc_stress')
+    if S is not None and S.get('ok'):
+        ax.axhline(S['Dc'], color=WONG['green'], ls='--', lw=1.4, label=f"hold stress trace: {sig(S['Dc'])}")
+    Uf = L.get('unload') or {}
+    if Uf.get('prof') is not None:
+        ax.axhline(Uf['prof']['Dc'], color=WONG['vermillion'], ls=':', lw=2.0, label=f"re-swelling (unload) profiles: {sig(Uf['prof']['Dc'])}")
+    ax.set_xlabel(r'window start $t_0$ after the hold onset  ($\tau$; symlog)')
+    ax.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
+    ax.set_ylim(bottom=0)
+    ax.set_title('(b) late-start windows: does $D_c$ climb to the re-swelling value once the skin phase is excluded?', fontsize=13)
+    ax.grid(alpha=0.3, which='both')
+    smart_legend(ax, fontsize=10)
+    return sc
+
+
 def fig_v0_check(cfg, R, L, disp=None):
     """TEMPORARY diagnostic (2026-10-09; delete once the D_c discrepancy is resolved).  Does the barycentric velocity
     v0(t) = phi_s v_s + phi_p v_p = q_s + q_p bias the hold's D_c?  The displacement equation du/dt = v0(t) + D_c u''
@@ -4832,21 +4914,14 @@ def fig_v0_check(cfg, R, L, disp=None):
     axa.set_title(rf"(a) level _c{L['lvl']}: $D_c$ with and without $v^0$ -- {sig(F['Dc'])} vs {sig(F2['Dc'])} (ratio {F2['Dc'] / F['Dc']:.3f})", fontsize=14)
     axa.grid(alpha=0.3)
     smart_legend(axa, fontsize=10)
-    # (b) the rigid part: <u> over the fit bins, data vs the displacement model
+    # (b) the late-start window scan (2026-10-14; replaced the rigid-translation panel, whose result -- the modes' own
+    #     solvent shuttle accounts for the rigid part -- is kept in the printed line below)
     t, zf, Lh = F['t_lj'], F['zf'], F['L']
     um_data = F['u_mean'] * Lh
     um_model = np.array([F['u_tr'](zf, ti).mean() for ti in t]) * Lh
-    axb.semilogx(t, um_data, '.', color='k', ms=4 if len(t) < 60 else 2.5, label=r'data: $\langle u_z\rangle$ over the fit bins')
-    axb.semilogx(t, um_model, '-', color=WONG['blue'], lw=2.2, label='displacement model (its own rigid part = the modal solvent shuttle)')
-    axb.semilogx(t, um_data - um_model, '-', color=WONG['vermillion'], lw=1.8, alpha=0.9, label=r'difference = translation the modes cannot represent, $\int v^0_\mathrm{extra}\,dt$')
-    axb.axhline(0, color='k', lw=0.8)
     amp = float(np.nanmax(np.abs(F['uhat'][:, F['idx']]))) * Lh
-    axb.set(xlabel=r'hold time  ($\tau$)', ylabel=r'mean displacement  ($\sigma$)')
-    axb.xaxis.set_minor_formatter(NullFormatter())
-    axb.set_title(rf"(b) rigid translation during the hold  (transient amplitude for scale: {amp:.2f} $\sigma$)", fontsize=14)
-    axb.grid(alpha=0.3)
-    smart_legend(axb, fontsize=10)
-    fig.suptitle(f'TEMPORARY v0 check  |  {cfg.sim_name}  |  d u/dt = v0(t) + D_c u\'\' vs d eps/dt = D_c eps\'\'', fontsize=12, fontweight='bold')
+    L['late_start'] = _late_start_panel(axb, cfg, R, L, disp)
+    fig.suptitle(f'TEMPORARY: v0 check (a) and late-start window scan (b)  |  {cfg.sim_name}', fontsize=12, fontweight='bold')
     print(f"  v0 check (level {L['lvl']}): D_c displacement fit {F['Dc']:.4e} (whole hold {F['Dc_all']:.4e})  |  strain-PDE fit {F2['Dc']:.4e} "
           f"(whole hold {F2['Dc_all']:.4e})  ->  ratio {F2['Dc'] / F['Dc']:.3f};  rms rigid translation data - model = {np.sqrt(np.mean((um_data - um_model) ** 2)):.3f} sigma "
           f"(transient amplitude {amp:.2f} sigma)")
