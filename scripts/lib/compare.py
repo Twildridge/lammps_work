@@ -268,6 +268,9 @@ def permeation_local(ccfg, perm, C):
     out['Dc_trace'] = float(F['trace']['Dc']) if (F and F.get('trace')) else np.nan
     Mp = P.get('M_perm')
     out['M_perm'] = float(Mp[Mp['primary']]['M']) if (Mp and Mp.get('primary')) else np.nan
+    # the permeation M is displacement-derived: dP L/(2 |u_F|) from the steady free-face displacement (perm_M_estimates)
+    out['M_perm_ci'] = ((float(Mp[Mp['primary']]['lo']), float(Mp[Mp['primary']]['hi'])) if (Mp and Mp.get('primary')) else (np.nan, np.nan))
+    out['M_perm_how'] = (Mp['primary'] if (Mp and Mp.get('primary')) else None)
     # ---- closures ----
     #  (i) the network stress across the fit range, read off the compression curve, against the share of dP
     #      that falls inside the fit range if the pore pressure were linear in z
@@ -293,13 +296,41 @@ def flux_from_compression(S, C, PL):
     return integ / PL['L_fit'], above
 
 
-def phi_dependence(ccfg, comp, perm):
-    """Everything for the D_c(phi_s) / kappa(phi_s) comparison: -> dict(S, C, PL, q_pred, q_above)."""
+def reswelling_state(ccfg, resw, C):
+    """The free re-swelling run (a compression deck whose level has an unload, 2026-10-15): its level's phi_s, the PRIMARY
+    re-swelling D_c (profile fit), the same run's hold D_c, the displacement-strain secant M of that level, M_cur of the
+    compression curve at its phi_s, and the kappas.  -> dict or None."""
+    if resw is None:
+        return None
+    key = 'phi_' + ccfg.PHI_KIND
+    for L in resw['levels']:
+        Pf = (L.get('unload') or {}).get('prof')
+        if Pf is None or L.get(key) is None:
+            continue
+        p, h = _interior_mean(L[key], L['interior'], ccfg.ci_level)
+        Dc = float(Pf['Dc'])
+        Mc = float(C['M'](p))
+        Mlo, Mhi = (float(v) for v in C['M_ci'](np.array([p])))
+        Mlo, Mhi = (Mlo if np.ndim(Mlo) == 0 else Mlo[0]), (Mhi if np.ndim(Mhi) == 0 else Mhi[0])
+        Tr = (L['unload'] or {}).get('trace_rg')
+        return dict(run_id=resw['cfg'].RUN_ID, lvl=str(L['lvl']), eps=float(L['eps_M']), phi=float(p), phi_h=float(h), Dc=Dc,
+                    Dc_hold=float(L['Dc']['Dc']) if L.get('Dc') else np.nan, Dc_trace_rg=float(Tr['Dc']) if Tr else np.nan,
+                    M_sec=float(L['M_net']), M_sec_lo=float(L['M_net_lo']), M_sec_hi=float(L['M_net_hi']), M_pist=float(L.get('M_pist', np.nan)),
+                    M_cur=Mc, M_cur_lo=Mlo, M_cur_hi=Mhi, kappa_cur=Dc / Mc, kappa_cur_lo=Dc / Mhi, kappa_cur_hi=Dc / Mlo,
+                    kappa_sec=Dc / float(L['M_net']), kappa_hold_cur=(float(L['Dc']['Dc']) / Mc if L.get('Dc') else np.nan))
+    return None
+
+
+def phi_dependence(ccfg, comp, perm, resw=None):
+    """Everything for the D_c(phi_s) / kappa(phi_s) comparison: -> dict(S, C, PL, RW, q_pred, q_above).
+    resw: a third deck, the compression run with the free re-swelling (its level's unload D_c is the primary D_c of
+    that gel since 2026-10-15; drawn as a star in fig_Dc / fig_kappa / fig_states)."""
     S = compression_states(ccfg, comp)
     C = compression_curve(ccfg, S)
     PL = permeation_local(ccfg, perm, C)
     q_pred, above = flux_from_compression(S, C, PL)
-    return dict(S=S, C=C, PL=PL, q_pred=q_pred, q_above=above, comp=comp, perm=perm)
+    RW = reswelling_state(ccfg, resw, C)
+    return dict(S=S, C=C, PL=PL, RW=RW, q_pred=q_pred, q_above=above, comp=comp, perm=perm, resw=resw)
 
 
 # ===========================================================================
@@ -331,7 +362,17 @@ def print_summary(ccfg, X):
     kd = PL['kappa_darcy']
     print("  membrane averages (permeation notebook):  "
           + (f"Darcy kappa = Q L/(A dP) = {kd[0]:.4f} [{kd[1]:.4f}, {kd[2]:.4f}];  " if kd else '')
-          + f"consolidation-fit D_c = {PL['Dc_prof']:.4f} (profile) / {PL['Dc_trace']:.4f} (trace);  M = {PL['M_perm']:.4f}")
+          + f"consolidation-fit D_c = {PL['Dc_prof']:.4f} (profile) / {PL['Dc_trace']:.4f} (trace);  "
+          f"M = {PL['M_perm']:.4f} [{PL['M_perm_ci'][0]:.4f}, {PL['M_perm_ci'][1]:.4f}] (displacement-derived: dP L/(2|u_F|), {PL['M_perm_how']})")
+    RW = X.get('RW')
+    if RW:
+        print(f"\nRE-SWELLING  {RW['run_id']} (level {RW['lvl']}, eps_disp {RW['eps']:.4f}, phi_s {RW['phi']:.4f} ± {RW['phi_h']:.4f}):  "
+              f"PRIMARY D_c (free re-swelling profiles) = {RW['Dc']:.4f};  same run's hold D_c = {RW['Dc_hold']:.4f} (ratio {RW['Dc_hold'] / RW['Dc']:.2f})"
+              + (f";  Rg thickness trace {RW['Dc_trace_rg']:.4f}" if np.isfinite(RW['Dc_trace_rg']) else ''))
+        print(f"  M: secant (displacement strain) {RW['M_sec']:.3f} [{RW['M_sec_lo']:.3f}, {RW['M_sec_hi']:.3f}], piston {RW['M_pist']:.3f};  "
+              f"M_cur of the compression curve at its phi_s {RW['M_cur']:.3f} [{RW['M_cur_lo']:.3f}, {RW['M_cur_hi']:.3f}]")
+        print(f"  kappa = D_c/M_cur = {RW['kappa_cur']:.4f} [{RW['kappa_cur_lo']:.4f}, {RW['kappa_cur_hi']:.4f}];  D_c/M_secant = {RW['kappa_sec']:.4f};  "
+              f"with the hold D_c: {RW['kappa_hold_cur']:.4f}" + (f"   vs Darcy {kd[0]:.4f}" if kd else ''))
     print("\nCLOSURES")
     share = PL['dP'] * PL['L_fit'] / PL['L_mem']
     print(f"  (i)  network stress across the fit range, from the compression curve at the measured phi_s: "
@@ -566,9 +607,17 @@ def fig_states(ccfg, X):
     b.plot([PL['phi_bot']], [PL['dP']], '*', color=WONG['vermillion'], ms=18, zorder=5,
            label=rf"permeation: $\Delta P$ = {sig(PL['dP'])} at the support-side $\phi_s$")
     b.set_ylim(-0.02, max(4 * PL['dP'], 0.3))
-    c.plot(S['phi'][1:], S['M_sec'][1:], 's', color='0.45', ms=7, label=r"secant $M=\sigma'/\varepsilon$ (sweep notebook)")
-    for ax in (b, c):
-        smart_legend(ax, fontsize=10)
+    c.plot(S['phi'][1:], S['M_sec'][1:], 's', color='0.45', ms=7, label=r"compression: secant $\Delta\sigma'/\varepsilon_{\rm disp}$")
+    if np.isfinite(PL['M_perm']):                      # the permeation M is displacement-derived too: dP L/(2|u_F|) (2026-10-15)
+        c.fill_between([PL['phi_bot'], PL['phi_top']], PL['M_perm_ci'][0], PL['M_perm_ci'][1], color=WONG['vermillion'], alpha=0.2, lw=0)
+        _bands(c, PL, PL['M_perm'], WONG['vermillion'], rf"permeation: $\Delta P\,L/(2|u_F|)$ = {sig(PL['M_perm'])}")
+    RW = X.get('RW')
+    if RW:
+        c.errorbar([RW['phi']], [RW['M_sec']], yerr=[[RW['M_sec'] - RW['M_sec_lo']], [RW['M_sec_hi'] - RW['M_sec']]], fmt='*', color=WONG['green'],
+                   ms=16, capsize=4, zorder=6, label=f"re-swelling run: secant $\\Delta\\sigma'/\\varepsilon_{{\\rm disp}}$ = {sig(RW['M_sec'])}")
+    c.set_title('(c) tangent modulus $M_\\mathrm{cur}$ + the displacement-derived $M$ of both decks', fontsize=13)
+    smart_legend(b, fontsize=10)
+    c.legend(loc='upper left', fontsize=9)
     fig.suptitle(f"States  |  compression {X['comp']['cfg'].RUN_ID}  |  permeation {X['perm']['cfg'].RUN_ID}", fontsize=12, fontweight='bold')
     return _save(fig, ccfg, 'states_phi')
 
@@ -608,9 +657,16 @@ def fig_Dc(ccfg, X):
         _bands(ax, PL, PL['Dc_trace'], WONG['reddishpurple'], f"permeation, transient fit (trace): {sig(PL['Dc_trace'])}")
     if PL['kappa_darcy'] and np.isfinite(PL['M_perm']):
         _bands(ax, PL, PL['kappa_darcy'][0] * PL['M_perm'], '0.35', rf"permeation, Darcy $\kappa \times M$ = {sig(PL['kappa_darcy'][0] * PL['M_perm'])}")
+    RW = X.get('RW')
+    if RW:                                               # the PRIMARY D_c of the gel: free re-swelling after a hold (2026-10-15)
+        ax.errorbar([RW['phi']], [RW['Dc']], xerr=[RW['phi_h']], fmt='*', color=WONG['green'], ms=18, capsize=4, zorder=6,
+                    label=f"free re-swelling (PRIMARY), profile fit: {sig(RW['Dc'])}  [{RW['run_id']}, level {RW['lvl']}]")
+        if np.isfinite(RW['Dc_hold']):
+            ax.plot([RW['phi']], [RW['Dc_hold']], 'o', color=WONG['green'], mfc='none', ms=10, mew=2, zorder=6,
+                    label=f"the same run's hold relaxation fit: {sig(RW['Dc_hold'])}")
     ax.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
     ax.set_yscale('log')
-    ax.set_title(r'Cooperative diffusivity $D_c(\phi_s)$: compression holds vs steady permeation', fontsize=15)
+    ax.set_title(r'Cooperative diffusivity $D_c(\phi_s)$: compression holds, free re-swelling, steady permeation', fontsize=15)
     _phi_axis(ax, ccfg)
     smart_legend(ax, fontsize=10)
     return _save(fig, ccfg, 'Dc_vs_phi')
@@ -633,6 +689,12 @@ def fig_kappa(ccfg, X):
     if kd:
         ax.fill_between([PL['phi_bot'], PL['phi_top']], kd[1], kd[2], color='0.35', alpha=0.2, lw=0)
         _bands(ax, PL, kd[0], '0.35', rf"permeation, Darcy $QL/(A\,\Delta P)$ = {sig(kd[0])} (membrane average)")
+    RW = X.get('RW')
+    if RW:
+        ax.errorbar([RW['phi']], [RW['kappa_cur']], yerr=[[RW['kappa_cur'] - RW['kappa_cur_lo']], [RW['kappa_cur_hi'] - RW['kappa_cur']]], fmt='*',
+                    color=WONG['green'], ms=18, capsize=4, zorder=6, label=rf"free re-swelling (PRIMARY $D_c$) / $M_\mathrm{{cur}}$ = {sig(RW['kappa_cur'])}")
+        ax.plot([RW['phi']], [RW['kappa_sec']], '*', color=WONG['green'], mfc='none', ms=16, mew=1.5, zorder=6,
+                label=rf"... / secant $M$ (displacement strain) = {sig(RW['kappa_sec'])}")
     ax.set_ylabel(r'$\kappa$  ($\sigma^5/(\epsilon\,\tau)$)')
     ax.set_yscale('log')
     ax.set_title(r'Hydraulic permeability $\kappa(\phi_s)$: compression vs steady permeation', fontsize=15)
