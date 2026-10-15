@@ -9,27 +9,29 @@ so a comparison function takes the decks it needs and nothing here re-implements
 First comparison: D_c and kappa as functions of the solvent volume fraction phi_s.
 
   Compression sweep (uniform states).  Level i is a uniformly compressed gel at phi_s,i with the
-  network stress sigma'_i and the hold-relaxation D_c,i (tri.fit_Dc).  The levels give the
-  equilibrium curve sigma'(phi_s), and with it the modulus that belongs to a small disturbance
-  of the state phi_s IN ITS CURRENT CONFIGURATION (the frame fit_Dc works in: it uses the
-  compressed thickness).  With the polymer conserved and the lateral box fixed, phi_p L = const,
-  so an increment of compressive strain is  de = -dL/L = dphi_p/phi_p  and
-
-      M_cur(phi_s) = phi_p dsigma'/dphi_p ,        kappa(phi_s) = D_c / M_cur .
-
-  (The sweep notebook's kappa = D_c/M divides by the SECANT modulus from eps = 0; the two agree
-  at small strain and part as the gel stiffens.)
+  network stress sigma'_i, the displacement-strain secant modulus M_i = dsigma'_i/eps_disp and the
+  hold-relaxation D_c,i (tri.fit_Dc).  Per level  kappa_i = D_c,i / M_i , the sweep notebook's
+  number.  The levels also give the equilibrium curve sigma'(phi_s) (monotone PCHIP, Monte-Carlo
+  CI), which the closures and fig_states (b) use.
 
   Permeation (one run, a range of phi_s at once).  In the steady state the network is at rest and
   the solvent flux q = Q/A is the same at every z.  Darcy, the uniform total stress
-  (dp/dz = dsigma'/dz) and the same sigma'(phi_s) give  q = kappa |dsigma'/dphi_s| |dphi_s/dz|, i.e.
+  (dp/dz = dsigma'/dz) and a network stress that depends on z through phi_s alone give
+  q = kappa |dsigma'/dphi_s| |dphi_s/dz|; with phi_p L = const (polymer conserved, lateral box
+  fixed) a strain increment is dphi_p/phi_p, so kappa phi_p |dsigma'/dphi_s| = kappa M = D_c and
 
-      D_c(phi_s) = kappa M_cur = q phi_p / |dphi_s/dz| ,   kappa(phi_s) = D_c(phi_s) / M_cur(phi_s) .
+      D_c(phi_s) = q phi_p / |dphi_s/dz| ,        kappa(phi_s) = D_c(phi_s) / M_perm .
 
   D_c needs the flux and the slope of the steady phi_s(z) profile only -- no modulus, no fit of a
-  transient; kappa borrows M_cur from the compression curve.  The membrane-average numbers of the
-  permeation notebook (Darcy kappa = Q L/(A dP), the consolidation-fit D_c) are drawn as bands
-  over the phi_s range the membrane spans.
+  transient.  M_perm is the permeation run's own displacement-derived modulus dP L/(2|u_F|) (a
+  membrane average), so the local kappa carries the local D_c and one M.  The membrane-average
+  numbers of the permeation notebook (Darcy kappa = Q L/(A dP), the consolidation-fit D_c) are
+  drawn as bands over the phi_s range the membrane spans.
+
+  No modulus here comes from the volume fraction.  The tangent modulus of the fitted sigma'(phi_s)
+  curve, M_cur = phi_p dsigma'/dphi_p (2026-10-03), was dropped on 2026-10-15: it rests on the
+  volume-fraction profiles, which are not trusted to that level yet.  Every M is a displacement-
+  strain secant of its own deck.
 
   Closures (print_summary, fig_closure): the network stress the compression curve assigns to the
   phi_s at the support against the applied dP (it must carry all of it), and the flux the
@@ -60,7 +62,7 @@ class Config:
                                           # Voronoi-based profiles come from the few steady trajectory frames: more
                                           # segments than ~3 leave the slope of a segment unresolved; 'mf' carries 4-5)
     PERM_POLY_DEG: int = 2                # degree of the polynomial phi_s(z) behind the continuous D_c(phi_s) curve
-    N_MC: int = 400                       # Monte-Carlo draws for the CI of the compression curve sigma'(phi_s) and M_cur
+    N_MC: int = 400                       # Monte-Carlo draws for the CI of the compression curve sigma'(phi_s)
     # ---- the solvent-measures figure of the permeation membrane (fig_solvent_measures, 2026-10-08) ----
     CONC_MARGIN: float = 5.0              # sigma of reservoir kept on either side of the membrane (the reservoir values of
                                           # the mass fraction -- > 1 on the feed side -- stay visible, the rest is trimmed)
@@ -126,7 +128,7 @@ def load_deck(cfg, verbose=True):
 
 
 # ===========================================================================
-#  2. COMPRESSION: uniform states -> sigma'(phi_s), M_cur(phi_s), D_c(phi_s), kappa(phi_s)
+#  2. COMPRESSION: uniform states -> sigma'(phi_s), D_c(phi_s), kappa(phi_s) = D_c/M_secant
 # ===========================================================================
 def _interior_mean(prof, mask, ci):
     """(mean, CI half-width) of a (mean, lo, hi) bin profile over the interior bins: the bins'
@@ -140,14 +142,16 @@ def _interior_mean(prof, mask, ci):
 
 def compression_states(ccfg, comp):
     """The sweep as a table of uniform states: the reference (sigma' = 0, no hold -> no D_c) and
-    one row per level.  -> dict of arrays (phi, phi_h, sig, sig_h, eps, Dc, M_sec, R2, label)
-    ordered by increasing compression, row 0 = the reference."""
+    one row per level.  -> dict of arrays (phi, phi_h, sig, sig_h, eps, Dc, M_sec, M_sec_lo, M_sec_hi, R2, label,
+    kappa, kappa_lo, kappa_hi) ordered by increasing compression, row 0 = the reference.  M_sec is the level's
+    displacement-strain secant dsigma'/eps_disp (L['M_net']) and kappa = D_c/M_sec, the sweep notebook's kappa
+    (the CI from the M CI)."""
     key = 'phi_' + ccfg.PHI_KIND
     R = comp['R']
     if R.get(key) is None:
         raise ValueError(f"the compression reference has no {key} profile (VOR_ENABLE / calibration artifact?)")
     p0, h0 = _interior_mean(R[key], R['interior'], ccfg.ci_level)
-    rows = [dict(label='ref', phi=p0, phi_h=h0, sig=0.0, sig_h=0.0, eps=0.0, Dc=np.nan, M_sec=np.nan, R2=np.nan)]
+    rows = [dict(label='ref', phi=p0, phi_h=h0, sig=0.0, sig_h=0.0, eps=0.0, Dc=np.nan, M_sec=np.nan, M_sec_lo=np.nan, M_sec_hi=np.nan, R2=np.nan)]
     for L in comp['levels']:
         if L.get(key) is None:
             print(f"  NOTE: level {L['lvl']} has no {key} profile -> left out of the comparison")
@@ -156,26 +160,28 @@ def compression_states(ccfg, comp):
         F = L.get('Dc')
         rows.append(dict(label=str(L['lvl']), phi=p, phi_h=h, sig=float(L['dsig_net']),
                          sig_h=float((L['M_net_hi'] - L['M_net_lo']) / 2 * L['eps_M']), eps=float(L['eps_M']),
-                         Dc=float(F['Dc']) if F else np.nan, M_sec=float(L['M_net']), R2=float(F['R2']) if F else np.nan))
+                         Dc=float(F['Dc']) if F else np.nan, M_sec=float(L['M_net']), M_sec_lo=float(L['M_net_lo']),
+                         M_sec_hi=float(L['M_net_hi']), R2=float(F['R2']) if F else np.nan))
     S = {k: np.array([r[k] for r in rows]) for k in rows[0]}
     if not np.all(np.diff(S['phi']) < 0):
         raise ValueError('phi_s does not fall monotonically along the sweep: ' + ', '.join(f'{p:.3f}' for p in S['phi']))
+    with np.errstate(invalid='ignore', divide='ignore'):
+        S['kappa'] = S['Dc'] / S['M_sec']
+        S['kappa_lo'], S['kappa_hi'] = S['Dc'] / S['M_sec_hi'], S['Dc'] / S['M_sec_lo']
     return S
 
 
 def _curve(phi_s, sg):
-    """Monotone (PCHIP) sigma'(phi_p) through the states -> (sigma'(phi_s), M_cur(phi_s)) callables."""
+    """Monotone (PCHIP) sigma'(phi_p) through the states -> the sigma'(phi_s) callable."""
     f = PchipInterpolator(1.0 - np.asarray(phi_s, float), np.asarray(sg, float), extrapolate=True)
-    df = f.derivative()
-    return (lambda ps: f(1.0 - np.asarray(ps, float))), (lambda ps: (1.0 - np.asarray(ps, float)) * df(1.0 - np.asarray(ps, float)))
+    return lambda ps: f(1.0 - np.asarray(ps, float))
 
 
 def compression_curve(ccfg, S, seed=0):
-    """sigma'(phi_s) and M_cur(phi_s) = phi_p dsigma'/dphi_p from the states S, with a Monte-Carlo
-    CI (the levels' sigma' and phi_s drawn from their CIs, the curve rebuilt each time).
-    -> dict(sig(phi), M(phi), sig_ci(phi) -> (lo, hi), M_ci(phi) -> (lo, hi), M_lvl, M_lvl_lo, M_lvl_hi,
-            M_strain (the same modulus from the strain: (1 - eps) dsigma'/deps), kappa, kappa_lo, kappa_hi)."""
-    f_sig, f_M = _curve(S['phi'], S['sig'])
+    """sigma'(phi_s) from the states S, with a Monte-Carlo CI (the levels' sigma' and phi_s drawn from
+    their CIs, the curve rebuilt each time).  Used by the closures (permeation_local, flux_from_compression,
+    fig_closure) and drawn in fig_states (b).  -> dict(sig(phi), sig_ci(phi) -> (lo, hi), n_draws)."""
+    f_sig = _curve(S['phi'], S['sig'])
     rng = np.random.default_rng(seed)
     z = stats.norm.ppf(0.5 + ccfg.ci_level / 2)
     draws = []
@@ -186,24 +192,14 @@ def compression_curve(ccfg, S, seed=0):
             draws.append(_curve(ph, np.maximum.accumulate(sg)))          # sigma' is non-decreasing with compression
     q = [100 * (0.5 - ccfg.ci_level / 2), 100 * (0.5 + ccfg.ci_level / 2)]
 
-    def _ci(which):
-        def g(ps):
-            if not draws:
-                v = (f_sig, f_M)[which](ps)
-                return v, v
-            A = np.array([d[which](ps) for d in draws])
-            return tuple(np.percentile(A, q, axis=0))
-        return g
+    def sig_ci(ps):
+        if not draws:
+            v = f_sig(ps)
+            return v, v
+        A = np.array([d(ps) for d in draws])
+        return tuple(np.percentile(A, q, axis=0))
 
-    C = dict(sig=f_sig, M=f_M, sig_ci=_ci(0), M_ci=_ci(1), n_draws=len(draws))
-    C['M_lvl'] = f_M(S['phi'])
-    C['M_lvl_lo'], C['M_lvl_hi'] = C['M_ci'](S['phi'])
-    C['M_strain'] = (1.0 - S['eps']) * np.gradient(S['sig'], S['eps'])
-    with np.errstate(invalid='ignore', divide='ignore'):
-        C['kappa'] = S['Dc'] / C['M_lvl']
-        C['kappa_lo'], C['kappa_hi'] = S['Dc'] / C['M_lvl_hi'], S['Dc'] / C['M_lvl_lo']
-        C['kappa_sec'] = S['Dc'] / S['M_sec']
-    return C
+    return dict(sig=f_sig, sig_ci=sig_ci, n_draws=len(draws))
 
 
 # ===========================================================================
@@ -216,7 +212,8 @@ def permeation_local(ccfg, perm, C):
        seg = dict(z, phi, slope, slope_h, Dc, Dc_lo, Dc_hi, kappa, kappa_lo, kappa_hi) (one row per segment; the
        bounds come from the slope's regression CI and the flux CI, and the upper ones are inf when the slope CI reaches 0),
        phi_bot / phi_top (the fitted phi_s at the two ends of the fit range), the membrane-average
-       numbers of the permeation notebook (kappa_darcy, Dc_prof, Dc_trace, M_perm) and the closures."""
+       numbers of the permeation notebook (kappa_darcy, Dc_prof, Dc_trace, M_perm) and the closures.
+       Every local kappa is the local D_c over M_perm, the run's own displacement-derived modulus."""
     P, R, cfg = perm['P'], perm['R'], perm['cfg']
     key = 'phi_' + ccfg.PHI_KIND
     if P.get(key) is None:
@@ -237,13 +234,28 @@ def permeation_local(ccfg, perm, C):
     out = dict(z=zs, phi=ps, phi_lo=lo[sel], phi_hi=hi[sel], q=float(q), q_h=float(q_h), dP=float(dP), A=float(A),
                z_lo=float(zs[0]), z_hi=float(zs[-1]), kind=ccfg.PHI_KIND,
                phi_ref=_interior_mean(R[key], R['interior'], ccfg.ci_level)[0] if R.get(key) is not None else np.nan)
+    # ---- the permeation notebook's membrane averages; its M divides every local kappa below ----
+    kd = (fl.get('k') or {}).get('N_measured') or (fl.get('k') or {}).get('N_applied')
+    out['kappa_darcy'] = (kd['k'], kd['lo'], kd['hi']) if kd else None
+    F = P.get('Dc')
+    out['Dc_prof'] = float(F['Dc']) if F else np.nan
+    out['Dc_trace'] = float(F['trace']['Dc']) if (F and F.get('trace')) else np.nan
+    Mp = P.get('M_perm')
+    # the permeation M is displacement-derived: dP L/(2|u_F|) from the steady free-face displacement (perm_M_estimates),
+    # a membrane average -- the only modulus this run measures (no volume-fraction-derived modulus since 2026-10-15)
+    has_M = bool(Mp and Mp.get('primary'))
+    M_perm = float(Mp[Mp['primary']]['M']) if has_M else np.nan
+    M_lo, M_hi = (float(Mp[Mp['primary']]['lo']), float(Mp[Mp['primary']]['hi'])) if has_M else (np.nan, np.nan)
+    out['M_perm'], out['M_perm_ci'], out['M_perm_how'] = M_perm, (M_lo, M_hi), (Mp['primary'] if has_M else None)
+    if not has_M:
+        print("  NOTE: the permeation run has no displacement-derived M (P['M_perm']) -> the local kappa is left nan")
     # ---- continuous: polynomial phi_s(z) ----
     poly = np.polynomial.Polynomial.fit(zs, ps, ccfg.PERM_POLY_DEG)
     zz = np.linspace(zs[0], zs[-1], 200)
     pf, dpf = poly(zz), poly.deriv()(zz)
     with np.errstate(divide='ignore', invalid='ignore'):
         Dc_fit = np.where(dpf > 0, q * (1.0 - pf) / dpf, np.nan)
-    out.update(poly=poly, zz=zz, phi_fit=pf, Dc_fit=Dc_fit, kappa_fit=Dc_fit / C['M'](pf),
+    out.update(poly=poly, zz=zz, phi_fit=pf, Dc_fit=Dc_fit, kappa_fit=Dc_fit / M_perm,
                phi_bot=float(pf[0]), phi_top=float(pf[-1]))
     # ---- segments: a straight line per z-segment, slope +/- its regression CI ----
     seg = {k: [] for k in ('z', 'phi', 'slope', 'slope_h', 'Dc', 'Dc_lo', 'Dc_hi', 'kappa', 'kappa_lo', 'kappa_hi')}
@@ -255,22 +267,10 @@ def permeation_local(ccfg, perm, C):
         D = q * (1.0 - pm) / r.slope if r.slope > 0 else np.nan
         D_lo = (q - q_h) * (1.0 - pm) / (r.slope + sh) if r.slope > 0 else np.nan
         D_hi = (q + q_h) * (1.0 - pm) / (r.slope - sh) if r.slope > sh else np.inf
-        Ml, Mh = C['M_ci'](pm)
         for k, v in (('z', float(np.mean(zs[idx]))), ('phi', pm), ('slope', r.slope), ('slope_h', sh), ('Dc', D), ('Dc_lo', D_lo), ('Dc_hi', D_hi),
-                     ('kappa', D / float(C['M'](pm))), ('kappa_lo', D_lo / float(Mh)), ('kappa_hi', D_hi / float(Ml))):
+                     ('kappa', D / M_perm), ('kappa_lo', D_lo / M_hi), ('kappa_hi', D_hi / M_lo)):
             seg[k].append(float(v))
     out['seg'] = {k: np.array(v) for k, v in seg.items()}
-    # ---- the permeation notebook's membrane averages ----
-    kd = (fl.get('k') or {}).get('N_measured') or (fl.get('k') or {}).get('N_applied')
-    out['kappa_darcy'] = (kd['k'], kd['lo'], kd['hi']) if kd else None
-    F = P.get('Dc')
-    out['Dc_prof'] = float(F['Dc']) if F else np.nan
-    out['Dc_trace'] = float(F['trace']['Dc']) if (F and F.get('trace')) else np.nan
-    Mp = P.get('M_perm')
-    out['M_perm'] = float(Mp[Mp['primary']]['M']) if (Mp and Mp.get('primary')) else np.nan
-    # the permeation M is displacement-derived: dP L/(2 |u_F|) from the steady free-face displacement (perm_M_estimates)
-    out['M_perm_ci'] = ((float(Mp[Mp['primary']]['lo']), float(Mp[Mp['primary']]['hi'])) if (Mp and Mp.get('primary')) else (np.nan, np.nan))
-    out['M_perm_how'] = (Mp['primary'] if (Mp and Mp.get('primary')) else None)
     # ---- closures ----
     #  (i) the network stress across the fit range, read off the compression curve, against the share of dP
     #      that falls inside the fit range if the pore pressure were linear in z
@@ -296,10 +296,10 @@ def flux_from_compression(S, C, PL):
     return integ / PL['L_fit'], above
 
 
-def reswelling_state(ccfg, resw, C):
+def reswelling_state(ccfg, resw):
     """The free re-swelling run (a compression deck whose level has an unload, 2026-10-15): its level's phi_s, the PRIMARY
-    re-swelling D_c (profile fit), the same run's hold D_c, the displacement-strain secant M of that level, M_cur of the
-    compression curve at its phi_s, and the kappas.  -> dict or None."""
+    re-swelling D_c (profile fit), the same run's hold D_c, the displacement-strain secant M of that level and
+    kappa = D_c/M (CI from the M CI; kappa_hold with the hold D_c).  -> dict or None."""
     if resw is None:
         return None
     key = 'phi_' + ccfg.PHI_KIND
@@ -309,15 +309,13 @@ def reswelling_state(ccfg, resw, C):
             continue
         p, h = _interior_mean(L[key], L['interior'], ccfg.ci_level)
         Dc = float(Pf['Dc'])
-        Mc = float(C['M'](p))
-        Mlo, Mhi = (float(v) for v in C['M_ci'](np.array([p])))
-        Mlo, Mhi = (Mlo if np.ndim(Mlo) == 0 else Mlo[0]), (Mhi if np.ndim(Mhi) == 0 else Mhi[0])
+        Dh = float(L['Dc']['Dc']) if L.get('Dc') else np.nan
+        M, Mlo, Mhi = float(L['M_net']), float(L['M_net_lo']), float(L['M_net_hi'])
         Tr = (L['unload'] or {}).get('trace_rg')
         return dict(run_id=resw['cfg'].RUN_ID, lvl=str(L['lvl']), eps=float(L['eps_M']), phi=float(p), phi_h=float(h), Dc=Dc,
-                    Dc_hold=float(L['Dc']['Dc']) if L.get('Dc') else np.nan, Dc_trace_rg=float(Tr['Dc']) if Tr else np.nan,
-                    M_sec=float(L['M_net']), M_sec_lo=float(L['M_net_lo']), M_sec_hi=float(L['M_net_hi']), M_pist=float(L.get('M_pist', np.nan)),
-                    M_cur=Mc, M_cur_lo=Mlo, M_cur_hi=Mhi, kappa_cur=Dc / Mc, kappa_cur_lo=Dc / Mhi, kappa_cur_hi=Dc / Mlo,
-                    kappa_sec=Dc / float(L['M_net']), kappa_hold_cur=(float(L['Dc']['Dc']) / Mc if L.get('Dc') else np.nan))
+                    Dc_hold=Dh, Dc_trace_rg=float(Tr['Dc']) if Tr else np.nan,
+                    M_sec=M, M_sec_lo=Mlo, M_sec_hi=Mhi, M_pist=float(L.get('M_pist', np.nan)),
+                    kappa=Dc / M, kappa_lo=Dc / Mhi, kappa_hi=Dc / Mlo, kappa_hold=Dh / M)
     return None
 
 
@@ -329,7 +327,7 @@ def phi_dependence(ccfg, comp, perm, resw=None):
     C = compression_curve(ccfg, S)
     PL = permeation_local(ccfg, perm, C)
     q_pred, above = flux_from_compression(S, C, PL)
-    RW = reswelling_state(ccfg, resw, C)
+    RW = reswelling_state(ccfg, resw)
     return dict(S=S, C=C, PL=PL, RW=RW, q_pred=q_pred, q_above=above, comp=comp, perm=perm, resw=resw)
 
 
@@ -339,22 +337,23 @@ def phi_dependence(ccfg, comp, perm, resw=None):
 def print_summary(ccfg, X):
     S, C, PL = X['S'], X['C'], X['PL']
     print(f"D_c and kappa vs the solvent volume fraction  (phi_s = {PHI_LABEL[ccfg.PHI_KIND]})")
-    print(f"\nCOMPRESSION  {X['comp']['cfg'].RUN_ID}:  uniform states; M_cur = phi_p dsigma'/dphi_p (PCHIP through the states, "
-          f"{C['n_draws']} MC draws); kappa = D_c/M_cur")
-    print("  level   phi_s            eps     sigma'    M_secant   M_cur [CI]              M_cur(strain)   D_c      R^2    kappa [CI]                 kappa(secant)")
+    print(f"\nCOMPRESSION  {X['comp']['cfg'].RUN_ID}:  uniform states;  M = the level's displacement-strain secant dsigma'/eps_disp "
+          f"(the sweep notebook's), kappa = D_c/M;  sigma'(phi_s) = PCHIP through the states ({C['n_draws']} MC draws), for the closures")
+    print("  level   phi_s            eps     sigma'    M [CI]                 D_c      R^2    kappa = D_c/M [CI]")
     for i in range(len(S['phi'])):
         if i == 0:
-            print(f"  {S['label'][i]:<6s}  {S['phi'][i]:.4f} ± {S['phi_h'][i]:.4f}  0.0000  0.0000    --         {C['M_lvl'][i]:.3f} [{C['M_lvl_lo'][i]:.3f}, {C['M_lvl_hi'][i]:.3f}]"
-                  f"   {C['M_strain'][i]:.3f}           --")
+            print(f"  {S['label'][i]:<6s}  {S['phi'][i]:.4f} ± {S['phi_h'][i]:.4f}  0.0000  0.0000    --                     --")
             continue
-        print(f"  {S['label'][i]:<6s}  {S['phi'][i]:.4f} ± {S['phi_h'][i]:.4f}  {S['eps'][i]:.4f}  {S['sig'][i]:.4f}    {S['M_sec'][i]:.3f}      "
-              f"{C['M_lvl'][i]:.3f} [{C['M_lvl_lo'][i]:.3f}, {C['M_lvl_hi'][i]:.3f}]   {C['M_strain'][i]:.3f}           {S['Dc'][i]:.4f}   {S['R2'][i]:.3f}  "
-              f"{C['kappa'][i]:.4f} [{C['kappa_lo'][i]:.4f}, {C['kappa_hi'][i]:.4f}]   {C['kappa_sec'][i]:.4f}")
+        print(f"  {S['label'][i]:<6s}  {S['phi'][i]:.4f} ± {S['phi_h'][i]:.4f}  {S['eps'][i]:.4f}  {S['sig'][i]:.4f}    "
+              f"{S['M_sec'][i]:.3f} [{S['M_sec_lo'][i]:.3f}, {S['M_sec_hi'][i]:.3f}]   {S['Dc'][i]:.4f}   {S['R2'][i]:.3f}  "
+              f"{S['kappa'][i]:.4f} [{S['kappa_lo'][i]:.4f}, {S['kappa_hi'][i]:.4f}]")
     sg = PL['seg']
     print(f"\nPERMEATION  {X['perm']['cfg'].RUN_ID}:  steady profile over z in [{PL['z_lo']:.0f}, {PL['z_hi']:.0f}] ({len(PL['z'])} bins, "
           f"{ccfg.PERM_TRIM:g} sigma trimmed at each end);  q = Q/A = {PL['q']:.3e} ± {PL['q_h']:.1e};  dP = {PL['dP']:.4f}")
     print(f"  phi_s: {PL['phi_bot']:.3f} (support side) -> {PL['phi_top']:.3f} (feed side);  zero-flux reference {PL['phi_ref']:.3f}")
-    print("  segment   z      phi_s    dphi_s/dz [CI half]      D_c = q phi_p/(dphi_s/dz) [CI]     kappa = D_c/M_cur [CI]")
+    print(f"  M_perm = {PL['M_perm']:.4f} [{PL['M_perm_ci'][0]:.4f}, {PL['M_perm_ci'][1]:.4f}] (displacement-derived: dP L/(2|u_F|), {PL['M_perm_how']}) "
+          "divides every local kappa")
+    print("  segment   z      phi_s    dphi_s/dz [CI half]      D_c = q phi_p/(dphi_s/dz) [CI]     kappa = D_c/M_perm [CI]")
     for i in range(len(sg['z'])):
         print(f"  {i + 1:<7d}  {sg['z'][i]:6.1f}  {sg['phi'][i]:.4f}   {sg['slope'][i]:.3e} ± {sg['slope_h'][i]:.1e}   {sg['Dc'][i]:.4f} [{sg['Dc_lo'][i]:.4f}, {sg['Dc_hi'][i]:.4f}]"
               f"          {sg['kappa'][i]:.4f} [{sg['kappa_lo'][i]:.4f}, {sg['kappa_hi'][i]:.4f}]"
@@ -362,17 +361,15 @@ def print_summary(ccfg, X):
     kd = PL['kappa_darcy']
     print("  membrane averages (permeation notebook):  "
           + (f"Darcy kappa = Q L/(A dP) = {kd[0]:.4f} [{kd[1]:.4f}, {kd[2]:.4f}];  " if kd else '')
-          + f"consolidation-fit D_c = {PL['Dc_prof']:.4f} (profile) / {PL['Dc_trace']:.4f} (trace);  "
-          f"M = {PL['M_perm']:.4f} [{PL['M_perm_ci'][0]:.4f}, {PL['M_perm_ci'][1]:.4f}] (displacement-derived: dP L/(2|u_F|), {PL['M_perm_how']})")
+          + f"consolidation-fit D_c = {PL['Dc_prof']:.4f} (profile) / {PL['Dc_trace']:.4f} (trace)")
     RW = X.get('RW')
     if RW:
         print(f"\nRE-SWELLING  {RW['run_id']} (level {RW['lvl']}, eps_disp {RW['eps']:.4f}, phi_s {RW['phi']:.4f} ± {RW['phi_h']:.4f}):  "
               f"PRIMARY D_c (free re-swelling profiles) = {RW['Dc']:.4f};  same run's hold D_c = {RW['Dc_hold']:.4f} (ratio {RW['Dc_hold'] / RW['Dc']:.2f})"
               + (f";  Rg thickness trace {RW['Dc_trace_rg']:.4f}" if np.isfinite(RW['Dc_trace_rg']) else ''))
-        print(f"  M: secant (displacement strain) {RW['M_sec']:.3f} [{RW['M_sec_lo']:.3f}, {RW['M_sec_hi']:.3f}], piston {RW['M_pist']:.3f};  "
-              f"M_cur of the compression curve at its phi_s {RW['M_cur']:.3f} [{RW['M_cur_lo']:.3f}, {RW['M_cur_hi']:.3f}]")
-        print(f"  kappa = D_c/M_cur = {RW['kappa_cur']:.4f} [{RW['kappa_cur_lo']:.4f}, {RW['kappa_cur_hi']:.4f}];  D_c/M_secant = {RW['kappa_sec']:.4f};  "
-              f"with the hold D_c: {RW['kappa_hold_cur']:.4f}" + (f"   vs Darcy {kd[0]:.4f}" if kd else ''))
+        print(f"  M: secant (displacement strain) {RW['M_sec']:.3f} [{RW['M_sec_lo']:.3f}, {RW['M_sec_hi']:.3f}], piston {RW['M_pist']:.3f}")
+        print(f"  kappa = D_c/M = {RW['kappa']:.4f} [{RW['kappa_lo']:.4f}, {RW['kappa_hi']:.4f}];  with the hold D_c: {RW['kappa_hold']:.4f}"
+              + (f"   vs Darcy {kd[0]:.4f}" if kd else ''))
     print("\nCLOSURES")
     share = PL['dP'] * PL['L_fit'] / PL['L_mem']
     print(f"  (i)  network stress across the fit range, from the compression curve at the measured phi_s: "
@@ -574,7 +571,8 @@ def _phi_axis(ax, ccfg):
 
 def fig_states(ccfg, X):
     """(a) the steady permeation phi_s(z) with its fits and the compression levels' phi_s;
-    (b) the compression curve sigma'(phi_s) and (c) M_cur(phi_s), with the range the membrane spans."""
+    (b) the compression curve sigma'(phi_s); (c) the modulus M of both decks, every one from a displacement
+    strain (sweep secants, permeation dP L/(2|u_F|), the re-swelling run's secant); the range the membrane spans."""
     S, C, PL = X['S'], X['C'], X['PL']
     fig, (a, b, c) = plt.subplots(1, 3, figsize=(24, 6.5), constrained_layout=True)
     a.fill_between(PL['z'], PL['phi_lo'], PL['phi_hi'], color='0.6', alpha=0.3, lw=0)
@@ -592,30 +590,32 @@ def fig_states(ccfg, X):
     a.grid(alpha=0.3)
     smart_legend(a, fontsize=10)
     pp = np.linspace(S['phi'][-1], S['phi'][0], 300)
-    for ax, f, ci, y, yl, tt in ((b, C['sig'], C['sig_ci'], S['sig'], r"network stress  $\sigma'_{zz}$", r"(b) compression: $\sigma'(\phi_s)$"),
-                                 (c, C['M'], C['M_ci'], C['M_lvl'], r"$M_\mathrm{cur}=\phi_p\,\mathrm{d}\sigma'/\mathrm{d}\phi_p$", r'(c) current-frame tangent modulus')):
-        lo, hi = ci(pp)
-        ax.fill_between(pp, lo, hi, color=WONG['blue'], alpha=0.2, lw=0)
-        ax.plot(pp, f(pp), '-', color=WONG['blue'], lw=2.2, label='PCHIP through the levels')
-        ax.plot(S['phi'], y, 'o', color=WONG['blue'], ms=9, label='compression levels')
-        ax.axvspan(PL['phi_bot'], PL['phi_top'], color=WONG['orange'], alpha=0.15, label=r'$\phi_s$ range of the membrane')
-        ax.set_ylabel(yl)
-        ax.set_yscale('log' if ax is c else 'linear')
-        ax.set_title(tt, fontsize=14)
-        _phi_axis(ax, ccfg)
+    lo, hi = C['sig_ci'](pp)
+    b.fill_between(pp, lo, hi, color=WONG['blue'], alpha=0.2, lw=0)
+    b.plot(pp, C['sig'](pp), '-', color=WONG['blue'], lw=2.2, label='PCHIP through the levels')
+    b.plot(S['phi'], S['sig'], 'o', color=WONG['blue'], ms=9, label='compression levels')
     b.errorbar(S['phi'], S['sig'], xerr=S['phi_h'], yerr=S['sig_h'], fmt='none', color=WONG['blue'], capsize=3)
     b.plot([PL['phi_bot']], [PL['dP']], '*', color=WONG['vermillion'], ms=18, zorder=5,
            label=rf"permeation: $\Delta P$ = {sig(PL['dP'])} at the support-side $\phi_s$")
     b.set_ylim(-0.02, max(4 * PL['dP'], 0.3))
-    c.plot(S['phi'][1:], S['M_sec'][1:], 's', color='0.45', ms=7, label=r"compression: secant $\Delta\sigma'/\varepsilon_{\rm disp}$")
-    if np.isfinite(PL['M_perm']):                      # the permeation M is displacement-derived too: dP L/(2|u_F|) (2026-10-15)
+    b.set_ylabel(r"network stress  $\sigma'_{zz}$")
+    b.set_title(r"(b) compression: $\sigma'(\phi_s)$", fontsize=14)
+    # (c) every modulus from a displacement strain; the volume-fraction tangent M_cur was dropped on 2026-10-15
+    c.errorbar(S['phi'][1:], S['M_sec'][1:], yerr=[S['M_sec'][1:] - S['M_sec_lo'][1:], S['M_sec_hi'][1:] - S['M_sec'][1:]], fmt='s',
+               color=WONG['blue'], ms=8, capsize=4, label=r"compression levels: secant $\Delta\sigma'/\varepsilon_{\rm disp}$")
+    if np.isfinite(PL['M_perm']):                      # the permeation M is displacement-derived too: dP L/(2|u_F|)
         c.fill_between([PL['phi_bot'], PL['phi_top']], PL['M_perm_ci'][0], PL['M_perm_ci'][1], color=WONG['vermillion'], alpha=0.2, lw=0)
         _bands(c, PL, PL['M_perm'], WONG['vermillion'], rf"permeation: $\Delta P\,L/(2|u_F|)$ = {sig(PL['M_perm'])}")
     RW = X.get('RW')
     if RW:
         c.errorbar([RW['phi']], [RW['M_sec']], yerr=[[RW['M_sec'] - RW['M_sec_lo']], [RW['M_sec_hi'] - RW['M_sec']]], fmt='*', color=WONG['green'],
                    ms=16, capsize=4, zorder=6, label=f"re-swelling run: secant $\\Delta\\sigma'/\\varepsilon_{{\\rm disp}}$ = {sig(RW['M_sec'])}")
-    c.set_title('(c) tangent modulus $M_\\mathrm{cur}$ + the displacement-derived $M$ of both decks', fontsize=13)
+    c.set_ylabel(r"modulus  $M$")
+    c.set_ylim(bottom=0)
+    c.set_title('(c) modulus $M$ of both decks, each from its displacement strain', fontsize=14)
+    for ax in (b, c):
+        ax.axvspan(PL['phi_bot'], PL['phi_top'], color=WONG['orange'], alpha=0.15, label=r'$\phi_s$ range of the membrane')
+        _phi_axis(ax, ccfg)
     smart_legend(b, fontsize=10)
     c.legend(loc='upper left', fontsize=9)
     fig.suptitle(f"States  |  compression {X['comp']['cfg'].RUN_ID}  |  permeation {X['perm']['cfg'].RUN_ID}", fontsize=12, fontweight='bold')
@@ -673,17 +673,18 @@ def fig_Dc(ccfg, X):
 
 
 def fig_kappa(ccfg, X):
-    """kappa against phi_s: compression D_c/M_cur per level (and the sweep notebook's D_c/M_secant),
-    the permeation local kappa = D_c(phi_s)/M_cur(phi_s), and the Darcy membrane average."""
-    S, C, PL = X['S'], X['C'], X['PL']
+    """kappa against phi_s: compression D_c/M per level (M = the level's displacement-strain secant, the sweep
+    notebook's kappa), the permeation local kappa = D_c(phi_s)/M_perm, the Darcy membrane average, and the
+    re-swelling run (its primary D_c over its secant M, filled star; its hold D_c, hollow)."""
+    S, PL = X['S'], X['PL']
     sg = PL['seg']
     fig, ax = plt.subplots(figsize=(11, 7), constrained_layout=True)
-    ok = np.isfinite(C['kappa'])
-    ax.errorbar(S['phi'][ok], C['kappa'][ok], yerr=[C['kappa'][ok] - C['kappa_lo'][ok], C['kappa_hi'][ok] - C['kappa'][ok]],
-                fmt='o-', color=WONG['blue'], ms=10, lw=2, capsize=5, label=r'compression: $D_c/M_\mathrm{cur}$')
-    ax.plot(S['phi'][ok], C['kappa_sec'][ok], 's--', color='0.45', ms=7, lw=1.2, label=r'compression: $D_c/M_\mathrm{secant}$ (sweep notebook)')
+    ok = np.isfinite(S['kappa'])
+    ax.errorbar(S['phi'][ok], S['kappa'][ok], yerr=[S['kappa'][ok] - S['kappa_lo'][ok], S['kappa_hi'][ok] - S['kappa'][ok]],
+                fmt='o-', color=WONG['blue'], ms=10, lw=2, capsize=5, label=r"compression holds: $D_c/M$,  $M = \Delta\sigma'/\varepsilon_{\rm disp}$ of the level")
     ax.plot(PL['phi_fit'], PL['kappa_fit'], '-', color=WONG['vermillion'], lw=2.2, alpha=0.8,
-            label=rf"permeation, local: $q/(|\mathrm{{d}}\sigma'/\mathrm{{d}}\phi_s|\,\mathrm{{d}}\phi_s/\mathrm{{d}}z)$, degree-{ccfg.PERM_POLY_DEG} profile")
+            label=rf"permeation, local: $q\,\phi_p/(\mathrm{{d}}\phi_s/\mathrm{{d}}z)\;/\;M_{{\rm perm}}$, degree-{ccfg.PERM_POLY_DEG} profile;  "
+                  rf"$M_{{\rm perm}} = \Delta P\,L/(2|u_F|)$ = {sig(PL['M_perm'])}")
     _seg_points(ax, ccfg, sg, 'kappa')
     kd = PL['kappa_darcy']
     if kd:
@@ -691,10 +692,11 @@ def fig_kappa(ccfg, X):
         _bands(ax, PL, kd[0], '0.35', rf"permeation, Darcy $QL/(A\,\Delta P)$ = {sig(kd[0])} (membrane average)")
     RW = X.get('RW')
     if RW:
-        ax.errorbar([RW['phi']], [RW['kappa_cur']], yerr=[[RW['kappa_cur'] - RW['kappa_cur_lo']], [RW['kappa_cur_hi'] - RW['kappa_cur']]], fmt='*',
-                    color=WONG['green'], ms=18, capsize=4, zorder=6, label=rf"free re-swelling (PRIMARY $D_c$) / $M_\mathrm{{cur}}$ = {sig(RW['kappa_cur'])}")
-        ax.plot([RW['phi']], [RW['kappa_sec']], '*', color=WONG['green'], mfc='none', ms=16, mew=1.5, zorder=6,
-                label=rf"... / secant $M$ (displacement strain) = {sig(RW['kappa_sec'])}")
+        ax.errorbar([RW['phi']], [RW['kappa']], yerr=[[RW['kappa'] - RW['kappa_lo']], [RW['kappa_hi'] - RW['kappa']]], fmt='*',
+                    color=WONG['green'], ms=18, capsize=4, zorder=6, label=rf"free re-swelling (PRIMARY $D_c$) / that level's secant $M$ = {sig(RW['kappa'])}")
+        if np.isfinite(RW['kappa_hold']):
+            ax.plot([RW['phi']], [RW['kappa_hold']], '*', color=WONG['green'], mfc='none', ms=16, mew=1.5, zorder=6,
+                    label=rf"... the same run's hold $D_c$ / $M$ = {sig(RW['kappa_hold'])}")
     ax.set_ylabel(r'$\kappa$  ($\sigma^5/(\epsilon\,\tau)$)')
     ax.set_yscale('log')
     ax.set_title(r'Hydraulic permeability $\kappa(\phi_s)$: compression vs steady permeation', fontsize=15)
@@ -711,12 +713,16 @@ def fig_closure(ccfg, X):
     fig, (a, b) = plt.subplots(1, 2, figsize=(17, 6.5), constrained_layout=True, gridspec_kw=dict(width_ratios=[2, 1]))
     lo, hi = C['sig_ci'](PL['phi'])
     a.fill_between(PL['z'], lo, hi, color=WONG['blue'], alpha=0.2, lw=0)
-    a.plot(PL['z'], C['sig'](PL['phi']), 'o', color=WONG['blue'], ms=4, label=r"$\sigma'_\mathrm{compression}(\phi_s(z))$, bin by bin")
+    # NOT a measurement of the membrane's network stress (2026-10-15): the pore pressure under flow is not measured yet
+    # (it needs the solvent chemical-potential profile), so sigma'(z) here is the value the compression EQUILIBRIUM curve
+    # assigns to the measured phi_s(z), and the dashed line is the pore-pressure drop a uniform kappa WOULD give -- an
+    # assumption drawn for scale, to be replaced by the measured profile when the permeation notebook has it.
+    a.plot(PL['z'], C['sig'](PL['phi']), 'o', color=WONG['blue'], ms=4, label=r"$\sigma'_\mathrm{compression}(\phi_s(z))$: the equilibrium curve's value at the measured $\phi_s$, bin by bin (not measured)")
     a.plot(PL['zz'], PL['sig_z'], '-', color=WONG['blue'], lw=2.2, label='the same on the fitted profile')
     zl = np.array([P['z_mem_lo'], P['z_mem_hi']])
-    a.plot(zl, [PL['dP'], 0.0], 'k--', lw=1.8, label=rf"linear pore-pressure drop: $\Delta P$ = {sig(PL['dP'])} at the support, 0 at the feed face")
-    a.set(xlabel=r'$z$  ($\sigma$)   [support $\leftarrow$ $\rightarrow$ feed]', ylabel=r"network stress  $\sigma'_{zz}$")
-    a.set_title(r"(a) does the membrane's $\phi_s(z)$ carry $\Delta P$ on the compression curve?", fontsize=14)
+    a.plot(zl, [PL['dP'], 0.0], 'k--', lw=1.8, label=rf"ASSUMED linear pore-pressure drop (uniform $\kappa$): $\Delta P$ = {sig(PL['dP'])} at the support, 0 at the feed face")
+    a.set(xlabel=r'$z$  ($\sigma$)   [support $\leftarrow$ $\rightarrow$ feed]', ylabel=r"network stress  $\sigma'_{zz}$  (inferred)")
+    a.set_title(r"(a) network stress IMPLIED by the compression curve at the measured $\phi_s(z)$ vs an assumed linear $p_{\rm pore}$ drop", fontsize=13)
     a.grid(alpha=0.3)
     smart_legend(a, fontsize=10)
     b.bar([0], [PL['q']], yerr=[PL['q_h']], color=WONG['vermillion'], capsize=8, width=0.6)

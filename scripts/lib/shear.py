@@ -228,6 +228,15 @@ class Config:
         print(f'Config (shear, {self.DECK}): {self.sim_name}  |  levels {self.STRAINS}\n'
               f'  data  {self.DATA_DIR}\n  plots {self.PLOT_DIR}\n'
               f'  file tag (NSTEPS): {t if t else "not local yet"}')
+        # a run folder holding files of ANOTHER DATANAME means the sync was run with a stale
+        # config (2026-10-15: the periodic slab's files were pulled into an isolated-gel folder)
+        strays = sorted({m.group(1) for f in self.DATA_DIR.glob('stress_tensor_polymer*.dat')
+                         if (m := re.match(r'^stress_tensor_polymer(?:_ref)?_(.+)_\d+(?:_g[0-9.]+|_unload)?\.dat$', f.name))
+                         and m.group(1) != f'{self.DATANAME}_{self.INTERACTION}'})
+        if strays:
+            print(f'  WARNING: {self.DATA_DIR} also holds files of other run(s): ' + ', '.join(strays)
+                  + '\n           -- DATANAME/INTERACTION must equal the batch file\'s; move or delete the stray files '
+                    'and delete .sync_absent.json before re-syncing')
         if self.iso:
             print("  ISOLATED-GEL deck: axes relabelled at read time -- every 'z' / 'u_x' / 'xx' below is the deck's "
                   "x (gap) / u_z / zz, and the deck's z (shear direction) appears as 'x' / 'zz'; sigma_xz is itself.")
