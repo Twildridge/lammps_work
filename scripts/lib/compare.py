@@ -351,8 +351,11 @@ def print_summary(ccfg, X):
     print(f"\nPERMEATION  {X['perm']['cfg'].RUN_ID}:  steady profile over z in [{PL['z_lo']:.0f}, {PL['z_hi']:.0f}] ({len(PL['z'])} bins, "
           f"{ccfg.PERM_TRIM:g} sigma trimmed at each end);  q = Q/A = {PL['q']:.3e} ± {PL['q_h']:.1e};  dP = {PL['dP']:.4f}")
     print(f"  phi_s: {PL['phi_bot']:.3f} (support side) -> {PL['phi_top']:.3f} (feed side);  zero-flux reference {PL['phi_ref']:.3f}")
-    print(f"  M_perm = {PL['M_perm']:.4f} [{PL['M_perm_ci'][0]:.4f}, {PL['M_perm_ci'][1]:.4f}] (displacement-derived: dP L/(2|u_F|), {PL['M_perm_how']}) "
-          "divides every local kappa")
+    how = {'lag': 'u_F from the per-atom (Lagrangian) steady displacement of the free face, paired with the zero-flux reference',
+           'prof': 'u_F from the steady-profile parabola', 'bb': 'u_F from the bounding-box thickness change',
+           'trace': 'u_F from the thickness-trace asymptote'}.get(PL['M_perm_how'], str(PL['M_perm_how']))
+    print(f"  M_perm = {PL['M_perm']:.4f} [{PL['M_perm_ci'][0]:.4f}, {PL['M_perm_ci'][1]:.4f}] = dP L/(2|u_F|) of the permeation run itself "
+          f"({how}; PERM_M_PRIMARY = '{PL['M_perm_how']}') divides every local kappa")
     print("  segment   z      phi_s    dphi_s/dz [CI half]      D_c = q phi_p/(dphi_s/dz) [CI]     kappa = D_c/M_perm [CI]")
     for i in range(len(sg['z'])):
         print(f"  {i + 1:<7d}  {sg['z'][i]:6.1f}  {sg['phi'][i]:.4f}   {sg['slope'][i]:.3e} ± {sg['slope_h'][i]:.1e}   {sg['Dc'][i]:.4f} [{sg['Dc_lo'][i]:.4f}, {sg['Dc_hi'][i]:.4f}]"

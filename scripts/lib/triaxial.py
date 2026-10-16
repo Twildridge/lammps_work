@@ -1575,14 +1575,14 @@ def fit_Dc(cfg, R, disp, free_offset=False):
 
         def resid(Dc):
             Xd = X(Dc)
-            return float(np.sum((Xd @ np.linalg.lstsq(Xd, y, rcond=None)[0] - y) ** 2))
+            return float(np.sum((Xd @ _lsq_amps(Xd, y) - y) ** 2))
 
         # coarse log grid first (short windows have secondary minima), then bounded Brent in the best cell
         grid = np.geomspace(cfg.DC_BOUNDS[0], cfg.DC_BOUNDS[1], 61)
         j = int(np.argmin([resid(g) for g in grid]))
         Dc = float(minimize_scalar(resid, bounds=(grid[max(j - 1, 0)], grid[min(j + 1, len(grid) - 1)]), method='bounded').x)
         Xd = X(Dc)
-        A = np.linalg.lstsq(Xd, y, rcond=None)[0]
+        A = _lsq_amps(Xd, y)
         ss_t = np.sum((y - np.mean(y)) ** 2)
         R2 = float(1.0 - np.sum((Xd @ A - y) ** 2) / ss_t) if ss_t > 1e-30 else np.nan
         return Dc, A, R2
@@ -1657,6 +1657,17 @@ def _decay_mat(lam, t, W):
     with np.errstate(divide='ignore', invalid='ignore'):
         avg = (np.exp(-lam * (t - w)) - inst) / (lam * w)
     return np.where(w > 0, avg, inst)
+
+
+def _lsq_amps(Xd, y):
+    """Least-squares amplitudes of the modal design matrix Xd (n x 2K, n ~ 1e4-1e5) by the normal equations
+    (2026-10-16): the SVD route of np.linalg.lstsq took ~30 ms per call and the D_c fitters call it a few
+    hundred times per level; the 2K x 2K system is well conditioned (cosine modes x decays) and takes ~1 ms."""
+    G, b = Xd.T @ Xd, Xd.T @ y
+    try:
+        return np.linalg.solve(G, b)
+    except np.linalg.LinAlgError:
+        return np.linalg.lstsq(G, b, rcond=None)[0]
 
 
 def interior_strain(F, U):
@@ -1940,13 +1951,13 @@ def fit_Dc_unload(cfg, R, U, F_hold):
 
                 def resid(Dc):
                     Xd = X(Dc)
-                    return float(np.sum((Xd @ np.linalg.lstsq(Xd, y, rcond=None)[0] - y) ** 2))
+                    return float(np.sum((Xd @ _lsq_amps(Xd, y) - y) ** 2))
 
                 grid = np.geomspace(cfg.DC_BOUNDS[0], cfg.DC_BOUNDS[1], 61)
                 j = int(np.argmin([resid(g) for g in grid]))
                 Dc = float(minimize_scalar(resid, bounds=(grid[max(j - 1, 0)], grid[min(j + 1, 60)]), method='bounded').x)
                 Xd = X(Dc)
-                A = np.linalg.lstsq(Xd, y, rcond=None)[0]
+                A = _lsq_amps(Xd, y)
                 ss = np.sum((y - y.mean()) ** 2)
                 return Dc, A, float(1.0 - np.sum((Xd @ A - y) ** 2) / ss) if ss > 1e-30 else np.nan
 
@@ -2867,11 +2878,68 @@ def _psd_state(cfg, R, frames, ts, z_lo, z_hi, interior, label=''):
     return S
 
 
+_PSD_REGIONS = ('interior', 'feed half', 'permeate half')
+
+
+def _psd_to_npz(cfile, S):
+    """Flat, pickle-free npz of a _psd_state result (regions in the fixed _PSD_REGIONS order)."""
+    d = dict(ts=S['ts'], por=np.array(S['por']), d_mean=np.array(S['d_mean']), d_med=np.array(S['d_med']), d_edges=S['d_edges'])
+    for i, name in enumerate(_PSD_REGIONS):
+        d[f'reg{i}'] = np.array(S['regions'][name])
+        d[f'Dreg{i}'] = np.array(S['D_reg'][name], float)
+    cfile.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(cfile, **d)
+
+
+def _psd_from_npz(cfile):
+    d = np.load(cfile, allow_pickle=False)
+    S = dict(ts=d['ts'], por=tuple(d['por']), d_mean=tuple(d['d_mean']), d_med=tuple(d['d_med']), d_edges=d['d_edges'], regions={}, D_reg={})
+    for i, name in enumerate(_PSD_REGIONS):
+        S['regions'][name] = tuple(d[f'reg{i}'])
+        S['D_reg'][name] = tuple(float(v) for v in d[f'Dreg{i}'])
+    return S
+
+
+def _psd_cached(cfg, R, vf, ts, z_lo, z_hi, interior, label=''):
+    """_psd_state on the frames `ts` of the _volume_fractions result `vf`, behind an on-disk cache
+    (2026-10-16): <DATA_DIR>/vor_cache/psd_<traj stem>__<hash>.npz keyed on the frames, the PSD knobs,
+    the window and the bin grid.  On a hit the dump is NOT re-streamed (the ~5 s/frame covering pass
+    was the slowest step of the comparison notebook's deck loading); on a miss the frames are
+    re-streamed by _frames_of if the Voronoi pass came from its own disk cache.  None without frames."""
+    if vf is None:
+        return None
+    ts = [int(t) for t in np.atleast_1d(ts)]
+    cfile = None
+    if vf.get('traj'):
+        key = (Path(vf['traj']).name, tuple(ts), cfg.PSD_GRID, cfg.PSD_R_PROBE, cfg.PSD_DMAX, cfg.PSD_DBIN, cfg.binWidth,
+               round(float(z_lo), 6), round(float(z_hi), 6), np.round(np.asarray(R['z'], float), 6).tolist(),
+               np.asarray(interior, bool).tolist())
+        ck = hashlib.md5(repr(key).encode()).hexdigest()[:12]
+        cfile = Path(cfg.DATA_DIR) / 'vor_cache' / f'psd_{Path(vf["traj"]).stem}__{ck}.npz'
+        if cfile.exists():
+            try:
+                S = _psd_from_npz(cfile)
+                print(f'    {label}disk-cached PSD ({cfile.parent.name}/{cfile.name}): {len(S["ts"])} frame(s), no re-read')
+                return S
+            except Exception as e:
+                print(f'    {label}PSD cache unreadable ({type(e).__name__}) -> recomputing')
+    if not _frames_of(vf, ts):
+        return None
+    S = _psd_state(cfg, R, vf['frames'], ts, z_lo, z_hi, interior, label)
+    if S is not None and cfile is not None:
+        try:
+            _psd_to_npz(cfile, S)
+        except Exception as e:
+            print(f'    {label}(PSD cache not written: {type(e).__name__}: {e})')
+    return S
+
+
 def add_perm_psd(cfg, R, P):
     """Geometric porosity and pore-size distribution (lib/psd.py) of the zero-flux
     reference and the steady permeation state, on the frames the Voronoi pass already
     streamed (R['vf_ref']: the reference frames; P['vf']: the steady-window frames), so
-    the dump is not re-read.  Fills R['psd'] and P['psd'] (None when unavailable) and
+    the dump is not re-read; the result itself is disk-cached next to the Voronoi cache
+    (_psd_cached).  Fills R['psd'] and P['psd'] (None when unavailable) and
     prints the interior means next to the hydraulic mesh size xi = sqrt(kappa)
     (Brinkman: kappa ~ xi^2).  Needs add_perm_volume_fractions with VOR_ENABLE."""
     P['psd'] = None
@@ -2880,14 +2948,14 @@ def add_perm_psd(cfg, R, P):
         return
     print(f'pore-size distribution (grid {cfg.PSD_GRID} sigma, r_probe = {cfg.PSD_R_PROBE}, largest-included-sphere covering):')
     vr = R.get('vf_ref')
-    if R.get('psd') is None and vr is not None and _frames_of(vr):
-        R['psd'] = _psd_state(cfg, R, vr['frames'], vr['ts'], R['z_gel_lo'], R['z_gel_hi'], R['interior'], 'reference: ')
+    if R.get('psd') is None and vr is not None:
+        R['psd'] = _psd_cached(cfg, R, vr, vr['ts'], R['z_gel_lo'], R['z_gel_hi'], R['interior'], 'reference: ')
     vf = P.get('vf')
-    if vf is None or not _frames_of(vf, P.get('vor_steady_ts', vf['ts']) if vf else None):
+    P['psd'] = _psd_cached(cfg, R, vf, P.get('vor_steady_ts', vf['ts']) if vf else [], P['z_mem_lo'], P['z_mem_hi'],
+                           P['interior'], 'steady: ') if vf is not None else None
+    if P['psd'] is None:
         print('  NOTE: no tessellated production frames (traj_stress missing?) -> steady-state PSD skipped')
         return
-    P['psd'] = _psd_state(cfg, R, vf['frames'], P.get('vor_steady_ts', vf['ts']), P['z_mem_lo'], P['z_mem_hi'],
-                          P['interior'], 'steady: ')
     for tag, D, S in (('reference (zero flux)', R, R.get('psd')), ('steady permeation', P, P['psd'])):
         if S is None:
             continue
@@ -4351,7 +4419,7 @@ def _gm_guide(cfg, L):
     if _is_perm(L):
         Mp = L.get('M_perm')
         if Mp and Mp.get('primary'):
-            return float(Mp[Mp['primary']]['M']), f"$M_{{\\rm {Mp['primary']}}}$", Gs
+            return float(Mp[Mp['primary']]['M']), r"$M_{\rm perm}$", Gs      # this run's own M (PERM_M_PRIMARY picks the u_F estimate)
         return None
     return (float(L['M_net']), r'$M_{\rm net}$', Gs) if np.isfinite(L.get('M_net', np.nan)) else None
 
