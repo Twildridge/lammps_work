@@ -6001,7 +6001,7 @@ def _record_curve(rec, key):
         x = np.asarray(x, float)
         y = np.interp(x, sg, ep)
         hi = x > sg[-1]
-        if hi.any() and len(sg) > 2:
+        if hi.any() and len(sg) >= 2:                         # linear beyond the last level (a one-level record: the secant through the origin)
             y[hi] = ep[-1] + (x[hi] - sg[-1]) * (ep[-1] - ep[-2]) / (sg[-1] - sg[-2])
         return y
     return f
@@ -6160,7 +6160,7 @@ def fig_perm_vs_compression(cfg, R, P):
     flip_z_axis(axB, R)
     ok = C.get('ok', False)
     col_v = WONG['green'] if ok else WONG['vermillion']
-    fig.suptitle(f"CHECK -- permeation vs compression sweep:  {C['verdict']}\n{cfg.sim_name}", fontsize=13,
+    fig.suptitle(f"CHECK -- permeation vs the compression record:  {C['verdict']}\n{cfg.sim_name}", fontsize=13,
                  fontweight='bold', color=col_v)
     Mp, F, lag = C['M_perm'], P['Dc'], C['lag']
     # ---- (a) ----
@@ -6179,7 +6179,7 @@ def fig_perm_vs_compression(cfg, R, P):
     for zp, lab in ((F['Z_P'], 'contact plane $Z^P$'), (F['Z_F'], 'free face $Z^F$')):
         axA.axvline(zp, color='0.4', ls=':', lw=1)
     axA.axhline(0, color='k', lw=0.8, alpha=0.5)
-    axA.set_xlabel(flip_hint(R, 'reference (material) position $Z$  ($\\sigma$)'))
+    axA.set_xlabel('reference (material) position $Z$  ($\\sigma$)')
     axA.set_ylabel('$u_z$ since the zero-flux reference  ($\\sigma$)')
     axA.set_title('(a) steady displacement in the material frame\nvs the compression-curve prediction', fontsize=12)
     axA.grid(alpha=0.3)
@@ -6194,7 +6194,7 @@ def fig_perm_vs_compression(cfg, R, P):
     if 'prof' in Mp:
         axB.plot(F['Z_P'] + zeta * F['L0'], -2 * Mp['prof']['uF'] / F['L0'] * (1 - zeta), '--', color='0.3', lw=1.3, label='fig-12 parabola')
     axB.axhline(0, color='k', lw=0.8, alpha=0.5)
-    axB.set_xlabel(flip_hint(R, 'reference (material) position $Z$  ($\\sigma$)'))
+    axB.set_xlabel(flip_hint(R, '$Z$  ($\\sigma$)'))                    # definition on (a), flip hint here (the full label overlapped)
     axB.set_ylabel('local compressive strain')
     axB.set_title("(b) local strain $-\\mathrm{d}u/\\mathrm{d}Z$ vs the compression curve at the\nlocal drag load $\\sigma'(Z) = \\Delta P\\,(Z^F - Z)/L_0$ (material-linear)", fontsize=12)
     axB.grid(alpha=0.3)
@@ -6203,22 +6203,22 @@ def fig_perm_vs_compression(cfg, R, P):
     bars = []
     for k in ('lag', 'prof', 'bb', 'trace'):
         if k in Mp:
-            bars.append((f"permeation\n{k}" + (' (primary)' if k == Mp['primary'] else ''), Mp[k]['M'], Mp[k]['lo'], Mp[k]['hi'],
+            bars.append((f"perm.\n{k}" + ('\n(primary)' if k == Mp['primary'] else ''), Mp[k]['M'], Mp[k]['lo'], Mp[k]['hi'],
                          WONG['skyblue'] if k == 'lag' else WONG['blue']))
     if C.get('rec'):
         rec = C['rec']
-        bars.append(('compression\nsmall-strain (net)', rec['M_small_net'], np.nan, np.nan, WONG['vermillion']))
-        bars.append(('compression\nsmall-strain (pist)', rec['M_small_pist'], np.nan, np.nan, WONG['orange']))
-        bars.append(('compression curve\neffective at this load', C['pred']['network']['M_eff'], np.nan, np.nan, WONG['green']))
+        bars.append(('comp.\nsmall-strain\n(net)', rec['M_small_net'], np.nan, np.nan, WONG['vermillion']))
+        bars.append(('comp.\nsmall-strain\n(pist)', rec['M_small_pist'], np.nan, np.nan, WONG['orange']))
+        bars.append(('comp. curve\nat this\nload', C['pred']['network']['M_eff'], np.nan, np.nan, WONG['green']))
     for j, (lab, m, lo, hi, col) in enumerate(bars):
         axC.bar(j, m, color=col, alpha=0.85)
         if np.isfinite(lo):
             axC.errorbar(j, m, yerr=[[m - lo], [hi - m]], color='k', capsize=5, lw=1.2)
         axC.text(j, m, f'{m:.3f}', ha='center', va='bottom', fontsize=10)
     axC.set_xticks(range(len(bars)))
-    axC.set_xticklabels([b[0] for b in bars], fontsize=8)
+    axC.set_xticklabels([b[0] for b in bars], fontsize=8, rotation=35, ha='right')
     axC.set_ylabel('$M$  (LJ)')
-    axC.set_title(f"(c) $M$: permeation (L = {Mp['L_src']}) vs the compression sweep\n" + (f"[{C['rec']['run_id']}]" if C.get('rec') else '[NO RECORD]'), fontsize=12)
+    axC.set_title(f"(c) $M$: permeation (L = {Mp['L_src']}) vs the compression record\n" + (f"[{C['rec']['run_id']}]" if C.get('rec') else '[NO RECORD]'), fontsize=12)
     axC.grid(axis='y', alpha=0.3)
     txt = (f"support load: polymer {C['F_supp']['P_poly']:.4f} vs $\\Delta P_{{\\rm ext}}$ {Mp['dP']:.4f}" if C.get('F_supp')
            else 'no support_force file\n(deck output since 2026-10-03)')
@@ -7151,7 +7151,7 @@ def load_perm_disp(cfg, R, P):
 
 
 def fit_perm_Dc(cfg, R, P, disp, free_offset=False):
-    """One-sided consolidation fit of a permeation run (see the section comment):
+    """Consolidation fit of a permeation run -- the gel compressed between the pinned support and the feed face pressed on by the drive (see the section comment):
     D_c from the displacement profiles (free amplitudes) and from the feed-face
     thickness trace (exact zero-IC series), M from the steady thickness change,
     the steady-profile parabola and the trace asymptote.  Returns a dict or None."""
@@ -7487,7 +7487,7 @@ def add_perm_displacement(cfg, R, P, verbose=True):
 
 def fig_perm_Dc(cfg, R, P):
     """Figure 12: (a) the deformation (u_z - u_0)(zeta, t)/L_0 of the snapshots, (b) data + the
-    one-sided consolidation model (D_c), (c) the feed-face displacement u_F(t) from the
+    permeation consolidation model (D_c), (c) the feed-face displacement u_F(t) from the
     thickness trace with the exact zero-IC series and the profile fit's own u(1, t)."""
     F = P.get('Dc')
     if F is None:
@@ -7521,7 +7521,7 @@ def fig_perm_Dc(cfg, R, P):
                 label=r'BC: $\partial u_z/\partial\zeta\,|_{\zeta=1}=0$ (free feed face)')
         if contact and ax is axl:
             ax.plot([], [], ' ', label=rf"rigid drop $u_0={F['u0_ss']:+.2f}\,\sigma$ subtracted (contact layer)")
-        ax.set(xlabel=flip_hint(R, xlab), ylabel=ylab, xlim=_zlim(R))
+        ax.set(xlabel=(xlab if ax is axl else flip_hint(R, r'$\zeta$')), ylabel=ylab, xlim=_zlim(R))   # definition left, flip hint right (the full label overlapped)
         ax.grid(alpha=0.3)
         smart_legend(ax, fontsize=10)
     axl.set_title(r'(a) ' + ylab + r' -- production snapshots (since the reset)'
