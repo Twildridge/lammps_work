@@ -5021,8 +5021,10 @@ def fit_Dc_timevarying(cfg, L, n_max=300, K=None):
 
 def fig_Dc_timevarying(cfg, R, L):
     """Third D_c figure of the single-level notebook (2026-10-18): (a) the diffusion time theta(t) of the hold and of the
-    re-swelling (piecewise-constant-D_c fit as a line, the unregularised per-snapshot theta_i as dots) against the
-    constant-D_c lines, (b) D_c per time bin with its standard error, the constant fits as dashed levels."""
+    re-swelling (the per-snapshot theta_i as dots, the binned-D_c fit as a line) against the constant-D_c lines,
+    (b) theta_i/(D_c t) against t/tau_1 -- the departure from a constant D_c read without differentiating.  The binned
+    D_c values are printed, not drawn: their heights trade off against the free amplitudes (they change with the number
+    of bins at the same R^2), so d theta/dt is not what the data determine; theta is."""
     TV = L.get('Dc_tv') or fit_Dc_timevarying(cfg, L)
     if not TV:
         print('D_c(t) figure skipped (no profile fits)')
@@ -5038,16 +5040,24 @@ def fig_Dc_timevarying(cfg, R, L):
         over = np.clip(tt[:, None] - d['edges'][None, :-1], 0.0, None) - np.clip(tt[:, None] - d['edges'][None, 1:], 0.0, None)
         axa.plot(tt, over @ d['D'], '-', color=c, lw=2.2, label=f"{d['K']}-bin $D_c(t)$ fit ($R^2$ {d['R2']:.3f}; first {d['n_id']:g} $\\tau_1$)")
         axa.plot(tt, d['Dc_const'] * tt, '--', color=c, lw=1.5, label=f"constant $D_c$ = {sig(d['Dc_const'])} ($R^2$ {d['R2_const']:.3f})")
-        e = d['edges']; D = d['D']; lo = D * np.exp(-d['se_logD']); hi = D * np.exp(d['se_logD'])
-        axb.stairs(D, e, color=c, lw=2.2, baseline=None, label=f"{d['label']}: $D_c$ per bin ($\\pm$ s.e.)")
-        axb.fill_between(np.repeat(e, 2)[1:-1], np.repeat(lo, 2), np.repeat(hi, 2), color=c, alpha=0.15)
-        axb.axhline(d['Dc_const'], color=c, ls='--', lw=1.5, label=f"constant fit {sig(d['Dc_const'])}")
-        axb.axvline(d['tau1'], color=c, ls=':', lw=1, alpha=0.6)
+        tn = d['t'] / d['tau1']
+        ratio = d['theta_i'] / (d['Dc_const'] * np.maximum(d['t'], 1e-9))
+        rse = d['se_i'] / (d['Dc_const'] * np.maximum(d['t'], 1e-9))
+        okb = ok & (tn > 0.05)
+        axb.errorbar(tn[okb], ratio[okb], yerr=rse[okb], fmt='o', color=c, ms=3, alpha=0.6, elinewidth=0.7, capsize=0,
+                     label=f"{d['label']}: $\\theta_i/(D_c t)$, constant-fit $D_c$ = {sig(d['Dc_const'])}")
+        m = okb & (tn <= 1.5)
+        if m.any():
+            axb.plot([0.05, 1.5], [np.mean(ratio[m])] * 2, '-', color=c, lw=2.0, alpha=0.8,
+                     label=f"mean to 1.5 $\\tau_1$: {np.mean(ratio[m]):.2f} (range {np.min(ratio[m]):.2f}-{np.max(ratio[m]):.2f})")
+    axb.axhline(1.0, color='k', ls='--', lw=1.2, label=r'$\theta = D_c t$ (constant $D_c$)')
+    axb.axhspan(0.8, 1.2, color='0.5', alpha=0.12, label=r'$\pm 20\%$')
+    axb.axvline(1.0, color='0.5', ls=':', lw=1)
     axa.set_xlabel(r'time since the onset  ($\tau$)'); axa.set_ylabel(r'$\theta(t) = \int_0^t D_c\,\mathrm{d}t^\prime$  ($\sigma^2$)')
     axa.set_title(r'(a) diffusion time: every mode decays as $e^{-\mu_k^2\theta/L^2}$, amplitudes shared by all snapshots', fontsize=12)
-    axb.set_xlabel(r'time since the onset  ($\tau$)'); axb.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
-    axb.set_title(r"(b) $D_c$ piecewise constant in time  (dotted: each fit's $\tau_1$)", fontsize=12)
-    axb.set_ylim(bottom=0)
+    axb.set_xlabel(r"$t/\tau_1$  (each transient's own $\tau_1$)"); axb.set_ylabel(r'$\theta_i\,/\,(D_c\,t)$')
+    axb.set_title(r'(b) the diffusion time against the constant-$D_c$ line: a ratio of 1 at every $t$ is a constant $D_c$', fontsize=12)
+    axb.set_ylim(0, 1.6); axb.set_xlim(0, float(cfg.DC_TV_TAU1))
     for ax in (axa, axb):
         ax.grid(alpha=0.3); ax.legend(fontsize=8.5, loc='upper left')
     fig.suptitle(f"Cooperative diffusivity with $D_c$ free in time (level _c{L['lvl']})  |  {cfg.sim_name}\n"
