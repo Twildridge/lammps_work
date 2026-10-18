@@ -323,6 +323,7 @@ class Config:
     # ---- D_c: fit window, stability scan, stress-trace D_c (2026-10-09) ----
     DC_FIT_TAU1: float = 6.0              # fit_Dc fits the FIRST DC_FIT_TAU1 x tau_1 of the hold, tau_1 = L^2/(4 pi^2 D_c) of the
     DC_TV_TAU1: float = 3.0                # D_c(t) fit (fit_Dc_timevarying): snapshots within this many tau_1 of the constant fit
+    PHI_S0: float = 0.448                # swollen-reference solvent volume fraction (lambda-calibrated Voronoi) for D_c(phi_s)
                                           # fit itself (iterated to self-consistency), and keeps the whole-hold fit as F['Dc_all'].
                                           # 0 = fit the DC_FRAC_EARLY fraction of the hold (the pre-2026-10-09 behaviour).  Why:
                                           # the quarter gel's hold (comp_3 level 0.30, fine file) is a poroelastic transient at
@@ -5057,6 +5058,224 @@ def fig_Dc_timevarying(cfg, R, L):
                  "hold: $\\sin, \\cos(2m\\pi\\zeta)$ modes between the held plates;  re-swelling: $\\cos(k\\pi\\zeta)$ modes, faces free",
                  fontsize=12, fontweight='bold')
     return _save(fig, cfg, 'Dc_timevarying', L['lvl'])
+
+
+# ---------------------------------------------------------------------------
+#  D_c(phi_s): both compression transients with ONE state-dependent diffusivity (2026-10-18).
+#  v_p = q(t) + kappa dsigma'/dz with sigma' = sigma'(eps) gives du/dt = q(t) + D_c(eps) d2u/dz2,
+#  D_c = kappa M_t (tangent modulus), and for the strain eps = -du/dz the conservative form
+#      d eps/dt = d/dz [ D_c(eps) d eps/dz ],      phi_s = phi_s0 - (1 - phi_s0) eps      (S129).
+#  D_c(phi_s) = D_ref exp[a (phi_s - phi_s0)]: D_ref at the swollen reference, a the sensitivity.
+#  Hold: eps periodic (pinned faces, both drained into one bath), mean eps = DL/L fixed.  Re-swelling:
+#  eps = 0 at both free faces.  Each transient's initial strain profile is free (periodic modes about
+#  DL/L; a uniform value + sine modes) and is fitted together with (D_ref, a); the observable is the
+#  displacement since the onset, u(zeta,t) - u(zeta,0) = -int_0^zeta [eps(t) - eps(0)] dzeta' (plus a
+#  constant removed with the COM for the re-swelling).  Explicit finite differences.  (D_ref, a) are
+#  shared in the joint fit and free per transient in the separate fits; the three are compared.
+# ---------------------------------------------------------------------------
+def _eps_pde(eps0, Dfun, L, t_out, periodic):
+    """d eps/dt = d/dzeta [D(eps) d eps/dzeta] / L^2 on zeta in [0, 1] (len(eps0) points), explicit Euler at the
+    stability limit, sampled at t_out (LJ, increasing).  periodic: zeta_j = j/n, j = 0..n-1;  else Dirichlet
+    eps = 0 at both ends.  Returns (len(t_out), n)."""
+    eps = np.asarray(eps0, float).copy()
+    n = len(eps)
+    dz = 1.0 / n if periodic else 1.0 / (n - 1)
+    out = np.empty((len(t_out), n))
+    t = 0.0
+    if not periodic:
+        eps[0] = eps[-1] = 0.0
+    for m, tm in enumerate(t_out):
+        while t < tm:
+            if periodic:
+                e1 = np.roll(eps, -1)
+                Dm = Dfun(0.5 * (eps + e1))
+                flux = Dm * (e1 - eps) / dz                     # between j and j+1
+                deriv = (flux - np.roll(flux, 1)) / (dz * L ** 2)
+            else:
+                Dm = Dfun(0.5 * (eps[1:] + eps[:-1]))
+                flux = Dm * (eps[1:] - eps[:-1]) / dz
+                deriv = np.zeros(n)
+                deriv[1:-1] = (flux[1:] - flux[:-1]) / (dz * L ** 2)
+            dt = min(0.4 * dz ** 2 * L ** 2 / max(float(Dm.max()), 1e-12), tm - t)
+            eps = eps + dt * deriv
+            t += dt
+        out[m] = eps
+    return out
+
+
+def _u_from_eps(eps_t, eps0, periodic):
+    """u(zeta,t) - u(zeta,0) = -int_0^zeta [eps(t) - eps(0)] on the solver grid (trapezoid)."""
+    d = eps_t - eps0[None, :]
+    n = d.shape[1]
+    if periodic:                                                # grid j/n, close the integral at zeta = 1
+        d = np.hstack([d, d[:, :1]])
+    dz = 1.0 / (d.shape[1] - 1)
+    u = -np.hstack([np.zeros((d.shape[0], 1)), np.cumsum(0.5 * (d[:, 1:] + d[:, :-1]) * dz, axis=1)])
+    return np.linspace(0.0, 1.0, d.shape[1]), u
+
+
+def fit_Dc_phi(cfg, L, n_grid=81, n_max=80, n_modes=6):
+    """One D_c(phi_s) for the hold and the free re-swelling (see the section comment).  Stores and returns
+    L['Dc_phi'] with the joint fit ('joint'), the separate fits ('hold', 'unload'), each with D_ref, a, their
+    standard errors, D_c at the swollen reference and at the hold state, R2 per transient, and the model
+    profiles at the shown snapshots."""
+    from scipy.optimize import least_squares
+    F = L.get('Dc')
+    Pf = (L.get('unload') or {}).get('prof')
+    if F is None or Pf is None:
+        print('D_c(phi_s) fit skipped (needs the hold profile fit and the re-swelling profile fit)')
+        return None
+    Uf = L['unload']
+    phi0 = float(L['phi_cal'][0]) if L.get('phi_cal') is not None and False else float(cfg.PHI_S0)
+    phip0 = 1.0 - phi0
+    n_id = float(cfg.DC_TV_TAU1)
+    # ---- data: hold (Eulerian bins zf, hold-referenced u/L) and re-swelling (material zeta per snapshot, COM removed) ----
+    selh = F['early_all'][F['t_lj'][F['early_all']] <= n_id * F['tau1']]
+    selh = selh[::max(1, int(np.ceil(len(selh) / n_max)))]
+    th = np.maximum(F['t_lj'][selh] - 0.5 * F['W'], 0.0)
+    Yh = [F['uhat'][i][F['idx']] for i in selh]
+    zh = F['zf']
+    selu = np.where(Pf['t_lj'] <= n_id * Pf['tau1'])[0]
+    selu = selu[::max(1, int(np.ceil(len(selu) / n_max)))]
+    tu = np.maximum(Pf['t_lj'][selu] - 0.5 * Pf['W'], 0.0)
+    Yu = [Pf['yl'][i] for i in selu]
+    Zu = [Pf['zl'][i] for i in selu]
+    Lh, Lu = float(F['L']), float(Uf['L'])
+    eps_h = float(F['DL'] / F['L'])                               # mean strain of the held gel
+    eps_u0 = float(Uf['dL_inf_ref'] / Uf['L_hold'])             # uniform strain released by the re-swelling
+    zg_p = np.arange(n_grid) / n_grid                            # periodic grid (hold)
+    zg_d = np.linspace(0.0, 1.0, n_grid)                         # Dirichlet grid (re-swelling)
+    mm = np.arange(1, n_modes + 1)
+    Mh = np.hstack([np.cos(2 * np.pi * np.outer(zg_p, mm)), np.sin(2 * np.pi * np.outer(zg_p, mm))])   # (n, 2N)
+    Mu = np.sin(np.pi * np.outer(zg_d, mm))                                                          # (n, N)
+    wh, wu = 1.0 / np.sqrt(sum(len(y) for y in Yh)), 1.0 / np.sqrt(sum(len(y) for y in Yu))
+
+    def Dfun_of(logD, a):
+        return lambda e: np.exp(logD) * np.exp(-a * phip0 * e)   # phi_s - phi_s0 = -phi_p0 eps
+
+    def model_hold(logD, a, amps):
+        eps0 = eps_h + Mh @ amps
+        E = _eps_pde(eps0, Dfun_of(logD, a), Lh, th, True)
+        zz, U = _u_from_eps(E, eps0, True)
+        return eps0, E, [np.interp(zh, zz, U[i]) for i in range(len(th))]
+
+    def model_unload(logD, a, amps):
+        eps0 = amps[0] + Mu @ amps[1:]
+        E = _eps_pde(eps0, Dfun_of(logD, a), Lu, tu, False)
+        zz, U = _u_from_eps(E, eps0, False)
+        return eps0, E, [np.interp(Zu[i], zz, U[i]) - np.mean(np.interp(Zu[i], zz, U[i])) for i in range(len(tu))]
+
+    def res_hold(logD, a, amps):
+        return np.concatenate([(m - y - np.mean(m - y) * 0.0) for m, y in zip(model_hold(logD, a, amps)[2], Yh)]) * wh
+
+    def res_unload(logD, a, amps):
+        return np.concatenate([(m - (y - np.mean(y))) for m, y in zip(model_unload(logD, a, amps)[2], Yu)]) * wu
+
+    nh, nu = 2 * n_modes, n_modes + 1
+    x0h = np.zeros(nh); x0u = np.concatenate([[eps_u0], np.zeros(n_modes)])
+
+    def _fit(which):
+        if which == 'joint':
+            f = lambda x: np.concatenate([res_hold(x[0], x[1], x[2:2 + nh]), res_unload(x[0], x[1], x[2 + nh:])])
+            x0 = np.concatenate([[np.log(0.5 * (F['Dc'] + Pf['Dc'])), 0.0], x0h, x0u])
+        elif which == 'hold':
+            f = lambda x: res_hold(x[0], x[1], x[2:])
+            x0 = np.concatenate([[np.log(F['Dc']), 0.0], x0h])
+        else:
+            f = lambda x: res_unload(x[0], x[1], x[2:])
+            x0 = np.concatenate([[np.log(Pf['Dc']), 0.0], x0u])
+        lo = np.full(len(x0), -np.inf); hi = np.full(len(x0), np.inf)
+        lo[0], hi[0] = np.log(cfg.DC_BOUNDS[0]), np.log(cfg.DC_BOUNDS[1]); lo[1], hi[1] = -60.0, 60.0
+        r = least_squares(f, x0, bounds=(lo, hi), x_scale='jac', max_nfev=400)
+        J = r.jac
+        try:
+            cov = np.linalg.inv(J.T @ J) * (np.sum(r.fun ** 2) / max(len(r.fun) - len(x0), 1))
+            se = np.sqrt(np.clip(np.diag(cov), 0, None))
+        except np.linalg.LinAlgError:
+            cov = None; se = np.full(len(x0), np.nan)
+        return r, cov, se
+
+    def _r2(res, Y, w):
+        y = np.concatenate([yy - (np.mean(yy) if w is wu else 0.0) for yy in Y])
+        ss = np.sum((y - y.mean()) ** 2)
+        return float(1.0 - np.sum((res / w) ** 2) / ss) if ss > 1e-30 else np.nan
+
+    out = dict(phi0=phi0, eps_h=eps_h, eps_u0=eps_u0, n_id=n_id, th=th, tu=tu, zh=zh, Yh=Yh, Yu=Yu, Zu=Zu, selh=selh, selu=selu,
+               Dc_const=dict(hold=F['Dc'], unload=Pf['Dc']), R2_const=dict(hold=F['R2'], unload=Pf['R2']))
+    for which in ('joint', 'hold', 'unload'):
+        r, cov, se = _fit(which)
+        x = r.x
+        d = dict(logD=float(x[0]), a=float(x[1]), se_logD=float(se[0]), se_a=float(se[1]), cov=cov[:2, :2] if cov is not None else None,
+                 D_ref=float(np.exp(x[0])), nfev=int(r.nfev), status=int(r.status))
+        d['D_hold'] = d['D_ref'] * np.exp(-d['a'] * phip0 * eps_h)   # at the held gel's mean strain
+        if which in ('joint', 'hold'):
+            amps = x[2:2 + nh] if which == 'joint' else x[2:]
+            eps0, E, U = model_hold(x[0], x[1], amps)
+            d['hold'] = dict(eps0=eps0, E=E, U=U, amps=amps, R2=_r2(res_hold(x[0], x[1], amps), Yh, wh))
+        if which in ('joint', 'unload'):
+            amps = x[2 + nh:] if which == 'joint' else x[2:]
+            eps0, E, U = model_unload(x[0], x[1], amps)
+            d['unload'] = dict(eps0=eps0, E=E, U=U, amps=amps, R2=_r2(res_unload(x[0], x[1], amps), Yu, wu))
+        out[which] = d
+    L['Dc_phi'] = out
+    print(f"  D_c(phi_s) = D_ref exp[a (phi_s - {phi0:.3f})], phi_s = phi_s0 - (1 - phi_s0) eps;  held gel eps = {eps_h:.4f} (phi_s {phi0 - phip0 * eps_h:.3f}), "
+          f"re-swelling from eps = {eps_u0:.4f}")
+    for which in ('joint', 'hold', 'unload'):
+        d = out[which]
+        print(f"    {which:7s}: D_ref = {d['D_ref']:.4f} (x/ {np.exp(d['se_logD']):.3f}),  a = {d['a']:+.1f} +/- {d['se_a']:.1f}  ->  D_c(hold state) = {d['D_hold']:.4f}"
+              + (f";  R^2 hold {d['hold']['R2']:.3f}" if 'hold' in d else '') + (f", re-swelling {d['unload']['R2']:.3f}" if 'unload' in d else '')
+              + f"   [constant-D_c fits: hold {F['Dc']:.4f} ({F['R2']:.3f}), re-swelling {Pf['Dc']:.4f} ({Pf['R2']:.3f})]")
+    return out
+
+
+def fig_Dc_phi(cfg, R, L):
+    """Fourth D_c figure of the single-level notebook (2026-10-18): (a) D_c(phi_s) of the joint and the separate fits
+    with the constant-D_c values at each transient's phi_s, (b) hold and (c) re-swelling profiles against the joint model."""
+    X = L.get('Dc_phi') or fit_Dc_phi(cfg, L)
+    if X is None:
+        return None
+    phi0, phip0 = X['phi0'], 1.0 - X['phi0']
+    fig, (axa, axb, axc) = plt.subplots(1, 3, figsize=(20, 6.5), constrained_layout=True)
+    phi = np.linspace(phi0 - phip0 * max(X['eps_h'], X['eps_u0']) * 1.3, phi0 + 0.02, 200)
+    cols = dict(joint='k', hold=WONG['blue'], unload=WONG['vermillion'])
+    for which, ls in (('joint', '-'), ('hold', '--'), ('unload', '--')):
+        d = X[which]
+        D = d['D_ref'] * np.exp(d['a'] * (phi - phi0))
+        axa.plot(phi, D, ls, color=cols[which], lw=2.2 if which == 'joint' else 1.6,
+                 label=f"{which} fit: $D_{{ref}}$ = {sig(d['D_ref'])}, a = {d['a']:+.1f} $\\pm$ {d['se_a']:.1f}"
+                       + (f"  ($R^2$ hold {d['hold']['R2']:.3f}, re-swelling {d['unload']['R2']:.3f})" if which == 'joint' else f"  ($R^2$ {d[which]['R2']:.3f})"))
+        if d['cov'] is not None and which == 'joint':
+            g = np.vstack([np.ones_like(phi), phi - phi0])          # d logD / d(logD_ref, a)
+            sd = np.sqrt(np.einsum('ij,jk,ik->i', g.T, d['cov'], g.T))
+            axa.fill_between(phi, D * np.exp(-sd), D * np.exp(sd), color='k', alpha=0.08)
+    ph_h = phi0 - phip0 * X['eps_h']
+    axa.plot([ph_h - 0.01, ph_h + 0.01], [X['Dc_const']['hold']] * 2, '-', color=WONG['blue'], lw=4, alpha=0.5, label=f"constant-$D_c$ hold fit {sig(X['Dc_const']['hold'])} at the held $\\phi_s$")
+    axa.plot([phi0 - phip0 * X['eps_u0'], phi0], [X['Dc_const']['unload']] * 2, '-', color=WONG['vermillion'], lw=4, alpha=0.5, label=f"constant-$D_c$ re-swelling fit {sig(X['Dc_const']['unload'])} over its $\\phi_s$ range")
+    axa.axvline(phi0, color='0.5', ls=':', lw=1)
+    axa.set_xlabel(r'$\phi_s = \phi_s^0 - (1-\phi_s^0)\,\varepsilon$'); axa.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)'); axa.set_yscale('log')
+    axa.set_title(r'(a) $D_c(\phi_s) = D_{ref}\,e^{a(\phi_s-\phi_s^0)}$ from $\partial_t\varepsilon = \partial_z[D_c(\varepsilon)\,\partial_z\varepsilon]$', fontsize=12)
+    axa.yaxis.set_major_formatter(FormatStrFormatter('%.2f')); axa.yaxis.set_minor_formatter(FormatStrFormatter('%.2f'))
+    axa.grid(alpha=0.3, which='both'); axa.legend(fontsize=8, loc='lower right')
+    J = X['joint']
+    for ax, key, t_, Y, Z, zz_grid, ttl in ((axb, 'hold', X['th'], X['Yh'], None, None, '(b) hold: data vs the joint $D_c(\\phi_s)$ model'),
+                                            (axc, 'unload', X['tu'], X['Yu'], X['Zu'], None, '(c) re-swelling: data (COM removed) vs the joint model')):
+        shown = np.unique(np.linspace(0, len(t_) - 1, 8).astype(int))
+        norm = Normalize(vmin=t_[0], vmax=t_[-1]); cmap = plt.cm.viridis
+        for i in shown:
+            c = cmap(norm(t_[i]))
+            if key == 'hold':
+                ax.plot(X['zh'], Y[i], 'o', color=c, ms=3, alpha=0.5)
+                ax.plot(X['zh'], J['hold']['U'][i], '-', color=c, lw=1.8)
+            else:
+                ax.plot(Z[i], Y[i] - np.mean(Y[i]), 'o', color=c, ms=3, alpha=0.5)
+                ax.plot(Z[i], J['unload']['U'][i], '-', color=c, lw=1.8)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
+        fig.colorbar(sm, ax=ax, fraction=0.04, pad=0.02).set_label(r'time since the onset ($\tau$)')
+        ax.set_xlabel(r'$\zeta$'); ax.set_ylabel(r'$[u_z(\zeta,t) - u_z(\zeta,0)]/L$'); ax.set_title(ttl, fontsize=12); ax.grid(alpha=0.3)
+    fig.suptitle(f"Cooperative diffusivity as a function of the solvent volume fraction, hold and re-swelling fitted together (level _c{L['lvl']})  |  {cfg.sim_name}\n"
+                 f"joint: $D_c$ = {sig(J['D_ref'])} at $\\phi_s^0$ = {phi0:.3f}, {sig(J['D_hold'])} at the held state;  separate fits: hold {sig(X['hold']['D_hold'])}, re-swelling {sig(X['unload']['D_ref'])} at $\\phi_s^0$",
+                 fontsize=12, fontweight='bold')
+    return _save(fig, cfg, 'Dc_phi_fit', L['lvl'])
 
 
 def fig_Dc(cfg, R, L):
