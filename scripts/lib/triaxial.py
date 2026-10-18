@@ -322,6 +322,7 @@ class Config:
     DC_TARGET_RESID: float = 0.01
     # ---- D_c: fit window, stability scan, stress-trace D_c (2026-10-09) ----
     DC_FIT_TAU1: float = 6.0              # fit_Dc fits the FIRST DC_FIT_TAU1 x tau_1 of the hold, tau_1 = L^2/(4 pi^2 D_c) of the
+    DC_TV_TAU1: float = 3.0                # D_c(t) fit (fit_Dc_timevarying): snapshots within this many tau_1 of the constant fit
                                           # fit itself (iterated to self-consistency), and keeps the whole-hold fit as F['Dc_all'].
                                           # 0 = fit the DC_FRAC_EARLY fraction of the hold (the pre-2026-10-09 behaviour).  Why:
                                           # the quarter gel's hold (comp_3 level 0.30, fine file) is a poroelastic transient at
@@ -4917,6 +4918,145 @@ def fig_Dc_reswelling(cfg, R, L):
                  + (f";  thickness traces: bb {sig(T['Dc'])}" if T else '') + (f", Rg {sig(Tr['Dc'])}" if Tr else ''),
                  fontsize=12, fontweight='bold')
     return _save(fig, cfg, 'Dc_reswelling_fit', L['lvl'])
+
+
+# ---------------------------------------------------------------------------
+#  D_c(t): the same modal problems with the diffusivity free in time (2026-10-18).
+#  The strain equation is linear with a time-only coefficient, so D_c(t) enters only through the
+#  diffusion time theta(t) = int_0^t D_c dt': every mode decays as exp(-lam_k theta), lam_k = mu_k^2/L^2.
+#  Fit: amplitudes A_k shared by all snapshots (linear least squares at fixed theta), one theta_i per
+#  snapshot (bounded Brent at fixed A), alternated; theta kept non-decreasing (pool-adjacent-violators)
+#  since D_c >= 0.  D_c(t) = d theta/dt by a running linear fit.  Window averaging of the snapshots is
+#  not modelled here: each snapshot is placed at its window centre (W/2 before its tag).
+# ---------------------------------------------------------------------------
+def _pava(y):
+    """non-decreasing least-squares fit of y (pool adjacent violators, unit weights)"""
+    vals, cnts = [], []
+    for v in np.asarray(y, float):
+        vals.append(float(v)); cnts.append(1)
+        while len(vals) > 1 and vals[-2] > vals[-1]:
+            n = cnts[-1] + cnts[-2]
+            vals[-2] = (vals[-2] * cnts[-2] + vals[-1] * cnts[-1]) / n
+            cnts[-2] = n
+            vals.pop(); cnts.pop()
+    return np.concatenate([np.full(c, v) for v, c in zip(vals, cnts)])
+
+
+def _theta_fit(Wm, Y, lam, theta0, n_iter=8):
+    """Variable-projection fit of u_i(zeta) = sum_k A_k w_k(zeta) [exp(-lam_k theta_i) - 1] to the snapshots
+    (Wm[i]: (n_i, K) mode matrix, Y[i]: (n_i,) data).  Returns theta (len(Y)), A (K), R2, and the per-snapshot R2."""
+    lam = np.asarray(lam, float)
+    y = np.concatenate(Y)
+    theta = np.asarray(theta0, float).copy()
+    th_hi = 3.0 * theta.max() + 8.0 / lam.min()
+
+    def X(th):
+        return np.vstack([Wm[i] * (np.exp(-lam * th[i]) - 1.0)[None, :] for i in range(len(Y))])
+
+    A = _lsq_amps(X(theta), y)
+    for _ in range(n_iter):
+        for i in range(len(Y)):
+            def r(th, i=i):
+                return float(np.sum((Wm[i] @ (A * (np.exp(-lam * th) - 1.0)) - Y[i]) ** 2))
+            theta[i] = minimize_scalar(r, bounds=(0.0, th_hi), method='bounded').x
+        theta = _pava(theta)
+        A = _lsq_amps(X(theta), y)
+    pred = X(theta) @ A
+    ss = np.sum((y - y.mean()) ** 2)
+    R2 = float(1.0 - np.sum((pred - y) ** 2) / ss) if ss > 1e-30 else np.nan
+    se = np.empty(len(Y))                                   # standard error of theta_i: residual variance over the
+    j = 0                                                   # squared sensitivity of the model to theta_i
+    for i in range(len(Y)):
+        n = len(Y[i]); pi_ = pred[j:j + n]; j += n
+        g = Wm[i] @ (A * lam * np.exp(-lam * theta[i]))
+        S = float(np.sum(g ** 2))
+        se[i] = np.sqrt(np.sum((pi_ - Y[i]) ** 2) / max(n - 1, 1) / S) if S > 0 else np.inf
+    return theta, A, R2, se
+
+
+def _running_slope(t, th, n):
+    """d theta/dt by a linear fit over 2n+1 consecutive points (one-sided at the ends)"""
+    out = np.full(len(t), np.nan)
+    for i in range(len(t)):
+        a, b = max(0, i - n), min(len(t), i + n + 1)
+        tt, yy = t[a:b], th[a:b]
+        if len(tt) >= 3 and tt[-1] > tt[0]:
+            out[i] = np.polyfit(tt, yy, 1)[0]
+    return out
+
+
+def fit_Dc_timevarying(cfg, L, n_max=300, n_iter=8):
+    """D_c(t) of the hold (modes of fit_Dc) and of the free re-swelling (modes of fit_Dc_unload) with the
+    diffusion time theta_i free per snapshot (see the section comment).  Stores and returns L['Dc_tv'] =
+    {'hold': {...}, 'unload': {...}} with t (LJ time from the onset, window centre), theta, Dc_t (running
+    slope over 2 n_win + 1 snapshots), the constant-D_c reference and the fit quality."""
+    out = {}
+    n_id = float(cfg.DC_TV_TAU1)                        # snapshots within n_id tau_1 of the constant fit: beyond, the modes
+    F = L.get('Dc')                                     # have decayed and theta_i is not identifiable (it runs to the bound)
+    if F is not None:
+        sel = F['early_all'][F['t_lj'][F['early_all']] <= n_id * F['tau1']]
+        sel = sel[::max(1, int(np.ceil(len(sel) / n_max)))]
+        t = F['t_lj'][sel] - 0.5 * F['W']
+        lam = np.tile((np.pi * F['kk'] / F['L']) ** 2, 2)
+        Wm = [_w_modes(F['zf'], F['kk'])] * len(sel)
+        Y = [F['uhat'][i][F['idx']] for i in sel]
+        theta, A, R2, se = _theta_fit(Wm, Y, lam, F['Dc'] * np.maximum(t, 0.0), n_iter)
+        n_win = max(3, len(sel) // 12)
+        out['hold'] = dict(t=t, theta=theta, se=se, Dc_t=_running_slope(t, theta, n_win), Dc_const=F['Dc'], tau1=F['tau1'],
+                           R2=R2, R2_const=F['R2'], n=len(sel), n_win=n_win, L=F['L'], n_id=n_id,
+                           label=r'hold, $\tau_1 = L^2/(4\pi^2 D_c)$')
+    Uf = L.get('unload')
+    Pf = (Uf or {}).get('prof')
+    if Pf is not None:
+        sel = np.where(Pf['t_lj'] <= n_id * Pf['tau1'])[0]
+        sel = sel[::max(1, int(np.ceil(len(sel) / n_max)))]
+        t = Pf['t_lj'][sel] - 0.5 * Pf['W']
+        lam = (np.pi * Pf['k'] / Uf['L']) ** 2
+        Wm = [np.cos(np.pi * np.outer(Pf['zl'][i], Pf['k'])) for i in sel]
+        Y = [Pf['yl'][i] for i in sel]
+        theta, A, R2, se = _theta_fit(Wm, Y, lam, Pf['Dc'] * np.maximum(t, 0.0), n_iter)
+        n_win = max(3, len(sel) // 12)
+        out['unload'] = dict(t=t, theta=theta, se=se, Dc_t=_running_slope(t, theta, n_win), Dc_const=Pf['Dc'], tau1=Pf['tau1'],
+                             R2=R2, R2_const=Pf['R2'], n=len(sel), n_win=n_win, L=Uf['L'], n_id=n_id,
+                             label=r're-swelling, $\tau_1 = L^2/(\pi^2 D_c)$')
+    L['Dc_tv'] = out
+    for k, d in out.items():
+        ok = np.isfinite(d['Dc_t'])
+        print(f"  D_c(t) {k:9s}: {d['n']} snapshots within {d['n_id']:g} tau_1, R^2 {d['R2']:.3f} (constant D_c {d['Dc_const']:.4f}: {d['R2_const']:.3f});  "
+              f"running D_c over {2 * d['n_win'] + 1} snapshots: first {np.nanmean(d['Dc_t'][ok][:3]):.4f} -> last {np.nanmean(d['Dc_t'][ok][-3:]):.4f}, "
+              f"min {np.nanmin(d['Dc_t']):.4f}, max {np.nanmax(d['Dc_t']):.4f};  theta(end)/(D_c t_end) = {d['theta'][-1] / (d['Dc_const'] * d['t'][-1]):.3f}")
+    return out
+
+
+def fig_Dc_timevarying(cfg, R, L):
+    """Third D_c figure of the single-level notebook (2026-10-18): (a) the fitted diffusion time theta(t) of the hold and of
+    the re-swelling against the constant-D_c lines, (b) D_c(t) = d theta/dt with the constant fits as dashed levels."""
+    TV = L.get('Dc_tv') or fit_Dc_timevarying(cfg, L)
+    if not TV:
+        print('D_c(t) figure skipped (no profile fits)')
+        return None
+    fig, (axa, axb) = plt.subplots(1, 2, figsize=(18, 6.5), constrained_layout=True)
+    cols = {'hold': WONG['blue'], 'unload': WONG['vermillion']}
+    for k, d in TV.items():
+        c = cols[k]
+        axa.errorbar(d['t'], d['theta'], yerr=d['se'], fmt='o', color=c, ms=3, alpha=0.6, elinewidth=0.8, capsize=0,
+                     label=f"{d['label']}: fitted $\\theta_i$ $\\pm$ s.e. ($R^2$ {d['R2']:.3f}; first {d['n_id']:g} $\\tau_1$)")
+        axa.plot(d['t'], d['Dc_const'] * np.maximum(d['t'], 0.0), '--', color=c, lw=1.5,
+                 label=f"constant $D_c$ = {sig(d['Dc_const'])} ($R^2$ {d['R2_const']:.3f})")
+        axb.plot(d['t'], d['Dc_t'], '-', color=c, lw=2.0, label=f"{d['label']}: $\\mathrm{{d}}\\theta/\\mathrm{{d}}t$ over {2 * d['n_win'] + 1} snapshots")
+        axb.axhline(d['Dc_const'], color=c, ls='--', lw=1.5, label=f"constant fit {sig(d['Dc_const'])}")
+        axb.axvline(d['tau1'], color=c, ls=':', lw=1, alpha=0.6)
+    axa.set_xlabel(r'time since the onset  ($\tau$)'); axa.set_ylabel(r'$\theta(t) = \int_0^t D_c\,\mathrm{d}t^\prime$  ($\sigma^2$)')
+    axa.set_title(r'(a) diffusion time per snapshot: every mode decays as $e^{-\mu_k^2\theta/L^2}$, amplitudes shared', fontsize=12)
+    axb.set_xlabel(r'time since the onset  ($\tau$)'); axb.set_ylabel(r'$D_c(t)$  ($\sigma^2/\tau$)')
+    axb.set_title(r"(b) $D_c(t) = \mathrm{d}\theta/\mathrm{d}t$  (dotted: each fit's $\tau_1$)", fontsize=12)
+    axb.set_ylim(bottom=0)
+    for ax in (axa, axb):
+        ax.grid(alpha=0.3); smart_legend(ax, fontsize=9)
+    fig.suptitle(f"Cooperative diffusivity with $D_c$ free in time (level _c{L['lvl']})  |  {cfg.sim_name}\n"
+                 "hold: $\\sin, \\cos(2m\\pi\\zeta)$ modes between the held plates;  re-swelling: $\\cos(k\\pi\\zeta)$ modes, faces free",
+                 fontsize=12, fontweight='bold')
+    return _save(fig, cfg, 'Dc_timevarying', L['lvl'])
 
 
 def fig_Dc(cfg, R, L):
