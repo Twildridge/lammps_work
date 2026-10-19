@@ -76,10 +76,12 @@ export NPT_PISTON_STEPS=1000000   # Phase-1 settle of the wet pistons
 export SETTLE_HALT=0          # 1 = end the settle early once both pistons are at rest
 
 # ----- compress_slab knobs -----
-export SEAT_MODE=rg           # gel face the plates seat on: rg = Rg-based face (the network's effective
-                              # surface; default), bb = outermost bead (the two-piston decks' seating).
-                              # The bounding box of the 12-cell cube is 3-5 sigma per side wider than its
-                              # Rg edge and a 10 % level closes each face by ~1.2 sigma: see compress_slab.lmp
+export SEAT_MODE=bb           # gel face the plates seat on: bb = outermost bead (the two-piston decks' seating;
+                              # zero-load reference, sigma' = 0 as in the triaxial / shear runs; default since
+                              # 2026-10-19), rg = Rg-based face (seated on the network's effective surface but
+                              # with a ~0.028 preload: the reference is a pre-compressed state; runs up to _04).
+                              # The bounding box of the 12-cell cube is 3-5 sigma per side wider than its Rg
+                              # edge, so with bb the first levels fold in the shell: see compress_slab.lmp
 export HOLD_AUTO=1            # 1 = size each hold from tau_1 = L^2/(pi^2 D_c) on the shortest gel edge;
                               # 0 = hold NSTEPS at every level (short trials)
 
@@ -90,11 +92,15 @@ export HOLD_AUTO=1            # 1 = size each hold from tau_1 = L^2/(pi^2 D_c) o
 # DRIVE_SPLIT of the closure, lo plate by the rest) until the plate strain
 # reaches the target (fix halt), freezes the plates, and holds.
 #
-# DEFAULT = ONE level, 10 % (eps_vol = 0.10, e = 3.45 % per axis), as the default
-# of triaxial_compression_two_pist.  For a sweep list more levels, e.g.
-#   STRAIN_TARGETS=(0.05 0.10 0.15 0.20 0.30)
-# and raise --time: each level adds its drive (~12k steps) and its hold (~2.5M
-# steps for a 62-sigma gel).  Solvent expelled by the compression backs the wet
+# SWEEP (2026-10-19): five levels from well below to past the 10 % single level
+# of runs _01-_04, STRAIN_TARGETS=(0.025 0.05 0.075 0.11 0.16), with bb seating
+# (zero reference).  Linear closure per axis e = 0.84 / 1.70 / 2.57 / 3.81 / 5.65 %,
+# i.e. 0.27 / 0.54 / 0.82 / 1.22 / 1.81 sigma per face on the 64-sigma cube.  The one-level
+# default is STRAIN_TARGETS=(0.10), as triaxial_compression_two_pist.  Each level
+# adds its drive (~12k steps) and its auto-sized hold (~2.5M steps for a 62-sigma
+# gel), so the five levels are ~2.3M setup + ~12.5M = ~15M steps against the 4.9M
+# of the one-level run _04; --time 48 h covers it (the triaxial batch runs ~50M
+# steps per 48 h on the same 4 nodes).  Solvent expelled by the compression backs the wet
 # pistons out by ~eps_vol*V0/A: the converter's margin_feed + margin_perm
 # (default 10 + 10 sigma ~ eps_vol 0.6 on the 12-cell cube) must cover the deepest
 # level or the box-face halt ends the run (the converter prints the limit).
@@ -105,7 +111,7 @@ export HOLD_AUTO=1            # 1 = size each hold from tau_1 = L^2/(pi^2 D_c) o
 # -----------------------------------------------------------------------
 # NOTE: the list must be exported as a SCALAR string (bash does not export
 # arrays); STRAIN_TARGETS is the array, COMPRESSIONS the scalar run_lammps.sh reads.
-STRAIN_TARGETS=(0.10)
+STRAIN_TARGETS=(0.025 0.05 0.075 0.11 0.16)
 export COMPRESSIONS="${STRAIN_TARGETS[*]}"
 export DRIVE_SPLIT=0.5        # hi-plate share of each gap closure (0.5 = symmetric drive)
 

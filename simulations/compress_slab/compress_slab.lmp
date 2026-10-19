@@ -56,9 +56,10 @@
 #   - Phase 0:    read + brief minimize + short Langevin NVT (mobile), all walls frozen.
 #   - Phase 1:    NPT-PISTON SETTLE of both wet pistons at P_target (Langevin on mobile).
 #   - Phase 1.25: SEATING: the six plates travel over the common time t_seat to
-#                 contact_gap from the gel face they load (seat_mode: the Rg-based
-#                 face, default, or the outermost bead); settle; record the
-#                 reference edges L0 = seated plate gap - 2 contact_gap and preloads.
+#                 contact_gap from the gel face they load (seat_mode: bb = the
+#                 outermost bead as the two-piston decks, zero-load reference, default;
+#                 rg = the Rg-based face, preloaded); settle; record the reference
+#                 edges L0 = seated plate gap - 2 contact_gap and preloads.
 #   - Phase 1.5:  eps_vol = 0 REFERENCE window (_ref files; wet pistons live).
 #   - Phase 2:    the strain SWEEP.  `compressions` are cumulative VOLUMETRIC strain
 #                 targets; each level closes the three plate gaps by the same linear
@@ -142,17 +143,22 @@ variable hold_auto   index 1
 # ----- Phase 1.25: seating -----
 variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) short of the gel face they seat on
 # seat_mode = which gel face the plates seat on.
-#   rg (default): the Rg-based face, com +/- L_rg/2 (L_rg = 2 sqrt(3) Rg_ii, the edge of the
-#       uniform block with the network's radius of gyration).  The network's bounding box
-#       sits 3-5 sigma per side OUTSIDE that face (sparse outer shell of dangling strands;
-#       12-cell cube, run new_02), while a 10 % volumetric level closes each face by only
-#       ~1.2 sigma: plates seated on the outermost bead would spend the whole level on the
-#       shell and hardly strain the network.  Seated on the Rg face they start at the
-#       network's effective surface; the shell they fold in carries a small preload, which
-#       the eps_vol = 0 reference window measures and every K subtracts.
-#   bb: the outermost bead of each face (the two-piston decks' seating; there the slab
-#       closes by ~6 sigma per face at eps = 0.10, so the shell does not matter).
-variable seat_mode    index rg
+#   bb (default since 2026-10-19): the outermost bead of each face, exactly the
+#       two-piston decks' seating (triaxial_compression_two_pist seats at contact_gap
+#       from the BB faces).  The seated gel carries NO load, so the eps_vol = 0
+#       reference is the free-swollen gel (sigma' = 0, Pi_ref = 0) as in the triaxial
+#       and shear notebooks, and the network stress increments of every level are
+#       measured from the same state as M.  The sparse outer shell of dangling
+#       strands (3-5 sigma per side outside the Rg face on the 12-cell cube) is
+#       folded in by the first levels: the displacement-profile strain
+#       (disp_*_polymer_cum, lib/bulk.py K_STRAIN = 'disp') is the network strain
+#       the plate strain overstates there.
+#   rg: the Rg-based face, com +/- L_rg/2 (L_rg = 2 sqrt(3) Rg_ii).  Plates start
+#       at the network's effective surface, but the shell they fold in during the
+#       seating carries a preload (~0.028 on the 12-cell cube, run _04), so the
+#       eps_vol = 0 reference is a pre-compressed state (phi_s 0.40 vs 0.45 for the
+#       free-swollen slab of the triaxial runs) and every K is a secant from there.
+variable seat_mode    index bb
 variable t_seat       index 143000        # common approach time (steps)
 variable nsteps_settle index 1000000      # plates fixed before the eps_vol = 0 reference
 

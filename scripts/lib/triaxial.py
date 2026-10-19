@@ -5021,10 +5021,14 @@ def fit_Dc_timevarying(cfg, L, n_max=300, K=None):
 
 def fig_Dc_timevarying(cfg, R, L):
     """Third D_c figure of the single-level notebook (2026-10-18): (a) the diffusion time theta(t) of the hold and of the
-    re-swelling (the per-snapshot theta_i as dots, the binned-D_c fit as a line) against the constant-D_c lines,
-    (b) theta_i/(D_c t) against t/tau_1 -- the departure from a constant D_c read without differentiating.  The binned
-    D_c values are printed, not drawn: their heights trade off against the free amplitudes (they change with the number
-    of bins at the same R^2), so d theta/dt is not what the data determine; theta is."""
+    re-swelling (the per-snapshot theta_i as dots, the binned-D_c fit as a line) against the constant-D_c lines, each
+    transient's tau_1 marked; (b) the CUMULATIVE ratio theta_i/(D_c t) against t/tau_1 (dots; 1 at every t = constant
+    D_c; a secant, so it smooths), and the LOCAL ratio D_k/D_c of the binned fit (faint steps = the slope of the line
+    in (a) over D_c).  The steps carry a caveat: the bin heights trade off against the free amplitudes (they change
+    with the number of bins at the same R^2) and the late bins are weakly determined once the modes have decayed
+    (the printed x/ errors are conditional on the amplitudes), so theta is what the data determine, D_k is a reading.
+    2026-10-18: the "mean to 1.5 tau_1" lines were dropped (a mean of the secant ratio over a window says nothing
+    the dots do not)."""
     TV = L.get('Dc_tv') or fit_Dc_timevarying(cfg, L)
     if not TV:
         print('D_c(t) figure skipped (no profile fits)')
@@ -5040,26 +5044,29 @@ def fig_Dc_timevarying(cfg, R, L):
         over = np.clip(tt[:, None] - d['edges'][None, :-1], 0.0, None) - np.clip(tt[:, None] - d['edges'][None, 1:], 0.0, None)
         axa.plot(tt, over @ d['D'], '-', color=c, lw=2.2, label=f"{d['K']}-bin $D_c(t)$ fit ($R^2$ {d['R2']:.3f}; first {d['n_id']:g} $\\tau_1$)")
         axa.plot(tt, d['Dc_const'] * tt, '--', color=c, lw=1.5, label=f"constant $D_c$ = {sig(d['Dc_const'])} ($R^2$ {d['R2_const']:.3f})")
+        axa.axvline(d['tau1'], color=c, ls=':', lw=1.0, label=f"$\\tau_1$ = {d['tau1']:.0f} $\\tau$ ($L$ = {d['L']:.1f}, {d['n']} snapshots)")
         tn = d['t'] / d['tau1']
         ratio = d['theta_i'] / (d['Dc_const'] * np.maximum(d['t'], 1e-9))
         rse = d['se_i'] / (d['Dc_const'] * np.maximum(d['t'], 1e-9))
         okb = ok & (tn > 0.05)
         axb.errorbar(tn[okb], ratio[okb], yerr=rse[okb], fmt='o', color=c, ms=3, alpha=0.6, elinewidth=0.7, capsize=0,
-                     label=f"{d['label']}: $\\theta_i/(D_c t)$, constant-fit $D_c$ = {sig(d['Dc_const'])}")
-        m = okb & (tn <= 1.5)
-        if m.any():
-            axb.plot([0.05, 1.5], [np.mean(ratio[m])] * 2, '-', color=c, lw=2.0, alpha=0.8,
-                     label=f"mean to 1.5 $\\tau_1$: {np.mean(ratio[m]):.2f} (range {np.min(ratio[m]):.2f}-{np.max(ratio[m]):.2f})")
+                     label=f"{d['label']}: cumulative $\\theta_i/(D_c t)$, constant-fit $D_c$ = {sig(d['Dc_const'])} ($t > 0.05\\,\\tau_1$)")
+        se_typ = np.exp(np.nanmedian(d['se_logD'][np.isfinite(d['se_logD'])])) if np.isfinite(d['se_logD']).any() else np.nan
+        axb.stairs(d['D'] / d['Dc_const'], d['edges'] / d['tau1'], baseline=None, color=c, lw=1.8, alpha=0.4,
+                   label=f"{k.replace('unload', 're-swelling')}: {d['K']}-bin local $D_c(t)/D_c$ (slope of the (a) line; s.e. x/ {se_typ:.2f} at fixed amplitudes)")
     axb.axhline(1.0, color='k', ls='--', lw=1.2, label=r'$\theta = D_c t$ (constant $D_c$)')
     axb.axhspan(0.8, 1.2, color='0.5', alpha=0.12, label=r'$\pm 20\%$')
     axb.axvline(1.0, color='0.5', ls=':', lw=1)
     axa.set_xlabel(r'time since the onset  ($\tau$)'); axa.set_ylabel(r'$\theta(t) = \int_0^t D_c\,\mathrm{d}t^\prime$  ($\sigma^2$)')
     axa.set_title(r'(a) diffusion time: every mode decays as $e^{-\mu_k^2\theta/L^2}$, amplitudes shared by all snapshots', fontsize=12)
     axb.set_xlabel(r"$t/\tau_1$  (each transient's own $\tau_1$)"); axb.set_ylabel(r'$\theta_i\,/\,(D_c\,t)$')
-    axb.set_title(r'(b) the diffusion time against the constant-$D_c$ line: a ratio of 1 at every $t$ is a constant $D_c$', fontsize=12)
+    axb.set_title(r'(b) against the constant-$D_c$ line: cumulative $\theta_i/(D_c t)$ (dots) and local $\mathrm{d}\theta/\mathrm{d}t\,/D_c$ (steps); 1 everywhere = constant $D_c$', fontsize=12)
     axb.set_ylim(0, 1.6); axb.set_xlim(0, float(cfg.DC_TV_TAU1))
-    for ax in (axa, axb):
-        ax.grid(alpha=0.3); ax.legend(fontsize=8.5, loc='upper left')
+    axa.grid(alpha=0.3); axa.legend(fontsize=8.5, loc='upper left')
+    hb, lb = axb.get_legend_handles_labels()
+    order = [i for i, l in enumerate(lb) if 'cumulative' in l] + [i for i, l in enumerate(lb) if 'local' in l] \
+        + [i for i, l in enumerate(lb) if 'cumulative' not in l and 'local' not in l]
+    axb.grid(alpha=0.3); axb.legend([hb[i] for i in order], [lb[i] for i in order], fontsize=8.5, loc='upper left')
     fig.suptitle(f"Cooperative diffusivity with $D_c$ free in time (level _c{L['lvl']})  |  {cfg.sim_name}\n"
                  "hold: $\\sin, \\cos(2m\\pi\\zeta)$ modes between the held plates;  re-swelling: $\\cos(k\\pi\\zeta)$ modes, faces free",
                  fontsize=12, fontweight='bold')

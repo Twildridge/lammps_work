@@ -102,7 +102,7 @@ COMPRESSIONS=${COMPRESSIONS:-0.1}
 # triaxial_compression_two_pist and reads the SAME variables: COMPRESSIONS is its list of
 # cumulative VOLUMETRIC strain targets, and PRESS_TARGET / PISTON_MASS / C_PIST_FRAC /
 # NPT_PISTON_STEPS / SETTLE_HALT / DRIVE_SPLIT mean what they mean there).  Two more:
-#   SEAT_MODE  rg (default) | bb : the gel face the six plates seat on (compress_slab.lmp)
+#   SEAT_MODE  bb (default) | rg : the gel face the six plates seat on (compress_slab.lmp)
 #   HOLD_AUTO  1 (default) = size every hold from tau_1 = L^2/(pi^2 D_c); 0 = NSTEPS flat
 # BARO_MODE (slab_with_support only): aniso (default) | iso | z -- barostat coupling (see
 #   slab_with_support.lmp).  PIN_GEL=1 (slab_with_support, isolated gel): zero the polymer's
