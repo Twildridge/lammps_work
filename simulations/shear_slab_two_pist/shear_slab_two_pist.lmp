@@ -34,8 +34,12 @@
 #   read_data (delete_atoms, IDs kept), so the compress_slab input works here too.
 # Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,
 #   strains (+ strains_list), press_target, piston_mass, c_pist_frac,
-#   npt_piston_steps, settle_halt.  No cont / continue_sim.sh support (as every
-#   two-piston deck).
+#   npt_piston_steps, settle_halt, wall_timeout.  No cont / continue_sim.sh support
+#   (as every two-piston deck): a sweep that outruns the SLURM wall time ends CLEANLY
+#   instead -- `timer timeout` (wall_timeout, below) stops the run in flight, the
+#   sweep loop exits (the remaining levels are not started) and the final write_data
+#   still happens; the level in flight is truncated (its files stop early: drop it
+#   from STRAINS in the notebook, the finished levels are intact).
 # Optional -var overrides (index-style knobs; short local smoke test e.g.
 #    -var phase0_steps 200 -var npt_piston_steps 400 -var min_iter 50 -var ref_avg_steps 400
 #    -var ref_nfreq 200 -var series_freq 100 -var stress_freq 100 -var nsteps_shear_base 3000
@@ -184,6 +188,17 @@ variable phase0_steps     index 50000
 variable box_guard_gap    equal 2.0       # halt if a wet piston face comes this close to a box face
 variable pin_gel_every    index 100       # free-gel pin (Phase 0, settle, seating): polymer linear + angular momentum zeroed every N steps
 
+# ----- Wall-clock budget (2026-10-19, for the strain sweep; as slab_with_support.lmp) -----
+# wall_timeout = seconds LAMMPS may run, counted from the `timer timeout` command below
+# (start-up), 0 = unlimited.  run_lammps.sh sets it from the SLURM job's remaining time
+# minus WALL_MARGIN (40 min).  LAMMPS checks the clock every wall_check_every steps
+# COUNTED WITHIN EACH RUN (a run shorter than that is never checked; every production
+# run here is >= 26 k steps).  When it fires the run in flight returns early ("WARNING:
+# Wall time limit reached", timeremain = 0), the strain loop below exits at the end of
+# that level (label sweep_cut) and the deck runs through to its final write_data.
+variable wall_timeout     index 0
+variable wall_check_every index 1000
+
 # ----- Phase 1.25: seating of the two grip plates (compress_slab's seating, x only) -----
 variable contact_gap       equal 1.12     # a plate stops this far (= WCA cutoff) short of the gel face it seats on
 variable seat_mode         index rg       # rg: the Rg-based x-face (com +/- L_rg/2; the outer shell is folded in, default)
@@ -264,6 +279,9 @@ atom_modify map array
 
 pair_style lj/cut 1.122
 bond_style fene      # plain fene (no hybrid): the per-atom bond virial is tallied correctly with /omp
+
+# Arm the wall-clock budget here so the read / minimize / settle are charged against it.
+if "${wall_timeout} > 0" then "timer timeout ${wall_timeout} every ${wall_check_every}"
 
 read_data data_files/${dataname}.data nocoeff
 
@@ -1047,12 +1065,20 @@ unfix out_shear_surf
 unfix out_shear_strain
 
 print ">>> Completed strain=${strains}:  gamma = $(v_gamma:%.4f)  tracking-slab strain = $(v_gamma_trk:%.4f)  S_r = $(v_S_r:%.5f)  S_l = $(v_S_l:%.5f)  N_r = $(v_N_r:%.5f)  N_l = $(v_N_l:%.5f)  sigma_p,xz(core) = $(v_stress_p_xz:%.5f)  step=$(step)"
+if "${wall_timeout} > 0" then &
+    "print '>>> wall-clock budget left after strain=${strains}: $(timeremain:%.0f) s of ${wall_timeout} s  (0 = budget spent: this level was cut short and the remaining levels are not started)'"
 
 variable hold_steps      delete
 variable drive_dump_freq delete
 
+# wall-clock budget spent (timer timeout fired inside this level): leave the sweep here
+if "${wall_timeout} > 0 && $(timeremain) <= 0.0" then "jump SELF sweep_cut"
+
 next strains
 jump SELF strain_loop
+
+label sweep_cut
+print ">>> WALL-CLOCK BUDGET SPENT: the strain sweep stops after strain=${strains} (this level is truncated; levels after it were not run)"
 
 
 # ==========================================================================

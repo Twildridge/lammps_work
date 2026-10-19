@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=shear_2p_sweep
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=0
+#SBATCH --time=48:00:00
+#SBATCH --output=%x.o%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (must run BEFORE STRAINS is defined below).  sbatch
+# submits whatever copy of this file is on disk; if it is stale the sweep list
+# is wrong and run_lammps.sh's own git pull is too late (STRAINS is already
+# exported).  Pull first, then re-exec the fresh batch.  (Mirrors
+# shear_slab_two_pist.batch.)
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${SHEAR2P_SWEEP_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining STRAINS..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export SHEAR2P_SWEEP_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/shear_slab_two_pist/shear_slab_two_pist_sweep.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (SHEAR2P_SWEEP_BATCH_SYNCED=1)"
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# ISOLATED-GEL SHEAR STRAIN SWEEP (2026-10-19): shear_slab_two_pist.lmp (the
+# isolated-gel deck of shear_slab_two_pist.batch, same input, same protocol) through
+# FOUR cumulative strain levels, 0.01 -> 0.03 -> 0.05 -> 0.10, in one job.
+#
+# Why: the single level at gamma = 0.10 (run shear_4, 2026-10-14) gave G ~ 0.19,
+# against G ~ 0.05 from the compression sweep (M ~ 0.42, sigma'_xx/sigma'_zz) and the
+# compress_slab closure G = 3/4 (M - K) with K ~ M.  The sweep asks whether G
+# depends on the strain (a lower G in the small-strain limit would point at
+# strain stiffening of the network at 0.10; a flat G would not).
+#
+# Protocol per level (shear_slab_two_pist.lmp, unchanged): drive the grips at the
+# fixed vshear until gamma reaches the target (fix halt, checked every stress_freq
+# = 1000 steps, i.e. the target is overshot by < 0.0004), freeze them, hold NSTEPS
+# steps; files tagged _g<strain>.  Then shear FURTHER to the next target from the
+# held state (cumulative, as every sweep in this repository).  Analyse with
+# shear_analysis_sweep.ipynb, DECK = "shear_slab_two_pist_iso",
+# STRAINS = ["0.01", "0.03", "0.05", "0.1"], NSTEPS = None.
+#
+# HOLD LENGTH / NOISE (from the shear_4 hold, 0.53 M atoms, 5000-step series blocks):
+#   core sigma_p,xz at gamma 0.10 = 0.0158, block std 0.0018, blocks uncorrelated
+#   (the block standard error is the same with 10, 20 or 50 blocks), so
+#     SE(hold) ~ 0.0018 / sqrt(NSTEPS / 5000):  9 M -> 0.00005,  3 M -> 0.00009.
+#   The signal at gamma 0.01 is ~0.0016, so a 3 M hold reads it to ~6 % and the
+#   0.03 level to ~2 %.  The gamma = 0 REFERENCE is subtracted from every level
+#   (G_SUBTRACT_REF) and is shared by all of them: the deck's default 150 k-step
+#   window has SE ~0.0003 = 20 % of the 0.01 signal, which is why REF_AVG_STEPS
+#   below lengthens it to 1 M (SE ~0.0001, ~8 % at 0.01, ~3 % at 0.03).
+#   The grip tractions S_r / S_l are 7x noisier (std 0.012) and stay a cross-check.
+#
+# WALL TIME: total ~ 14.6 M steps = Phase 0 50 k + settle 1 M + seating 300 k +
+#   reference 1 M + drives ~290 k (a 0.10 increment takes ~260 k) + 4 holds x 3 M,
+#   against 10.8 M for shear_4, whose output was on disk ~30 h after submission
+#   (throughput >= ~100 steps/s on 4 nodes, so 48 h covers >= 17 M steps).  The deck
+#   also carries a wall-clock guard since 2026-10-19: run_lammps.sh passes
+#   -var wall_timeout = SLURM time left - 40 min, and when it fires the level in
+#   flight ends early, the sweep loop exits (later levels are not started) and the
+#   final write_data still runs (finished levels are intact; drop the truncated one
+#   from STRAINS in the notebook).  Verified locally 2026-10-19 (smoke test).
+#   Deeper levels (say 0.15, 0.20) go in a second run from the same input, or
+#   extend STRAINS_LIST here and shorten NSTEPS to fit.
+#
+# DATANAME: the converter output (layout = x_plates) already in
+#   ~/Documents/lammps_data/input_data/ from the shear_4 run (see
+#   shear_slab_two_pist.batch for how it was built).
+# =======================================================================
+FOLDER="shear_slab_two_pist"
+DATANAME="final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000_x_plates"
+INTERACTION="1.0_1.0"   # epsSS_epsSP
+# NSTEPS: Phase 3 production HOLD per strain level (flat; also the output-file tag).
+NSTEPS=3000000
+TYPE=""
+PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run
+
+# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var) -----
+export PISTON_MASS=1000
+export C_PIST_FRAC=1.0
+export NPT_PISTON_STEPS=1000000
+export SETTLE_HALT=0
+
+# ----- gamma = 0 reference window (Phase 1.5), -var ref_avg_steps; deck default 150000 -----
+export REF_AVG_STEPS=1000000
+
+# -----------------------------------------------------------------------
+# Cumulative shear strains: shear to the first, hold NSTEPS, shear FURTHER to the
+# next, ...; files tagged _g<strain> with the strings exactly as written here (the
+# notebook's STRAINS list must match them: "0.1", not "0.10").  The list must be
+# exported as a SCALAR string (bash does not export arrays).
+# -----------------------------------------------------------------------
+STRAINS_LIST=(0.01 0.03 0.05 0.1)
+export STRAINS="${STRAINS_LIST[*]}"
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"

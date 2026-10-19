@@ -26,7 +26,7 @@ if [ $# -lt 4 ]; then
     echo "  to continue a finished run, use continue_sim.sh instead of resubmitting this script"
     echo "  press_target: optional, overrides press_target in .lmp file (default: 1.5)"
     echo "  vel_seed: optional, RNG seed for create_velocity and fix langevin (default: 12345)"
-    echo "  env knobs: PISTON_TRANSPARENT BARO_MODE (slab_with_support); STRAINS / COMPRESSIONS (sweeps);"
+    echo "  env knobs: PISTON_TRANSPARENT BARO_MODE (slab_with_support); STRAINS / COMPRESSIONS (sweeps); REF_AVG_STEPS;"
     echo "             DP_PISTON PISTON_MASS C_PIST_FRAC NPT_PISTON_STEPS SETTLE_HALT (triaxial_*_two_pist)"
     echo "             DRIVE_SPLIT (triaxial_compression*: piston share of the gap closure, 0.5 = symmetric)"
     echo "             UNLOAD / UNLOAD_STEPS / UNLOAD_MARGIN (triaxial_compression_two_pist: re-swelling hold after each level)"
@@ -111,6 +111,11 @@ SEAT_MODE=${SEAT_MODE:-rg}
 HOLD_AUTO=${HOLD_AUTO:-1}
 BARO_MODE=${BARO_MODE:-aniso}
 PIN_GEL=${PIN_GEL:-0}                # slab_with_support: 1 = zero the gel's linear + angular momentum (isolated gel)
+# REF_AVG_STEPS (2026-10-19, shear_slab_two_pist_sweep.batch): length of the strain-zero
+# reference window (-var ref_avg_steps; every deck with that knob keeps its own default
+# when the variable is unset -- it is only forwarded when set).  The reference stress is
+# subtracted from every level, so its noise is a floor under the small-strain levels.
+REF_AVG_STEPS=${REF_AVG_STEPS:-}
 
 # P-sweep parameters (only used for pure_solvent; ignored by other scripts)
 NSTEPS_EQ=200000    # equilibration steps per state point
@@ -317,7 +322,7 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var perm_stress_curves "$PERM_STRESS_CURVES" \
     -var disp_nfreq "$DISP_NFREQ" \
     -var wall_timeout "$WALL_TIMEOUT" \
-    \
+    ${REF_AVG_STEPS:+-var ref_avg_steps "$REF_AVG_STEPS"} \
     -in $LAMMPS_FILE &
 MPIRUN_PID=$!
 
