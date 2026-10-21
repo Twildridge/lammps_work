@@ -1071,14 +1071,27 @@ if "${wall_timeout} > 0" then &
 variable hold_steps      delete
 variable drive_dump_freq delete
 
+# Remember this level's tag BEFORE `next`: when `next` exhausts the list it DELETES
+# the index variable and skips the following command, so execution falls through
+# to the code after the loop with ${strains} undefined.  Sweep 55082229 (2026-10-19)
+# died here after all four levels had finished ("Substitution for illegal variable
+# strains") and lost its final write_data; the FINAL STATE block below must never
+# reference ${strains}, only ${last_strain}.
+variable last_strain string ${strains}
+
 # wall-clock budget spent (timer timeout fired inside this level): leave the sweep here
 if "${wall_timeout} > 0 && $(timeremain) <= 0.0" then "jump SELF sweep_cut"
 
+# `next` with the list exhausted skips the jump below, so we land on the second jump (normal exit)
 next strains
 jump SELF strain_loop
+jump SELF sweep_done
 
 label sweep_cut
-print ">>> WALL-CLOCK BUDGET SPENT: the strain sweep stops after strain=${strains} (this level is truncated; levels after it were not run)"
+print ">>> WALL-CLOCK BUDGET SPENT: the strain sweep stops after strain=${last_strain} (this level is truncated; levels after it were not run)"
+
+label sweep_done
+print ">>> strain sweep finished (last level: strain=${last_strain})"
 
 
 # ==========================================================================

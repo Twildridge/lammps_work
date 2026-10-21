@@ -139,9 +139,17 @@ if [ "$FOLDER" = "solvent_phase" ] || [ "$FOLDER" = "polymer_phase" ]; then
     exit 0
 fi
 
-if [ "$FOLDER" = "shear_slab" ]; then
+if [ "$FOLDER" = "shear_slab" ] || [ "$FOLDER" = "shear_slab_two_pist" ]; then
     echo "Generating shear stress-strain sweep plots (per strain: $STRAINS)..."
-    python "$SCRIPT_DIR/lib/plot_shear_strain_sweep.py" "." "$STEM" "$STRAINS"
+    python "$SCRIPT_DIR/lib/plot_shear_strain_sweep.py" "." "$STEM" "$STRAINS" \
+        || echo "  WARNING: plot_shear_strain_sweep.py failed (skipping)"
+    # shear_slab_two_pist (2026-10-21): the wet-piston bath-pressure check and the
+    # whole-run piston file are drawn by plot_piston_data.py as for the other two-piston decks.
+    if [ "$FOLDER" = "shear_slab_two_pist" ]; then
+        echo "Generating two-piston bath-pressure plots..."
+        python "$SCRIPT_DIR/lib/plot_piston_data.py" "." "$STEM" "$OLDSTEPS" \
+            || echo "  WARNING: plot_piston_data.py failed (skipping)"
+    fi
 elif { [ "$FOLDER" = "triaxial_compression" ] || [ "$FOLDER" = "triaxial_compression_two_pist" ] || [ "$FOLDER" = "compress_slab" ]; } && [ -n "$COMPRESSIONS" ]; then
     # Compression sweep: every level's output files are tagged _c<level>. Rather
     # than emit one plot PER LEVEL, the consolidated plotter overlays every
