@@ -2118,7 +2118,8 @@ def primary_Dc(cfg, L):
     if cfg.DC_PRIMARY == 'unload' and Pf is not None:
         return dict(Dc=float(Pf['Dc']), src='free re-swelling, profile fit', phase='unload', tau1=float(Pf['tau1']), R2=float(Pf['R2']))
     F = L['Dc']
-    return dict(Dc=float(F['Dc']), src=f"hold, profile fit (first {F['n_tau1_fit']:.1f} tau_1)", phase='hold', tau1=float(F['tau1']), R2=float(F['R2']))
+    return dict(Dc=float(F['Dc']), src=f"hold, profile fit (first {F['n_tau1_fit']:.1f} tau_1; a LOAD measurement, no unload in this level)",
+                phase='hold', tau1=float(F['tau1']), R2=float(F['R2']))
 
 
 def load_level(cfg, R, lvl, verbose=True):
@@ -4914,9 +4915,9 @@ def fig_Dc_reswelling(cfg, R, L):
     sm.set_array([])
     fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02).set_label('timestep')
     F, T, Tr = L.get('Dc'), Uf.get('trace'), Uf.get('trace_rg')
-    fig.suptitle(f"Cooperative diffusivity, PRIMARY estimate (level _c{L['lvl']}, DC_PRIMARY = {cfg.DC_PRIMARY!r})  |  {cfg.sim_name}\n"
+    fig.suptitle(f"Cooperative diffusivity, UNLOAD (free re-swelling) = the trusted estimate (level _c{L['lvl']}, DC_PRIMARY = {cfg.DC_PRIMARY!r})  |  {cfg.sim_name}\n"
                  f"$\\tau_1 = L^2/(\\pi^2 D_c)$ = {Pf['tau1']:.0f} $\\tau$ with $L$ = {Uf['L']:.1f} ({cfg.UNLOAD_L})"
-                 + (f";  hold profile fit {sig(F['Dc'])} (ratio {F['Dc'] / Pf['Dc']:.2f})" if F else '')
+                 + (f";  LOAD (hold) profile fit {sig(F['Dc'])} (ratio {F['Dc'] / Pf['Dc']:.2f})" if F else '')
                  + (f";  thickness traces: bb {sig(T['Dc'])}" if T else '') + (f", Rg {sig(Tr['Dc'])}" if Tr else ''),
                  fontsize=12, fontweight='bold')
     return _save(fig, cfg, 'Dc_reswelling_fit', L['lvl'])
@@ -5345,8 +5346,8 @@ def fig_Dc(cfg, R, L):
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     fig.colorbar(sm, ax=[axl, axr], fraction=0.015, pad=0.04).set_label('timestep')
-    fig.suptitle(f'Cooperative diffusivity, HOLD consolidation fit (level _c{L["lvl"]}'
-                 + ('; the re-swelling fit above is the primary' if Uf is not None else '') + f')  |  {cfg.sim_name}  |  '
+    fig.suptitle(f'Cooperative diffusivity, LOAD measurement: hold consolidation fit (level _c{L["lvl"]}'
+                 + ('; the UNLOAD fit above is the trusted estimate' if Uf is not None else '; no unload in this run') + f')  |  {cfg.sim_name}  |  '
                  f'plate-gap closure $\\Delta L={sig(F["DL"])}\\,\\sigma$: support {fs:.0%} / piston {1 - fs:.0%}'
                  + ('  (symmetric drive)' if abs(fs - 0.5) < 0.05 else '  (top-only drive)' if fs < 0.05 else ''),
                  fontsize=12, fontweight='bold')
@@ -5372,11 +5373,11 @@ def fig_kappa(cfg, R, L):
         if Kh and key in Kh:
             vh = Kh[key]
             ax.errorbar([k + 0.15], [vh['k']], yerr=[[vh['k'] - vh['lo']], [vh['hi'] - vh['k']]], fmt=mk, ms=10, color=col, mfc='none',
-                        capsize=5, lw=1.5, alpha=0.7, label=f"... with the hold's $D_c$ = {sig(L['Dc']['Dc'])}: {sig(vh['k'])}")
+                        capsize=5, lw=1.5, alpha=0.7, label=f"... with the LOAD (hold) $D_c$ = {sig(L['Dc']['Dc'])}: {sig(vh['k'])}")
     ax.set_xticks([0, 1])
     ax.set_xticklabels(['network $M$', 'piston $M$'], fontsize=16)
     ax.set_ylabel(r'$\kappa = D_c/M$  (LJ: $\sigma^5/(\epsilon\,\tau)$)')
-    ax.set_title(f'Hydraulic permeability $\\kappa = D_c/M$\n$D_c = {sig(Dp["Dc"])}$ ({Dp["src"]})  |  '
+    ax.set_title(f'Hydraulic permeability $\\kappa = D_c/M$\n$D_c = {sig(Dp["Dc"])}$ ({"UNLOAD: " if Dp["phase"] == "unload" else "LOAD: "}{Dp["src"]})  |  '
                  f'$\\varepsilon = {L["lvl"]}$', fontsize=14)
     ax.set_xlim(-0.5, 1.6)
     ax.set_ylim(bottom=0)
@@ -5864,29 +5865,35 @@ def fig_Dc_sweep(cfg, R, levels):
         return None
     n = len(hd)
     fig, axes = plt.subplots(1, n + 1, figsize=(7 + 6.5 * n, 6), constrained_layout=True)
-    fig.suptitle(f'Cooperative diffusivity across the sweep  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    hu = [L for L in hd if (L.get('unload') or {}).get('prof')]
+    fig.suptitle(f'Cooperative diffusivity across the sweep  |  {cfg.sim_name}  |  LOAD measurements (hold consolidation, stress trace)'
+                 + ('; stars = UNLOAD (free re-swelling), the trusted estimate' if hu else '; this run has no unload, so no trusted (unload) D_c'),
+                 fontsize=13, fontweight='bold')
     ax = axes[0]
     e = np.array([L['eps'] for L in hd])
     v = np.array([L['Dc']['Dc'] for L in hd])
     ax.plot(e, v, 'o-', color=WONG['reddishpurple'], lw=2, ms=8,
-            label=rf"profile fit, first {cfg.DC_FIT_TAU1:g} $\tau_1$ of the hold" if cfg.DC_FIT_TAU1 > 0 else 'profile fit')
+            label=rf"LOAD: hold profile fit, first {cfg.DC_FIT_TAU1:g} $\tau_1$ of the hold" if cfg.DC_FIT_TAU1 > 0 else 'LOAD: hold profile fit')
+    if hu:
+        ax.plot([L['eps'] for L in hu], [L['unload']['prof']['Dc'] for L in hu], '*', color=WONG['blue'], ms=17, zorder=6,
+                label='UNLOAD: free re-swelling profile fit (the trusted $D_c$)')
     for L in hd:   # R^2 label under each point, clipped inside the axes
         ax.annotate(f"$R^2$={sig(L['Dc']['R2'])}", (L['eps'], L['Dc']['Dc']), textcoords='offset points',
                     xytext=(0, -12), ha='center', va='top', fontsize=10, color='0.35',
                     annotation_clip=True)
     if cfg.DC_FIT_TAU1 > 0:            # 2026-10-09: the whole-hold fit and the stress-trace D_c alongside
         ax.plot(e, [L['Dc']['Dc_all'] for L in hd], 'o:', mfc='none', color=WONG['reddishpurple'], lw=1.5, ms=8,
-                label='profile fit, whole hold')
+                label='LOAD: hold profile fit, whole hold')
     hs = [L for L in hd if (L.get('Dc_stress') or {}).get('ok')]
     if hs:
         ax.errorbar([L['eps'] for L in hs], [L['Dc_stress']['Dc'] for L in hs], yerr=[L['Dc_stress']['Dc_se'] for L in hs],
-                    fmt='^--', color=WONG['green'], lw=1.8, ms=9, capsize=5, label='load-piston stress trace (held-slab series)')
+                    fmt='^--', color=WONG['green'], lw=1.8, ms=9, capsize=5, label='LOAD: load-piston stress trace (held-slab series)')
     ax.margins(x=0.12, y=0.15)
     ax.axhline(cfg.DC_SLOW_REF / 4.0, color='0.4', ls=':', lw=1.5,
                label=f"deck hold-sizing $D_c$ = {sig(cfg.DC_SLOW_REF / 4)}  ($Dc_{{est}}$ = {sig(cfg.DC_SLOW_REF)} in the deck's $L^2/\\pi^2 D_c$ formula)")
     ax.set_xlabel(r'applied strain  $\varepsilon$')
     ax.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
-    ax.set_title(r'(a) $D_c$ vs applied strain', fontsize=15)
+    ax.set_title(r'(a) $D_c$ vs applied strain: LOAD (hold) fits' + (', UNLOAD stars' if hu else ''), fontsize=15)
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=11)
     zff = np.linspace(0, 1, 300)
@@ -5904,7 +5911,7 @@ def fig_Dc_sweep(cfg, R, levels):
         dlL, fs = F['DL'] / F['L'], F['f_sup']
         ax.plot([0, 1], [fs * dlL, (fs - 1.0) * dlL], 'k:', lw=1.6)
         ax.set(xlabel=flip_hint(R, r'$\zeta$'), ylabel=r'$u_z/L$', xlim=_zlim(R))
-        ax.set_title(fr"({'bcdefgh'[k]}) $\varepsilon={L['lvl']}$:  $D_c={sig(F['Dc'])}$, $R^2={sig(F['R2'])}$",
+        ax.set_title(fr"({'bcdefgh'[k]}) $\varepsilon={L['lvl']}$, LOAD (hold):  $D_c={sig(F['Dc'])}$, $R^2={sig(F['R2'])}$",
                      fontsize=14, color=level_color(i_lvl))
         ax.grid(alpha=0.3)
     return _save(fig, cfg, 'sweep_Dc')
@@ -5925,15 +5932,21 @@ def fig_kappa_sweep(cfg, R, levels):
         k = np.array([L['kappa'][key]['k'] for L in Ls])
         lo = k - np.array([L['kappa'][key]['lo'] for L in Ls])
         hi = np.array([L['kappa'][key]['hi'] for L in Ls]) - k
+        tags = sorted({('u' if (L.get('Dc_primary') or {}).get('phase') == 'unload' else 'h') for L in Ls})
+        src_ = {('u',): 'UNLOAD $D_c$', ('h',): 'LOAD (hold) $D_c$ -- no unload in this run'}.get(tuple(tags), 'UNLOAD $D_c$ where the level has one, else LOAD (hold)')
         ax.errorbar(e, k, yerr=[np.clip(lo, 0, None), np.clip(hi, 0, None)],      # an M CI through zero makes hi < 0
-                    fmt=mk + '-', ms=10, lw=2, color=col, capsize=6, label=lab)
+                    fmt=mk + '-', ms=10, lw=2, color=col, capsize=6, label=f'{lab}  [{src_}]')
+    hh = [L for L in hk if (L.get('Dc_primary') or {}).get('phase') == 'unload' and 'net' in (L.get('kappa_hold') or {})]
+    if hh:
+        ax.plot([L['eps'] for L in hh], [L['kappa_hold']['net']['k'] for L in hh], 'o', mfc='none', ms=11, mew=1.8, color=WONG['blue'],
+                label=r'... with the LOAD (hold) $D_c$ instead / $M_\mathrm{network}$')
     hs = [L for L in hk if 'net' in (L.get('kappa_stress') or {})]
     if hs:
         ax.plot([L['eps'] for L in hs], [L['kappa_stress']['net'] for L in hs], '^--', ms=10, lw=1.8, color=WONG['green'],
-                label=r'$D_c^\mathrm{stress\ trace}/M_\mathrm{network}$')
+                label=r'LOAD: $D_c^\mathrm{stress\ trace}/M_\mathrm{network}$')
     ax.set_xlabel(r'applied strain  $\varepsilon$')
     ax.set_ylabel(r'$\kappa = D_c/M$  (LJ)')
-    ax.set_title(r'Hydraulic permeability $\kappa = D_c/M$ vs strain', fontsize=15)
+    ax.set_title(r'Hydraulic permeability $\kappa = D_c/M$ vs strain' + ('' if hh else '  (LOAD $D_c$: no unload in this run)' if all((L.get('Dc_primary') or {}).get('phase') != 'unload' for L in hk) else ''), fontsize=15)
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=12)
     return _save(fig, cfg, 'sweep_kappa')
@@ -6613,7 +6626,8 @@ def print_summary(cfg, levels):
     print(f'\nSUMMARY  ({cfg.sim_name}; {ci}% CIs; {how})')
     if cfg.RELAX_SYS:
         how += '; M lower bounds include delta_sys (unrelaxed-hold excess, last column)'
-    print(f"{'eps':>6s} {'eps_M':>9s} {'M_net':>18s} {'M_pist':>18s} {'G_x':>18s} {'G_y':>18s} {'D_c*':>11s} {'D_c_hold':>10s} {'D_c_stress':>10s} {'D_c_resw_bb':>11s} {'kappa_net':>10s} {'kappa_pist':>10s} {'delta_sys':>10s}")
+    print(f"{'eps':>6s} {'eps_M':>9s} {'M_net':>18s} {'M_pist':>18s} {'G_x':>18s} {'G_y':>18s} | {'LOAD: D_c_hold':>15s} {'D_c_stress':>10s} | "
+          f"{'UNLOAD: D_c_prof':>17s} {'D_c_rg_trace':>12s} | {'kappa_net':>11s} {'kappa_pist':>11s} {'delta_sys':>10s}")
     for L in levels:
         def ci_(v, lo, hi):
             return f'{v:.3f} [{lo:.3f},{hi:.3f}]'
@@ -6624,21 +6638,25 @@ def print_summary(cfg, levels):
         gx = ci_(L['G']['xx']['G'], L['G']['xx']['lo'], L['G']['xx']['hi']) if 'xx' in L['G'] else 'n/a'
         gy = ci_(L['G']['yy']['G'], L['G']['yy']['lo'], L['G']['yy']['hi']) if 'yy' in L['G'] else 'n/a'
         Dp = L.get('Dc_primary')
-        dcp = f"{Dp['Dc']:.3e}{'u' if Dp['phase'] == 'unload' else 'h'}" if Dp else 'n/a'
+        tag = ('u' if Dp['phase'] == 'unload' else 'h') if Dp else ''
         dc = f"{L['Dc']['Dc']:.3e}" + (' !' if L['Dc'].get('stab_flag') else '') if L.get('Dc') else 'n/a'
         S = L.get('Dc_stress')
         dst = f"{S['Dc']:.3e}" if (S and S.get('ok')) else 'n/a'
-        Uf = L.get('unload')
-        dun = f"{Uf['trace']['Dc']:.3e}" if (Uf and Uf.get('trace')) else 'n/a'
-        kn = f"{L['kappa']['net']['k']:.3e}" if L.get('kappa', {}).get('net') else 'n/a'
-        kp = f"{L['kappa']['pist']['k']:.3e}" if L.get('kappa', {}).get('pist') else 'n/a'
-        print(f"{L['eps']:6.3f} {em:>9s} {ci_(L['M_net'], L['M_net_lo'], L['M_net_hi']):>18s} {mp:>18s} {gx:>18s} {gy:>18s} "
-              f"{dcp:>11s} {dc:>10s} {dst:>10s} {dun:>11s} {kn:>10s} {kp:>10s} {ds_s:>10s}")
+        Uf = L.get('unload') or {}
+        dup = f"{Uf['prof']['Dc']:.3e}" if Uf.get('prof') else 'n/a'
+        dur = f"{Uf['trace_rg']['Dc']:.3e}" if Uf.get('trace_rg') else 'n/a'
+        kn = f"{L['kappa']['net']['k']:.3e}{tag}" if L.get('kappa', {}).get('net') else 'n/a'
+        kp = f"{L['kappa']['pist']['k']:.3e}{tag}" if L.get('kappa', {}).get('pist') else 'n/a'
+        print(f"{L['eps']:6.3f} {em:>9s} {ci_(L['M_net'], L['M_net_lo'], L['M_net_hi']):>18s} {mp:>18s} {gx:>18s} {gy:>18s} | "
+              f"{dc:>15s} {dst:>10s} | {dup:>17s} {dur:>12s} | {kn:>11s} {kp:>11s} {ds_s:>10s}")
     print('  eps_M = the strain M, G and kappa divide by (M_STRAIN): d = steady displacement-profile slope, r = Rg, a = applied')
-    print(f'  D_c* = the PRIMARY D_c (DC_PRIMARY = {cfg.DC_PRIMARY!r}; kappa uses it): u = the free re-swelling profile fit after the hold, '
-          f'tau_1 = L^2/(pi^2 D_c); h = the hold profile fit.  D_c_hold = the hold profile fit over the first {cfg.DC_FIT_TAU1:g} tau_1 '
-          f'(! = the whole-hold fit differs by more than {cfg.DC_STAB_FLAG:.0%});  D_c_stress = the load-piston trace, held-slab series;  '
-          f'D_c_resw_bb = the re-swelling bounding-box thickness trace (reads high: surface beads)')
+    print(f'  LOAD   = measured on the compression hold (2026-10-21 grouping): D_c_hold = the hold profile fit over the first {cfg.DC_FIT_TAU1:g} tau_1 '
+          f'(! = the whole-hold fit differs by more than {cfg.DC_STAB_FLAG:.0%}), D_c_stress = the load-piston trace (held-slab series).  '
+          f'The hold starts from the ramp\'s face skins plus an undrained interior strain, so these are NOT the trusted D_c (they move with modes/trim/window).')
+    print(f'  UNLOAD = the free re-swelling after the hold (files _u<lvl>): D_c_prof = the profile fit, tau_1 = L^2/(pi^2 D_c) -- the trusted D_c; '
+          f'D_c_rg_trace = the Rg thickness trace (check; the bounding-box trace reads high: surface beads).')
+    print(f'  kappa = D_c/M with the D_c tagged u (unload) or h (hold: the level has no unload) per DC_PRIMARY = {cfg.DC_PRIMARY!r}.  '
+          f'The cross-deck comparison uses the unload D_c only.')
     if cfg.RELAX_SYS:
         print('  delta_sys = (piston plateau - fitted tail asymptote) / eps;  * = larger than the M_net bootstrap half-width')
     print_hold_check(cfg, levels)
