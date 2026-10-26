@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=shear_2p_fine
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=0
+#SBATCH --time=36:00:00
+#SBATCH --output=%x.o%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (must run BEFORE STRAINS is defined below) -- see
+# shear_slab_two_pist_sweep.batch.
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${SHEAR2P_FINE_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining STRAINS..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export SHEAR2P_FINE_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/shear_slab_two_pist/shear_slab_two_pist_fine.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (SHEAR2P_FINE_BATCH_SYNCED=1)"
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# ISOLATED-GEL SHEAR SWEEP WITH THE FINE-CADENCE DISPLACEMENT FILE (2026-10-22):
+# shear_slab_two_pist.lmp through the same four cumulative levels as
+# shear_slab_two_pist_sweep.batch (job 55082229), with three changes that aim the
+# run at the transverse relaxation of the network at the start of each hold.
+#
+# Why: in sweep 55082229 the hold-referenced displacement profile (disp_z_polymer,
+# 300k-step blocks) is a static pattern from its first block to its last, and the
+# 5000-step stress series are at their plateau in the first block of every hold, so
+# whatever relaxes after the grips stop is over in < 25 tau and the ramp (26k-130k
+# steps at the default speed) is slow against it: the D_c fit had nothing to fit.
+# The expectation (two-fluid picture: the solvent moves with the network at
+# wavelengths above the ~0.5 sigma screening length) is a relaxation at the
+# Kelvin-Voigt rate G/eta_s ~ 0.1 / tau, the same for every mode; the Tanaka-Fillmore
+# alternative is diffusive, tau_k = L^2 / (4 pi^2 k^2 D_c).  The fine file resolves
+# both and lib/shear.py fit_Dc_fine reads the mode times tau_1, tau_2, tau_3.
+#
+#   * DISP_FINE_NFREQ=250 / DISP_FINE_SPAN=200000: the cumulative displacement
+#     profile u_z(x) every 1.25 tau (10-step samples) from the drive start through the
+#     first 1000 tau of each hold (disp_z_polymer_fine_*_g<strain>; ~2.5 MB per level).
+#     Its reference is the late plateau of the coarse _cum file (the same quantity,
+#     the same bins), not the hold-onset displace/atom snapshot.
+#   * NSTEPS_SHEAR_BASE=10000: the drive 28x faster than the sweep's (vshear ~ 0.046
+#     sigma/tau per grip; a 0.10 increment takes ~9k steps = 45 tau, the 0.01 level
+#     ~900 steps), so the ramp no longer hides the relaxation.  The grips are rigid
+#     and ballistic, the adjacent beads are bonded to them: watch the log for FENE
+#     warnings in the drives (none expected at this speed; a bead's thermal speed is
+#     ~1 sigma/tau).
+#   * STRESS_FREQ=100: the halt that stops each drive is checked every stress_freq
+#     steps, and at the faster drive 1000 steps would overshoot a target by up to
+#     0.011; 100 keeps it at ~0.001 (the held gamma is read from the files anyway).
+#     It is also the fix print cadence (strain, gel / box dims, COM): 10x more rows,
+#     ~15 MB per logger over the run.
+#
+# Everything else is the sweep's: NSTEPS=3000000 per hold (G and the stress-strain
+# curve are read as before and compare directly with 55082229), REF_AVG_STEPS = 1 M.
+# Analyse with shear_analysis_{single,sweep}.ipynb, DECK = "shear_slab_two_pist_iso",
+# STRAINS = ["0.01", "0.03", "0.05", "0.1"], NSTEPS = None: figures 9b / 7b read the
+# fine file (they skip themselves on runs without one).
+#
+# DATANAME: the converter output (layout = x_plates) already in
+#   ~/Documents/lammps_data/input_data/ from the shear_4 run.
+# =======================================================================
+FOLDER="shear_slab_two_pist"
+DATANAME="final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000_x_plates"
+INTERACTION="1.0_1.0"   # epsSS_epsSP
+# NSTEPS: Phase 3 production HOLD per strain level (flat; also the output-file tag).
+NSTEPS=3000000
+TYPE=""
+PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run
+
+# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var) -----
+export PISTON_MASS=1000
+export C_PIST_FRAC=1.0
+export NPT_PISTON_STEPS=1000000
+export SETTLE_HALT=0
+
+# ----- gamma = 0 reference window (Phase 1.5), -var ref_avg_steps; deck default 150000 -----
+export REF_AVG_STEPS=1000000
+
+# ----- the fine-cadence run (see the header) -----
+export DISP_FINE_NFREQ=250      # -var disp_fine_nfreq: fine displacement block length (steps); 0 = off
+export DISP_FINE_SPAN=200000    # -var disp_fine_span: hold steps the fine file covers (the drive is always covered)
+export NSTEPS_SHEAR_BASE=10000  # -var nsteps_shear_base: steps a 0.10 increment takes (deck default 285000)
+export STRESS_FREQ=100          # -var stress_freq: halt check + fix print cadence (deck default 1000)
+
+# -----------------------------------------------------------------------
+# Cumulative shear strains (as the sweep): the notebook's STRAINS list must match
+# these strings exactly ("0.1", not "0.10").  Exported as a SCALAR string.
+# -----------------------------------------------------------------------
+STRAINS_LIST=(0.01 0.03 0.05 0.1)
+export STRAINS="${STRAINS_LIST[*]}"
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"

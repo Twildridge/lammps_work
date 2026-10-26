@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=slab_isolated_tall_random
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=128 # was 32, 128
+#SBATCH --cpus-per-task=1     # was 4, 1
+#SBATCH --mem=0
+#SBATCH --time=36:00:00
+#SBATCH --output=%x.o%j.%N
+# #SBATCH --error=%x.e%j.%N
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# TALL ISOLATED GEL, RANDOM f = 4 NETWORK (2026-10-25): the rot45 block
+# (slab_with_support_isolated_tall_rot45.batch: 48.5 x 47.5 x 112.0 sigma, 15257 crosslinks,
+# 28854 five-bead strands, a = 5.28, rho 0.40, 15 sigma of bath, no sheets) with its
+# lattice strands re-wired by Wooten-Winer-Weaire bond switching (scripts/
+# slab_with_support.ipynb, bond_switch = 3 accepted switches per strand): every junction
+# keeps four strands, the strand count and length are unchanged, the block faces stay
+# where they were (the faces are held flat: outermost junction 0.46 sigma inside the
+# nominal face on average), and the strand directions carry no lattice left -- the
+# notebook's isotropy check (4th-rank orientation tensor, Steinhardt Q4 / Q6, Born-affine
+# Zener ratio) reads the written file back against random directions; the interior
+# beyond 7 sigma of the faces passes every metric, a 7-sigma skin keeps an in-plane bias
+# from the tethered, pre-stretched faces that this equilibration is expected to relax.
+#
+# WHY: the aligned diamond gel is cubic (shear G 0.15-0.18 = C44 vs 0.04-0.06 =
+# (C11 - C12)/2 on the compression side).  The rot45 run measures the other constant of
+# the same lattice; this gel has no lattice constants at all, so its shear G and its
+# compression G must agree if the discrepancy is anisotropy, whatever the orientation.
+#
+# The random network at the lattice block size starts with its strands ~1.28 r0 long on
+# average (one of 28854 at 1.98 r0 = 4.5 sigma end-to-end, bead spacing 1.13 sigma against
+# FENE R0 1.5; the push-off runs on harmonic bonds):
+# a random f = 4 network spans less volume per strand than the open diamond lattice, so at
+# the same block it is pre-stretched.  The equilibration lets the gel find its own size
+# (the aligned gel was also built off-equilibrium at pre_swell 1.10): read the result
+# from gel_dimensions / stress_aniso, not from the rot45 numbers.
+#
+# Same protocol and knobs as the aligned and rot45 runs (BARO_MODE=iso, PIN_GEL=1, 8 M
+# steps, CHAIN=1, P* = 1.5, 1.0_1.0; ~15 h on 4 nodes).  Deck path smoke-tested locally
+# 2026-10-25 on a 4 x 3 x 8-cell switched mini gel (LAMMPS GUI lmp, 200 k steps).
+#
+# THEN: pull final_config_<DATANAME>_1.0_1.0_8000000.data to lammps_data_files_local/,
+# convert it with  python add_more_plates_to_gel.py --layout x_plates --input <that file>
+# (scripts/lib), copy the _x_plates file to ~/Documents/lammps_data/input_data/ on
+# Expanse and run shear_slab_two_pist_fine_g005.batch with DATANAME = its stem.
+# =======================================================================
+FOLDER="slab_with_support"
+DATANAME="slab_support_5beads_tall_rho04_nowalls_random"   # scripts/slab_with_support.ipynb, the bond_switch input cell (2026-10-25)
+INTERACTION="1.0_1.0"   # the interaction of the triaxial runs, so that K, M and G belong to the same gel
+NSTEPS=8000000
+TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
+PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
+SEED=12345          # RNG seed for create_velocity / langevin
+
+export BARO_MODE=iso          # one scale factor for x, y, z: the data file's aspect ratio is KEPT (see above);
+                              # aniso (the deck's default) has no restoring force on the box shape of an isolated gel
+export PIN_GEL=1              # zero the gel's linear + angular momentum every 100 steps: a free 48 x 48 x 111 block
+                              # would turn ~14 deg in 10M steps, and the plates of compress_slab are parked along
+                              # the box axes (see slab_with_support.lmp)
+export PISTON_TRANSPARENT=1   # no piston in this file: irrelevant, kept so a file WITH a piston is safe too
+export CHAIN=1                # chain continuation jobs until all NSTEPS are done (see WALL LIMIT above)
+export WALL_MARGIN=2400       # seconds before the SLURM limit at which the deck stops (final write_data,
+                              # teardown, chain submission and post-processing all fit in 40 min)
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET VEL_SEED
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET" "$SEED"

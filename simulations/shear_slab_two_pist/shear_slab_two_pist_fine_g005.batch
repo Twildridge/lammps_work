@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=shear_2p_fine005
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=0
+#SBATCH --time=24:00:00
+#SBATCH --output=%x.o%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (must run BEFORE STRAINS is defined below) -- see
+# shear_slab_two_pist_sweep.batch.  (This file is the single-level copy of
+# shear_slab_two_pist_fine.batch; its guard variable is its own.)
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${SHEAR2P_FINE005_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining STRAINS..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export SHEAR2P_FINE005_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/shear_slab_two_pist/shear_slab_two_pist_fine_g005.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (SHEAR2P_FINE005_BATCH_SYNCED=1)"
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# ISOLATED-GEL SHEAR, ONE LEVEL (gamma = 0.05) WITH THE FINE-CADENCE DISPLACEMENT FILE
+# (2026-10-25).  shear_slab_two_pist_fine.batch (the four-level sweep 0.01/0.03/0.05/0.1
+# with the fine file, 2026-10-22) run at a SINGLE level: the grips go from the gamma = 0
+# reference straight to 0.05 in one ~4.5 k-step drive (a 2.4 sigma relative grip
+# displacement over the 47.5 sigma gap), so the start of the hold carries the largest
+# one-step transient the sweep protocol allows, and the fine file follows it from the
+# drive start through the first 200 k steps of the hold.  Everything else is the fine
+# batch's (and the sweep's): DISP_FINE_NFREQ=250 / DISP_FINE_SPAN=200000 (one profile per
+# 1.25 tau), NSTEPS_SHEAR_BASE=10000 (drive 0.046 sigma/tau per grip, 28x the sweep's
+# speed; watch the log for FENE warnings in the drive, none expected), STRESS_FREQ=100
+# (halt overshoot ~0.001; 10x the fix print rows), NSTEPS=3000000 hold, REF_AVG_STEPS=1M.
+# Cost: 0.05 M + 1 M + 1 M + 4.5 k + 3 M = ~5.1 M steps; the 10.8 M-step shear_4 took
+# under 30 h on 4 nodes, so ~14 h -- --time 24 h.
+#
+# What the hold shows: fit_Dc_fine (lib/shear.py) reads disp_z_polymer_fine_*_g0.05
+# against the late plateau of the coarse _cum file and fits the decay time of each
+# transverse sine mode: diffusive (Tanaka-Fillmore, tau_k ~ 1/k^2, a D_c) or one
+# Kelvin-Voigt time for every mode (solvent entrained, rate G/eta_s).  G comes from the
+# hold as in every shear run and compares with the 0.05 level of sweep 55082229.
+#
+# Analyse with shear_analysis_single.ipynb, DECK = "shear_slab_two_pist_iso",
+# STRAINS = ["0.05"], NSTEPS = None (figure 9b is the fine fit).
+#
+# DATANAME: the aligned tall gel's x_plates file already in
+#   ~/Documents/lammps_data/input_data/ (shear_4, the sweep and the fine batch use it).
+#   For the 45-degree-rotated gel (slab_with_support_isolated_tall_rot45.batch, then
+#   add_more_plates_to_gel.py --layout x_plates on its final config) set DATANAME to
+#   final_config_slab_support_5beads_tall_rho04_nowalls_rot45_1.0_1.0_8000000_x_plates
+#   and run this same batch: same level, same cadence, the lattice orientation is the
+#   only difference between the two runs.
+# =======================================================================
+FOLDER="shear_slab_two_pist"
+DATANAME="final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000_x_plates"
+INTERACTION="1.0_1.0"   # epsSS_epsSP
+# NSTEPS: Phase 3 production HOLD per strain level (flat; also the output-file tag).
+NSTEPS=3000000
+TYPE=""
+PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run
+
+# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var) -----
+export PISTON_MASS=1000
+export C_PIST_FRAC=1.0
+export NPT_PISTON_STEPS=1000000
+export SETTLE_HALT=0
+
+# ----- gamma = 0 reference window (Phase 1.5), -var ref_avg_steps; deck default 150000 -----
+export REF_AVG_STEPS=1000000
+
+# ----- the fine-cadence run (see the header) -----
+export DISP_FINE_NFREQ=250      # -var disp_fine_nfreq: fine displacement block length (steps); 0 = off
+export DISP_FINE_SPAN=200000    # -var disp_fine_span: hold steps the fine file covers (the drive is always covered)
+export NSTEPS_SHEAR_BASE=10000  # -var nsteps_shear_base: steps a 0.10 increment takes (deck default 285000)
+export STRESS_FREQ=100          # -var stress_freq: halt check + fix print cadence (deck default 1000)
+
+# -----------------------------------------------------------------------
+# ONE level.  The notebook's STRAINS list must match the string exactly ("0.05").
+# Exported as a SCALAR string, as the sweep does.
+# -----------------------------------------------------------------------
+STRAINS_LIST=(0.05)
+export STRAINS="${STRAINS_LIST[*]}"
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"

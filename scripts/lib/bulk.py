@@ -127,6 +127,9 @@ class Config(tri.Config):
                                           # rg -> plate when missing), 'plate' (measured plate closure, the applied
                                           # strain), 'rg' / 'bb' (the network's own Rg / bounding-box volume), or
                                           # 'nominal' (the level's target)
+    EPS_MIN: float = 1e-3                 # a level whose K-denominator strain is not above this AND above its own
+                                          # uncertainty is a 'toe' level (the plates only closed on the loose shell):
+                                          # K is undefined there (nan) and the level is left out of the K figures
     PLATE_AREA: str = 'gap'               # plate pressure = load / face area.  'gap': the face enclosed by the other two
                                           # plate pairs, (gap_a - 2 contact_gap)(gap_b - 2 contact_gap), constant over a
                                           # hold; 'bb': the live bounding-box face of the network (follows its extreme
@@ -579,16 +582,28 @@ def load_level(cfg, R, lvl, verbose=True):
         # CI of the product from the three independent slope CIs (first order)
         L['strain']['disp_half'] = float((1.0 - L['strain']['disp']) * np.sqrt(sum(
             (L['disp_fit'][a]['half'] / (1.0 - L['eps_lin_disp'][a])) ** 2 for a in 'xyz')))
-    # K denominator: the requested strain, falling back disp -> rg -> plate when a source is missing / unusable
+    # K denominator: the requested strain, falling back disp -> rg -> plate only when a source is MISSING (no files).
+    # A measured strain of zero or below is kept as the level's strain: the level is the toe of the curve (2026-10-25:
+    # the first bb-seated level, whose 0.58 sigma plate closure only folded the loose shell, read disp -0.003 and
+    # Rg -0.003; the old rule required > 0 and silently fell back to the plate strain 0.025, which put the level
+    # fourth on the strain axis and made K dip there).  K would divide by ~0 at a toe level, so it is undefined
+    # (eps_ok False -> nan); the level is left out of the K figures and the small-strain slope and is drawn at its
+    # measured strain in the stress-strain and strain figures.
     chain = [cfg.K_STRAIN] + [k for k in ('disp', 'rg', 'plate') if k != cfg.K_STRAIN]
-    L['eps_src'] = next((k for k in chain if np.isfinite(L['strain'].get(k, np.nan)) and L['strain'].get(k, 0) > 0), 'plate')
+    L['eps_src'] = next((k for k in chain if np.isfinite(L['strain'].get(k, np.nan))), 'plate')
     L['eps'] = L['strain'][L['eps_src']]
+    L['eps_half'] = float(L['strain'].get(L['eps_src'] + '_half', L['strain'].get(L['eps_src'] + '_sd', 0.0)))
+    L['eps_ok'] = bool(L['eps'] > max(L['eps_half'], float(cfg.EPS_MIN)))
     if L['eps_src'] != cfg.K_STRAIN:
-        say(f"  NOTE: K_STRAIN='{cfg.K_STRAIN}' strain unavailable" + (' (no disp_*_polymer_cum files: deck before 2026-10-05)' if cfg.K_STRAIN == 'disp' else '')
-            + f" -- K divides by the '{L['eps_src']}' strain")
-    eps = L['eps']
+        why = ' (no disp_*_polymer_cum files: deck before 2026-10-05)' if cfg.K_STRAIN == 'disp' else ' (files missing)'
+        say(f"  NOTE: K_STRAIN='{cfg.K_STRAIN}' strain unavailable{why} -- K divides by the '{L['eps_src']}' strain")
+    eps = L['eps'] if L['eps_ok'] else np.nan          # the K denominator; nan = K undefined at this level
+    if not L['eps_ok']:
+        say(f"  NOTE: toe level -- the {L['eps_src']} strain {L['eps']:+.4f} ± {L['eps_half']:.4f} is not resolved above zero "
+            f"(EPS_MIN {cfg.EPS_MIN}): the plates only closed on the loose shell.  K is undefined (nan) here; the level is left "
+            'out of the K figures and the small-strain slope and drawn at its measured strain elsewhere')
     say(f"  plates (held): " + '   '.join(f'{a}: gap {L["gap"][a]:.3f} (closed {L["closure"][a]:.3f} = {L["eps_lin"][a]:.4f} L0)' for a in 'xyz'))
-    say(f"  eps_vol: target {float(lvl):.4f} | plates {L['strain']['plate']:.5f} (K denominator: {L['eps_src']} = {eps:.5f}) | "
+    say(f"  eps_vol: target {float(lvl):.4f} | plates {L['strain']['plate']:.5f} (K denominator: {L['eps_src']} = {L['eps']:.5f}) | "
         f"network Rg {L['strain'].get('rg', np.nan):.4f} ± {L['strain'].get('rg_sd', np.nan):.4f}   "
         f"BB {L['strain'].get('bb', np.nan):.4f} ± {L['strain'].get('bb_sd', np.nan):.4f}"
         + (f"   disp-profile {L['strain']['disp']:.4f} ± {L['strain']['disp_half']:.4f} (per axis "
@@ -879,17 +894,19 @@ def view(cfg, R, L=None, axis=None):
               z_gel_lo=Ra['z_gel_lo'], z_gel_hi=Ra['z_gel_hi'], in_gel=Ra['in_gel'], interior=Ra['interior'],
               z_support=Ra['plate_lo'], z_piston=Ra['plate_hi'], z_load=Ra['plate_hi'], bw=Ra['bw'],
               z_feed=(R['z_feed'] if a == 'z' else np.nan), z_perm=(R['z_perm'] if a == 'z' else np.nan),
-              two_pist=(a == 'z'), phi_mf=Ra['phi_mf'], phi_vor=None, phi_cal=None, rho_s0=Ra['rho_s0'], axis=a)
+              two_pist=(a == 'z'), phi_mf=Ra['phi_mf'], phi_vor=Ra.get('phi_vor'), phi_cal=Ra.get('phi_cal'),
+              rho_s0=Ra['rho_s0'], axis=a)      # phi_vor / phi_cal: set per axis by add_volume_fractions (2026-10-25 fix)
     if L is None:
         return Rv, None
     La = L['ax'][a]
-    Lv = dict(lvl=L['lvl'], eps=L['eps'], z=La['z'], ts=La['stress']['zz']['ts'], stress=La['stress'],
+    Lv = dict(lvl=L['lvl'], eps=L['eps'], eps_nominal=L['eps_nominal'], eps_ok=L.get('eps_ok', True),
+              z=La['z'], ts=La['stress']['zz']['ts'], stress=La['stress'],
               halt_ts=L['halt_ts'], evol_from=L['evol_from'], plat=L['plat'][:len(La['stress']['zz']['ts'])],
               in_mem=La['in_mem'], interior=La['interior'], z_mem_lo=La['z_mem_lo'], z_mem_hi=La['z_mem_hi'],
               z_pist=La['plate_hi'], z_supp=La['plate_lo'], piston_z_at=La['hi_at'], support_z_at=La['lo_at'],
               support_pos=_track(L['plate_tab'], a + 'lo'), piston_pos=_track(L['plate_tab'], a + 'hi'),
-              bw=La['bw'], wet=L.get('wet'), wetz=L['wetz'], phi_mf=La['phi_mf'], phi_vor=None, phi_cal=None,
-              G={}, Dc=None, axis=a)
+              bw=La['bw'], wet=L.get('wet'), wetz=L['wetz'], phi_mf=La['phi_mf'], phi_vor=La.get('phi_vor'),
+              phi_cal=La.get('phi_cal'), G={}, Dc=None, axis=a)
     return Rv, Lv
 
 
@@ -963,8 +980,8 @@ def fig_osmotic_pressure(cfg, R, L, axes=None):
 
 
 def fig_volfrac(cfg, R, L, axes=None):
-    """mass-fraction solvent volume fraction rho_s / rho_bath in the column (the Voronoi and
-    lambda-calibrated estimators of the triaxial notebooks are not computed for this geometry)."""
+    """solvent volume fraction in the column: mass fraction rho_s / rho_bath, Voronoi and
+    lambda-calibrated (the last two after add_volume_fractions; blank otherwise)."""
     return _each_axis(cfg, R, L, tri.fig_volfrac, axes)
 
 
@@ -1117,6 +1134,9 @@ def fig_K(cfg, R, L):
     (a) diagnostic: the network K from each profile axis and their mean, the plate K, and the
         absolute stress / eps_vol values (hollow) with the eps_vol = 0 readings each subtracts;
     (b) presentation: the two K estimates alone, with their CIs."""
+    if not L.get('eps_ok', True):
+        print(f"K figure skipped: toe level (strain {L['eps']:+.4f} not resolved above zero, K undefined)")
+        return None
     fig, (axA, axB) = plt.subplots(1, 2, figsize=(15, 6), constrained_layout=True)
     ci = int(cfg.ci_level * 100)
     sub = bool(cfg.K_SUBTRACT_REF)
@@ -1270,6 +1290,9 @@ def fig_Dc(cfg, R, L):
 
 def fig_closure(cfg, R, L):
     """K next to the triaxial M (cfg.M_REF): G = (3/4)(M - K) and kappa = D_c / M."""
+    if not L.get('eps_ok', True):
+        print(f"closure figure skipped: toe level (strain {L['eps']:+.4f} not resolved above zero, K undefined)")
+        return None
     if cfg.M_REF is None:
         print('closure figure skipped (set M_REF in the Config to the M of the triaxial notebook)')
         return None
@@ -1333,6 +1356,11 @@ def fig_plates_sweep(cfg, R, levels):
     return _save(fig, cfg, 'sweep_plate_pressure_history')
 
 
+def _usable(levels):
+    """Levels with a defined K (strain resolved above zero, see load_level), in order of strain."""
+    return sorted((L for L in levels if L.get('eps_ok', True)), key=lambda L: L['eps'])
+
+
 def _ser(ax, e, Ls, key, marker, color, label, hollow=False, dx=0.0):
     v = np.array([L[key] for L in Ls])
     lo = np.array([L[key + '_lo'] for L in Ls])
@@ -1343,7 +1371,12 @@ def _ser(ax, e, Ls, key, marker, color, label, hollow=False, dx=0.0):
 
 def fig_K_sweep(cfg, R, levels):
     """Bulk modulus vs volumetric strain, two panes (the layout of triaxial.fig_M_sweep):
-    (a) diagnostic (per profile axis + the absolute values, hollow), (b) presentation."""
+    (a) diagnostic (per profile axis + the absolute values, hollow), (b) presentation.
+    Toe levels (K undefined) are left out."""
+    levels = _usable(levels)
+    if not levels:
+        print('K sweep figure skipped (no level has a defined K)')
+        return None
     fig, (axA, axB) = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
     sub = bool(cfg.K_SUBTRACT_REF)
     fig.suptitle('Bulk modulus across the sweep' + (' (increment from $\\varepsilon_{vol}=0$)' if sub else '') + '   |   ' + cfg.sim_name,
@@ -1392,13 +1425,17 @@ def fig_stress_strain_sweep(cfg, R, levels):
     n_fit = int(max(1, cfg.SS_FIT_NPTS))
     fits = []
 
-    def _series(e, s, err, color, marker, name, s0, err0):
-        ax.errorbar(e, s, yerr=err, fmt=marker + '-', lw=2, ms=9, color=color, capsize=6, label=name)
-        e, s = np.asarray(e, float), np.asarray(s, float)
+    def _series(e, s, err, color, marker, name, s0, err0, ok):
+        # every level is drawn at its measured strain (toe levels included), in order of strain
+        e, s, ok = np.asarray(e, float), np.asarray(s, float), np.asarray(ok, bool)
+        o = np.argsort(e)
+        err = [np.asarray(x, float)[o] for x in err]
+        ax.errorbar(e[o], s[o], yerr=err, fmt=marker + '-', lw=2, ms=9, color=color, capsize=6, label=name)
         anchor = float(s0) if np.isfinite(s0) else 0.0
         if np.isfinite(s0):
             ax.errorbar([0.0], [s0], yerr=err0, fmt=marker, ms=9, mfc='none', color=color, capsize=6)
-        o = np.argsort(e)
+        # the small-strain slope: the first n_fit levels WITH a defined K (toe levels excluded)
+        o = o[ok[o]]
         ef, sf = e[o][:n_fit], s[o][:n_fit]
         slope = float(np.sum(ef * (sf - anchor)) / np.sum(ef ** 2))
         xs = np.linspace(0, max(e) * 1.05, 20)
@@ -1407,26 +1444,33 @@ def fig_stress_strain_sweep(cfg, R, levels):
         return slope
 
     eps = np.array([L['eps'] for L in levels])
+    ok = np.array([L.get('eps_ok', True) for L in levels])
     exc = np.array([L.get('relax', {}).get('excess', 0.0) for L in levels])
+    exc = np.where(np.isfinite(exc), exc, 0.0)
     sn = np.array([L['Pi_int'] for L in levels])
     hn = np.array([L['Pi_half'] for L in levels])
     R['K_small_net'] = _series(eps, sn, [hn + exc, hn], WONG['blue'], 'o', 'network $\\langle\\mathit{\\Pi}\\rangle_{\\rm int}$ (plateau)',
-                               R['Pi_ref'], R['Pi_ref_half'])
+                               R['Pi_ref'], R['Pi_ref_half'], ok)
     hp = [L for L in levels if 'PF' in L]
     if hp:
         ep = np.array([L['eps'] for L in hp])
         Pp = np.array([L['PF']['mean'] for L in hp])
         ex = np.array([L.get('relax', {}).get('excess', 0.0) for L in hp])
+        ex = np.where(np.isfinite(ex), ex, 0.0)
         pref = R.get('P_ref', np.nan)
         R['K_small_pl'] = _series(ep, Pp, [Pp - [L['PF']['lo'] for L in hp] + ex, [L['PF']['hi'] for L in hp] - Pp],
                                   WONG['vermillion'], 's', 'plates $\\bar P$ (plateau)', pref,
-                                  (float(R['P_ref_hi'] - R['P_ref_lo']) / 2 if np.isfinite(pref) else None))
+                                  (float(R['P_ref_hi'] - R['P_ref_lo']) / 2 if np.isfinite(pref) else None),
+                                  [L.get('eps_ok', True) for L in hp])
     ax.plot([], [], 'o', mfc='none', color='0.4', label=r'hollow = $\varepsilon_{vol}=0$ reading')
-    ax.plot([], [], ls=':', lw=1.5, color='0.4', label=f'dotted = through the $\\varepsilon_{{vol}}=0$ reading, slope from the first {n_fit} levels')
+    ax.plot([], [], ls=':', lw=1.5, color='0.4', label=f'dotted = slope of the first {n_fit} levels\nthrough the $\\varepsilon_{{vol}}=0$ reading')
+
     if np.any(exc > 0):
-        ax.plot([], [], ' ', label='lower bars include the unrelaxed-hold excess')
+        ax.plot([], [], ' ', label='lower bars: + unrelaxed-hold excess')
     ax.set_title('Stress vs volumetric strain, small-strain slopes through $\\varepsilon_{vol}=0$:  ' +
-                 ',  '.join(f"$K_{{\\rm {n[:4]}}}\\approx{sig(s)}$ ({k} levels)" for n, s, k in fits) + '\n' + cfg.sim_name, fontsize=12)
+                 ',  '.join(f"$K_{{\\rm {n[:4]}}}\\approx{sig(s)}$ ({k} levels)" for n, s, k in fits)
+                 + ('' if ok.all() else f'\n({int((~ok).sum())} toe level(s), strain not resolved above zero: drawn, left out of the slopes)')
+                 + '\n' + cfg.sim_name, fontsize=12)
     ax.set_xlabel(r'volumetric strain  $\varepsilon_{vol}$')
     ax.set_ylabel(r'plateau stress  (LJ)')
     ax.grid(alpha=0.3)
@@ -1499,6 +1543,10 @@ def fig_closure_sweep(cfg, R, levels):
     if cfg.M_REF is None:
         print('closure figure skipped (set M_REF in the Config to the M of the triaxial notebook)')
         return None
+    levels = _usable(levels)
+    if not levels:
+        print('closure figure skipped (no level has a defined K)')
+        return None
     fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
     eps = np.array([L['eps'] for L in levels])
     _ser(ax, eps, levels, 'K_net', 'o', WONG['blue'], '$K$ (network)')
@@ -1555,7 +1603,8 @@ def print_summary(cfg, levels):
         print(f"{L['eps_nominal']:7.3f} {L['eps']:8.4f} {L['strain'].get('rg', np.nan):8.4f} "
               f"{c(L['K_net'], L['K_net_lo'], L['K_net_hi']):>22s} {L.get('K_net_rg', np.nan):10.4f} {kp:>22s} {L['dev_rel']:8.1%} {dc:>10s} "
               f"{ds:10.4f}" + (' *' if ds > 0.5 * (L['K_net_hi'] - L['K_net']) else '')
-              + (f" {L['G_from_MK']:11.4f}" if 'G_from_MK' in L else ''))
+              + (f" {L['G_from_MK']:11.4f}" if 'G_from_MK' in L else '')
+              + ('' if L.get('eps_ok', True) else '   <- toe level: strain not resolved above zero, K undefined'))
     print(f"  eps_vol = the K denominator ('{cfg.K_STRAIN}');  K_net(Rg) = the same stress increment over the network's own Rg strain")
     if cfg.RELAX_SYS:
         print('  delta_sys = (plate plateau - fitted tail asymptote) / eps_vol;  * = larger than the K_net half-width')

@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=slab_isolated_tall_rot45
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=128 # was 32, 128
+#SBATCH --cpus-per-task=1     # was 4, 1
+#SBATCH --mem=0
+#SBATCH --time=36:00:00
+#SBATCH --output=%x.o%j.%N
+# #SBATCH --error=%x.e%j.%N
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# TALL ISOLATED GEL, LATTICE ROTATED 45 deg ABOUT y (2026-10-25): the same network as
+# slab_with_support_isolated_tall.batch (5-bead strands, a = 5.28 sigma, rho 0.40, 15 sigma
+# of bath on every side, no sheets; scripts/slab_with_support.ipynb, rot45_y = True) with
+# the cube axes of the diamond lattice turned 45 degrees about y: box x = crystal [101],
+# box z = crystal [-101], y = [010].  13 x 9 x 30 body-centred-tetragonal cells
+# (a/sqrt2 x a x a/sqrt2 = 3.73 x 5.28 x 3.73 sigma), lattice 48.5 x 47.5 x 112.0 -- the
+# aligned block is 47.5 x 47.5 x 110.9 -- about 14 k crosslinks either way, ~0.44 M atoms.
+#
+# WHY: the shear decks give G = 0.15-0.18 and every compression-side measurement
+# (the lateral-stress ratio of the two-piston sweep, compress_slab's K vs M, the
+# normalised P_th guide) gives 0.04-0.06.  The gel is a diamond lattice built with its
+# cube axes along the box, so it is cubic, not isotropic: an xz shear of the aligned
+# gel is a cube-face shear, C44 (it stretches the <111> strands at first order), while
+# a z compression is a cube-axis strain whose deviatoric response is (C11 - C12)/2
+# (it only rotates the strands).  In the rotated gel the shear deck's xz shear becomes
+# a cube-diagonal shear, i.e. (C11 - C12)/2.  If its G lands near 0.05 the discrepancy
+# is lattice anisotropy (Zener ratio ~3) and the material G of the network is the
+# compression family's; if it stays near 0.17 the compression lateral stress is what
+# to doubt.
+#
+# Same protocol and knobs as the aligned run (BARO_MODE=iso, PIN_GEL=1, 8 M steps,
+# CHAIN=1, P* = 1.5, 1.0_1.0): the aligned run of this size took ~15 h on 4 nodes.
+# Expected steady read-outs: box_dimensions ~ 78 x 77 x 142 (iso keeps the data file's
+# aspect ratio 78.5 x 77.5 x 142.0), gel_dimensions (bounding box) ~ 53 x 52 x 116-117
+# (lattice + 4-5 sigma per axis).  The gel's own anisotropy comes from stress_aniso_*.dat
+# and the Rg edges in gel_dimensions_*.dat, not from the box.  Deck path smoke-tested
+# locally 2026-10-25 on a 4 x 3 x 8-cell rotated mini gel (LAMMPS GUI lmp, 200 k steps).
+#
+# THEN: pull final_config_<DATANAME>_1.0_1.0_8000000.data to lammps_data_files_local/,
+# convert it with  python add_more_plates_to_gel.py --layout x_plates --input <that file>
+# (scripts/lib), copy the _x_plates file to ~/Documents/lammps_data/input_data/ on
+# Expanse and run shear_slab_two_pist_fine_g005.batch with DATANAME = its stem (the
+# aligned gel's 5 % run under the same batch is the direct comparison).
+# =======================================================================
+FOLDER="slab_with_support"
+DATANAME="slab_support_5beads_tall_rho04_nowalls_rot45"   # scripts/slab_with_support.ipynb, the rot45_y input cell (2026-10-25)
+INTERACTION="1.0_1.0"   # the interaction of the triaxial runs, so that K, M and G belong to the same gel
+NSTEPS=8000000
+TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
+PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
+SEED=12345          # RNG seed for create_velocity / langevin
+
+export BARO_MODE=iso          # one scale factor for x, y, z: the data file's aspect ratio is KEPT (see above);
+                              # aniso (the deck's default) has no restoring force on the box shape of an isolated gel
+export PIN_GEL=1              # zero the gel's linear + angular momentum every 100 steps: a free 48 x 48 x 111 block
+                              # would turn ~14 deg in 10M steps, and the plates of compress_slab are parked along
+                              # the box axes (see slab_with_support.lmp)
+export PISTON_TRANSPARENT=1   # no piston in this file: irrelevant, kept so a file WITH a piston is safe too
+export CHAIN=1                # chain continuation jobs until all NSTEPS are done (see WALL LIMIT above)
+export WALL_MARGIN=2400       # seconds before the SLURM limit at which the deck stops (final write_data,
+                              # teardown, chain submission and post-processing all fit in 40 min)
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET VEL_SEED
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET" "$SEED"

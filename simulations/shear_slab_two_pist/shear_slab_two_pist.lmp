@@ -230,6 +230,22 @@ variable thermo_freq index 250000
 variable stress_freq index 1000     # fix print cadence (strain, gel/box dims, COM)
 variable volume_freq index 5000     # piston logs
 
+# ----- Fine-cadence displacement profile (2026-10-22; DISP_FINE_NFREQ / DISP_FINE_SPAN in the batch) -----
+# disp_fine_nfreq > 0: the cumulative polymer displacement u_z(x) (v_uz_cum, the quantity and the bins of
+# disp_z_polymer_cum) is ALSO block-averaged every disp_fine_nfreq steps, from the start of each level's
+# drive through the first disp_fine_span steps of its hold -> disp_z_polymer_fine_*_g<strain>.dat.  The
+# standard file's first block closes nfreq_stress (hold/10) into the hold, long after the gel's transverse
+# relaxation (sweep 55082229: nothing left to relax at the first 5000-step series block), and its reference
+# is the single displace/atom snapshot at the hold onset.  The notebooks subtract the late plateau of the
+# coarse _cum file instead (lib/shear.py fit_Dc_fine), so that snapshot drops out.  Resolving the relaxation
+# also needs a fast ramp: NSTEPS_SHEAR_BASE (-var nsteps_shear_base) and a halt check every 100 steps
+# (STRESS_FREQ) -- see shear_slab_two_pist_fine.batch.  0 = off (the standard runs).
+variable disp_fine_nfreq   index 0
+variable disp_fine_span    index 100000   # hold steps the fine file covers (the drive before them is always covered)
+variable disp_fine_nevery  equal 10
+variable disp_fine_nrepeat equal floor(${disp_fine_nfreq}/v_disp_fine_nevery)
+variable disp_fine_nf      equal v_disp_fine_nevery*v_disp_fine_nrepeat
+
 # ----- Phase 1.5: gamma = 0 REFERENCE window -----
 variable ref_avg_steps index 150000
 variable ref_nevery    equal 100
@@ -260,6 +276,7 @@ variable nrepeat_stress equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepea
 variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
+print ">>> Fine displacement profile: every ${disp_fine_nf} steps over the drive + the first ${disp_fine_span} hold steps (0 = off)"
 print ">>> Mode: SHEAR, ISOLATED GEL in a two-piston bath (grip plates seated on the x-faces, driven -/+z; wet pistons hold the bath at P_target)"
 
 # ----- Spatial Binning -----
@@ -878,6 +895,7 @@ variable uz_shear atom c_displace_shear[3]
 compute  displace_cum polymer displace/atom
 variable uz_cum atom c_displace_cum[3]
 compute  chunk_x_poly_cum polymer chunk/atom bin/1d x lower ${binWidth_rx} units reduced region reg_core_yz
+compute  chunk_x_poly_fine polymer chunk/atom bin/1d x lower ${binWidth_rx} units reduced region reg_core_yz   # fine-cadence file (own compute: chunk lock)
 
 
 # ==========================================================================
@@ -972,6 +990,11 @@ fix out_polymer_com all print ${stress_freq} &
     "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
     file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
 
+# ----- fine-cadence u_z(x): from the drive start through the first disp_fine_span steps of the hold -----
+# (v_uz_cum is never reset, so one fix spans the drive run and the first hold segment; unfixed there)
+if "${disp_fine_nfreq} > 0" then &
+    "print '>>> [strain=${strains}] fine displacement profile: v_uz_cum every ${disp_fine_nf} steps (nevery=${disp_fine_nevery} nrepeat=${disp_fine_nrepeat}) over the drive + the first ${disp_fine_span} hold steps'" &
+    "fix avg_disp_fine polymer ave/chunk ${disp_fine_nevery} ${disp_fine_nrepeat} ${disp_fine_nf} chunk_x_poly_fine v_uz_cum file output_files/displacement_data/disp_z_polymer_fine_${dataname}_${interaction}_${nsteps}_g${strains}.dat"
 # ----- PHASE 2: drive -- the grips translate at -/+vshear (left -z, right +z) until gamma >= ${strains} -----
 # (all forces on the grips are zeroed by setforce, so the velocity set here persists unchanged)
 velocity grip_r set 0.0 0.0  ${vshear}
@@ -1043,7 +1066,15 @@ print "========================================"
 print ">>> [strain=${strains}] measurement HOLD (grips frozen, stress relaxes) for ${hold_steps} steps (>= nsteps=${nsteps}, aligned to nfreq_stress=${nfreq_stress})"
 print ">>> [strain=${strains}] gamma = $(v_gamma:%.4f) (grips);  tracking-slab strain = $(v_gamma_trk:%.4f)"
 print "========================================"
-run ${hold_steps}
+# hold segment 1 carries the fine displacement fix (padded to a disp_fine_nf epoch, capped at the hold); segment 2 is the rest
+variable fine_run equal 0
+if "${disp_fine_nfreq} > 0" then "variable fine_run delete" "variable fine_run equal (floor(($(step)+${disp_fine_span}-1)/${disp_fine_nf})+1)*${disp_fine_nf}-$(step)"
+if "${fine_run} > ${hold_steps}" then "variable fine_run delete" "variable fine_run equal ${hold_steps}"
+if "${fine_run} > 0" then &
+    "print '>>> [strain=${strains}] hold segment 1: ${fine_run} steps with the fine displacement profile, then ${hold_steps} - ${fine_run} without'" &
+    "run ${fine_run}" &
+    "unfix avg_disp_fine"
+run $(v_hold_steps-v_fine_run)
 
 unfix avg_disp_x_poly
 unfix avg_disp_x_cum
@@ -1069,6 +1100,7 @@ if "${wall_timeout} > 0" then &
     "print '>>> wall-clock budget left after strain=${strains}: $(timeremain:%.0f) s of ${wall_timeout} s  (0 = budget spent: this level was cut short and the remaining levels are not started)'"
 
 variable hold_steps      delete
+variable fine_run        delete
 variable drive_dump_freq delete
 
 # Remember this level's tag BEFORE `next`: when `next` exhausts the list it DELETES

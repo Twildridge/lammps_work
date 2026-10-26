@@ -3683,9 +3683,18 @@ def overlay_levels(ax, R, levels, get_z, get_ts, get_stack, cfg, ref=None, autos
     return finals
 
 
+def level_label(L):
+    """legend text of one level: its strain to 3 significant digits (the bulk sweep's network strains
+    are 0.009 / 0.011 ...), plus the target when the level carries one that differs (bulk levels)."""
+    lab = fr'$\varepsilon={L["eps"]:.3g}$'
+    nom = L.get('eps_nominal')
+    if nom is not None and abs(float(nom) - float(L['eps'])) > 5e-4:
+        lab += f' (target {float(nom):g})'
+    return lab
+
+
 def level_handles(levels, ref=False):
-    h = [Line2D([0], [0], color=level_color(i), lw=3, label=fr'$\varepsilon={L["eps"]:.2f}$')
-         for i, L in enumerate(levels)]
+    h = [Line2D([0], [0], color=level_color(i), lw=3, label=level_label(L)) for i, L in enumerate(levels)]
     if ref:
         h.insert(0, Line2D([0], [0], color='k', ls='--', lw=2, label=r'reference ($\varepsilon=0$)'))
     return h
@@ -5415,7 +5424,7 @@ def fig_volfrac_sweep(cfg, R, levels):
             zs = _level_support_z(R, L)              # held support (moved: symmetric drive)
             if np.isfinite(zs) and abs(zs - R['z_support']) > 1e-6:
                 ax.axvline(zn(R, zs), color=level_color(i), ls='-', lw=1.2, alpha=0.6)
-            txt.append(f'{L["eps"]:.2f}: {fmt_mu(m[L["interior"]])}')
+            txt.append(f'{L["eps"]:.3g}: {fmt_mu(m[L["interior"]])}')
         ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)
         if np.isfinite(R['z_support']):
             ax.axvline(zn(R, R['z_support']), color='k', lw=1.5, alpha=0.85)
