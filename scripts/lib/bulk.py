@@ -130,6 +130,14 @@ class Config(tri.Config):
     EPS_MIN: float = 1e-3                 # a level whose K-denominator strain is not above this AND above its own
                                           # uncertainty is a 'toe' level (the plates only closed on the loose shell):
                                           # K is undefined there (nan) and the level is left out of the K figures
+    SS_FIT_MODE: str = 'auto'             # the K line of the stress-strain figure.  'auto': a free straight line through the
+                                          # LONGEST run of consecutive points (the eps_vol = 0 reading + the levels with a
+                                          # defined K, in order of strain) that is collinear within SS_FIT_TOL -- its slope is K,
+                                          # its intercept minus the eps_vol = 0 reading the zero-strain offset.  'first': the
+                                          # through-anchor slope of the first SS_FIT_NPTS such levels (the older rule)
+    SS_FIT_TOL: float = 0.05              # 'auto' collinearity: every point of the run within this fraction of the run's
+                                          # stress span of its line (ties -> the straightest run)
+    SS_FIT_NMIN: int = 3                  # 'auto': shortest run considered
     PLATE_AREA: str = 'gap'               # plate pressure = load / face area.  'gap': the face enclosed by the other two
                                           # plate pairs, (gap_a - 2 contact_gap)(gap_b - 2 contact_gap), constant over a
                                           # hold; 'bb': the live bounding-box face of the network (follows its extreme
@@ -587,7 +595,7 @@ def load_level(cfg, R, lvl, verbose=True):
     # the first bb-seated level, whose 0.58 sigma plate closure only folded the loose shell, read disp -0.003 and
     # Rg -0.003; the old rule required > 0 and silently fell back to the plate strain 0.025, which put the level
     # fourth on the strain axis and made K dip there).  K would divide by ~0 at a toe level, so it is undefined
-    # (eps_ok False -> nan); the level is left out of the K figures and the small-strain slope and is drawn at its
+    # (eps_ok False -> nan); the level is left out of the K figures and the stress-strain K fit and is drawn at its
     # measured strain in the stress-strain and strain figures.
     chain = [cfg.K_STRAIN] + [k for k in ('disp', 'rg', 'plate') if k != cfg.K_STRAIN]
     L['eps_src'] = next((k for k in chain if np.isfinite(L['strain'].get(k, np.nan))), 'plate')
@@ -601,7 +609,7 @@ def load_level(cfg, R, lvl, verbose=True):
     if not L['eps_ok']:
         say(f"  NOTE: toe level -- the {L['eps_src']} strain {L['eps']:+.4f} ± {L['eps_half']:.4f} is not resolved above zero "
             f"(EPS_MIN {cfg.EPS_MIN}): the plates only closed on the loose shell.  K is undefined (nan) here; the level is left "
-            'out of the K figures and the small-strain slope and drawn at its measured strain elsewhere')
+            'out of the K figures and the stress-strain K fit and drawn at its measured strain elsewhere')
     say(f"  plates (held): " + '   '.join(f'{a}: gap {L["gap"][a]:.3f} (closed {L["closure"][a]:.3f} = {L["eps_lin"][a]:.4f} L0)' for a in 'xyz'))
     say(f"  eps_vol: target {float(lvl):.4f} | plates {L['strain']['plate']:.5f} (K denominator: {L['eps_src']} = {L['eps']:.5f}) | "
         f"network Rg {L['strain'].get('rg', np.nan):.4f} ± {L['strain'].get('rg_sd', np.nan):.4f}   "
@@ -1416,16 +1424,44 @@ def fig_K_sweep(cfg, R, levels):
     return _save(fig, cfg, 'sweep_modulus')
 
 
+def linear_run(e, s, tol=0.05, n_min=3):
+    """Longest run of consecutive points (e, s sorted by e) that a free straight line fits with every
+    residual within tol * (stress span of the run).  Ties go to the straightest run; if no run of
+    n_min points passes, the straightest run of n_min points is returned with ok=False.
+    Returns dict(i0, i1, slope, icpt, score) with the run = indices i0..i1 inclusive."""
+    e, s = np.asarray(e, float), np.asarray(s, float)
+    n, best, fallback = len(e), None, None
+    for w in range(n, n_min - 1, -1):
+        cands = []
+        for i in range(0, n - w + 1):
+            ee, ss = e[i:i + w], s[i:i + w]
+            k, b = np.polyfit(ee, ss, 1)
+            span = max(ss.max() - ss.min(), 1e-300)
+            score = float(np.abs(ss - (k * ee + b)).max() / span)
+            cands.append(dict(i0=i, i1=i + w - 1, slope=float(k), icpt=float(b), score=score, n=w, ok=score <= tol))
+        good = [c for c in cands if c['ok']]
+        if good:
+            best = min(good, key=lambda c: c['score'])
+            break
+        if w == n_min:
+            fallback = min(cands, key=lambda c: c['score'])
+    return best if best is not None else fallback
+
+
 def fig_stress_strain_sweep(cfg, R, levels):
-    """Pi and the mean plate pressure vs volumetric strain, INCLUDING each estimator's
-    eps_vol = 0 reading (hollow).  The dotted line of each series is anchored at its own
-    eps_vol = 0 reading and its slope is the through-anchor least-squares fit of the first
-    cfg.SS_FIT_NPTS levels (the linear regime): that slope is the small-strain K."""
+    """Pi and the mean plate pressure vs volumetric strain, INCLUDING each estimator's eps_vol = 0
+    reading (hollow).  Toe levels are crossed out and never fitted.  The dotted line of each series
+    is the K fit, drawn heavy over the fitted points and faint beyond them:
+      SS_FIT_MODE 'auto'  -- free line through the longest collinear run (linear_run; the eps_vol = 0
+                             reading is a candidate point).  K = slope (R['K_small_*']); the line's
+                             intercept minus the eps_vol = 0 reading = zero-strain offset (R['ss_fit_*']).
+      SS_FIT_MODE 'first' -- through-anchor slope of the first SS_FIT_NPTS levels with a defined K."""
     fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
-    n_fit = int(max(1, cfg.SS_FIT_NPTS))
+    auto = str(getattr(cfg, 'SS_FIT_MODE', 'auto')).lower() == 'auto'
+    n_fit = None if cfg.SS_FIT_NPTS is None else int(max(1, cfg.SS_FIT_NPTS))
     fits = []
 
-    def _series(e, s, err, color, marker, name, s0, err0, ok):
+    def _series(e, s, err, color, marker, name, s0, err0, ok, key):
         # every level is drawn at its measured strain (toe levels included), in order of strain
         e, s, ok = np.asarray(e, float), np.asarray(s, float), np.asarray(ok, bool)
         o = np.argsort(e)
@@ -1434,13 +1470,35 @@ def fig_stress_strain_sweep(cfg, R, levels):
         anchor = float(s0) if np.isfinite(s0) else 0.0
         if np.isfinite(s0):
             ax.errorbar([0.0], [s0], yerr=err0, fmt=marker, ms=9, mfc='none', color=color, capsize=6)
-        # the small-strain slope: the first n_fit levels WITH a defined K (toe levels excluded)
-        o = o[ok[o]]
-        ef, sf = e[o][:n_fit], s[o][:n_fit]
-        slope = float(np.sum(ef * (sf - anchor)) / np.sum(ef ** 2))
-        xs = np.linspace(0, max(e) * 1.05, 20)
-        ax.plot(xs, anchor + slope * xs, ls=':', lw=1.5, color=color, alpha=0.8)
-        fits.append((name.split()[0], slope, len(ef)))
+        if not ok.all():       # toe levels: crossed out (drawn, not fitted)
+            ax.plot(e[~ok], s[~ok], 'x', ms=16, mew=2.5, color=color, zorder=5)
+        o = o[ok[o]]           # the levels with a defined K, in order of strain
+        if auto:
+            # candidate points: the eps_vol = 0 reading (if measured) then the usable levels
+            ec = np.concatenate([[0.0] if np.isfinite(s0) else [], e[o]])
+            sc = np.concatenate([[s0] if np.isfinite(s0) else [], s[o]])
+            run = linear_run(ec, sc, tol=cfg.SS_FIT_TOL, n_min=int(cfg.SS_FIT_NMIN))
+            slope, icpt = run['slope'], run['icpt']
+            ef = ec[run['i0']:run['i1'] + 1]
+            info = dict(run, n=len(ef), e_lo=float(ef.min()), e_hi=float(ef.max()), anchor_in=bool(run['i0'] == 0 and np.isfinite(s0)),
+                        offset=float(icpt - anchor) if np.isfinite(s0) else np.nan, mode='auto')
+            print(f"  stress-strain K fit ({name.split()[0]}): longest collinear run = {info['n']} of {len(ec)} points, eps {info['e_lo']:.4f}..{info['e_hi']:.4f}"
+                f" (max residual {run['score']*100:.1f}% of the run's stress span, tolerance {cfg.SS_FIT_TOL*100:.0f}%)"
+                + ('' if run['ok'] else '  -- NO run passed the tolerance: straightest short run shown')
+                + f";  slope K = {slope:.4f}, intercept {icpt:+.5f} = eps_vol=0 reading {anchor:+.5f} {icpt-anchor:+.5f}")
+        else:
+            ef, sf = e[o][:n_fit], s[o][:n_fit]
+            slope, icpt = float(np.sum(ef * (sf - anchor)) / np.sum(ef ** 2)), anchor
+            info = dict(n=len(ef), e_lo=0.0, e_hi=float(ef.max()), slope=slope, icpt=icpt, offset=0.0, ok=True, mode='first')
+        lo, hi = min(info['e_lo'], 0.0) if info['n'] else 0.0, info['e_hi']
+        xs = np.linspace(lo, hi, 20)
+        ax.plot(xs, icpt + slope * xs, ls=':', lw=2.2, color=color, alpha=0.9)
+        for a_, b_ in ((min(e.min(), 0.0) - 0.002, lo), (hi, max(e) * 1.05)):      # faint extension both ways
+            if b_ > a_:
+                xs = np.linspace(a_, b_, 10)
+                ax.plot(xs, icpt + slope * xs, ls=':', lw=1.2, color=color, alpha=0.3)
+        R['ss_fit_' + key] = info
+        fits.append((name.split()[0], slope, info['n']))
         return slope
 
     eps = np.array([L['eps'] for L in levels])
@@ -1449,8 +1507,8 @@ def fig_stress_strain_sweep(cfg, R, levels):
     exc = np.where(np.isfinite(exc), exc, 0.0)
     sn = np.array([L['Pi_int'] for L in levels])
     hn = np.array([L['Pi_half'] for L in levels])
-    R['K_small_net'] = _series(eps, sn, [hn + exc, hn], WONG['blue'], 'o', 'network $\\langle\\mathit{\\Pi}\\rangle_{\\rm int}$ (plateau)',
-                               R['Pi_ref'], R['Pi_ref_half'], ok)
+    R['K_small_net'] = _series(eps, sn, [hn + exc, hn], WONG['blue'], 'o', 'network $\\langle\\mathit{\\Pi}\\rangle_{\\rm int}$',
+                               R['Pi_ref'], R['Pi_ref_half'], ok, 'net')
     hp = [L for L in levels if 'PF' in L]
     if hp:
         ep = np.array([L['eps'] for L in hp])
@@ -1459,17 +1517,17 @@ def fig_stress_strain_sweep(cfg, R, levels):
         ex = np.where(np.isfinite(ex), ex, 0.0)
         pref = R.get('P_ref', np.nan)
         R['K_small_pl'] = _series(ep, Pp, [Pp - [L['PF']['lo'] for L in hp] + ex, [L['PF']['hi'] for L in hp] - Pp],
-                                  WONG['vermillion'], 's', 'plates $\\bar P$ (plateau)', pref,
+                                  WONG['vermillion'], 's', 'plates $\\bar P$', pref,
                                   (float(R['P_ref_hi'] - R['P_ref_lo']) / 2 if np.isfinite(pref) else None),
-                                  [L.get('eps_ok', True) for L in hp])
-    ax.plot([], [], 'o', mfc='none', color='0.4', label=r'hollow = $\varepsilon_{vol}=0$ reading')
-    ax.plot([], [], ls=':', lw=1.5, color='0.4', label=f'dotted = slope of the first {n_fit} levels\nthrough the $\\varepsilon_{{vol}}=0$ reading')
-
-    if np.any(exc > 0):
-        ax.plot([], [], ' ', label='lower bars: + unrelaxed-hold excess')
-    ax.set_title('Stress vs volumetric strain, small-strain slopes through $\\varepsilon_{vol}=0$:  ' +
-                 ',  '.join(f"$K_{{\\rm {n[:4]}}}\\approx{sig(s)}$ ({k} levels)" for n, s, k in fits)
-                 + ('' if ok.all() else f'\n({int((~ok).sum())} toe level(s), strain not resolved above zero: drawn, left out of the slopes)')
+                                  [L.get('eps_ok', True) for L in hp], 'pl')
+    ax.plot([], [], 'o', mfc='none', color='0.4', label=r'$\varepsilon_{vol}=0$ reading')
+    ax.plot([], [], ls=':', lw=2.2, color='0.4', label=('linear-regime fit (slope = $K$)' if auto else 'small-strain fit through it (slope = $K$)'))
+    if not ok.all():
+        ax.plot([], [], 'x', ms=10, mew=2.5, color='0.4', label='toe level, not fitted')
+    npts = int(ok.sum()) + 1
+    ax.set_title('Plateau stress vs volumetric strain:  ' +
+                 ',  '.join(f"$K_{{\\rm {n[:4]}}}\\approx{sig(s)}$ ({k} pts)" for n, s, k in fits)
+                 + (f"  --  longest collinear run of the {npts} points" if auto else "  --  small-strain slopes through $\\varepsilon_{vol}=0$")
                  + '\n' + cfg.sim_name, fontsize=12)
     ax.set_xlabel(r'volumetric strain  $\varepsilon_{vol}$')
     ax.set_ylabel(r'plateau stress  (LJ)')
