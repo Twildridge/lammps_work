@@ -648,3 +648,11 @@ Converted x_plates + two-wet-piston data file  [2026-10-14 10:15, add_more_plate
   Plates: parked 3.0 sigma outside the BB faces, overhang 6.0, spacing 0.5 (68904 beads in 2 plate(s)); wet pistons 14040 beads each, z = 10.00 / 153.49, vacuum margins 10.0 / 10.0
   Crosslinks: 14562   Chain beads: 81648   Solvent: 338638   Plates: 68904   Feed piston: 14040   Permeate piston: 14040
   Total atoms: 531832   Total bonds: 108864   Output: final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000_x_plates.data
+
+Converted x_plates + two-wet-piston data file  [2026-10-27 20:01, add_more_plates_to_gel.py]  (plates: xlo, xhi):
+  Input: final_config_slab_support_5beads_tall_rho04_nowalls_rot45_1.0_1.0_8000000.data
+  Box: 79.0417 x 78.0194 x 164.920   (bath cropped: x,y margin 8.8, z reservoir 9.0 sigma; 0 solvent cropped, 0 removed at the seam)
+  Gel: L_bb 55.43 x 54.84 x 119.01, L_rg 49.79 x 48.36 x 112.84; bath rho = 0.4703
+  Plates: parked 3.0 sigma outside the BB faces, overhang 6.0, spacing 0.5 (71010 beads in 2 plate(s)); wet pistons 14220 beads each, z = 10.00 / 154.92, vacuum margins 10.0 / 10.0
+  Crosslinks: 15257   Chain beads: 86562   Solvent: 345817   Plates: 71010   Feed piston: 14220   Permeate piston: 14220
+  Total atoms: 547086   Total bonds: 115416   Output: final_config_slab_support_5beads_tall_rho04_nowalls_rot45_1.0_1.0_8000000_x_plates.data
