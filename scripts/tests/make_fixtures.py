@@ -8,7 +8,8 @@ output trees:
   <root>/two_piston_perm/   a triaxial_permeation_two_pist run (feed | perm columns,
                             piston_pressure, permeation_data/permeation)
   <root>/two_piston_comp/   a triaxial_compression_two_pist run, levels c0.05 c0.10
-                            (load | feed | perm columns, _ref files, disp_z_polymer, ...)
+                            (load | feed | perm columns, _ref files, disp_z_polymer, ...; the six-plate
+                            fixture also writes an unload, _u<lvl> files, since 2026-10-28)
   <root>/six_plate_bulk/    a compress_slab run (2026-09-29), levels c0.05 c0.10: six plates +
                             two wet pistons, profiles along z, x and y, with a KNOWN bulk
                             modulus K_TRUE so the analysis can be checked against it
@@ -331,8 +332,11 @@ B_GEL = ((10.0, 50.0), (10.0, 50.0), (25.0, 65.0))   # gel faces per axis (edge 
 B_CONTACT = 1.12
 B_ZPERM, B_ZFEED = 5.0, 85.0
 K_TRUE = 0.25                              # the bulk modulus the synthetic stresses are built from
-B_DC, B_DT = 0.04, 0.5                     # D_c of the synthetic consolidation and the LJ time per step it assumes
+B_DC, B_DT = 0.04, 0.5                     # D_c of the two-piston fixture's consolidation and the LJ time per step it assumes
                                            # (a 6000-step hold must span a few tau_1 = L^2/(4 pi^2 D_c): pass dt_lj=B_DT)
+B_DM = 0.04                                # D_m of the six-plate fixture's free re-swelling (unload, deck Phase 2c, 2026-10-28):
+                                           # tau_1 = L^2/(3 pi^2 D_m) ~ 1270 tau on the 38.8-sigma compressed cube = 2540 steps
+B_UMARGIN = 1.0                            # sigma per plate beyond its seat in the fixture's unload
 B_PI_REF, B_P_REF = 0.005, 0.010           # eps_vol = 0 readings of the profiles and of the plates
 B_FACES = ('zlo', 'zhi', 'xlo', 'xhi', 'ylo', 'yhi')
 B_AX = {'x': 0, 'y': 1, 'z': 2}
@@ -350,7 +354,24 @@ def _b_name(kind, axis, ref=False, comp=None, species=None):
         return ('solvent_density_z' if axis == 'z' else f'solvent_density_along{axis}') + r
     if kind == 'disp_cum':
         return 'disp_z_polymer_cum' if axis == 'z' else f'disp_along{axis}_polymer_cum'
-    return 'disp_z_polymer' if axis == 'z' else f'disp_along{axis}_polymer'
+    raise ValueError(kind)      # the hold-onset disp_*_polymer files were dropped from the deck on 2026-10-28
+
+
+def _b_slab_remaining(t, D, L, n=40):
+    k = 2.0 * np.arange(1, n + 1) - 1.0
+    t = np.clip(np.atleast_1d(np.asarray(t, float)), 0.0, None)[:, None]
+    return (8.0 / (k * np.pi) ** 2 * np.exp(-(k * np.pi / L) ** 2 * D * t)).sum(axis=1)
+
+
+def _b_cube_remaining(t, D, L3):
+    """the free-cube series R(t) of lib/bulk.py (fraction of the dilatation excess still inside)."""
+    return _b_slab_remaining(t, D, L3[0]) * _b_slab_remaining(t, D, L3[1]) * _b_slab_remaining(t, D, L3[2])
+
+
+def _b_cube_remaining_avg(t_end, W, D, L3):
+    """R(t) averaged over the block window [t_end - W, t_end], as the deck's block averages read it."""
+    offs = np.linspace(-W, 0.0, 9) if W > 0 else np.array([0.0])
+    return np.mean([_b_cube_remaining(np.atleast_1d(t_end) + o, D, L3) for o in offs], axis=0)
 
 
 def _b_chunk(path, fixname, steps, zc, cols, names):
@@ -506,15 +527,6 @@ def six_plate_bulk(root, levels=('0.05', '0.10')):
             k = B_AX[a]
             lo = planes_t[-1][a + 'lo'] + B_CONTACT
             Lh = planes_t[-1][a + 'hi'] - planes_t[-1][a + 'lo'] - 2 * B_CONTACT
-            zeta = (zc - lo) / Lh
-            disp = []
-            lam = 4 * np.pi ** 2 * B_DC / Lh ** 2
-            for j in range(len(hs)):
-                # block average over the output interval ending at hs[j], as the deck's ave/chunk writes it
-                tw = (np.linspace(max(hs[j] - (hs[1] - hs[0]), t_hold), hs[j], 41) - t_hold) * B_DT
-                u = np.where(g, 0.15 * np.sin(2 * np.pi * zeta) * (np.mean(np.exp(-lam * tw)) - 1.0), 0.0)
-                disp.append(np.column_stack([np.where(g, 1500, 0), u + np.where(g, rng.normal(0, 0.001, len(zc)), 0.0)]))
-            _b_chunk(dd / f'{_b_name("disp", a)}_{st}.dat', 'avg_disp', hs, zc, disp, [f'v_u{a}_poly'])
             # cumulative displacement since the reference (deck since 2026-10-05): the network strain along a equals the
             # plate's linear strain e_lin here; Eulerian bins -> u = -e/(1-e) (a - a_centre) inside the gel
             a_c = 0.5 * (planes_t[-1][a + 'lo'] + planes_t[-1][a + 'hi'])
@@ -523,7 +535,86 @@ def six_plate_bulk(root, levels=('0.05', '0.10')):
                    for _ in hs]
             _b_chunk(dd / f'{_b_name("disp_cum", a)}_{st}.dat', 'avg_disp_cum', hs, zc, cum, [f'v_u{a}_poly_cum'])
         write_traj(r / 'traj_files' / f'traj_stress_{st}.lammpstrj', hs[:2], {4: zlo[-1], 5: B_ZFEED, 6: B_ZPERM, 7: zhi[-1]})
-        t_start += hold + 1000
+
+        # ---- the UNLOAD (deck Phase 2c, 2026-10-28): retraction, then the free re-swelling, files _u<lvl> ----
+        # the plates open over 300 steps to the seated gap + 2 B_UMARGIN; the Rg edges, the Rg volume strain and the
+        # interior Pi then relax along the free-cube series at B_DM (lengths = the compressed Rg edges, UNLOAD_L 'hold');
+        # the BB edges follow the plates at once; the cumulative displacement keeps the compressed profile times R(t).
+        ust = st.replace(f'_c{lvl}', f'_u{lvl}')
+        t_u0 = steps[-1] + 100
+        usteps = np.arange(t_u0, t_u0 + hold + 1, 100)
+        nu = len(usteps)
+        retr = np.minimum(1.0, (usteps - t_u0) / 300.0)
+        planes_u = [_b_planes(e_lin * (1.0 - rr) - 2.0 * B_UMARGIN * rr / L0[0]) for rr in retr]
+        Lrg_hold = [0.97 * l * (1.0 - e_lin) for l in L0]
+        tt_u = (usteps - t_u0) * B_DT
+        Ru = _b_cube_remaining(tt_u, B_DM, Lrg_hold)
+        write_print(pd_ / f'plate_position_{ust}.dat', hdr_pos, np.column_stack([usteps] + [[p[f] for p in planes_u] for f in B_FACES]))
+        press_u = (B_P_REF + K_TRUE * eps) * (1.0 - retr)
+        Fu = plate_rows(usteps, planes_u, press_u)
+        write_print(pd_ / f'plate_force_{ust}.dat', hdr_F.replace('TimeStep', 'step'), Fu)
+        write_print(pd_ / f'plate_force_avg_{ust}.dat', '# Time-averaged data for fix uout_plate_force_avg\n' + hdr_F, Fu)
+        e_lin_u = e_lin * (1.0 - retr) - 2.0 * B_UMARGIN * retr / L0[0]
+        eps_pl_u = 1.0 - (1.0 - e_lin_u) ** 3
+        write_print(sd / f'strain_vol_{ust}.dat', '# step eps_vol_plate eps_vol_bb eps_vol_rg eps_x eps_y eps_z V_bb V_rg',
+                    np.column_stack([usteps, eps_pl_u, eps * (1.0 - retr) + rng.normal(0, 0.002, nu), 0.95 * eps * Ru,
+                                     e_lin_u, e_lin_u, e_lin_u, V0_bb * (1.0 - eps * (1.0 - retr)) * (1 + rng.normal(0, 0.002, nu)),
+                                     V0_rg * (1.0 - 0.95 * eps * Ru) * (1 + rng.normal(0, 0.0003, nu))]))
+        write_print(vd / f'gel_dimensions_rg_{ust}.dat', None,
+                    np.column_stack([usteps] + [0.97 * l * (1.0 - e_lin * Ru) + rng.normal(0, 0.01, nu) for l in L0]))
+        write_print(vd / f'gel_dimensions_bb_{ust}.dat', None, np.column_stack([usteps] + [(l + 1.0) * (1.0 - e_lin * (1.0 - retr)) for l in L0]))
+        zhi_u, zlo_u = np.array([p['zhi'] for p in planes_u]), np.array([p['zlo'] for p in planes_u])
+        dV_u = eps * V0 * Ru
+        write_print(pd_ / f'piston_position_{ust}.dat', '# step z_load z_feed z_perm',
+                    np.column_stack([usteps, zhi_u, B_ZFEED + 0.5 * dV_u / A_box, B_ZPERM - 0.5 * dV_u / A_box]))
+        write_print(pd_ / f'support_position_{ust}.dat', '# step z_support', np.column_stack([usteps, zlo_u]))
+        write_print(pd_ / f'piston_force_avg_{ust}.dat', '# Time-averaged data for fix uout_piston_force_avg\n# TimeStep F_load F_fluid_feed F_fluid_perm',
+                    np.column_stack([usteps, Fu[:, 2], 1.5 * A_box + rng.normal(0, 30, nu), -1.5 * A_box + rng.normal(0, 30, nu)]))
+        write_print(pd_ / f'piston_pressure_{ust}.dat', '# step P_load_meas P_feed_meas P_feed_app P_perm_meas P_perm_app',
+                    np.column_stack([usteps, press_u, 1.5 + 0 * usteps, 1.5 + 0 * usteps, 1.5 + 0 * usteps, 1.5 + 0 * usteps]))
+        write_print(pm / f'permeation_{ust}.dat', '# step z_feed z_perm dV_feed dV_perm dV_total   (solvent expelled since seating, sigma^3; A*dz)',
+                    np.column_stack([usteps, B_ZFEED + 0.5 * dV_u / A_box, B_ZPERM - 0.5 * dV_u / A_box, 0.5 * dV_u, 0.5 * dV_u, dV_u]))
+        write_print(vd / f'polymer_com_{ust}.dat', None, np.column_stack([usteps] + [np.full(nu, 0.5 * (lo + hi)) for lo, hi in B_GEL]))
+        write_print(vd / f'box_dimensions_{ust}.dat', None, np.column_stack([usteps] + [np.full(nu, b) for b in B_BOX]))
+        hs_u = usteps[retr >= 1.0][::3]
+        W_u = (hs_u[1] - hs_u[0]) * B_DT
+        Rb_u = _b_cube_remaining_avg((hs_u - t_u0) * B_DT, W_u, B_DM, Lrg_hold)
+        write_print(sd / f'pressure_reservoirs_{ust}.dat', '# Time-averaged data for fix uavg_P_res\n# TimeStep P_res_feed rho_feed P_res_perm rho_perm',
+                    np.column_stack([hs_u, 1.5 + rng.normal(0, 0.005, len(hs_u)), 0.45 + 0 * hs_u, 1.5 + rng.normal(0, 0.005, len(hs_u)), 0.45 + 0 * hs_u]))
+        for a in 'zxy':
+            P_all = {c: ([], []) for c in ('zz', 'xx', 'yy')}
+            dens_u = []
+            for j, t_ in enumerate(hs_u):
+                zc, g, pro, dens = _b_profiles(a, [t_], K_TRUE * eps * Rb_u[j], ref=True)     # ref=True: no extra relaxation factor
+                for c in P_all:
+                    P_all[c][0].append(pro[c][0][0])
+                    P_all[c][1].append(pro[c][1][0])
+                dens_u.append(dens[0])
+            for c in P_all:
+                write_ave_time_vector(sd / f'{_b_name("sigma", a, False, c, "polymer")}_{ust}.dat', 'uavg', 'c_prof_p', hs_u, np.array(P_all[c][0]))
+                write_ave_time_vector(sd / f'{_b_name("sigma", a, False, c, "solvent")}_{ust}.dat', 'uavg', 'c_prof_s', hs_u, np.array(P_all[c][1]))
+            _b_chunk(cp / f'{_b_name("density", a)}_{ust}.dat', 'uavg_dens', hs_u, zc, dens_u, ['v_nd', 'v_nd'])
+            # the lag u_late - u(zeta, t) of the separable free-cube solution: the slab's displacement modes along a,
+            # -s_hold L_c sum_odd 4/(k pi)^2 cos(k pi zeta) exp(-k^2 pi^2 D t/L_a^2), times the transverse M_b M_c; at t = 0 the
+            # odd-cosine series is the sawtooth 1/2 - zeta, i.e. the compressed linear profile; u_late = 0 (full recovery)
+            ia = 'xyz'.index(a)
+            lo_c = planes_t[-1][a + 'lo'] + B_CONTACT
+            L_c = planes_t[-1][a + 'hi'] - planes_t[-1][a + 'lo'] - 2 * B_CONTACT
+            zeta_u = (zc - lo_c) / L_c
+            s_hold = -e_lin / (1.0 - e_lin)
+            kk_u = 2.0 * np.arange(1, 41) - 1.0
+            La_, Lb_, Lc_ = Lrg_hold[ia], Lrg_hold[(ia + 1) % 3], Lrg_hold[(ia + 2) % 3]
+            cum_u = []
+            for j, t_ in enumerate(hs_u):
+                tw = (t_ - t_u0) * B_DT + np.linspace(-W_u, 0.0, 9)
+                tw = np.clip(tw, 0.0, None)
+                trans = np.mean(_b_slab_remaining(tw, B_DM, Lb_) * _b_slab_remaining(tw, B_DM, Lc_))
+                Ek = np.array([np.mean(np.exp(-(k * np.pi / La_) ** 2 * B_DM * tw)) for k in kk_u])
+                shape = (np.cos(np.pi * np.outer(zeta_u, kk_u)) * (4.0 / (kk_u * np.pi) ** 2 * Ek)[None, :]).sum(axis=1)
+                u_now = -s_hold * L_c * shape * trans
+                cum_u.append(np.column_stack([np.where(g, 1500, 0), np.where(g, u_now + rng.normal(0, 0.001, len(zc)), 0.0)]))
+            _b_chunk(dd / f'{_b_name("disp_cum", a)}_{ust}.dat', 'uavg_disp_cum', hs_u, zc, cum_u, [f'v_u{a}_poly_cum'])
+        t_start = usteps[-1] + 1000
     # whole-run polymer partial-stress anisotropy (stem tagged with NSTEPS = hold here), as slab_with_support writes it
     asteps = np.arange(0, t_start, 500)
     write_print(sd / f'stress_aniso_{rst}.dat', '# Time-averaged data for fix stress_aniso_output\n# TimeStep sig_p_xx sig_p_yy sig_p_zz P_xx P_yy P_zz',

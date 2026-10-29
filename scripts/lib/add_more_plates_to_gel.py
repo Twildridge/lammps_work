@@ -80,7 +80,7 @@ HOW TO RUN IT ON THE LAPTOP (no notebook: this script IS the converter, 2026-10-
 4. Read the output: it prints the geometry, the validation ("RESULT: OK" or the problems and
    nothing is written), the gel-unchanged check, the info-log entry, and the last line
    "DATANAME for the batch file: <stem>".  Next to the input it writes <stem>.data, the
-   <stem>.data.info.json sidecar and <stem>_profiles.png (density profiles: open it and check
+   (no sidecar since 2026-10-28; --png draws <stem>_profiles.png: density profiles, open it and check
    the gel sits between the plates / pistons).  Copy the .data file to
    ~/Documents/lammps_data/input_data/ on the cluster and put the stem in the deck's batch
    (shear_slab_two_pist.batch for x_plates, compress_slab.batch for six_plates).
@@ -92,7 +92,7 @@ Usage (CLI)
         [--layout six_plates|x_plates|z_plates|no_plates]
         [--bath-margin-xy 12] [--reservoir-z 15] [--reservoir-feed R] [--reservoir-perm R]
         [--plate-park-gap 3] [--plate-overhang 6] [--plate-spacing 0.5] [--piston-spacing 0.5]
-        [--margin-feed 10] [--margin-perm 10] [--no-log] [--no-png]
+        [--margin-feed 10] [--margin-perm 10] [--no-log] [--png]
   --self-check-only <file> validates an existing output file without rewriting it.
   From Python (a notebook cell or another script):
         import sys; sys.path.insert(0, 'lib'); import add_more_plates_to_gel as amp
@@ -102,7 +102,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
-import json
 import sys
 from collections import deque
 from dataclasses import dataclass, asdict
@@ -174,7 +173,7 @@ class Config:
     drop_fragments: bool = True        # delete polymer not bonded to the main network (free corner beads of the lattice)
     density_window: float = 4.0        # bath-density window starts this far outside the gel BB
     log_info: bool = True              # append the entry to slab_data_file_info.md
-    make_png: bool = True
+    make_png: bool = False             # --png: draw the density profiles next to the output (off since 2026-10-28)
 
     def __post_init__(self):
         if self.layout not in LAYOUTS:
@@ -585,10 +584,7 @@ def convert(cfg: Config):
               f'8 plate_xlo 9 plate_xhi 10 plate_ylo 11 plate_yhi (fixed table, absent plates empty); {cfgs}; '
               f'gel_bb_lo={bb_lo_o.round(3).tolist()} gel_bb_hi={bb_hi_o.round(3).tolist()} rho_bulk={rho_bulk:.4f}')
     write_data(cfg.output_file, header, new_ids, all_mol, all_typ, all_xyz, all_vel, bonds, new_box)
-    with open(str(cfg.output_file) + '.info.json', 'w') as f:
-        json.dump(s2p._jsonable(info), f, indent=1)
     print(f'  wrote {len(all_typ)} atoms, {len(bonds)} bonds -> {cfg.output_file}')
-    print(f'  sidecar: {cfg.output_file}.info.json')
     print_layout(info)
     if cfg.make_png:
         info['png'] = plot_profiles(all_typ, all_xyz, new_box, info, str(cfg.output_file).replace('.data', '_profiles.png'))
@@ -832,7 +828,7 @@ if __name__ == '__main__':
     ap.add_argument('--keep-fragments', action='store_true',
                     help='refuse (instead of deleting) polymer not bonded to the main network')
     ap.add_argument('--no-log', action='store_true', help='do not append to slab_data_file_info.md')
-    ap.add_argument('--no-png', action='store_true')
+    ap.add_argument('--png', action='store_true', help='also write <stem>_profiles.png next to the output (off by default)')
     ap.add_argument('--self-check-only', metavar='DATAFILE', help='validate an existing plated data file and exit (layout read off the file)')
     args = ap.parse_args()
     if args.self_check_only:
@@ -844,7 +840,7 @@ if __name__ == '__main__':
                  plate_park_gap=args.plate_park_gap, plate_overhang=args.plate_overhang,
                  plate_spacing=args.plate_spacing, piston_spacing=args.piston_spacing,
                  piston_clearance=args.piston_clearance, margin_feed=args.margin_feed, margin_perm=args.margin_perm,
-                 drop_fragments=not args.keep_fragments, log_info=not args.no_log, make_png=not args.no_png)
+                 drop_fragments=not args.keep_fragments, log_info=not args.no_log, make_png=args.png)
     convert(cfg)
     ok, msg = check_gel_unchanged(cfg.input_file, cfg.output_file)
     print(('  gel-unchanged check: OK -- ' if ok else '  gel-unchanged check: FAILED -- ') + msg)

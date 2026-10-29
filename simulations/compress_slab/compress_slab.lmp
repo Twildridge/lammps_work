@@ -67,6 +67,13 @@
 #                 drive_split of the closure, lo plate by the rest) until the plate
 #                 volumetric strain reaches the target (fix halt), freezes the
 #                 plates, and holds for the auto-sized hold; files _<hold>_c<strain>.
+#   - Phase 2c:   UNLOAD (optional, -var unload 1; 2026-10-28): after each level's hold the six
+#                 plates are driven back to the seated gap + 2 x unload_margin per axis and
+#                 frozen; the gel RE-SWELLS FREELY for unload_steps (0 = this level's hold
+#                 length), files _<hold>_u<strain>.  The re-swelling is where the diffusivity
+#                 is measured (free cube, all six faces unloaded: lib/bulk.py fit_Dm_unload on
+#                 the Rg edges and the cumulative displacement profiles); the next level
+#                 compresses from the reference again.
 #
 # What changed from the 2026-08 deck (the seven issues of the 2026-09-29 review):
 #   1. no whole-run osmotic path file: Pi is measured in the holds only, and K is
@@ -83,10 +90,17 @@
 #   8. (2026-10-05, as the compression deck's disp_z_polymer_cum) every hold also writes the
 #      CUMULATIVE polymer displacement since the eps_vol = 0 reference along each axis,
 #      displacement_data/disp_{z,alongx,alongy}_polymer_cum_<stem>_c<strain>.dat (never
-#      reset, unlike the hold-referenced disp_* files of the D_c fit): the steady profile
-#      u_a(a) whose interior slope is the strain of the NETWORK alone -- the applied plate
-#      strain also counts the plates closing on the diffuse faces (~0.02 per axis in the
-#      compression runs) -- the eps_vol K divides by (lib/bulk.py K_STRAIN = 'disp').
+#      reset): the steady profile u_a(a) whose interior slope is the strain of the NETWORK
+#      alone -- the applied plate strain also counts the plates closing on the diffuse faces
+#      (~0.02 per axis in the compression runs) -- the eps_vol K divides by (lib/bulk.py
+#      K_STRAIN = 'disp').
+#   9. (2026-10-28) the hold-onset displace/atom files (disp_*_polymer_<stem>_c<strain>, the
+#      held-cube D_c fit) are gone: a displace/atom reference is one instantaneous snapshot,
+#      which the block averages carried as a static pattern, and the compression hold mixes
+#      the shell folding in with the drainage.  The diffusivity comes from the UNLOAD
+#      (Phase 2c): the free re-swelling of the cube, all six faces unloaded, is the 3-D
+#      unconstrained problem, whose diffusivity is D_m = (K/M) D_c rather than the confined
+#      D_c of the triaxial holds.  K from the hold, D_m from the unload, in one run.
 
 
 # ==========================================================================
@@ -139,6 +153,19 @@ variable hold_min    index 500000
 variable hold_round  equal 100000
 variable pi_sq       equal 9.86960440108936
 variable hold_auto   index 1
+
+# ---- UNLOAD (Phase 2c, optional: -var unload 1 / UNLOAD=1 in the batch; 2026-10-28) ----
+# After a level's hold the six plates are driven back at the drive speeds until every gap is
+# at its seated value + 2 x unload_margin (each plate unload_margin beyond its seat), frozen,
+# and the gel is left to RE-SWELL FREELY for unload_steps (0 = this level's hold_len), files
+# _<hold>_u<strain>.  unload_margin keeps the re-swollen gel off the plates: its outermost
+# beads fluctuate 3-5 sigma beyond the Rg face on the 12-cell cube, and a bb-seated plate sits
+# contact_gap from them.  The re-swelling hold writes the level's file set (loggers, the 18
+# stress profiles, densities, bath pressures, the cumulative displacement profiles) so the
+# notebooks read it with the hold's own loaders; no hold-onset displace/atom file (see 9.).
+variable unload        index 0
+variable unload_steps  index 0            # re-swelling hold length (steps); 0 -> this level's hold_len
+variable unload_margin index 3.0          # sigma: extra retraction of EACH plate beyond its seated position
 
 # ----- Phase 1.25: seating -----
 variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) short of the gel face they seat on
@@ -416,8 +443,6 @@ fix trk_plates all print ${strain_freq} "$(step) $(v_p_zlo) $(v_p_zhi) $(v_p_xlo
     title "# step zlo zhi xlo xhi ylo yhi   (plate planes, whole run)" &
     file output_files/piston_data/plate_position_run_${dataname}_${interaction}_${nsteps}.dat screen no
 
-compute displace_poly polymer displace/atom
-
 
 # ==========================================================================
 #                           THERMO OUTPUT
@@ -650,10 +675,6 @@ compute prof_p_zz_y polymer reduce/chunk ch_p_zz_y sum v_s_p_zz_y
 compute prof_s_xx_y solvent reduce/chunk ch_s_xx_y sum v_s_s_xx_y
 compute prof_s_yy_y solvent reduce/chunk ch_s_yy_y sum v_s_s_yy_y
 compute prof_s_zz_y solvent reduce/chunk ch_s_zz_y sum v_s_s_zz_y
-
-variable ux_poly atom c_displace_poly[1]
-variable uy_poly atom c_displace_poly[2]
-variable uz_poly atom c_displace_poly[3]
 
 # ----- bath pressure / density above and below the gel (full cross-section) -----
 #   Each window stops res_wall_clear from its piston FACE (the sheet depletes / layers
@@ -906,10 +927,11 @@ print '>>> Reference recording done.  step=$(step)  strain_vol: plate $(v_strain
 variable strain_vol_pct equal v_strain_vol_plate*100.0
 variable e_lin_prev equal 0.0
 variable movie_open equal 1
-# cumulative polymer displacement since the eps_vol = 0 reference (2026-10-05): NEVER reset, unlike
-# displace_poly (re-created at every hold onset for the D_c relaxation fit).  Binned by current
-# coordinate in the core columns in each hold -> disp_*_polymer_cum files: the steady profile u_a(a),
-# whose slope s gives the network's own linear strain along a, eps_a = -s/(1-s) (Eulerian bins).
+# cumulative polymer displacement since the eps_vol = 0 reference (2026-10-05): NEVER reset.  Binned
+# by current coordinate in the core columns in each hold (and each re-swelling, Phase 2c) ->
+# disp_*_polymer_cum files: the steady profile u_a(a), whose slope s gives the network's own linear
+# strain along a, eps_a = -s/(1-s) (Eulerian bins); referenced to its own late plateau in the unload,
+# the lag still to relax (lib/bulk.py fit_Dm_unload).
 compute displace_poly_cum polymer displace/atom
 variable ux_poly_cum atom c_displace_poly_cum[1]
 variable uy_poly_cum atom c_displace_poly_cum[2]
@@ -922,6 +944,7 @@ print ">>>   first level=${compressions}   drive cap=${nsteps_comp}   halt check
 print ">>>   HOLD: auto=${hold_auto} (1=sized per level from tau_1=L^2/(pi^2 D_c) on the shortest gel edge)"
 print ">>>         Dc_est=${Dc_est}  n_tau_hold=${n_tau_hold}  hold_min=${hold_min}  flat fallback nsteps=${nsteps}"
 print ">>>   DRIVE: six plates, drive_split=${drive_split} (hi-plate share of each gap closure)"
+print ">>>   UNLOAD: ${unload} (1 = after every hold the plates open to the seated gaps + 2 x ${unload_margin} and the gel re-swells freely for unload_steps=${unload_steps} (0 = the hold length); files _u<strain>)"
 print ">>>   wet-piston headroom: feed $(zhi-v_feed_z_top-v_box_guard_gap:%.2f) + permeate $(v_perm_z_bot-zlo-v_box_guard_gap:%.2f) sigma = eps_vol ~$((zhi-v_feed_z_top+v_perm_z_bot-zlo-2.0*v_box_guard_gap)*v_area/v_V0:%.3f) of expelled solvent"
 print ">>>   If the list above reads 'STALE-run_lammps.sh...', only ONE level will run."
 print "############################################################"
@@ -1078,16 +1101,6 @@ variable nfreq_stress     equal v_nevery_stress*v_nrepeat_stress
 variable dump_freq_prod   equal floor(${hold_len}/v_num_dump_frames)
 print ">>> [eps_vol=${compressions}] stress cadence: nevery=${nevery_stress} nrepeat=${nrepeat_stress} nfreq=${nfreq_stress}  |  movie every ${dump_freq_prod}"
 
-# displacement referenced to the hold onset (the consolidation fit's u = 0)
-variable ux_poly delete
-variable uy_poly delete
-variable uz_poly delete
-uncompute displace_poly
-compute displace_poly polymer displace/atom
-variable ux_poly atom c_displace_poly[1]
-variable uy_poly atom c_displace_poly[2]
-variable uz_poly atom c_displace_poly[3]
-
 # ----- PHASE 2b: production HOLD -- chunk-locked averaging fixes created HERE -----
 dump traj_flow movie custom ${dump_freq_prod} &
     traj_files/gel_flow_${dataname}_${interaction}_${hold_tag}_c${compressions}.lammpstrj &
@@ -1125,12 +1138,6 @@ fix avg_P_res all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} v_
     title2 "# TimeStep P_res_feed rho_feed P_res_perm rho_perm" &
     file output_files/stress_data/pressure_reservoirs_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 
-fix avg_disp_z all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_z v_uz_poly &
-    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
-fix avg_disp_x all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_x v_ux_poly &
-    file output_files/displacement_data/disp_alongx_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
-fix avg_disp_y all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_y v_uy_poly &
-    file output_files/displacement_data/disp_alongy_polymer_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_disp_z_cum all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_z v_uz_poly_cum &
     file output_files/displacement_data/disp_z_polymer_cum_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 fix avg_disp_x_cum all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_x v_ux_poly_cum &
@@ -1146,9 +1153,6 @@ run ${hold_steps}
 unfix avg_disp_y_cum
 unfix avg_disp_x_cum
 unfix avg_disp_z_cum
-unfix avg_disp_y
-unfix avg_disp_x
-unfix avg_disp_z
 unfix avg_P_res
 unfix avg_dens_y
 unfix avg_dens_x
@@ -1212,6 +1216,240 @@ variable gap_target_z    delete
 variable drive_steps_est delete
 variable drive_dump_freq delete
 
+# ==========================================================================
+# PHASE 2c (optional, unload = 1): UNLOAD -- six plates back to the seated gap (+ margins), then
+# a FREE re-swelling hold tagged _${hold_tag}_u${compressions}  (2026-10-28; see the UNLOAD knobs)
+# ==========================================================================
+if "${unload} == 0" then "jump SELF label_after_unload"
+
+print "########################################################"
+print "  UNLOAD after eps_vol ${compressions}: plates back to the seated gaps + 2 x ${unload_margin}, free re-swelling"
+print "########################################################"
+variable unload_len   delete
+variable unload_tag   delete
+variable ugap_x       delete
+variable ugap_y       delete
+variable ugap_z       delete
+variable unload_open  delete
+variable unload_cap   delete
+variable urate_x      delete
+variable urate_y      delete
+variable urate_z      delete
+variable unload_len   equal (${unload_steps}>0)*${unload_steps}+(${unload_steps}<=0)*${hold_len}
+variable unload_tag   string ${hold_tag}_u${compressions}
+variable ugap_x       equal ${L0_gap_x}+2.0*${unload_margin}
+variable ugap_y       equal ${L0_gap_y}+2.0*${unload_margin}
+variable ugap_z       equal ${L0_gap_z}+2.0*${unload_margin}
+# every gap back at its target: the product of the three conditions (1 when all three hold)
+variable unload_open  equal (v_gap_x>=v_ugap_x)*(v_gap_y>=v_ugap_y)*(v_gap_z>=v_ugap_z)
+# reversed drive: the same linear-strain rate on every axis (the z gap at v_piston_prod)
+variable urate_z      equal ${v_piston_prod}
+variable urate_x      equal ${v_piston_prod}*${L0_x}/${L0_z}
+variable urate_y      equal ${v_piston_prod}*${L0_y}/${L0_z}
+# cap on the retraction run: 1.5 x the travel back (closure + margins) at v_piston_prod
+# (plain equal variable: ${...} is NOT expanded inside an immediate $(...))
+variable unload_cap   equal ceil(1.5*(v_e_lin*${L0_z}+2.0*${unload_margin})/(${v_piston_prod}*${timestep_prod}))+1000
+
+# ----- unload loggers (span the retraction + the re-swelling hold; the level files' columns) -----
+fix uout_piston_pos all print ${strain_freq} "$(step) $(v_z_load) $(v_z_feed) $(v_z_perm)" &
+    title "# step z_load z_feed z_perm" &
+    file output_files/piston_data/piston_position_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_piston_vel all print ${strain_freq} "$(step) $(v_vz_load) $(v_vz_feed) $(v_vz_perm)" &
+    title "# step vz_load vz_feed vz_perm" &
+    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_support_pos all print ${strain_freq} "$(step) $(v_p_zlo)" &
+    title "# step z_support   (= the z-lo plate)" &
+    file output_files/piston_data/support_position_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_plate_pos all print ${strain_freq} "$(step) $(v_p_zlo) $(v_p_zhi) $(v_p_xlo) $(v_p_xhi) $(v_p_ylo) $(v_p_yhi)" &
+    title "# step zlo zhi xlo xhi ylo yhi" &
+    file output_files/piston_data/plate_position_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_piston_force all print ${volume_freq} "$(step) $(c_fp_zhi[3]) $(c_fp_feed[3]) $(c_fp_perm[3])" &
+    title "# step F_load F_fluid_feed F_fluid_perm   (pair force on each sheet, z; F_load = z-hi plate)" &
+    file output_files/piston_data/piston_force_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_fp_zhi[3] c_fp_feed[3] c_fp_perm[3] ave one &
+    title2 "# TimeStep F_load F_fluid_feed F_fluid_perm   (block-averaged; F_load = z-hi plate)" &
+    file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${unload_tag}.dat
+fix uout_plate_force all print ${volume_freq} &
+    "$(step) $(v_N_zlo) $(v_N_zhi) $(v_N_xlo) $(v_N_xhi) $(v_N_ylo) $(v_N_yhi) $(v_A_x) $(v_A_y) $(v_A_z)" &
+    title "# step N_zlo N_zhi N_xlo N_xhi N_ylo N_yhi A_x A_y A_z   (compressive plate loads + BB face areas)" &
+    file output_files/piston_data/plate_force_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_plate_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    v_N_zlo v_N_zhi v_N_xlo v_N_xhi v_N_ylo v_N_yhi v_A_x v_A_y v_A_z ave one &
+    title2 "# TimeStep N_zlo N_zhi N_xlo N_xhi N_ylo N_yhi A_x A_y A_z   (compressive plate loads + BB face areas; block-averaged)" &
+    file output_files/piston_data/plate_force_avg_${dataname}_${interaction}_${unload_tag}.dat
+fix uout_piston_pressure_lvl all print ${volume_freq} &
+    "$(step) $(v_P_load_meas) $(v_P_feed_meas) $(v_P_feed_app) $(v_P_perm_meas) $(v_P_perm_app)" &
+    title "# step P_load_meas P_feed_meas P_feed_app P_perm_meas P_perm_app" &
+    file output_files/piston_data/piston_pressure_${dataname}_${interaction}_${unload_tag}.dat screen no
+# solvent expelled (wet-piston displacement) -> permeation_data
+fix uout_expelled all print ${strain_freq} &
+    "$(step) $(v_z_feed) $(v_z_perm) $(v_dV_feed) $(v_dV_perm) $(v_dV_total)" &
+    title "# step z_feed z_perm dV_feed dV_perm dV_total   (solvent expelled since seating, sigma^3; A*dz)" &
+    file output_files/permeation_data/permeation_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_strain_vol all print ${strain_freq} &
+    "$(step) $(v_strain_vol_plate) $(v_strain_vol_bb) $(v_strain_vol_rg) $(v_eps_x) $(v_eps_y) $(v_eps_z) $(v_gel_vol_bb) $(v_gel_vol_rg)" &
+    title "# step eps_vol_plate eps_vol_bb eps_vol_rg eps_x eps_y eps_z V_bb V_rg" &
+    file output_files/stress_data/strain_vol_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_strain_zz all print ${strain_freq} &
+    "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
+    file output_files/stress_data/strain_zz_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_strain_piston all print ${strain_freq} &
+    "$(step) ${L0_gap} $(v_gap_z) $(v_piston_strain)" &
+    file output_files/stress_data/strain_piston_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_gel_strain_thermo all print ${thermo_freq} &
+    ">>> eps_vol (plates) = $(v_strain_vol_pct:%.2f) %" screen yes &
+    file output_files/stress_data/gel_strain_log_${dataname}_${interaction}_${unload_tag}.dat
+fix uout_gel_vol_bb all print ${strain_freq} "$(step) $(v_gel_vol_bb)" &
+    file output_files/volume_data/gel_volume_bb_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_gel_dims_bb all print ${strain_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb)" &
+    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_gel_vol_rg all print ${strain_freq} "$(step) $(v_gel_vol_rg)" &
+    file output_files/volume_data/gel_volume_rg_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_gel_dims_rg all print ${strain_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_box_dims all print ${strain_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_polymer_com all print ${strain_freq} &
+    "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_gel_edges all print ${strain_freq} &
+    "$(step) $(c_minz) $(c_maxz) $(v_p_zhi) $(v_p_zlo)" &
+    file output_files/volume_data/gel_edges_${dataname}_${interaction}_${unload_tag}.dat screen no
+
+# ----- retraction: reversed drive until every gap is back at its seated value + 2 x unload_margin -----
+fix nve_plates plates nve
+velocity plate_zhi set 0.0 0.0 $(v_drive_split*v_urate_z)
+velocity plate_zlo set 0.0 0.0 $(-(1.0-v_drive_split)*v_urate_z)
+velocity plate_xhi set $(v_drive_split*v_urate_x) 0.0 0.0
+velocity plate_xlo set $(-(1.0-v_drive_split)*v_urate_x) 0.0 0.0
+velocity plate_yhi set 0.0 $(v_drive_split*v_urate_y) 0.0
+velocity plate_ylo set 0.0 $(-(1.0-v_drive_split)*v_urate_y) 0.0
+fix halt_unload all halt ${halt_freq} v_unload_open >= 0.5 error continue
+print ">>> [unload ${compressions}] opening the six plates at the drive speeds until gaps >= x ${ugap_x}  y ${ugap_y}  z ${ugap_z} (seated L0_gap + 2 x ${unload_margin}; cap ${unload_cap} steps)..."
+run ${unload_cap}
+unfix halt_unload
+velocity plates set 0.0 0.0 0.0
+unfix nve_plates
+run 0
+print ">>> [unload ${compressions}] retraction done at step $(step): gaps x $(v_gap_x:%.3f) (target $(v_ugap_x:%.3f))  y $(v_gap_y:%.3f) ($(v_ugap_y:%.3f))  z $(v_gap_z:%.3f) ($(v_ugap_z:%.3f));  plate strain $(v_strain_vol_plate:%.5f);  network BB $(v_strain_vol_bb:%.4f)  Rg $(v_strain_vol_rg:%.4f)"
+if "$(v_unload_open) < 0.5" then &
+    "print '>>> WARNING: the retraction hit its cap (unload_cap) before every gap was open -- the gel may still touch a plate'"
+
+# ----- re-swelling hold: output cadences from unload_len (as the hold's from hold_len) -----
+variable nfreq_raw        delete
+variable nrepeat_raw      delete
+variable nr_lo            delete
+variable nrepeat_stress   delete
+variable nevery_stress    delete
+variable nfreq_stress     delete
+variable nfreq_raw        equal floor(${unload_len}/v_num_stress_curves)
+variable nrepeat_raw      equal floor(v_nfreq_raw/v_nevery_target)
+variable nr_lo            equal (v_nrepeat_raw>v_nrepeat_min)*v_nrepeat_raw+(v_nrepeat_raw<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress   equal (v_nr_lo<v_nrepeat_max)*v_nr_lo+(v_nr_lo>=v_nrepeat_max)*v_nrepeat_max
+variable nevery_stress    equal floor(v_nfreq_raw/v_nrepeat_stress)
+variable nfreq_stress     equal v_nevery_stress*v_nrepeat_stress
+print ">>> [unload ${compressions}] stress cadence: nevery=${nevery_stress} nrepeat=${nrepeat_stress} nfreq=${nfreq_stress}"
+
+fix uavg_sigmaxx_poly   all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_p_xx_z mode vector file output_files/stress_data/sigmaxx_polymer_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmayy_poly   all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_p_yy_z mode vector file output_files/stress_data/sigmayy_polymer_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmazz_poly   all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_p_zz_z mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmaxx_solv   all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_s_xx_z mode vector file output_files/stress_data/sigmaxx_solvent_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmayy_solv   all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_s_yy_z mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmazz_solv   all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_s_zz_z mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmaxx_poly_x all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_p_xx_x mode vector file output_files/stress_data/sigmaxx_polymer_alongx_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmayy_poly_x all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_p_yy_x mode vector file output_files/stress_data/sigmayy_polymer_alongx_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmazz_poly_x all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_p_zz_x mode vector file output_files/stress_data/sigmazz_polymer_alongx_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmaxx_solv_x all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_s_xx_x mode vector file output_files/stress_data/sigmaxx_solvent_alongx_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmayy_solv_x all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_s_yy_x mode vector file output_files/stress_data/sigmayy_solvent_alongx_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmazz_solv_x all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_s_zz_x mode vector file output_files/stress_data/sigmazz_solvent_alongx_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmaxx_poly_y all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_p_xx_y mode vector file output_files/stress_data/sigmaxx_polymer_alongy_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmayy_poly_y all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_p_yy_y mode vector file output_files/stress_data/sigmayy_polymer_alongy_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmazz_poly_y all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_p_zz_y mode vector file output_files/stress_data/sigmazz_polymer_alongy_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmaxx_solv_y all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_s_xx_y mode vector file output_files/stress_data/sigmaxx_solvent_alongy_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmayy_solv_y all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_s_yy_y mode vector file output_files/stress_data/sigmayy_solvent_alongy_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmazz_solv_y all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} c_prof_s_zz_y mode vector file output_files/stress_data/sigmazz_solvent_alongy_${dataname}_${interaction}_${unload_tag}.dat
+
+fix uavg_dens_z all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_dens_z v_nd_z v_nd_z norm none &
+    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_dens_x all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_dens_x v_nd_x v_nd_x norm none &
+    file output_files/chemical_potential/solvent_density_alongx_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_dens_y all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_dens_y v_nd_y v_nd_y norm none &
+    file output_files/chemical_potential/solvent_density_alongy_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_P_res all ave/time ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} v_P_res_feed v_rho_feed v_P_res_perm v_rho_perm &
+    title2 "# TimeStep P_res_feed rho_feed P_res_perm rho_perm" &
+    file output_files/stress_data/pressure_reservoirs_${dataname}_${interaction}_${unload_tag}.dat
+
+fix uavg_disp_z_cum all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_z v_uz_poly_cum &
+    file output_files/displacement_data/disp_z_polymer_cum_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_disp_x_cum all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_x v_ux_poly_cum &
+    file output_files/displacement_data/disp_alongx_polymer_cum_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_disp_y_cum all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_stress} ch_disp_y v_uy_poly_cum &
+    file output_files/displacement_data/disp_alongy_polymer_cum_${dataname}_${interaction}_${unload_tag}.dat
+
+variable unload_run equal (floor(($(step)+${unload_len}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
+print ">>> [unload ${compressions}] re-swelling HOLD (plates frozen at the seated gaps + margins, faces free) for ${unload_run} steps (>= unload_len=${unload_len}, aligned to nfreq_stress=${nfreq_stress}); files tagged _${unload_tag}"
+run ${unload_run}
+
+# ----- teardown of the re-swelling fixes -----
+unfix uavg_disp_y_cum
+unfix uavg_disp_x_cum
+unfix uavg_disp_z_cum
+unfix uavg_P_res
+unfix uavg_dens_y
+unfix uavg_dens_x
+unfix uavg_dens_z
+unfix uavg_sigmazz_solv_y
+unfix uavg_sigmayy_solv_y
+unfix uavg_sigmaxx_solv_y
+unfix uavg_sigmazz_poly_y
+unfix uavg_sigmayy_poly_y
+unfix uavg_sigmaxx_poly_y
+unfix uavg_sigmazz_solv_x
+unfix uavg_sigmayy_solv_x
+unfix uavg_sigmaxx_solv_x
+unfix uavg_sigmazz_poly_x
+unfix uavg_sigmayy_poly_x
+unfix uavg_sigmaxx_poly_x
+unfix uavg_sigmazz_solv
+unfix uavg_sigmayy_solv
+unfix uavg_sigmaxx_solv
+unfix uavg_sigmazz_poly
+unfix uavg_sigmayy_poly
+unfix uavg_sigmaxx_poly
+
+# ----- teardown of the unload loggers -----
+unfix uout_gel_edges
+unfix uout_polymer_com
+unfix uout_box_dims
+unfix uout_gel_dims_rg
+unfix uout_gel_vol_rg
+unfix uout_gel_dims_bb
+unfix uout_gel_vol_bb
+unfix uout_gel_strain_thermo
+unfix uout_strain_piston
+unfix uout_strain_zz
+unfix uout_strain_vol
+unfix uout_expelled
+unfix uout_piston_pressure_lvl
+unfix uout_plate_force_avg
+unfix uout_plate_force
+unfix uout_piston_force_avg
+unfix uout_piston_force
+unfix uout_plate_pos
+unfix uout_support_pos
+unfix uout_piston_vel
+unfix uout_piston_pos
+
+run 0
+print ">>> [unload ${compressions}] done:  plate strain $(v_strain_vol_plate:%.5f)  network BB $(v_strain_vol_bb:%.4f)  Rg $(v_strain_vol_rg:%.4f)  plate pressure $(v_P_plates:%.4f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)  step=$(step)"
+variable unload_run delete
+# the next level drives from the OPEN gaps: its travel estimate counts the margins (e_lin_prev < 0)
+variable e_lin_prev delete
+variable e_lin_prev equal -2.0*${unload_margin}/${L0_z}
+
+label label_after_unload
+
 next compressions
 jump SELF comp_loop
 
@@ -1220,7 +1458,7 @@ jump SELF comp_loop
 #                            FINAL STATE
 # ==========================================================================
 print "========================================"
-print "Bulk compression (six plates) strain sweep complete"
+print "Bulk compression (six plates) strain sweep complete  (unload = ${unload})"
 print "  Final plate strain: $(v_strain_vol_plate:%.5f)   network BB $(v_strain_vol_bb:%.4f)  Rg $(v_strain_vol_rg:%.4f)"
 print "  expelled solvent dV_total=$(v_dV_total:%.1f) sigma^3 = $(v_dV_total/v_V0:%.4f) of V0"
 print "  Final box: $(lx:%.3f) x $(ly:%.3f) x $(lz:%.3f)"

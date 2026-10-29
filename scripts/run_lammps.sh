@@ -29,7 +29,7 @@ if [ $# -lt 4 ]; then
     echo "  env knobs: PISTON_TRANSPARENT BARO_MODE (slab_with_support); STRAINS / COMPRESSIONS (sweeps); REF_AVG_STEPS; NSTEPS_SHEAR_BASE DISP_FINE_SPAN STRESS_FREQ (shear fine run);"
     echo "             DP_PISTON PISTON_MASS C_PIST_FRAC NPT_PISTON_STEPS SETTLE_HALT (triaxial_*_two_pist)"
     echo "             DRIVE_SPLIT (triaxial_compression*: piston share of the gap closure, 0.5 = symmetric)"
-    echo "             UNLOAD / UNLOAD_STEPS / UNLOAD_MARGIN (triaxial_compression_two_pist: re-swelling hold after each level)"
+    echo "             UNLOAD / UNLOAD_STEPS / UNLOAD_MARGIN (triaxial_compression_two_pist and compress_slab: re-swelling hold after each level)"
     echo "             compress_slab reads the two-piston knobs too, plus SEAT_MODE (rg|bb) and HOLD_AUTO (1|0)"
     exit 1
 fi
@@ -67,7 +67,7 @@ PERM_STRESS_CURVES=${PERM_STRESS_CURVES:-10}
 DISP_NFREQ=${DISP_NFREQ:-50000}
 DISP_FINE_NFREQ=${DISP_FINE_NFREQ:-0}       # triaxial_compression_two_pist: block length (steps) of the fine-cadence
 DISP_FINE_BIN=${DISP_FINE_BIN:-1.0}         # hold displacement profile disp_z_polymer_fine and its bin width; 0 = off
-UNLOAD=${UNLOAD:-0}                         # triaxial_compression_two_pist (2026-10-09): 1 = after every level's hold drive the
+UNLOAD=${UNLOAD:-0}                         # triaxial_compression_two_pist (2026-10-09) + compress_slab (2026-10-28): 1 = after every level's hold drive the
 UNLOAD_STEPS=${UNLOAD_STEPS:-0}             # plates back to the seated gap and record a free re-swelling hold of UNLOAD_STEPS
 UNLOAD_MARGIN=${UNLOAD_MARGIN:-0.0}         # (0 = the level's hold length), each plate UNLOAD_MARGIN sigma beyond its seat
 CALIB_FRAMES=${CALIB_FRAMES:-5}          # calibration-dump frames near run end (polymer_pure /
@@ -83,7 +83,7 @@ PRERELAXED=${PRERELAXED:-0}
 if [ -z "${STRAINS:-}" ]; then
     echo ">>> WARNING: STRAINS is unset — falling back to single strain 0.1."
     echo ">>>          For shear_slab this means NO sweep. If you intended a sweep,"
-    echo ">>>          your shear_slab.batch on the cluster was likely stale at sbatch"
+    echo ">>>          your .batch on the cluster was likely stale at sbatch"
     echo ">>>          time. Pull lammps_work and resubmit (the batch now self-syncs)."
 fi
 STRAINS=${STRAINS:-0.1}      # Space-separated shear-strain list (shear_slab only); passed as a

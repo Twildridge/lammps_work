@@ -34,13 +34,18 @@ the compression notebooks estimate M:
     the compression runs): K_network is printed for both and the gap is that shortfall;
   * unrelaxed-hold systematic (RELAX_SYS), isotropy of the network stress (the deviator must
     vanish under isotropic loading: there is no G in this measurement);
-  * D_c from the THREE-DIMENSIONAL consolidation fit (fit_Dc_cube): the held-cube version of
-    the triaxial held-slab fit -- every face drained at the bath pressure (the feed BC of the
-    compression fit), zero displacement at the centre by symmetry -- so u_a along axis a
-    relaxes in sin(2 l pi zeta_a) times the transverse cos(2 m pi zeta_b) cos(2 n pi zeta_c)
-    modes, all at 4 pi^2 D_c (l^2/L_a^2 + m^2/L_b^2 + n^2/L_c^2); one D_c is fitted to the
-    three column profiles at once; kappa = D_c / M; the wet-piston bath check and the
-    (no 'solvent expelled' reading: the plates are solvent-transparent, the pistons do not move);
+  * the diffusivity comes from the UNLOAD (deck Phase 2c, 2026-10-28), not from the hold: after
+    the hold the six plates open and the cube RE-SWELLS FREELY (_u<level> files).  All six faces
+    unloaded is the 3-D unconstrained problem, whose diffusivity is D_m = (K/M) D_c = K/zeta
+    (the confined D_c = M/zeta of the triaxial holds divides by the longitudinal modulus; the
+    free volumetric response by K).  fit_Dm_unload fits the exact free-cube series -- the
+    product of three slab series, every observable linear in the dilatation relaxes as
+    1 - M_x M_y M_z -- to the Rg edges (headline), the Rg volume strain, the interior Pi and
+    the cumulative displacement profiles referenced to the re-swollen plateau; kappa = D_m / K
+    from the same run.  No D_c is read from the compression hold any more (the hold-onset
+    displace/atom files were dropped: a one-snapshot reference, and the shell folding mixed in
+    with the drainage); the wet-piston bath check stays (no 'solvent expelled' reading: the
+    plates are solvent-transparent, the pistons do not move);
   * network anisotropy: sigma'_ii / Pi in the gel interior over every hold (fig_ratio) and
     the whole-run polymer partial-stress ratios sig_p,xx / sig_p,zz, sig_p,yy / sig_p,zz of
     stress_aniso (fig_anisotropy_run; the same file slab_with_support writes, so the free
@@ -48,7 +53,8 @@ the compression notebooks estimate M:
   * solvent volume fractions in the core columns along x, y and z: mass fraction from the
     density profiles, Voronoi and lambda-calibrated Voronoi from the trajectories
     (add_volume_fractions, one tessellation per frame serves the three axes);
-  * closure: with M from the triaxial run (M_REF), G = (3/4)(M - K) and kappa = D_c / M.
+  * closure: with M from the triaxial run (M_REF), G = (3/4)(M - K) and D_c = (M/K) D_m, the
+    confined diffusivity this gel would show in a triaxial hold.
 
 Shared machinery (style, readers, block bootstrap, plateau window, tail fit, Terzaghi split,
 the consolidation fit, smart_legend, the Expanse puller and the PROFILE FIGURES) is
@@ -60,13 +66,13 @@ Layout of this file
     1. Config                        knobs, path builders (per-axis file names)
     2. file readers                  plate tables, per-axis profile stacks
     3. reference state               load_reference   (eps_vol = 0, shared by every level)
-    4. one strain level              load_level       (stresses, Terzaghi, plates, K, D_c)
+    4. one strain level              load_level       (stresses, Terzaghi, plates, K; + the unload: D_m, kappa)
     5. Expanse sync                  sync_from_expanse (via triaxial.sync_pull)
     6. per-axis views                view, axis context for triaxial's figures
-    7. figures, single level         fig_strain ... fig_closure
+    7. figures, single level         fig_strain ... fig_Dm, fig_closure
     8. figures, sweep                fig_*_sweep
-    9. summaries                     print_summary, print_hold_check
-   10. D_c of the cube               fit_Dc_cube (3-D held-cube modes, one D_c for the three axes)
+    9. summaries                     print_summary
+   10. unload: free re-swelling      load_unload, fit_Dm_unload (the free-cube series; D_m, kappa = D_m / K)
    11. anisotropy                    fig_ratio, fig_anisotropy_run (+ sweep)
    12. volume fractions              add_volume_fractions (column Voronoi + calibration), fig_volfrac_evolution
 """
@@ -143,16 +149,18 @@ class Config(tri.Config):
                                           # hold; 'bb': the live bounding-box face of the network (follows its extreme
                                           # beads, so it fluctuates)
     M_REF: object = None                  # longitudinal modulus M of the SAME gel from the triaxial notebooks: gives
-                                          # G = (3/4)(M - K) and kappa = D_c / M.  None -> both skipped
+                                          # G = (3/4)(M - K) and the confined D_c = (M/K) D_m.  None -> both skipped
     G_REF: object = None                  # shear modulus to compare that G with (shear or triaxial notebook); optional
     SYNC_TRAJ: bool = True                # pull traj_ref / traj_stress too (large): add_volume_fractions tessellates them
-    DC_N_T: int = 0                       # transverse modes 0..DC_N_T per transverse direction in the held-cube fit (DC_N_MODES
-                                          # = the longitudinal modes l along the profile axis, as for the slab).  0 = the pure
-                                          # modes (l, 0, 0) only: identifiable exactly like the slab fit (one rate per shape).
-                                          # 1 adds the mixed modes (l, m, n) that carry the transverse drainage into the core
-                                          # column; they share the shape sin(2 l pi zeta) with the pure ones, so with free
-                                          # amplitudes D_c is then pinned only through the multi-l structure (a single-rate
-                                          # signal is degenerate: D_c and D_c/2 fit alike) -- a cross-check, not the default
+    # ---- unload / free re-swelling (deck Phase 2c, 2026-10-28): the diffusivity D_m = (K/M) D_c ----
+    DM_UNLOAD: bool = True                # read the level's _u<lvl> files when they exist and fit the re-swelling (fit_Dm_unload)
+    DM_N_MODES: int = 3                   # odd cos modes k = 1, 3, 5 of the displacement-profile fit along each axis
+    DM_TRACE_SKIP: float = 0.0            # tau after the plates stop left out of the edge / volume / Pi fits (0 = none)
+    DM_BOUNDS: tuple = (1e-4, 10.0)       # D_m search interval (sigma^2/tau)
+    DM_SERIES_TERMS: int = 40             # odd terms kept in each slab series
+    DM_N_BOOT: int = 200                  # block-bootstrap resamples behind the D_m confidence interval of the edge fit
+                                          # (UNLOAD_L, inherited: 'hold' = the compressed edges at the hold end set the lengths
+                                          # of the series; 'ref' = the edges the level drove from; 'mean')
     HOST: str = 'expanse'                 # 'expanse' | 'pod' | 'bridges': which cluster folder RUNS_ROOT defaults to
                                           # (the sync cell logs in to Expanse only; copy Pod / Bridges output by hand)
     PARTIAL_NORM: str = 'raw'             # the triaxial notebooks' normalised partial-stress figures (triaxial.Config,
@@ -229,13 +237,13 @@ def read_table(path):
     return out
 
 
-def _stacks(cfg, axis, lvl=None, ref=False):
+def _stacks(cfg, axis, lvl=None, ref=False, phase='c'):
     """{comp: dict(ts, bins, p, s, t)} for one profile axis; a component whose files are
-    missing is left out."""
+    missing is left out.  phase 'u' reads the level's unload files."""
     out = {}
     for comp in COMPONENTS:
-        fp = cfg.path(cfg.pname('sigma', axis, ref, comp, 'polymer'), None if ref else lvl)
-        fs = cfg.path(cfg.pname('sigma', axis, ref, comp, 'solvent'), None if ref else lvl)
+        fp = cfg.path(cfg.pname('sigma', axis, ref, comp, 'polymer'), None if ref else lvl, phase=phase)
+        fs = cfg.path(cfg.pname('sigma', axis, ref, comp, 'solvent'), None if ref else lvl, phase=phase)
         if not (fp.exists() and fs.exists()):
             continue
         sp, ss = tri.read_ave_time_file(fp), tri.read_ave_time_file(fs)
@@ -470,27 +478,6 @@ def load_reference(cfg, verbose=True):
 # ===========================================================================
 #  4. ONE STRAIN LEVEL
 # ===========================================================================
-def _load_disp(cfg, axis, lvl, Pt, R):
-    """displacement profile along `axis` + the held plate planes, in triaxial.fit_Dc's format."""
-    f = cfg.path(cfg.pname('disp', axis), lvl)
-    if not f.exists() or not Pt:
-        return None
-    snaps = tri.read_ave_chunk_file(f)
-    if not snaps:
-        return None
-    hi, lo = Pt[axis + 'hi'], Pt[axis + 'lo']
-    d = dict(ts=np.array([s[0] for s in snaps], float), z=snaps[0][1][:, 1],
-             Nc=np.array([s[1][:, 2] for s in snaps]), uz=np.array([s[1][:, 3] for s in snaps]),
-             z_pist_held=float(hi[-1]), z_supp_held=float(lo[-1]),
-             t_hold=float(Pt['step'][np.argmax(np.isclose(hi, hi[-1]))]))
-    B = tri.load2c(cfg.path('gel_dimensions_bb', lvl), 4)
-    if B is not None:
-        h = B[:, 0] >= d['t_hold'] + 0.1 * (B[-1, 0] - d['t_hold'])
-        rows = B[h] if h.any() else B[-1:]
-        d['L_bb'] = float(np.median(rows[:, 1 + AXI[axis]]))
-    return d
-
-
 def fit_disp_profile(cfg, L, axis, lvl):
     """Steady CUMULATIVE displacement profile u_a(a) along `axis` for one level (disp_*_polymer_cum:
     displace/atom never reset after the eps_vol = 0 reference; plateau-window, count-weighted mean) and
@@ -544,8 +531,8 @@ def load_level(cfg, R, lvl, verbose=True):
     """Everything for ONE volumetric-strain level `lvl` (string, e.g. "0.10"): measured strains,
     per-axis stress stacks with their Terzaghi split, the plate histories and plateau, K
     (network per axis + mean, plates), the unrelaxed-hold systematic, the isotropy check,
-    the D_c fit per axis, the wet-piston bath check.  Returns a dict L, or None when the
-    core files are missing."""
+    the wet-piston bath check, and -- when the run has an unload (deck Phase 2c) -- the free
+    re-swelling: D_m and kappa = D_m / K.  Returns a dict L, or None when the core files are missing."""
     say = print if verbose else (lambda *a, **k: None)
     a0 = cfg.AXES[0]
     st0 = _stacks(cfg, a0, lvl=lvl) if a0 in R['ax'] else {}
@@ -803,25 +790,29 @@ def load_level(cfg, R, lvl, verbose=True):
         # solvent squeezed out of the gel redistributes inside the same bath and the wet pistons do not move --
         # dV_total ~ 0 by construction (the two-piston compression deck's piston is NOT transparent).
 
-    # ---- D_c: the held-cube fit (one D_c, three axes) + the 1-D per-axis fits as a check ----
-    L['disp'] = {a: _load_disp(cfg, a, lvl, Pt, R) for a in axs}
-    L['Dc_axis'] = {}
-    for a in axs:
-        Ra = R['ax'][a]
-        F_ = tri.fit_Dc(cfg, dict(z_support=Ra['plate_lo'], z_piston=Ra['plate_hi']), L['disp'][a])
-        if F_ is not None:
-            L['Dc_axis'][a] = F_
-    L['Dc'] = fit_Dc_cube(cfg, R, L)
-    if L['Dc'] is not None:
-        F = L['Dc']
-        L['Dc_mean'] = F['Dc']
-        say(f"  D_c (held-cube fit, {len(F['ax'])} axes jointly, {F['n_amp']} amplitudes) = {F['Dc']:.4e} sigma^2/tau  "
-            f"(R^2 = {F['R2']:.3f}; L = " + ' x '.join(f"{F['ax'][a]['L']:.1f}" for a in F['ax']) + f"; hold = {F['hold_T']:.0f} tau)")
-        if L['Dc_axis']:
-            say('    1-D held-slab fits per axis (apparent): ' + '   '.join(
-                f"{a}: {F_['Dc']:.4e} (R^2 {F_['R2']:.3f})" for a, F_ in L['Dc_axis'].items()))
-    else:
-        say('  NOTE: no D_c (missing disp files / plate_position, or too few polymer atoms per bin: see Ncount_min)')
+    # ---- the unload (deck Phase 2c): free re-swelling -> D_m, kappa = D_m / K --------
+    L['U'] = load_unload(cfg, R, lvl, L, verbose=verbose) if cfg.DM_UNLOAD else None
+    L['Dm'] = fit_Dm_unload(cfg, R, L, L['U']) if L['U'] is not None else None
+    if L['Dm'] is not None:
+        F = L['Dm']
+        E = F['edges']
+        say(f"  UNLOAD (free re-swelling after the hold; retraction {F['retract_T']:.0f} tau; re-swelling hold {F['hold_T']:.0f} tau"
+            f" = {F['n_tau1']:.1f} tau_1;  series lengths {F['L3'][0]:.1f} x {F['L3'][1]:.1f} x {F['L3'][2]:.1f} = {cfg.UNLOAD_L!r} edges)")
+        say(f"    D_m (Rg edges, one D_m for x, y, z) = {F['Dm']:.4f} [{F['Dm_lo']:.4f}, {F['Dm_hi']:.4f}] sigma^2/tau  (R^2 {E['R2']:.3f}; "
+            f"tau_1 = L^2/(3 pi^2 D_m) = {F['tau1']:.0f} tau;  recovery of the compression per axis "
+            + ', '.join(f"{a} {r:.2f}" for a, r in zip('xyz', E['recovery'])) + ')'
+            + ('   <-- at a search bound' if E['at_bound'] else ''))
+        for key, label in (('volume', 'Rg volume strain'), ('stress', 'interior Pi relaxation'), ('prof_joint', 'displacement profiles, joint')):
+            if F.get(key) is not None:
+                G_ = F[key]
+                say(f"    D_m ({label}) = {G_['Dm']:.4f}  (R^2 {G_['R2']:.3f})" + ('   <-- at a search bound' if G_.get('at_bound') else ''))
+        if F.get('prof'):
+            say('    D_m (profiles per axis): ' + '   '.join(f"{a}: {Pa['Dm']:.4f} (R^2 {Pa['R2']:.3f})" for a, Pa in F['prof'].items()))
+        L['kappa'] = F['Dm'] / L['K_net']
+        L['kappa_lo'], L['kappa_hi'] = F['Dm_lo'] / L['K_net_hi'], F['Dm_hi'] / L['K_net_lo']
+        say(f"  kappa = D_m / K_network = {L['kappa']:.4e} [{L['kappa_lo']:.4e}, {L['kappa_hi']:.4e}]")
+    elif cfg.DM_UNLOAD:
+        say('  no unload files for this level (run without UNLOAD=1): D_m and kappa skipped')
 
     # ---- closure with the triaxial M ------------------------------------------------
     if cfg.M_REF is not None:
@@ -830,9 +821,9 @@ def load_level(cfg, R, lvl, verbose=True):
         L['G_from_MK_lo'], L['G_from_MK_hi'] = 0.75 * (M - L['K_net_hi']), 0.75 * (M - L['K_net_lo'])
         say(f"  closure M = K + 4G/3 with M_REF = {M:.4f}:  G = {L['G_from_MK']:.4f} [{L['G_from_MK_lo']:.4f}, {L['G_from_MK_hi']:.4f}]"
             + (f"   (G_REF = {float(cfg.G_REF):.4f})" if cfg.G_REF is not None else ''))
-        if L['Dc'] is not None:
-            L['kappa'] = L['Dc_mean'] / M
-            say(f"  kappa = D_c / M_REF = {L['kappa']:.4e}")
+        if L['Dm'] is not None:
+            L['Dc_from_Dm'] = L['Dm']['Dm'] * M / L['K_net']
+            say(f"  confined D_c = (M/K) D_m = {L['Dc_from_Dm']:.4f}  (what a triaxial hold of this gel would show)")
     return L
 
 
@@ -853,7 +844,6 @@ def _profile_names(cfg, ref):
         out += [cfg.pname('sigma', a, ref, c, s) for c in COMPONENTS for s in ('polymer', 'solvent')]
         out.append(cfg.pname('density', a, ref))
         if not ref:
-            out.append(cfg.pname('disp', a))
             out.append(cfg.pname('disp_cum', a))
     return out
 
@@ -868,6 +858,8 @@ def sync_files(cfg, levels=None):
     for l in levels:
         data += [cfg.path(n, l) for n in tuple(_PROD) + tuple(_profile_names(cfg, False))]
         req += [cfg.path(n, l) for n in _REQUIRED + (cfg.pname('sigma', cfg.AXES[0], False, 'zz', 'polymer'),)]
+        # the level's UNLOAD files (deck Phase 2c, runs with UNLOAD=1): the same set tagged _u<level>; all optional
+        data += [cfg.path(n, l, phase='u') for n in tuple(_PROD) + tuple(_profile_names(cfg, False))]
         if cfg.SYNC_TRAJ:
             traj.append(cfg.traj('traj_stress', l))
     return data, traj, req
@@ -886,6 +878,7 @@ def sync_from_expanse(cfg, levels=None, force=False):
     optional |= {cfg.path(n, l).name for n in ('pressure_reservoirs', 'support_position', 'gel_edges', 'polymer_com',
                                                'strain_zz', 'strain_piston', 'piston_force', 'gel_dimensions_rg')
                  for l in cfg.COMP_LEVELS}
+    optional |= {cfg.path(n, l, phase='u').name for n in tuple(_PROD) + tuple(_profile_names(cfg, False)) for l in cfg.COMP_LEVELS}
     tri.sync_pull(cfg, data, traj, req, optional, force, refresh=lambda: sync_files(cfg, levels))
 
 
@@ -1076,6 +1069,18 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
                     f"BB {sig(L['strain'].get('bb', np.nan))}", (st[-1], S['eps_vol_plate'][-1]),
                     textcoords='offset points', xytext=(-6, 9), ha='right', va='bottom', fontsize=10, color=col,
                     bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='none', alpha=0.8))
+        U = L.get('U')
+        if U is not None and U.get('strain_tab'):                      # the unload (deck Phase 2c): plates open, free re-swelling
+            Su = U['strain_tab']
+            su = Su['step']                                            # no plate strain here: the open plates no longer touch the gel
+            if np.isfinite(R['V0_rg']):
+                ax.plot(su, 1.0 - Su['V_rg'] / R['V0_rg'], '-', color=col, lw=1.6, alpha=0.8)
+            if np.isfinite(R['V0_bb']):
+                ax.plot(su, rolling_mean(1.0 - Su['V_bb'] / R['V0_bb'], cfg.roll_win), '--', color=col, lw=1.2, alpha=0.5)
+            ax.axvspan(U['halt_ts'], su[-1], color=col, alpha=0.04)
+            ax.axvline(U['t_free'], color=col, ls='-.', lw=0.9, alpha=0.6)
+            ax.annotate('unload' + (f"  ($D_m$ = {sig(L['Dm']['Dm'])})" if L.get('Dm') else ''), (U['t_free'], 0.0),
+                        textcoords='offset points', xytext=(4, -4 - 11 * (i % 3)), ha='left', va='top', fontsize=9, color=col)
     if not any_:
         plt.close(fig)
         print('strain diagnostic skipped (no strain_vol files)')
@@ -1083,7 +1088,8 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
     ax.set_xlabel('time step')
     ax.set_ylabel(r'volumetric strain  $\varepsilon_{vol}=1-V/V_0$')
     ax.set_title('Strain diagnostic: bold = applied (plates), solid = network $V_{Rg}$, dashed = network $V_{BB}$,\n'
-                 'dotted = target, shaded = plateau window', fontsize=15)
+                 'dotted = target, shaded = plateau window' + (', dash-dot = plates open (unload)' if any(L.get('U') for L in levels) else ''),
+                 fontsize=15)
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=10)
     return _save(fig, cfg, stem, levels[0]['lvl'] if len(levels) == 1 else None)
@@ -1249,55 +1255,8 @@ def fig_solvent_expelled(cfg, R, L):
           "move when the gel is compressed -- the bath check (fig_wet_pistons) is the meaningful wet-piston figure")
     return None
 
-def _dc_panel(ax, F, a, title, legend=True):
-    zff = np.linspace(0.0, 1.0, 300)
-    cmap = plt.cm.viridis
-    norm = Normalize(vmin=F['ts'][F['early'][0]], vmax=F['ts'][F['early'][-1]])
-    u0_b = F['u_IC'](F['zf'])
-    for i in F['early']:
-        c = cmap(norm(F['ts'][i]))
-        ax.plot(F['zf'], u0_b + F['uhat'][i][F['idx']], 'o', color=c, ms=3, alpha=0.35)
-        ax.plot(zff, F['u_model'](zff, F['t_lj'][i]), '-', color=c, lw=1.8)
-    dlL, fs = F['DL'] / F['L'], F['f_sup']
-    ax.plot([0, 1], [fs * dlL, (fs - 1.0) * dlL], 'k:', lw=1.8, label=r'affine ($t\to\infty$)')
-    ax.set(xlabel=rf'$\zeta=({a}-{a}_{{\rm lo}})/L$', ylabel=rf'$u_{a}/L$', xlim=(0, 1))
-    ax.set_title(title, fontsize=14, color=AX_COLOR[a])
-    ax.grid(alpha=0.3)
-    ax._tri_has_colorbar = True
-    if legend:
-        smart_legend(ax, fontsize=11)
-    return norm, cmap
-
-
-def fig_Dc(cfg, R, L):
-    """The held-cube consolidation fit (fit_Dc_cube): u_a(zeta_a, t)/L_a along each profile
-    axis, data + the joint model, ONE D_c for the three panels.  Every face is drained at the
-    bath pressure and the displacement vanishes at the centre, so only the antisymmetric
-    sin(2 l pi zeta) modes appear along an axis; their decay carries the transverse
-    cos(2 m pi zeta_b) cos(2 n pi zeta_c) drainage of the other two axes."""
-    F = L.get('Dc')
-    if F is None:
-        print('D_c figure skipped (no fit)')
-        return None
-    axs = list(F['ax'])
-    fig, axes = plt.subplots(1, len(axs), figsize=(8.5 * len(axs), 6.5), constrained_layout=True, squeeze=False)
-    for ax, a in zip(axes[0], axs):
-        Fa = F['ax'][a]
-        one = L.get('Dc_axis', {}).get(a)
-        norm, cmap = _dc_panel(ax, Fa, a, rf"along {a}:  $L={sig(Fa['L'])}$, $\Delta L={sig(Fa['DL'])}$"
-                               + (rf"  (1-D fit alone: $D_c={sig(one['Dc'])}$)" if one else ''))
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    fig.colorbar(sm, ax=list(axes[0]), fraction=0.015, pad=0.02).set_label('timestep')
-    fig.suptitle(f'Held-cube consolidation fit (level _c{L["lvl"]})  |  {cfg.sim_name}  |  '
-                 f"$D_c = {sig(F['Dc'])}\\ \\sigma^2/\\tau$,  $R^2 = {sig(F['R2'])}$  "
-                 f"(modes: $l \\leq {cfg.DC_N_MODES}$ along the axis, $m, n \\leq {cfg.DC_N_T}$ across; zero at the centre)",
-                 fontsize=12, fontweight='bold')
-    return _save(fig, cfg, 'Dc_consolidation_fit', L['lvl'])
-
-
 def fig_closure(cfg, R, L):
-    """K next to the triaxial M (cfg.M_REF): G = (3/4)(M - K) and kappa = D_c / M."""
+    """K next to the triaxial M (cfg.M_REF): G = (3/4)(M - K); with an unload also kappa = D_m / K and D_c = (M/K) D_m."""
     if not L.get('eps_ok', True):
         print(f"closure figure skipped: toe level (strain {L['eps']:+.4f} not resolved above zero, K undefined)")
         return None
@@ -1318,7 +1277,7 @@ def fig_closure(cfg, R, L):
     ax.set_xticklabels(['$K$', '$M$', '$G$'], fontsize=16)
     ax.set_ylabel('modulus  (LJ units)')
     ax.set_title(f"Closure $M = K + \\frac{{4}}{{3}}G$   |   {cfg.RUN_ID}   |   $\\varepsilon_{{vol}}={sig(L['eps'])}$"
-                 + (f"\n$\\kappa=D_c/M$ = {sig(L['kappa'])}" if 'kappa' in L else ''), fontsize=14)
+                 + (f"\n$\\kappa=D_m/K$ = {sig(L['kappa'])},   confined $D_c=(M/K)\\,D_m$ = {sig(L['Dc_from_Dm'])}" if 'Dc_from_Dm' in L else ''), fontsize=14)
     ax.set_xlim(-0.5, 2.7)
     ax.grid(axis='y', alpha=0.3)
     smart_legend(ax, fontsize=12)
@@ -1563,39 +1522,6 @@ def fig_isotropy_sweep(cfg, R, levels):
     return _save(fig, cfg, 'sweep_isotropy')
 
 
-def fig_Dc_sweep(cfg, R, levels):
-    """(a) D_c vs volumetric strain (the held-cube fit; hollow dotted = the 1-D fits per axis);
-    then the cube fit along cfg.AXES[0] of every level."""
-    hd = [L for L in levels if L.get('Dc') is not None]
-    if not hd:
-        print('D_c figure skipped (no level produced a fit)')
-        return None
-    a0 = next(a for a in cfg.AXES if any(a in L['Dc']['ax'] for L in hd))
-    hp = [L for L in hd if a0 in L['Dc']['ax']]
-    fig, axes = plt.subplots(1, len(hp) + 1, figsize=(7 + 6.5 * len(hp), 6), constrained_layout=True)
-    fig.suptitle(f'Cooperative diffusivity across the sweep  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
-    ax = axes[0]
-    ax.plot([L['eps'] for L in hd], [L['Dc']['Dc'] for L in hd], 'o-', color='k', lw=2.2, ms=9, label='held-cube fit (3 axes jointly)')
-    for a in cfg.AXES:
-        Ls = [L for L in levels if a in L.get('Dc_axis', {})]
-        if Ls:
-            ax.plot([L['eps'] for L in Ls], [L['Dc_axis'][a]['Dc'] for L in Ls], 'o:', mfc='none', color=AX_COLOR[a], lw=1.2, ms=7,
-                    alpha=0.8, label=f'1-D fit along {a} (apparent)')
-    ax.axhline(cfg.DC_SLOW_REF / 4.0, color='0.4', ls=':', lw=1.5,
-               label=f"deck hold-sizing $D_c$ = {sig(cfg.DC_SLOW_REF / 4)}  (= {sig(cfg.DC_SLOW_REF)} in the deck's $L^2/\\pi^2 D_c$ convention)")
-    ax.margins(x=0.12, y=0.15)
-    ax.set_xlabel(r'volumetric strain  $\varepsilon_{vol}$')
-    ax.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
-    ax.set_title(r'(a) $D_c$ vs volumetric strain', fontsize=15)
-    ax.grid(alpha=0.3)
-    smart_legend(ax, fontsize=11)
-    for k, L in enumerate(hp):
-        F = L['Dc']
-        _dc_panel(axes[k + 1], F['ax'][a0], a0, fr"({'bcdefgh'[k]}) $\varepsilon_{{vol}}={L['lvl']}$, along {a0}:  $D_c={sig(F['Dc'])}$, $R^2={sig(F['R2'])}$",
-                  legend=False)
-    return _save(fig, cfg, 'sweep_Dc')
-
-
 def fig_closure_sweep(cfg, R, levels):
     """K, the triaxial M (M_REF) and G = (3/4)(M - K) vs volumetric strain."""
     if cfg.M_REF is None:
@@ -1623,152 +1549,513 @@ def fig_closure_sweep(cfg, R, levels):
 # ===========================================================================
 #  9. SUMMARIES
 # ===========================================================================
-def print_hold_check(cfg, levels):
-    """Was each level held long enough?  (triaxial.hold_adequacy on the held-cube fit.)"""
-    hd = [L for L in levels if L.get('Dc') is not None]
-    if not hd:
-        return
-    print(f'\nHOLD-ADEQUACY CHECK  (fit: tau_1 = L_max^2/(4 pi^2 D_c), the slowest held-cube mode (1,0,0) along the longest '
-          f'edge; slow: the deck\'s sizing formula L^2/(pi^2 Dc_est); residual = mean excess stress over the last '
-          f'{cfg.plateau_frac:.0%} of the hold)')
-    for L in hd:
-        F = L['Dc']
-        print(f"  level _c{L['lvl']}:  L = " + ' x '.join(f"{F['ax'][a]['L']:.1f}" for a in F['ax'])
-              + f" sigma   hold T = {F['hold_T']:.0f} tau = {F['hold_T'] / cfg.dt_lj / 1e6:.2f}M steps")
-        for tag, h in F['hold_check'].items():
-            flag = '' if h['ok'] else '   <-- TOO SHORT'
-            print(f"     {tag:<4s} D_c={h['Dc']:.3f}:  tau_1 = {h['tau1']:.0f} tau = {h['tau1'] / cfg.dt_lj / 1e6:.2f}M steps"
-                  f"  |  held {F['hold_T'] / h['tau1']:.2f} tau_1  ->  residual {h['avg'] * 100:5.2f}%  |  "
-                  f"{cfg.DC_TARGET_RESID:.0%} needs {h['need']:.1f} tau_1{flag}")
-        if 'K_pl' in L:
-            print(f"     observed K_plates/K_network - 1 = {L['K_pl'] / L['K_net'] - 1:+.1%}")
-    print('  (the direct measure of what is still unrelaxed is delta_sys, the plate tail fit)')
-
-
 def print_summary(cfg, levels):
-    """One line per level with the headline numbers, then the hold check."""
+    """One line per level with the headline numbers."""
     ci = int(cfg.ci_level * 100)
     how = 'K = increment from the eps_vol = 0 reference' if cfg.K_SUBTRACT_REF else 'K = absolute stress / eps_vol'
     print(f'\nSUMMARY  ({cfg.sim_name}; {ci}% CIs; {how}; eps_vol = {cfg.K_STRAIN} (used: {", ".join(sorted(set(L.get("eps_src", cfg.K_STRAIN) for L in levels)))})'
           + ('; K lower bounds include delta_sys' if cfg.RELAX_SYS else '') + ')')
-    print(f"{'target':>7s} {'eps_vol':>8s} {'eps_Rg':>8s} {'K_net':>22s} {'K_net(Rg)':>10s} {'K_plates':>22s} {'dev/dPi':>8s} {'D_c':>10s} {'delta_sys':>10s}"
-          + (f" {'G=3(M-K)/4':>11s}" if cfg.M_REF is not None else ''))
+    print(f"{'target':>7s} {'eps_vol':>8s} {'eps_Rg':>8s} {'K_net':>22s} {'K_net(Rg)':>10s} {'K_plates':>22s} {'dev/dPi':>8s} {'delta_sys':>10s}   "
+          f"{'D_m(unload)':>22s} {'kappa=D_m/K':>11s}" + (f" {'G=3(M-K)/4':>11s} {'D_c=(M/K)D_m':>12s}" if cfg.M_REF is not None else ''))
     for L in levels:
         c = lambda v, lo, hi: f'{v:.4f} [{lo:.4f},{hi:.4f}]'      # noqa: E731
         kp = c(L['K_pl'], L['K_pl_lo'], L['K_pl_hi']) if 'K_pl' in L else 'n/a'
-        dc = f"{L['Dc_mean']:.3e}" if L.get('Dc') is not None else 'n/a'
         ds = L.get('K_sys', 0.0)
+        F = L.get('Dm')
+        dm = c(F['Dm'], F['Dm_lo'], F['Dm_hi']) if F is not None else 'n/a'
+        ka = f"{L['kappa']:11.4e}" if 'kappa' in L else f"{'n/a':>11s}"
         print(f"{L['eps_nominal']:7.3f} {L['eps']:8.4f} {L['strain'].get('rg', np.nan):8.4f} "
-              f"{c(L['K_net'], L['K_net_lo'], L['K_net_hi']):>22s} {L.get('K_net_rg', np.nan):10.4f} {kp:>22s} {L['dev_rel']:8.1%} {dc:>10s} "
-              f"{ds:10.4f}" + (' *' if ds > 0.5 * (L['K_net_hi'] - L['K_net']) else '')
+              f"{c(L['K_net'], L['K_net_lo'], L['K_net_hi']):>22s} {L.get('K_net_rg', np.nan):10.4f} {kp:>22s} {L['dev_rel']:8.1%} "
+              f"{ds:10.4f}" + (' *' if ds > 0.5 * (L['K_net_hi'] - L['K_net']) else '  ')
+              + f" {dm:>22s} {ka}"
               + (f" {L['G_from_MK']:11.4f}" if 'G_from_MK' in L else '')
+              + (f" {L['Dc_from_Dm']:12.4f}" if 'Dc_from_Dm' in L else (f" {'n/a':>12s}" if cfg.M_REF is not None else ''))
               + ('' if L.get('eps_ok', True) else '   <- toe level: strain not resolved above zero, K undefined'))
     print(f"  eps_vol = the K denominator ('{cfg.K_STRAIN}');  K_net(Rg) = the same stress increment over the network's own Rg strain")
     if cfg.RELAX_SYS:
         print('  delta_sys = (plate plateau - fitted tail asymptote) / eps_vol;  * = larger than the K_net half-width')
-    print_hold_check(cfg, levels)
+    if any(L.get('Dm') is not None for L in levels):
+        print('  D_m = diffusivity of the FREE re-swelling after the hold (deck Phase 2c; Rg edges against the free-cube series, 95% block-bootstrap CI);'
+              '  kappa = D_m / K_net' + (';  D_c = (M/K) D_m = the confined diffusivity a triaxial hold would show' if cfg.M_REF is not None else ''))
+    elif cfg.DM_UNLOAD:
+        print('  D_m / kappa: no unload files (the run had UNLOAD=0); the compression hold itself is not used for a diffusivity')
 
 
 # ===========================================================================
-#  10. D_c OF THE CUBE  (held-cube modes, one D_c for the three axes)
+#  10. UNLOAD: FREE RE-SWELLING OF THE CUBE  ->  D_m  (deck Phase 2c, 2026-10-28)
 # ===========================================================================
-def _cube_design(cfg, Fa, Dc, t, zh=None, decay_only=False):
-    """Design matrix of one axis at hold time t: one column per (l, s) with l = 1..DC_N_MODES
-    the longitudinal mode sin(2 l pi zeta) and s a distinct transverse rate m^2/L_b^2 + n^2/L_c^2
-    (m, n <= DC_N_T); lambda = 4 pi^2 D_c (l^2/L_a^2 + s).  Hold-referenced (u = 0 at the hold
-    onset), the time factor is exp(-lambda t) - 1; decay_only gives exp(-lambda t) (the
-    transient itself).  The exponential is averaged over the ave/chunk window Fa['W'] like the
-    block-averaged snapshots (tri.window_decay, 2026-10-03).  The transverse cos modes average
-    over the core column to constants, so every (l, s) pair is one free amplitude."""
-    zf = (Fa['zf'] if zh is None else np.asarray(zh, float))[:, None]
-    cols = []
-    for l in range(1, cfg.DC_N_MODES + 1):
-        shape = np.sin(2.0 * np.pi * l * zf)
-        for sv in Fa['s_vals']:
-            lam = 4.0 * np.pi ** 2 * Dc * (l ** 2 / Fa['L'] ** 2 + sv)
-            dec = float(tri.window_decay(lam, t, Fa.get('W', 0.0)))
-            cols.append(shape * (dec if decay_only else dec - 1.0))
-    return np.hstack(cols)
+# Convention.  In a triaxial hold the solvent drains along one axis under lateral constraint
+# and the dilatation diffuses with the CONFINED coefficient D_c = M / zeta (M = K + 4G/3 the
+# longitudinal modulus, zeta the network-solvent friction).  Here the compressed cube is
+# released on all six faces and re-swells freely; the volumetric response is set by the bulk
+# modulus, so the diffusivity of the unconstrained problem is D_m = K / zeta = (K/M) D_c.
+# (The Tanaka-Fillmore bulk equation keeps M in its diffusion term and lets K enter through the
+# stress-free boundary; the D_m convention folds that into the coefficient.  Either way the
+# number to compare with the triaxial unloads is (K/M) D_c.)
+#
+# Model.  The plates leave at the drive speed, the faces are unloaded within a few tau, and
+# the dilatation excess e - e_inf starts uniform (the compressed state) and obeys
+# de/dt = D_m lap e with e = e_inf on the six faces: the separable product of three slab
+# solutions.  The fraction of the initial excess still inside the cube at time t,
+#     R(t) = M(t; L_x) M(t; L_y) M(t; L_z),
+#     M(t; L) = sum_{k odd} 8/(k pi)^2 exp(-k^2 pi^2 D_m t / L^2),
+# is what every observable linear in the dilatation follows: each Rg edge and the Rg volume
+# strain grow as 1 - R(t), the interior osmotic-pressure excess decays as R(t), and the
+# cumulative displacement along axis a, referenced to its re-swollen plateau, relaxes in
+# cos(k pi zeta_a) (odd k; u = 0 at the centre) at exp(-k^2 pi^2 D_m t / L_a^2) times the
+# transverse factors M(t; L_b) M(t; L_c).  The fundamental (1,1,1) decays at
+# tau_1 = L^2 / (3 pi^2 D_m) for a cube of edge L -- three times faster than a slab of the same
+# thickness.  The lengths are the COMPRESSED Rg edges at the hold end (UNLOAD_L = 'hold'; 'ref'
+# = the edges the level drove from; 'mean').  Time runs from the start of the retraction; the
+# fitted windows start when the plates have stopped (t_free, + DM_TRACE_SKIP).
+#
+# Estimators (one D_m each; the Rg-edge fit is the headline, the others are cross-checks):
+#   edges   -- the three Rg edges Delta L_a(t) = L_a(t) - L_a(hold end), one D_m, one free
+#              amplitude per axis (its ratio to L_start - L_hold is the recovery of the
+#              compression); 95 % interval from a circular block bootstrap of the residuals;
+#   volume  -- the Rg volumetric strain given back, eps_hold - eps_Rg(t);
+#   stress  -- the interior <Pi>(t) of every profile axis, block means: Pi_inf + dPi0 R(t);
+#   prof    -- the cumulative displacement profiles per axis (and jointly), the lag
+#              u_late(zeta) - u(zeta, t) in cos(k pi zeta) with a free constant per block
+#              (the floating gel's COM drift), a time-independent amplitude per mode (the
+#              late plateau has not fully relaxed itself) and the transverse factors in the decay.
+def slab_remaining(t, D, L, n=40):
+    """M(t; L): the fraction of a uniform initial excess still inside a slab of thickness L whose
+    two faces are held at the final value, sum over odd k of 8/(k pi)^2 exp(-k^2 pi^2 D t / L^2)."""
+    k = 2.0 * np.arange(1, n + 1) - 1.0
+    t = np.clip(np.atleast_1d(np.asarray(t, float)), 0.0, None)[:, None]
+    return (8.0 / (k * np.pi) ** 2 * np.exp(-(k * np.pi / L) ** 2 * D * t)).sum(axis=1)
 
 
-def fit_Dc_cube(cfg, R, L):
-    """The three-dimensional counterpart of triaxial.fit_Dc for the held cube.
-    Boundary conditions: every face is drained at the bath pressure -- the feed BC of the
-    compression fit (u'' = -q/D_c and equal pore pressure on both faces of every axis, so the
-    strain modes are the periodic cos(2 m pi zeta) family) -- and the displacement vanishes at
-    the centre (the plates close symmetrically about it).  The dilatation therefore relaxes in
-    cos(2 l pi zeta_x) cos(2 m pi zeta_y) cos(2 n pi zeta_z) at 4 pi^2 D_c (l^2/L_x^2 + m^2/L_y^2
-    + n^2/L_z^2), and the core-column displacement along axis a in sin(2 l pi zeta_a) times the
-    column average of the transverse factors.  One D_c is fitted to the hold-referenced
-    u_a/L_a of every axis at once (free amplitudes, linear least squares at each D_c, bounded
-    scalar search over D_c, as triaxial.fit_Dc).  Returns dict(Dc, R2, hold_T, n_amp, ax={axis:
-    per-axis dict in triaxial's plotting layout}, hold_check) or None."""
-    axs = [a for a in cfg.AXES if L.get('disp', {}).get(a) is not None and a in R['ax']]
-    F_ax, Lhat = {}, {}
-    for a in axs:
-        d = L['disp'][a]
-        Ra = R['ax'][a]
-        z_sup, z_pist = float(d['z_supp_held']), float(d['z_pist_held'])
-        span = z_pist - z_sup
-        Lg = float(d.get('L_bb', span - 2.0))
-        gap = 0.5 * (span - Lg)
-        DL_pist, DL_sup = Ra['plate_hi'] - z_pist, z_sup - Ra['plate_lo']
-        DL = DL_pist + DL_sup
-        if not (Lg > 0 and DL > 0):
-            continue
-        Lhat[a] = Lg
-        F_ax[a] = dict(L=Lg, DL=DL, DL_pist=DL_pist, DL_sup=DL_sup, f_sup=float(DL_sup / DL), gap=gap, z_sup=z_sup,
-                       z_pist=z_pist, zeta=(d['z'] - (z_sup + gap)) / Lg, uhat=d['uz'] / Lg, ts=d['ts'],
-                       t_lj=(d['ts'] - d['t_hold']) * cfg.dt_lj, Nc=d['Nc'],
-                       W=float(np.min(np.diff(d['ts']))) * cfg.dt_lj if (cfg.DC_WINDOW_AVG and len(d['ts']) > 1) else 0.0)
-    if not F_ax:
+def cube_remaining(t, D, Lx, Ly, Lz, n=40):
+    """R(t) of the free cube: the product of the three slab fractions."""
+    return slab_remaining(t, D, Lx, n) * slab_remaining(t, D, Ly, n) * slab_remaining(t, D, Lz, n)
+
+
+def _cube_remaining_avg(t_end, W, D, L3, n=40, m=9):
+    """R(t) averaged over the block window [t_end - W, t_end] (the deck's ave/time and ave/chunk
+    blocks end at t_end); W = 0 -> the instantaneous value."""
+    t_end = np.atleast_1d(np.asarray(t_end, float))
+    if W <= 0:
+        return cube_remaining(t_end, D, *L3, n=n)
+    offs = np.linspace(-W, 0.0, m)
+    return np.mean([cube_remaining(t_end + o, D, *L3, n=n) for o in offs], axis=0)
+
+
+def _search_D(resid_logD, bounds, xatol=1e-4):
+    """bounded scalar minimisation over log D; returns (D, at_bound)."""
+    lo, hi = np.log(bounds[0]), np.log(bounds[1])
+    r = minimize_scalar(resid_logD, bounds=(lo, hi), method='bounded', options=dict(xatol=xatol))
+    D = float(np.exp(r.x))
+    return D, bool(D <= bounds[0] * 1.02 or D >= bounds[1] / 1.02)
+
+
+def _fit_traces(t, Y, D_bounds, L3, n_terms, W=0.0, offset=False):
+    """One D_m for the columns of Y (n_t x n_series): column j = a_j (1 - R(t)) [+ c_j].  Linear
+    least squares for the a_j (and c_j) at every D, bounded scalar search over log D.
+    Returns dict(Dm, amps, offs, R2, model, ss, at_bound)."""
+    t = np.asarray(t, float)
+    Y = np.asarray(Y, float)
+    if Y.ndim == 1:
+        Y = Y[:, None]
+
+    def solve(logD):
+        D = np.exp(logD)
+        F = 1.0 - _cube_remaining_avg(t, W, D, L3, n=n_terms)
+        X = np.column_stack([F, np.ones_like(F)]) if offset else F[:, None]
+        coef = np.linalg.lstsq(X, Y, rcond=None)[0]
+        model = X @ coef
+        return float(np.sum((Y - model) ** 2)), coef, model
+
+    D, at_bound = _search_D(lambda lg: solve(lg)[0], D_bounds)
+    ss, coef, model = solve(np.log(D))
+    ss_t = float(np.sum((Y - Y.mean(axis=0)) ** 2))
+    return dict(Dm=D, amps=coef[0], offs=(coef[1] if offset else np.zeros(Y.shape[1])),
+                R2=float(1.0 - ss / ss_t) if ss_t > 0 else np.nan, model=model, ss=ss, at_bound=at_bound)
+
+
+def _boot_D(t, Y, fit, D_bounds, L3, n_terms, n_boot, seed=12345):
+    """95 % interval of D_m from a circular block bootstrap of the residuals about the fitted
+    model (block = a tenth of the series, so the autocorrelation of the trace is kept)."""
+    Y = np.asarray(Y, float)
+    if Y.ndim == 1:
+        Y = Y[:, None]
+    if n_boot < 2:
+        return np.nan, np.nan
+    rng = np.random.default_rng(seed)
+    res = Y - fit['model']
+    n = len(t)
+    blk = max(5, n // 10)
+    Ds = []
+    for _ in range(int(n_boot)):
+        starts = rng.integers(0, n, size=int(np.ceil(n / blk)))
+        idx = np.concatenate([np.arange(s, s + blk) % n for s in starts])[:n]
+        Ds.append(_fit_traces(t, fit['model'] + res[idx], D_bounds, L3, n_terms)['Dm'])
+    lo, hi = np.percentile(Ds, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
+def load_unload(cfg, R, lvl, L, verbose=True):
+    """The level's _u<lvl> files (deck Phase 2c) -> dict U, or None when the run had no unload.
+    U holds the plate planes and the two times of the unload (t_retract: the loggers start with
+    the retraction; t_free: the six plates have stopped), the strain table, the Rg and BB edge
+    traces of the re-swelling with the compressed edges at the hold end (L_hold_*) and the
+    edges the level drove from (L_start_*), the mean plate pressure, the cumulative
+    displacement profiles and the Terzaghi-split stress stacks per axis (bath window outside
+    the OPEN plates; interior = the hold's interior bins, inside the compressed gel and so
+    inside the re-swelling one)."""
+    say = print if verbose else (lambda *a, **k: None)
+    fp, fs = cfg.path('plate_position', lvl, phase='u'), cfg.path('strain_vol', lvl, phase='u')
+    if not (fp.exists() and fs.exists()):
         return None
-    for a, Fa in F_ax.items():
-        idx = np.where((Fa['Nc'].min(axis=0) > cfg.Ncount_min) & (Fa['zeta'] > 0) & (Fa['zeta'] < 1))[0]
-        if len(idx) < 4 + 2 * cfg.DC_TRIM_BINS:
-            return None
-        if cfg.DC_TRIM_BINS:
-            idx = idx[cfg.DC_TRIM_BINS:-cfg.DC_TRIM_BINS]
-        Fa['idx'], Fa['zf'] = idx, Fa['zeta'][idx]
-        Fa['early'] = np.where(Fa['t_lj'] <= cfg.DC_FRAC_EARLY * Fa['t_lj'][-1])[0]
-        others = [b for b in Lhat if b != a]
-        others = (others + others)[:2] if others else [a, a]      # a lone axis: its own edge stands in for the other two
-        sv = {round(m ** 2 / Lhat[others[0]] ** 2 + n ** 2 / Lhat[others[1]] ** 2, 12)
-              for m in range(cfg.DC_N_T + 1) for n in range(cfg.DC_N_T + 1)}
-        Fa['s_vals'] = np.array(sorted(sv))
-        if np.nanmax(np.abs(Fa['uhat'][:, idx] * Lg)) > 0.5 * Fa['DL']:
-            print(f'  WARNING: |u| ~ DL along {a} -- the disp file does not look hold-referenced.')
-        if len(Fa['early']) < 2:
-            return None
+    Pu, Su = read_table(fp), read_table(fs)
+    if not Pu or not Su or len(Pu['step']) < 3:
+        return None
+    st = Pu['step']
+    stopped = np.all([np.isclose(Pu[f], Pu[f][-1], atol=1e-6) for f in PLATES], axis=0)
+    U = dict(lvl=lvl, phase='unload', plate_tab=Pu, strain_tab=Su, t_retract=float(st[0]),
+             t_free=float(st[np.argmax(stopped)]), plane={f: float(Pu[f][-1]) for f in PLATES})
+    U['gap'] = {a: U['plane'][a + 'hi'] - U['plane'][a + 'lo'] for a in 'xyz'}
+    U['ts_end'] = float(Su['step'][-1])
+    U['halt_ts'] = int(U['ts_end'] - cfg.plateau_frac * (U['ts_end'] - U['t_free']))
+    # the level's own loggers start with its drive: the edges the level drove from are the rows before any plate moved
+    Pl = read_table(cfg.path('plate_position', lvl))
+    t_drive = float(Pl['step'][0]) if Pl else -np.inf
+    if Pl:
+        still = np.all([np.isclose(Pl[f], Pl[f][0], atol=1e-6) for f in PLATES], axis=0)
+        t_drive = float(Pl['step'][np.argmin(still)]) if not still.all() else float(Pl['step'][-1])
+    for key in ('rg', 'bb'):
+        Au = tri.load2c(cfg.path(f'gel_dimensions_{key}', lvl, phase='u'), 4)
+        Al = tri.load2c(cfg.path(f'gel_dimensions_{key}', lvl), 4)
+        if Au is None or Al is None:
+            continue
+        U[f'{key}_step'], U[f'{key}_L'] = Au[:, 0], Au[:, 1:4]
+        hold_rows = Al[Al[:, 0] >= L['halt_ts']] if np.any(Al[:, 0] >= L['halt_ts']) else Al[-3:]
+        U[f'L_hold_{key}'] = np.median(hold_rows[:, 1:4], axis=0)      # the compressed edges (hold plateau)
+        pre = Al[Al[:, 0] < t_drive] if np.any(Al[:, 0] < t_drive) else Al[:1]
+        U[f'L_start_{key}'] = np.median(pre[:, 1:4], axis=0)            # the edges the level drove from
+    F = read_table(cfg.path('plate_force_avg', lvl, phase='u'))
+    if F:
+        U['plates'] = plate_pressures(cfg, F, Pu)
+    Wp = read_table(cfg.path('piston_position', lvl, phase='u'))
+    feed_at = _at(_track(Wp, 'z_feed'), L.get('z_feed', R['z_feed']))
+    perm_at = _at(_track(Wp, 'z_perm'), L.get('z_perm', R['z_perm']))
+    U['disp'], U['ax'] = {}, {}
+    for a in cfg.AXES:
+        f = cfg.path(cfg.pname('disp_cum', a), lvl, phase='u')
+        if f.exists():
+            snaps = [sn for sn in tri.read_ave_chunk_file(f) if sn[1].shape[1] >= 4]
+            if snaps:
+                nb = min(sn[1].shape[0] for sn in snaps)
+                U['disp'][a] = dict(ts=np.array([sn[0] for sn in snaps], float), z=snaps[-1][1][:nb, 1],
+                                    Nc=np.array([sn[1][:nb, 2] for sn in snaps]), u=np.array([sn[1][:nb, 3] for sn in snaps]))
+        if a not in R['ax'] or a not in L['ax']:
+            continue
+        stx = _stacks(cfg, a, lvl=lvl, phase='u')
+        if not all(c in stx for c in COMPONENTS):
+            continue
+        Ra, La = R['ax'][a], L['ax'][a]
+        z = Ra['z']
+        n = min(len(stx[c]['ts']) for c in COMPONENTS)
+        tsx = stx['zz']['ts'][:n]
+        G = dict(lo=Ra['lo'], hi=Ra['hi'])
+        rows = []
+        for t in tsx:
+            lim = _limits(cfg, a, G, perm_at(t), feed_at(t))
+            m = bath_mask(cfg, z, U['plane'][a + 'lo'], U['plane'][a + 'hi'], *lim) & Ra['full']
+            rows.append(m if m.any() else Ra['bw'])
+        bw = np.array(rows, bool)
+        for comp, Sx in stx.items():
+            Rs = Ra['stress'][comp]
+            sd_bin = Rs['sd_bin']
+            if Rs['t'].shape[0] < 2 or not np.any(sd_bin > 0):
+                sd_bin = np.full(len(z), float(np.nanstd(Sx['t'][-1][bw[-1]])))
+            for k in ('p', 's', 't', 'ts'):
+                Sx[k] = Sx[k][:n]
+            Sx['net'], Sx['pore'], Sx['pore_half'], Sx['net_half'] = tri.terzaghi_split(Sx['t'], bw, sd_bin, cfg.ci_level)
+        im = La['interior'] if La['interior'].sum() >= 3 else La['in_mem']
+        Pn = tri._tr3(stx, 'net')
+        U['ax'][a] = dict(axis=a, ts=tsx, stress=stx, bw=bw, interior=im, Pi=Pn,
+                          Pi_series=np.array([np.nanmean(Pn[i][im]) for i in range(n)]),
+                          Pi_ref=float(Ra['Pi_ref']), Pi_hold=float(La['Pi_int']))
+    say(f"  unload files read: the plates stopped {(U['t_free'] - U['t_retract']) * cfg.dt_lj:.0f} tau after the retraction began;"
+        f" re-swelling {(U['ts_end'] - U['t_free']) * cfg.dt_lj:.0f} tau;  open gaps x {U['gap']['x']:.2f} y {U['gap']['y']:.2f} z {U['gap']['z']:.2f}"
+        + (f";  Rg edges at the hold end {' x '.join(f'{v:.1f}' for v in U['L_hold_rg'])}" if 'L_hold_rg' in U else '')
+        + (f", before the drive {' x '.join(f'{v:.1f}' for v in U['L_start_rg'])}" if 'L_start_rg' in U else '')
+        + f";  stress profiles along {', '.join(U['ax']) or 'none'}, displacement along {', '.join(U['disp']) or 'none'}")
+    return U
 
-    def solve(Dc):
-        res, amps = 0.0, {}
-        for a, Fa in F_ax.items():
-            X = np.vstack([_cube_design(cfg, Fa, Dc, Fa['t_lj'][i]) for i in Fa['early']])
-            y = np.concatenate([Fa['uhat'][i][Fa['idx']] for i in Fa['early']])
-            A = np.linalg.lstsq(X, y, rcond=None)[0]
-            amps[a] = A
-            res += float(np.sum((X @ A - y) ** 2))
-        return res, amps
 
-    Dc = float(minimize_scalar(lambda D: solve(D)[0], bounds=cfg.DC_BOUNDS, method='bounded').x)
-    ss_res, amps = solve(Dc)
-    y_all = np.concatenate([Fa['uhat'][i][Fa['idx']] for Fa in F_ax.values() for i in Fa['early']])
-    ss_t = float(np.sum((y_all - y_all.mean()) ** 2))
-    R2 = float(1.0 - ss_res / ss_t) if ss_t > 1e-30 else np.nan
-    hold_T = float(max(Fa['t_lj'][-1] for Fa in F_ax.values()))
-    for a, Fa in F_ax.items():
-        A = amps[a]
-        Fa.update(A=A, Dc=Dc, R2=R2, hold_T=hold_T, kk=2.0 * np.arange(1, cfg.DC_N_MODES + 1))
+def fit_Dm_unload(cfg, R, L, U):
+    """D_m of the free re-swelling (see the section comment): the Rg edges (headline, with a
+    block-bootstrap interval), the Rg volume strain, the interior Pi relaxation and the
+    cumulative displacement profiles, each against the free-cube series with the lengths
+    UNLOAD_L selects.  Returns a dict or None (no unload, no Rg trace, or too few points)."""
+    if U is None or 'rg_L' not in U:
+        return None
+    Lh, Ls = U['L_hold_rg'], U['L_start_rg']
+    Lser = {'hold': Lh, 'ref': Ls, 'mean': 0.5 * (Lh + Ls)}.get(cfg.UNLOAD_L, Lh)
+    L3 = tuple(float(v) for v in Lser)
+    nt = int(cfg.DM_SERIES_TERMS)
+    t0, tf = U['t_retract'], U['t_free']
+    t_start = (tf - t0) * cfg.dt_lj + float(cfg.DM_TRACE_SKIP)
+    out = dict(L3=L3, L_hold=Lh, L_start=Ls, L_mode=cfg.UNLOAD_L, t_retract=t0, t_free=tf, n_terms=nt,
+               retract_T=(tf - t0) * cfg.dt_lj, hold_T=(U['ts_end'] - tf) * cfg.dt_lj, t_start=t_start)
+    # ---- (a) the Rg edges: one D_m, a free amplitude per axis ----------------------------
+    tt = (U['rg_step'] - t0) * cfg.dt_lj
+    w = tt >= t_start
+    if w.sum() < 20:
+        return None
+    dL = U['rg_L'] - Lh[None, :]
+    E = _fit_traces(tt[w], dL[w], cfg.DM_BOUNDS, L3, nt)
+    gain = Ls - Lh
+    E.update(t=tt, dL=dL, fit=w, dL_inf_ref=gain, recovery=E['amps'] / np.where(np.abs(gain) > 1e-12, gain, np.nan))
+    E['Dm_lo'], E['Dm_hi'] = _boot_D(tt[w], dL[w], E, cfg.DM_BOUNDS, L3, nt, cfg.DM_N_BOOT)
+    if 'bb_L' in U:
+        E['bb_t'], E['bb_dL'] = (U['bb_step'] - t0) * cfg.dt_lj, U['bb_L'] - U['L_hold_bb'][None, :]
+    out['edges'] = E
+    out['Dm'], out['Dm_lo'], out['Dm_hi'] = E['Dm'], E['Dm_lo'], E['Dm_hi']
+    Lm = float(np.mean(L3))
+    out['tau1'] = Lm ** 2 / (3.0 * np.pi ** 2 * out['Dm'])
+    out['n_tau1'] = out['hold_T'] / out['tau1']
+    # ---- (b) the Rg volume strain given back ------------------------------------------------
+    S = U['strain_tab']
+    if 'V_rg' in S and np.isfinite(R.get('V0_rg', np.nan)):
+        ts_ = (S['step'] - t0) * cfg.dt_lj
+        ws = ts_ >= t_start
+        e_rg = 1.0 - S['V_rg'] / R['V0_rg']
+        e_hold = float(L['strain'].get('rg', e_rg[0]))
+        de = e_hold - e_rg
+        if ws.sum() >= 20:
+            V = _fit_traces(ts_[ws], de[ws], cfg.DM_BOUNDS, L3, nt)
+            V.update(t=ts_, de=de, fit=ws, e_hold=e_hold, amp=float(V['amps'][0]))
+            out['volume'] = V
+    # ---- (c) the interior Pi relaxation, block means, joint over the profile axes ---------
+    axs = [a for a in cfg.AXES if a in U['ax']]
+    if axs:
+        n = min(len(U['ax'][a]['Pi_series']) for a in axs)
+        tsP = (U['ax'][axs[0]]['ts'][:n] - t0) * cfg.dt_lj
+        Wb = float(np.min(np.diff(tsP))) if n > 1 else 0.0
+        wp = tsP >= t_start - Wb                                    # the first block may start in the retraction
+        Y = np.column_stack([U['ax'][a]['Pi_series'][:n] for a in axs])
+        if wp.sum() >= 4:
+            Pf = _fit_traces(tsP[wp], Y[wp], cfg.DM_BOUNDS, L3, nt, W=Wb, offset=True)
+            Pf.update(t=tsP, Pi=Y, fit=wp, axes=axs, W=Wb, Pi_ref=np.array([U['ax'][a]['Pi_ref'] for a in axs]),
+                      Pi_hold=np.array([U['ax'][a]['Pi_hold'] for a in axs]))
+            Pf['Pi_inf'] = Pf['offs'] + Pf['amps']                   # Pi(t) = Pi_inf + dPi0 R(t) = (c + a) - a (1 - R)
+            Pf['dPi0'] = -Pf['amps']
+            out['stress'] = Pf
+    # ---- (d) the cumulative displacement profiles, referenced to the re-swollen plateau ---
+    prof, fns, ss_tot = {}, {}, 0.0
+    kk = 2.0 * np.arange(1, int(cfg.DM_N_MODES) + 1) - 1.0           # odd k: u = 0 at the centre
+    for a in [a for a in cfg.AXES if a in U['disp'] and a in L['ax']]:
+        d = U['disp'][a]
+        z = d['z']
+        lo_c = L['plane'][a + 'lo'] + cfg.contact_gap                 # the compressed gel's face planes (hold end)
+        hi_c = L['plane'][a + 'hi'] - cfg.contact_gap
+        Lc = hi_c - lo_c
+        ok = (d['Nc'].min(axis=0) > cfg.Ncount_min) & (z > lo_c + cfg.wall_margin) & (z < hi_c - cfg.wall_margin)
+        if ok.sum() < len(kk) + 3:
+            continue
+        zeta = (z[ok] - lo_c) / Lc
+        tb = (d['ts'] - t0) * cfg.dt_lj
+        Wb = float(np.min(np.diff(d['ts']))) * cfg.dt_lj if len(d['ts']) > 1 else 0.0
+        late = d['ts'] >= U['halt_ts']
+        if late.sum() < 1:
+            late[-1] = True
+        u_late = d['u'][late].mean(axis=0)
+        du = (u_late[None, :] - d['u'])[:, ok]                        # the lag still to relax (n_t, n_bins)
+        wb = (tb >= t_start - Wb) & ~late
+        if wb.sum() < 3:
+            continue
+        ia = 'xyz'.index(a)
+        La_, Lb, Lc2 = L3[ia], L3[(ia + 1) % 3], L3[(ia + 2) % 3]
+        S_ = np.cos(np.pi * np.outer(zeta, kk))                        # (n_bins, n_modes)
+        tfit = tb[wb]
+        y = du[wb].ravel()
+        offs = np.linspace(-Wb, 0.0, 9) if Wb > 0 else np.array([0.0])
+        nB = len(tfit)
 
-        def T(zh, t, Fa=Fa, A=A):
-            return _cube_design(cfg, Fa, Dc, t, zh=zh, decay_only=True) @ A
-        dlL, fs = Fa['DL'] / Fa['L'], Fa['f_sup']
-        Fa['T'] = T
-        Fa['u_model'] = lambda zh, t, T=T, dlL=dlL, fs=fs: dlL * (fs - np.asarray(zh, float)) + T(zh, t)
-        Fa['u_IC'] = lambda zh, um=Fa['u_model']: um(zh, 0.0)
-    return dict(Dc=Dc, R2=R2, hold_T=hold_T, ax=F_ax, n_amp=int(sum(len(A) for A in amps.values())),
-                hold_check=tri.hold_adequacy(cfg, max(Lhat.values()), hold_T, Dc))
+        nk = len(kk)
+
+        def design(D, tfit=tfit, S_=S_, La_=La_, Lb=Lb, Lc2=Lc2, offs=offs, nB=nB, nk=nk, nz=len(zeta)):
+            blocks = []
+            for i, te in enumerate(tfit):
+                tw = np.clip(te + offs, 0.0, None)
+                trans = float(np.mean(slab_remaining(tw, D, Lb, nt) * slab_remaining(tw, D, Lc2, nt)))
+                Ek = np.array([np.mean(np.exp(-(k * np.pi / La_) ** 2 * D * tw)) for k in kk]) * trans
+                Xi = np.zeros((nz, nB + 2 * nk))
+                Xi[:, i] = 1.0                                        # a free constant per block (COM drift)
+                Xi[:, nB:nB + nk] = S_ * Ek[None, :]                  # the decaying modes
+                Xi[:, nB + nk:] = S_                                  # time-independent modes: the late plateau the lag is
+                blocks.append(Xi)                                     # referenced to has not fully relaxed itself
+            return np.vstack(blocks)
+
+        def resid(D, design=design, y=y):
+            X = design(D)
+            coef = np.linalg.lstsq(X, y, rcond=None)[0]
+            return float(np.sum((X @ coef - y) ** 2)), coef, X
+
+        D, at_bound = _search_D(lambda lg, resid=resid: resid(np.exp(lg))[0], cfg.DM_BOUNDS)
+        ss, coef, X = resid(D)
+        ss_t = float(np.sum((y - y.mean()) ** 2))
+        prof[a] = dict(Dm=D, at_bound=at_bound, R2=float(1.0 - ss / ss_t) if ss_t > 0 else np.nan, amps=coef[nB:nB + nk],
+                       late_amps=coef[nB + nk:], consts=coef[:nB], zeta=zeta, z=z[ok], t=tb, fit=wb, late=late, du=du,
+                       model=(X @ coef).reshape(nB, len(zeta)), L=La_, kk=kk, W=Wb, lo_c=lo_c, Lc=Lc, n_blocks=nB)
+        fns[a] = resid
+        ss_tot += ss_t
+    if prof:
+        Dj, atb = _search_D(lambda lg: sum(fn(np.exp(lg))[0] for fn in fns.values()), cfg.DM_BOUNDS)
+        ssj = sum(fn(Dj)[0] for fn in fns.values())
+        out['prof_joint'] = dict(Dm=Dj, at_bound=atb, R2=float(1.0 - ssj / ss_tot) if ss_tot > 0 else np.nan, axes=list(prof))
+    out['prof'] = prof
+    return out
+
+
+def fig_Dm(cfg, R, L):
+    """The free re-swelling after the hold (deck Phase 2c) and its D_m fits: (a) the three Rg
+    edges growing back with the fitted free-cube series (BB edges faint: the outermost beads
+    spring back at once), (b) the collapse of every estimator onto 1 - R(t) (edges, volume
+    strain, interior Pi), (c) the numbers; bottom row: the cumulative displacement lag
+    u_late - u(zeta, t) along each axis with the cos(k pi zeta) model."""
+    F = L.get('Dm')
+    if F is None:
+        print('D_m figure skipped (no unload files for this level)')
+        return None
+    E = F['edges']
+    fig = plt.figure(figsize=(20, 12), constrained_layout=True)
+    gs = fig.add_gridspec(2, 3, width_ratios=[1.25, 1.25, 1.0])
+    axA, axB, axC = (fig.add_subplot(gs[0, j]) for j in range(3))
+    fig.suptitle(f"Free re-swelling after the hold (level _c{L['lvl']}, files _u{L['lvl']}):  $D_m$ = {sig(F['Dm'])} "
+                 f"[{sig(F['Dm_lo'])}, {sig(F['Dm_hi'])}] $\\sigma^2/\\tau$ from the Rg edges,  $\\tau_1 = L^2/(3\\pi^2 D_m)$ = {F['tau1']:.0f} $\\tau$,"
+                 f"  re-swelling = {F['n_tau1']:.1f} $\\tau_1$   |   {cfg.sim_name}", fontsize=13, fontweight='bold')
+    # ---- (a) the edges ----
+    t = E['t']
+    tm = np.linspace(max(t[E['fit']].min(), 0.0), t.max(), 400)
+    Fm = 1.0 - cube_remaining(tm, E['Dm'], *F['L3'], n=F['n_terms'])
+    for j, a in enumerate('xyz'):
+        axA.plot(t, E['dL'][:, j], '-', color=AX_COLOR[a], lw=1.0, alpha=0.5, label=fr'$\Delta L_{a}$ (Rg edge)')
+        if 'bb_t' in E:
+            axA.plot(E['bb_t'], E['bb_dL'][:, j], ':', color=AX_COLOR[a], lw=0.8, alpha=0.3)
+        axA.plot(tm, E['amps'][j] * Fm, '--', color='k', lw=1.5, alpha=0.9)
+        axA.axhline(E['dL_inf_ref'][j], color=AX_COLOR[a], ls=':', lw=0.9, alpha=0.6)
+    axA.axvline(F['retract_T'], color='0.4', ls='-.', lw=1.0)
+    axA.plot([], [], '--', color='k', lw=1.5, label=fr'fit $a_a\,[1-R(t)]$, one $D_m$ = {sig(E["Dm"])}')
+    axA.plot([], [], ':', color='0.5', lw=0.9, label='full recovery (edge before the drive)')
+    axA.plot([], [], '-.', color='0.4', lw=1.0, label='plates stopped')
+    axA.set(xlabel=r'$t$ since the retraction began  ($\tau$)', ylabel=r'$L_a(t) - L_a^{\rm hold}$  ($\sigma$)')
+    axA.set_title(fr'(a) Rg edges   ($R^2$ = {sig(E["R2"])}; recovery x/y/z = ' + '/'.join(f'{r:.2f}' for r in E['recovery']) + ')', fontsize=13)
+    axA.grid(alpha=0.3)
+    axA.legend(loc='lower right', fontsize=9, framealpha=0.85).set_in_layout(False)   # inside the axes: not a layout artist
+    # ---- (b) the collapse ----
+    for j, a in enumerate('xyz'):
+        if E['amps'][j] != 0:
+            axB.plot(t[E['fit']], E['dL'][E['fit'], j] / E['amps'][j], '-', color=AX_COLOR[a], lw=0.9, alpha=0.5, label=fr'edge {a} / $a_{a}$')
+    if F.get('volume') is not None:
+        V = F['volume']
+        if V['amp'] != 0:
+            axB.plot(V['t'][V['fit']], V['de'][V['fit']] / V['amp'], '-', color=WONG['skyblue'], lw=0.9, alpha=0.6,
+                     label=fr'Rg volume strain / $a_V$  ($D_m$ = {sig(V["Dm"])})')
+    if F.get('stress') is not None:
+        P = F['stress']
+        for j, a in enumerate(P['axes']):
+            if P['dPi0'][j] != 0:
+                axB.plot(P['t'][P['fit']], 1.0 - (P['Pi'][P['fit'], j] - P['Pi_inf'][j]) / P['dPi0'][j], 's', mfc='none',
+                         color=AX_COLOR[a], ms=6, alpha=0.8)
+        axB.plot([], [], 's', mfc='none', color='0.4', label=fr'interior $\Pi$ blocks, $1-(\Pi-\Pi_\infty)/\Delta\Pi_0$  ($D_m$ = {sig(P["Dm"])})')
+    axB.plot(tm, Fm, '-', color='k', lw=2.0, label=fr'$1-R(t)$ at $D_m$ = {sig(F["Dm"])}')
+    axB.set(xlabel=r'$t$ since the retraction began  ($\tau$)', ylabel='fraction of the relaxation done', ylim=(-0.05, 1.15))
+    axB.set_title('(b) every estimator against the free-cube series', fontsize=13)
+    axB.grid(alpha=0.3)
+    axB.legend(loc='lower right', fontsize=9, framealpha=0.85).set_in_layout(False)
+    # ---- (c) the numbers ----
+    axC.axis('off')
+    lines = [f"lengths of the series ({F['L_mode']} edges): " + ' x '.join(f'{v:.1f}' for v in F['L3']) + ' sigma',
+             f"retraction {F['retract_T']:.0f} tau, then {F['hold_T']:.0f} tau of free re-swelling",
+             '',
+             f"D_m (Rg edges)        = {F['Dm']:.4f}  [{F['Dm_lo']:.4f}, {F['Dm_hi']:.4f}]   R^2 {E['R2']:.3f}",
+             f"D_m (Rg volume)       = {F['volume']['Dm']:.4f}   R^2 {F['volume']['R2']:.3f}" if F.get('volume') else 'D_m (Rg volume): n/a',
+             f"D_m (interior Pi)     = {F['stress']['Dm']:.4f}   R^2 {F['stress']['R2']:.3f}" if F.get('stress') else 'D_m (interior Pi): n/a',
+             f"D_m (profiles, joint) = {F['prof_joint']['Dm']:.4f}   R^2 {F['prof_joint']['R2']:.3f}" if F.get('prof_joint') else 'D_m (profiles): n/a']
+    if F.get('prof'):
+        lines.append('   per axis: ' + '  '.join(f"{a} {Pa['Dm']:.4f}" for a, Pa in F['prof'].items()))
+    lines += ['', f"tau_1 = L^2/(3 pi^2 D_m) = {F['tau1']:.0f} tau;  re-swelling = {F['n_tau1']:.1f} tau_1",
+              "recovery of the compression (a_i / (L_start - L_hold)): " + ', '.join(f'{a} {r:.2f}' for a, r in zip('xyz', E['recovery'])),
+              '',
+              f"K_network (hold)      = {L['K_net']:.4f}  [{L['K_net_lo']:.4f}, {L['K_net_hi']:.4f}]",
+              f"kappa = D_m / K       = {L['kappa']:.4e}  [{L.get('kappa_lo', np.nan):.3e}, {L.get('kappa_hi', np.nan):.3e}]" if 'kappa' in L else '']
+    if 'Dc_from_Dm' in L:
+        lines.append(f"confined D_c = (M/K) D_m = {L['Dc_from_Dm']:.4f}   (M_REF = {float(cfg.M_REF):.4f})")
+    if any(G_.get('at_bound') for G_ in (E, F.get('volume'), F.get('stress'), F.get('prof_joint')) if G_):
+        lines.append('')
+        lines.append('WARNING: a fit sits at a DM_BOUNDS edge -- not a measurement')
+    axC.text(0.0, 1.0, '\n'.join(lines), transform=axC.transAxes, va='top', ha='left', fontsize=11, family='monospace')
+    axC.set_title('(c) the numbers  (profiles: odd cos modes, per-block constant removed)', fontsize=13)
+    # ---- bottom row: the displacement profiles (one shared colour bar: the blocks' times are the same along every axis) ----
+    cmap = plt.cm.viridis
+    tf_all = np.concatenate([Pa['t'][Pa['fit']] for Pa in F.get('prof', {}).values()]) if F.get('prof') else np.array([0.0, 1.0])
+    norm = Normalize(vmin=tf_all.min(), vmax=tf_all.max())
+    bottom = []
+    for j, a in enumerate(cfg.AXES[:3]):
+        ax = fig.add_subplot(gs[1, j])
+        bottom.append(ax)
+        Pa = F.get('prof', {}).get(a)
+        if Pa is None:
+            ax.text(0.5, 0.5, f'no displacement profile along {a}', transform=ax.transAxes, ha='center', va='center', fontsize=12)
+            ax.set_axis_off()
+            continue
+        tf = Pa['t'][Pa['fit']]
+        for i, (ti, row, mrow, c0) in enumerate(zip(tf, Pa['du'][Pa['fit']], Pa['model'], Pa['consts'])):
+            c = cmap(norm(ti))
+            ax.plot(Pa['zeta'], (row - c0) / Pa['L'], 'o', color=c, ms=3.5, alpha=0.5)
+            ax.plot(Pa['zeta'], (mrow - c0) / Pa['L'], '-', color=c, lw=1.4)
+        ax.axhline(0, color='k', lw=0.8, alpha=0.5)
+        ax.set(xlabel=fr'$\zeta$ along {a} (compressed gel)', ylabel=fr'lag  $[u_{a}^{{\rm late}}-u_{a}(t)]/L_{a}$', xlim=(0, 1))
+        ax.set_title(fr'({"def"[j]}) along {a}:  $D_m$ = {sig(Pa["Dm"])},  $R^2$ = {sig(Pa["R2"])}', fontsize=12, color=AX_COLOR[a])
+        ax.grid(alpha=0.3)
+    if F.get('prof'):
+        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+        fig.colorbar(sm, ax=bottom, pad=0.01, shrink=0.9, label=r'$t$ since the retraction ($\tau$)')
+    return _save(fig, cfg, 'Dm_reswelling_fit', L['lvl'])
+
+
+def fig_Dm_sweep(cfg, R, levels):
+    """(a) D_m vs volumetric strain: Rg edges (filled, 95 % interval), Rg volume (hollow),
+    interior Pi (triangles), displacement profiles (crosses); (b) kappa = D_m / K per level."""
+    hd = [L for L in _usable(levels) if L.get('Dm') is not None]
+    if not hd:
+        print('D_m sweep figure skipped (no level has unload files)')
+        return None
+    fig, (axD, axK) = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
+    eps = np.array([L['eps'] for L in hd])
+    Dm = np.array([L['Dm']['Dm'] for L in hd])
+    lo = np.array([L['Dm']['Dm_lo'] for L in hd])
+    hi = np.array([L['Dm']['Dm_hi'] for L in hd])
+    axD.errorbar(eps, Dm, yerr=[np.clip(Dm - lo, 0, None), np.clip(hi - Dm, 0, None)], fmt='o-', color='k', lw=2, ms=9, capsize=5,
+                 label='Rg edges (headline; block-bootstrap 95 %)')
+    for key, mk, col, lab in (('volume', 'o', WONG['skyblue'], 'Rg volume strain'), ('stress', '^', WONG['orange'], r'interior $\Pi$ relaxation'),
+                              ('prof_joint', 'x', WONG['blue'], 'displacement profiles (joint)')):
+        pts = [(L['eps'], L['Dm'][key]['Dm']) for L in hd if L['Dm'].get(key) is not None]
+        if pts:
+            e_, d_ = zip(*pts)
+            axD.plot(e_, d_, mk, mfc=('none' if mk == 'o' else col), color=col, ms=9, mew=1.8, ls=':', lw=1.0, label=lab)
+    axD.set_xlabel(r'volumetric strain  $\varepsilon_{vol}$ (of the compression the gel re-swells from)')
+    axD.set_ylabel(r'$D_m$  ($\sigma^2/\tau$)')
+    axD.set_title(r'(a) $D_m$ of the free re-swelling vs the strain released', fontsize=14)
+    axD.grid(alpha=0.3)
+    smart_legend(axD, fontsize=11)
+    ka = np.array([L.get('kappa', np.nan) for L in hd])
+    klo = np.array([L.get('kappa_lo', np.nan) for L in hd])
+    khi = np.array([L.get('kappa_hi', np.nan) for L in hd])
+    axK.errorbar(eps, ka, yerr=[np.clip(ka - klo, 0, None), np.clip(khi - ka, 0, None)], fmt='s-', color=WONG['green'], lw=2, ms=9, capsize=5,
+                 label=r'$\kappa = D_m / K_{\rm network}$')
+    axK.set_xlabel(r'volumetric strain  $\varepsilon_{vol}$')
+    axK.set_ylabel(r'$\kappa = D_m/K$  ($\sigma^4/(\epsilon\,\tau)$)')
+    axK.set_title(r'(b) mobility $\kappa$ from the same run', fontsize=14)
+    axK.grid(alpha=0.3)
+    smart_legend(axK, fontsize=11)
+    return _save(fig, cfg, 'sweep_Dm')
 
 
 # ===========================================================================

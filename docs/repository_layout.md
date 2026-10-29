@@ -10,10 +10,10 @@ lammps_work/                    ← This git repository
 │   ├── triaxial_compression_two_pist/  ← STANDARD compression workflow (two-piston, 2026-09-16; standard since 2026-09-22): NPT-pistons on both reservoirs + load piston; cumulative strain sweep
 │   ├── triaxial_permeation_two_pist/   ← STANDARD permeation workflow (two-piston): feed/permeate NPT-pistons, one constant-dP drive (no sweep)
 │   │                              (the one-piston triaxial_compression/ and triaxial_permeation/ moved to archive/simulations/ on 2026-09-22)
-│   ├── shear_slab/             ← Shear modulus measurement (plate-driven xz shear; current G workflow; deck laid out like the triaxial decks since 2026-09-22)
-│   ├── shear_slab_two_pist/    ← Shear modulus on the two-piston system. shear_slab_two_pist.lmp (2026-10-13) = ISOLATED gel from the six-plate converter file (plates
-│   │                              deleted), rigid x-face grips driven -/+z, core stresses; shear_slab_two_pist_periodic.lmp (2026-10-03) = laterally periodic slab, z-face
-│   │                              layers rigid in x/y driven +/-x (DECK_FILE in its .batch). Same notebooks, DECK = "shear_slab_two_pist_iso" / "shear_slab_two_pist"
+│   │                              (shear_slab/, the plate-driven periodic-slab shear, moved to archive/simulations/ on 2026-10-28)
+│   ├── shear_slab_two_pist/    ← Shear modulus on the two-piston system (the current G workflow). shear_slab_two_pist.lmp (2026-10-13) = ISOLATED gel from the x_plates converter file,
+│   │                              rigid x-face grips driven -/+z, core stresses, Phase 2c unload after every hold (2026-10-28: D_c read there); the periodic deck
+│   │                              shear_slab_two_pist_periodic.lmp + batch and the fine-cadence batches are in archive/simulations/shear_slab_two_pist/ (2026-10-28)
 │   ├── compress_slab/          ← Bulk modulus K: six plates + two wet pistons, on the template of triaxial_compression_two_pist (2026-09-29)
 │   ├── solvent_phase/          ← Pure solvent equation of state sweep
 │   ├── solvent_pure/           ← Single-state pure solvent run
@@ -30,7 +30,7 @@ lammps_work/                    ← This git repository
 │   ├── continue_sim.sh         ← Resume a finished run without redoing setup (see running_simulations.md)
 │   │
 │   │   # ── data-file builders / converters (notebooks; converter code in lib/) ──
-│   ├── slab_with_support.ipynb         ← Finite gel block in a bath, with or without sheets (includeWalls); current input: the tall isolated gel
+│   ├── data_file_generator.ipynb       ← Finite gel block in a bath (was slab_with_support.ipynb until 2026-10-28): knobs only; NETWORK = tetrahedral | rot45 | random; code in lib/data_file_generator.py
 │   ├── slab_with_support_periodic.ipynb ← xy-periodic crosslinked slab (bonds wrap x,y only; finite-z; p p p; one support+piston per z-period). The reference 14000002 slab
 │   ├── slab_two_pistons_periodic.ipynb          ← CONVERTER notebook (code: lib/slab_two_pistons_periodic.py): equilibrated periodic slab → two-piston (feed/permeate) data file (input for triaxial_*_two_pist, shear_slab_two_pist)
 │   ├── pure_polymer.ipynb              ← Build pure polymer data file (polymer_phase)
@@ -40,8 +40,8 @@ lammps_work/                    ← This git repository
 │   ├── triaxial_compression_single_two_pist.ipynb ← STANDARD: two-piston compression, one level: the eleven figures + wet-piston bath check + solvent expelled
 │   ├── triaxial_compression_sweep_two_pist.ipynb  ← STANDARD: two-piston compression, all levels (M, G, D_c, κ vs strain) + per-level bath check
 │   ├── triaxial_permeation_single_two_pist.ipynb  ← STANDARD: two-piston permeation: profile evolutions, P_feed/P_perm measured vs applied, Q_perm(t), permeability k, D_c + M from the polymer displacement (no sweep)
-│   ├── shear_analysis_single.ipynb          ← one shear level: G (network + series estimators, increments from γ = 0), N1/N2, D_c, κ, P_th (shear_slab or shear_slab_two_pist output: DECK in Config)
-│   ├── shear_analysis_sweep.ipynb           ← every level of a shear sweep: G vs γ, stress–strain slope, D_c, κ
+│   ├── shear_analysis_single.ipynb          ← one shear level: G (network + series estimators, increments from γ = 0), N1/N2, P_th; D_c and κ from the level's UNLOAD (2026-10-28); DECK in Config
+│   ├── shear_analysis_sweep.ipynb           ← every level of a shear sweep: G vs γ, stress–strain slope, D_c (unloads), κ
 │   ├── bulk_modulus_analysis_{single,sweep}.ipynb ← Bulk modulus K (code in lib/bulk.py, on top of lib/triaxial.py)
 │   ├── calibration_analysis.ipynb           ← φ_f calibration / PMV sweep analysis (lib/volfrac.py)
 │   ├── cross_deck_comparison.ipynb          ← figures built from more than one deck's run (lib/compare.py)
@@ -59,6 +59,7 @@ lammps_work/                    ← This git repository
 │   │   │   # data-file converters / CLI tools (imported by the converter notebooks, or run as `python scripts/lib/<tool>.py`)
 │   │   ├── slab_two_pistons_periodic.py              ← CONVERTER: equilibrated periodic slab → two-piston (feed/permeate) data file
 │   │   ├── add_more_plates_to_gel.py        ← CONVERTER (2026-09-29, layouts 2026-10-14): isolated gel → plates by layout + two wet pistons (compress_slab / shear_slab_two_pist inputs); imports slab_two_pistons_periodic
+│   │   ├── data_file_generator.py           ← GENERATOR (2026-10-28, from slab_with_support.ipynb): diamond-lattice gel block in a bath; build(network='tetrahedral'|'rot45'|'random'), WWW bond switching, isotropy check
 │   │   ├── slab_shear_plates_periodic.py             ← CONVERTER (2026-09-22): periodic slab → isolate + z-normal plates on its faces = shear_slab input; imports isolate_gel + add_plates_to_gel_periodic
 │   │   ├── add_plates_to_gel_periodic.py             ← plate builder (module extracted from the notebook 2026-09-22)
 │   │   ├── isolate_gel.py                   ← CLI: strip bath/walls and define interior control volume (calibration_sweep, archived volmix_sweep)

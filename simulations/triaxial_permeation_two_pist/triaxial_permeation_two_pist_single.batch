@@ -20,7 +20,7 @@ if [ -z "${TRIAX_BATCH_SYNCED:-}" ]; then
     echo ">>> [self-sync] pulling lammps_work before defining the run knobs..."
     command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
     export TRIAX_BATCH_SYNCED=1
-    exec bash "$LAMMPS_WORK_DIR/simulations/triaxial_permeation_two_pist/triaxial_permeation_two_pist.batch"
+    exec bash "$LAMMPS_WORK_DIR/simulations/triaxial_permeation_two_pist/triaxial_permeation_two_pist_single.batch"
 fi
 echo ">>> [self-sync] running freshly synced batch (TRIAX_BATCH_SYNCED=1)"
 

@@ -1,4 +1,4 @@
-# scripts/ — what each file is (2026-10-11)
+# scripts/ — what each file is (2026-10-28)
 
 Rule (same as `lammps_data_files_local/`): a notebook or script lives here while a deck in `simulations/`, a doc, or a current analysis uses it. Superseded ones are in `archive/scripts/` (open them from this folder: their relative paths assume `scripts/`).
 
@@ -17,9 +17,9 @@ Rule (same as `lammps_data_files_local/`): a notebook or script lives here while
 
 | Notebook | Role |
 |---|---|
-| `slab_with_support.ipynb` | Finite gel block in a bath, with or without sheets (`includeWalls`). Current: the tall isolated gel (`tall_rho04_nowalls`). |
+| `data_file_generator.ipynb` (was `slab_with_support.ipynb` until 2026-10-28) | Finite gel block in a bath for `slab_with_support`: a knob cell only — `NETWORK = "tetrahedral" | "rot45" | "random"` (aligned diamond lattice, the lattice turned 45° about y, or the rot45 block re-wired into a random f = 4 network by bond switching) and the block / bath sizes; the code is `lib/data_file_generator.py` (`build()`, `generate_gel_slab()`, `verify_network_isotropy()`). Current gels: `tall_rho04_nowalls`, `_rot45`, `_random`. |
 | `slab_with_support_periodic.ipynb` | The x/y-periodic slab — the reference 14000002 state comes from it. |
-| `slab_two_pistons_periodic.ipynb` | Equilibrated periodic slab → two-piston (feed / permeate) file for `triaxial_*_two_pist` and the periodic `shear_slab_two_pist_periodic.lmp`. |
+| `slab_two_pistons_periodic.ipynb` | Equilibrated periodic slab → two-piston (feed / permeate) file for `triaxial_*_two_pist` (and the archived periodic shear deck). Converters write no `.info.json` sidecar or png since 2026-10-28 (`--png` draws one on request). |
 | `lib/add_more_plates_to_gel.py` (**script, no notebook**: run it from a terminal, see `docs/building_data_files.md`) | Equilibrated isolated gel → load plates by `layout` + two wet pistons: `six_plates` for `compress_slab`, `x_plates` (the two grip plates) for the isolated-gel `shear_slab_two_pist`, `z_plates` / `no_plates` for future decks (layouts 2026-10-14). |
 | `pure_solvent_1.ipynb`, `pure_polymer.ipynb` | Pure-phase boxes for `solvent_phase` / `polymer_phase`. |
 
@@ -27,10 +27,10 @@ Rule (same as `lammps_data_files_local/`): a notebook or script lives here while
 
 | Notebook | Role |
 |---|---|
-| `triaxial_compression_single_two_pist.ipynb`, `triaxial_compression_sweep_two_pist.ipynb` | Two-piston compression: one level / whole sweep (M, G, D_c, κ). |
+| `triaxial_compression_single_two_pist.ipynb`, `triaxial_compression_sweep_two_pist.ipynb` | Two-piston compression: one level / whole sweep (M, G, D_c, κ; the trusted D_c is the unload's, `triaxial_compression_two_pist_single.batch`). |
 | `triaxial_permeation_single_two_pist.ipynb` | Two-piston permeation (Q, κ, D_c, M from the polymer displacement). |
-| `shear_analysis_single.ipynb`, `shear_analysis_sweep.ipynb` | Shear G for `shear_slab`, the periodic `shear_slab_two_pist` and the isolated-gel `shear_slab_two_pist_iso` (`DECK`). |
-| `bulk_modulus_analysis_single.ipynb`, `bulk_modulus_analysis_sweep.ipynb` | Bulk modulus K from `compress_slab`. |
+| `shear_analysis_single.ipynb`, `shear_analysis_sweep.ipynb` | Shear G for the isolated-gel `shear_slab_two_pist_iso` (`DECK`; the archived `shear_slab` and periodic two-piston runs still load). D_c and κ come from each level's **unload** (deck Phase 2c, 2026-10-28), not from the hold. |
+| `bulk_modulus_analysis_single.ipynb`, `bulk_modulus_analysis_sweep.ipynb` | Bulk modulus K from the `compress_slab` hold and D_m = (K/M) D_c, κ = D_m/K from its free re-swelling unload (2026-10-28). |
 | `cross_deck_comparison.ipynb` | Figures that combine decks (D_c(φ_s), κ(φ_s), EOS). |
 | `calibration_analysis.ipynb` | φ_f calibration / PMV sweep (`calibration/` holds its λ table and summary figure). |
 
@@ -39,3 +39,5 @@ Rule (same as `lammps_data_files_local/`): a notebook or script lives here while
 `lib/` all Python (analysis modules, converters, plotters — see `docs/repository_layout.md`); `tests/` deck linter, fixtures, plot and notebook smoke tests; `calibration/` the calibration outputs the notebooks read.
 
 Moved out on 2026-10-11: the Pod and Bridges-2 runners (with every `*_pod.batch` / `*_bridges.batch` and the Pod benchmarks) → `../archive/pod_bridges/`; the LAMMPS build script and its log → `../lammps_build/`; the one-piston analysis notebooks (`triaxial_compression{,_single,_sweep}`, `triaxial_permeation`), the walled / angled / isolate / split / add_plates builders and `run_analysis_notebook.sh` → `../archive/scripts/`.
+
+**Batch files (2026-10-28):** every simulation folder keeps at most two, `<folder>_single.batch` and `<folder>_sweep.batch` (`run_lammps.sh` keys on the folder, not the batch name; the self-sync guard in each batch re-execs its own file). Everything else — the fine-cadence and periodic shear batches, the half / quarter triaxial gels, the small-dP permeation, the older `slab_with_support` inputs and the plate-driven `shear_slab` deck — is in `archive/simulations/` with a note in `archive/README.md`.

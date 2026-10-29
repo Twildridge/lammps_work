@@ -116,7 +116,7 @@ git pull                      # make sure you have the latest scripts
 cd simulations/solvent_pure
 ```
 
-Open `solvent_pure.batch` in a text editor (`nano solvent_pure.batch` over SSH) and find this block near the bottom:
+Open `solvent_pure_single.batch` in a text editor (`nano solvent_pure_single.batch` over SSH) and find this block near the bottom:
 ```bash
 FOLDER="solvent_pure"
 DATANAME="final_config_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_solvent_only"
@@ -131,7 +131,7 @@ Leave the rest as it is. `INTERACTION="1.0_0.0"` is right for a solvent-only run
 
 Submit it:
 ```bash
-sbatch solvent_pure.batch
+sbatch solvent_pure_single.batch
 ```
 This prints a job ID, e.g. `Submitted batch job 12345678`. The job is queued; the terminal can be closed.
 

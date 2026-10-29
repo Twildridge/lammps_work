@@ -104,3 +104,22 @@ The versions it replaced are kept here as they were at commit `a98f53e`.
   `scripts/` (its paths are relative to that folder).
 * `plot_lammps_log.py` still draws its normal-stress panel when a run directory
   holds `bulk_modulus_plot_data_*.dat`; the new deck does not write that file.
+
+## Archived (2026-10-28): the two-batch rule, `shear_slab`, the stray data folder
+
+Every folder under `simulations/` now keeps at most two batch files, `<folder>_single.batch` and `<folder>_sweep.batch`
+(renamed from the unsuffixed files where there was one of each kind); everything else moved here, unchanged, under
+`archive/simulations/<folder>/`:
+
+| Folder | Archived | Why |
+|---|---|---|
+| `shear_slab/` (whole folder: deck + batch) | `shear_slab.lmp`, `shear_slab.batch` | The plate-driven shear of a periodic slab with plates on its z-faces (`slab_shear_plates_periodic.py` input). Superseded by **`simulations/shear_slab_two_pist/`** (isolated gel in the two-piston bath, grip plates). The shear notebooks still load its runs (`DECK = "shear_slab"`). |
+| `shear_slab_two_pist/` | `shear_slab_two_pist_periodic.lmp` + `_periodic.batch`, `_fine.batch`, `_fine_g005.batch`, `_fine_g005_rot45.batch` | The laterally periodic two-piston shear deck (reads the compression deck's `*_two_pist.data`) and the fine-cadence displacement batches of the October D_c diagnosis (`DISP_FINE_NFREQ`; the deck no longer writes the fine or the hold-onset displacement files — D_c comes from the unload, Phase 2c). To run the periodic deck again: move both files back and keep `DECK_FILE=shear_slab_two_pist_periodic` in its batch. The rot45 run (`shear_6`) was `_fine_g005_rot45.batch`: the same run today is `shear_slab_two_pist_single.batch` with that DATANAME. |
+| `slab_with_support/` | `slab_with_support.batch`, `_piston_transparent.batch`, `_isolated.batch`, `_isolated_tall.batch`, `_isolated_tall_rot45.batch` | The walled periodic slab runs (support + piston sheets), the rho10 cube and the aligned / rot45 tall gels. `slab_with_support_single.batch` (the former `_isolated_tall_random.batch`) runs any of them: set `DATANAME` (the gel from `data_file_generator.ipynb`), keep `BARO_MODE=iso`, `PIN_GEL=1` for an isolated gel. |
+| `solvent_pure/` | `solvent_pure_old_no_piston_support.lmp` | The pre-sheet solvent deck. |
+| `triaxial_compression_two_pist/` | `_half.batch`, `_quarter.batch` | The thinner gels (L² test of the hold relaxation, 2026-10-03/06: drainage confirmed, hold D_c thickness-independent). `_single.batch` is the former `_fine.batch` (one level, fine cadence, unload); `_sweep.batch` the former unsuffixed sweep. |
+| `triaxial_permeation_two_pist/` | `_quarter.batch`, `_quarter_smalldp.batch` | The quarter gel and its small-dP ringing test (2026-10-07/08: amplitude explanation rejected). `_single.batch` is the former unsuffixed batch. |
+
+Also removed the same day: `lammps_work/lammps_data_files_local/` (two August `..._with_six_plates_FIXED*.data` files that had been
+committed by mistake; input data lives in `lammps_data_files_local/` NEXT TO the repo, never inside it) and every `.info.json`
+sidecar and `_profiles.png` / `_zprofile.png` in that data folder (the converters stopped writing them; `--png` draws one on request).

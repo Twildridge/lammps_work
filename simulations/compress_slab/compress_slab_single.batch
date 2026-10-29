@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=compress_slab
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=0
+#SBATCH --time=27:00:00
+#SBATCH --output=%x.o%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (must run BEFORE COMPRESSIONS is defined below).  sbatch
+# submits whatever copy of this file is on disk; if it is stale the sweep list
+# is wrong and the run script's own git pull is too late (COMPRESSIONS is already
+# exported).  Pull first, then re-exec the fresh batch.  (Mirrors
+# triaxial_compression_two_pist_sweep.batch / shear_slab.batch.)
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${COMPRESS_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining COMPRESSIONS..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export COMPRESS_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/compress_slab/compress_slab_single.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (COMPRESS_BATCH_SYNCED=1)"
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# BULK MODULUS K + RE-SWELLING DIFFUSIVITY D_m, ONE LEVEL (the SINGLE batch; the sweep is
+# compress_slab_sweep.batch).  Drained ISOTROPIC compression of an isolated gel at constant
+# bath pressure: two wet NPT-pistons hold the bath at PRESS_TARGET; six solvent-transparent
+# plates are seated onto the gel faces and closed together to ONE cumulative VOLUMETRIC
+# strain target (STRAIN_TARGETS=(0.10) -> COMPRESSIONS, files _<hold>_c0.10, auto-sized
+# hold) -- that hold gives K.  Then the UNLOAD (Phase 2c, UNLOAD=1, 2026-10-28): the plates
+# open back to the seated gaps + 2 x UNLOAD_MARGIN and the gel re-swells FREELY for
+# UNLOAD_STEPS (0 = the hold length), files _<hold>_u0.10 -- that re-swelling gives the
+# diffusivity.  Free cube, all six faces unloaded = the 3-D unconstrained problem, so the
+# diffusivity it measures is D_m = (K/M) D_c, not the confined D_c of the triaxial holds;
+# kappa = D_m / K from this run alone.  No D_c is taken from the compression hold any more
+# (hold-onset displace/atom files dropped from the deck the same day).  The deck, its
+# variables and its files follow triaxial_compression_two_pist; analysis in
+# scripts/bulk_modulus_analysis_single.ipynb (lib/bulk.py).
+#
+# DATANAME is the CONVERTER output (scripts/lib/add_more_plates_to_gel.py) of an
+# equilibrated slab_with_support snapshot of the ISOLATED gel; copy it to
+# ~/Documents/lammps_data/input_data/.
+# =======================================================================
+FOLDER="compress_slab"
+DATANAME="final_config_slab_support_5beads_square_rho10_nowalls_1.0_1.0_8000000_six_plates"   # <- SET THIS to the converter's
+                        # output stem (add_more_plates_to_gel.py; 2026-10-11 conversion of the rho10 12^3 cube -- the same gel
+                        # Jordan ran under the old ..._tall_rho04_new_03_nowalls stem; copy it to ~/Documents/lammps_data/input_data/)
+INTERACTION="1.0_1.0"   # epsSS_epsSP
+# NSTEPS: (a) FALLBACK hold length with HOLD_AUTO=0 and (b) the tag of the
+# setup-phase files only.  Every reference/production file is tagged with its
+# level's AUTO-SIZED HOLD LENGTH (..._<hold>_c<strain>.dat); the notebooks resolve
+# the tags (NSTEPS=None there).
+NSTEPS=3000000
+TYPE=""
+PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run
+
+# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var) -----
+export PISTON_MASS=1000       # mass per wet-piston bead (types 5/6)
+export C_PIST_FRAC=1.0        # damping / critical damping (the .lmp prints C_crit and the period)
+export NPT_PISTON_STEPS=1000000   # Phase-1 settle of the wet pistons
+export SETTLE_HALT=0          # 1 = end the settle early once both pistons are at rest
+
+# ----- compress_slab knobs -----
+export SEAT_MODE=bb           # gel face the plates seat on: bb = outermost bead (the two-piston decks' seating;
+                              # zero-load reference, sigma' = 0 as in the triaxial / shear runs; default since
+                              # 2026-10-19), rg = Rg-based face (seated on the network's effective surface but
+                              # with a ~0.028 preload: the reference is a pre-compressed state; runs up to _04).
+                              # The bounding box of the 12-cell cube is 3-5 sigma per side wider than its Rg
+                              # edge, so with bb the first levels fold in the shell: see compress_slab.lmp
+export HOLD_AUTO=1            # 1 = size each hold from tau_1 = L^2/(pi^2 D_c) on the shortest gel edge;
+                              # 0 = hold NSTEPS at every level (short trials)
+
+# ----- UNLOAD = the D_m measurement (deck Phase 2c, 2026-10-28) -----
+export UNLOAD=1               # after the hold: six plates back to the seated gaps + 2 x UNLOAD_MARGIN, then a free
+                              # re-swelling hold; files _<hold>_u<strain> (lib/bulk.py load_unload / fit_Dm_unload)
+export UNLOAD_STEPS=0         # re-swelling hold length; 0 = this level's auto-sized hold length (same tau_1 sizing)
+export UNLOAD_MARGIN=3.0      # sigma per plate beyond its seat: the re-swollen gel's outermost beads fluctuate 3-5 sigma
+                              # beyond its Rg face, so the plates must not stay at contact_gap from the seated BB face
+
+# -----------------------------------------------------------------------
+# ONE LEVEL: cumulative VOLUMETRIC strain target eps_vol = 1 - V/V0 = 0.10.  The level
+# closes the three plate gaps by the same linear strain e = 1 - (1 - eps_vol)^(1/3) of the
+# reference edge L0 (hi plate inward by DRIVE_SPLIT of the closure, lo plate by the rest)
+# until the plate strain reaches the target (fix halt), freezes the plates, and holds; with
+# bb seating the first ~1 sigma per face folds in the loose shell, so 0.10 (1.2 sigma per
+# face on the 64-sigma cube) is the smallest level whose network strain is well resolved
+# (lib/bulk.py K_STRAIN = 'disp'; the 2026-10-25 sweep put the shell at 0.025-0.05).
+#
+# STEPS with the defaults: 50k Phase 0 + 1M settle + 143k seating + 1M settle + 150k
+# reference + ~12k drive + ~2.8M hold + ~30k retraction + ~2.8M re-swelling = ~8M steps;
+# --time 27 h is ample (the triaxial batch runs ~50M steps per 48 h on the same 4 nodes).
+# Solvent expelled by the compression backs the wet pistons out by ~eps_vol*V0/A and comes
+# back in the unload: the converter's margin_feed + margin_perm (default 10 + 10 sigma ~
+# eps_vol 0.6 on the 12-cell cube) covers it.  Do a SHORT trial first (HOLD_AUTO=0, a small
+# NSTEPS, UNLOAD_STEPS=NSTEPS, NPT_PISTON_STEPS=100000).
+# -----------------------------------------------------------------------
+# NOTE: the list must be exported as a SCALAR string (bash does not export
+# arrays); STRAIN_TARGETS is the array, COMPRESSIONS the scalar run_lammps.sh reads.
+STRAIN_TARGETS=(0.10)
+export COMPRESSIONS="${STRAIN_TARGETS[*]}"
+export DRIVE_SPLIT=0.5        # hi-plate share of each gap closure (0.5 = symmetric drive)
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"

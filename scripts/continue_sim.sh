@@ -30,7 +30,7 @@
 #   --batch <file>   the .batch whose #SBATCH lines and exports the continuation
 #                    job borrows (default: the .batch in this folder whose
 #                    --job-name matches the output file's prefix, else the
-#                    CONT_BATCH_FILE a chained job inherited, else <folder>.batch)
+#                    CONT_BATCH_FILE a chained job inherited, else <folder>_single.batch)
 #   --dry-run        print the batch script that would be submitted; submit nothing
 #
 #   job_id  — the SLURM job ID, e.g. 49772594
@@ -360,9 +360,9 @@ if [ "$MODE" != "run" ]; then
         if [ -z "$BATCH_FILE" ] && [ -n "${CONT_BATCH_FILE:-}" ] && [ -f "$CONT_BATCH_FILE" ]; then
             BATCH_FILE="$CONT_BATCH_FILE"      # a chained job: the batch its ancestor used
         fi
-        if [ -z "$BATCH_FILE" ] && [ -f "$PWD/${FOLDER}.batch" ]; then
-            BATCH_FILE="$PWD/${FOLDER}.batch"
-            echo "WARNING: no .batch with --job-name=${JOBNAME} here — borrowing ${FOLDER}.batch"
+        if [ -z "$BATCH_FILE" ] && [ -f "$PWD/${FOLDER}_single.batch" ]; then
+            BATCH_FILE="$PWD/${FOLDER}_single.batch"
+            echo "WARNING: no .batch with --job-name=${JOBNAME} here — borrowing ${FOLDER}_single.batch"
             echo "         (check its --nodes/--time; pass --batch <file> to choose another)."
         fi
     fi

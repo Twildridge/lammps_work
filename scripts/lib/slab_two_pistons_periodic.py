@@ -65,7 +65,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
-import json
 import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
@@ -119,7 +118,7 @@ class Config:
     seed: int = 42
     density_window: float = 4.0        # bulk-density window starts this far above the gel top (sigma)
     log_info: bool = True              # append the entry to slab_data_file_info.md
-    make_png: bool = True
+    make_png: bool = False             # --png: draw the z-density histogram next to the output (off since 2026-10-28)
 
     def __post_init__(self):
         if self.output_file is None:
@@ -666,10 +665,7 @@ def convert(cfg: Config):
                         img=(img if img_in else None))
     print(f'  image flags: x,y carried over from the input for {n_old} atoms ({len(img_in)} read), z reset to 0'
           if img_in else '  image flags: none in the input -> none written')
-    with open(str(cfg.output_file) + '.info.json', 'w') as f:
-        json.dump(_jsonable(info), f, indent=1)
     print(f'  wrote {len(all_typ)} atoms, {len(bonds)} bonds -> {cfg.output_file}')
-    print(f'  sidecar: {cfg.output_file}.info.json')
 
     print_layout(info)
     if cfg.make_png:
@@ -1049,8 +1045,6 @@ def cut_two_pist(input_file, output_file=None, keep_frac=0.5, log_info=True, fee
               f'z: support={info["support_z"]:.3f} gel_bb=[{G["bb_lo"]:.3f},{G["bb_hi"]:.3f}] perm_piston={info["z_perm_piston"]:.3f} '
               f'load_piston={info["z_load_piston"]:.3f} feed_piston={info["z_feed_piston"]:.3f}; cut plane {z_cut:.3f}, {D:.3f} sigma excised')
     write_two_pist_data(output_file, header, np.arange(1, len(ids_k) + 1), mols_k, typ_k, xyz_k, vel, bonds, new_box, img=img)
-    with open(str(output_file) + '.info.json', 'w') as f:
-        json.dump(_jsonable(info), f, indent=1)
     print(f'  wrote {len(ids_k)} atoms, {len(bonds)} bonds -> {output_file}')
     c = info['counts']
     entry = '\n'.join([
@@ -1093,7 +1087,7 @@ if __name__ == '__main__':
     ap.add_argument('--sheet-spacing', type=float, default=0.2)
     ap.add_argument('--seed', type=int, default=42)
     ap.add_argument('--no-log', action='store_true', help='do not append to slab_data_file_info.md')
-    ap.add_argument('--no-png', action='store_true')
+    ap.add_argument('--png', action='store_true', help='also write <stem>_zprofile.png next to the output (off by default)')
     ap.add_argument('--self-check-only', metavar='DATAFILE', help='validate an existing two-piston data file and exit')
     ap.add_argument('--cut-existing', metavar='DATAFILE', help='thin the gel of an EXISTING two-piston data file to the bottom '
                     '--gel-keep-frac of its thickness (cut_two_pist) and exit; --output names the new file (default <stem>_half.data)')
@@ -1112,7 +1106,7 @@ if __name__ == '__main__':
                  feed_thickness=args.feed_thickness, margin_perm=args.margin_perm, margin_feed=args.margin_feed,
                  piston_clearance=args.piston_clearance, load_piston_frac=args.load_piston_frac,
                  sheet_source=args.sheet_source, sheet_spacing=args.sheet_spacing, seed=args.seed,
-                 log_info=not args.no_log, make_png=not args.no_png)
+                 log_info=not args.no_log, make_png=args.png)
     info = convert(cfg)
     ok, msg = check_gel_unchanged(cfg.input_file, cfg.output_file)
     print(('  gel-unchanged check: OK -- ' if ok else '  gel-unchanged check: FAILED -- ') + msg)

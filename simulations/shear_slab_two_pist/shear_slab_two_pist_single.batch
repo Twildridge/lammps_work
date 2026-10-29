@@ -22,7 +22,7 @@ if [ -z "${SHEAR2P_BATCH_SYNCED:-}" ]; then
     echo ">>> [self-sync] pulling lammps_work before defining STRAINS..."
     command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
     export SHEAR2P_BATCH_SYNCED=1
-    exec bash "$LAMMPS_WORK_DIR/simulations/shear_slab_two_pist/shear_slab_two_pist.batch"
+    exec bash "$LAMMPS_WORK_DIR/simulations/shear_slab_two_pist/shear_slab_two_pist_single.batch"
 fi
 echo ">>> [self-sync] running freshly synced batch (SHEAR2P_BATCH_SYNCED=1)"
 
@@ -44,9 +44,19 @@ module load openmpi/4.1.3
 module load python/3.8.12
 
 # =======================================================================
-# ISOLATED-GEL SHEAR (2026-10-13): shear_slab_two_pist.lmp on a gel that is periodic
-# in NO direction -- the tall 9 x 9 x 21-cell block equilibrated free in its bath by
-# slab_with_support_isolated_tall.batch (BARO_MODE=iso, PIN_GEL=1), floating in a bath
+# ISOLATED-GEL SHEAR, ONE LEVEL (the SINGLE batch; the sweep is shear_slab_two_pist_sweep.batch).
+# 2026-10-28: the RANDOM f = 4 NETWORK at gamma = 0.10 -- the gel built by
+# scripts/data_file_generator.ipynb (NETWORK = "random": the rot45 block re-wired by bond
+# switching, no lattice directions), equilibrated by slab_with_support_single.batch, converted
+# with add_more_plates_to_gel.py --layout x_plates.  The aligned lattice gave G ~ 0.17-0.19 in
+# shear (C44) against 0.04-0.06 on the compression side ((C11 - C12)/2): if that gap is the
+# cubic anisotropy of the diamond lattice, this gel must read G ~ 0.05-0.07 at the same strain.
+# UNLOAD=1 (deck Phase 2c, 2026-10-28): after the hold the grips go back to gamma = 0 and the
+# gel relaxes for UNLOAD_STEPS (0 = NSTEPS), files _u0.1 -- the transverse relaxation D_c is
+# read THERE (lib/shear.py fit_Dc_unload), nothing from the hold's own transient any more.
+#
+# shear_slab_two_pist.lmp on a gel that is periodic in NO direction -- a block equilibrated
+# free in its bath by slab_with_support_single.batch (BARO_MODE=iso, PIN_GEL=1), floating in a bath
 # that the two wet NPT-pistons hold at PRESS_TARGET.  The grips are the polymer beads
 # within 3 sigma of the gel's LEFT and RIGHT (x) faces -- its long sides -- rigid in
 # all three directions and driven -z (left) / +z (right): x is the gap, z the shear
@@ -58,18 +68,20 @@ module load python/3.8.12
 #
 # DATANAME: the converter output (layout = x_plates) of the equilibrated isolated gel --
 #   scripts/lib/add_more_plates_to_gel.py (lib/add_more_plates_to_gel.py) on
-#   final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000.data
+#   final_config_slab_support_5beads_tall_rho04_nowalls_random_1.0_1.0_8000000.data
 #   -> ..._x_plates.data: gel + bath + two wet pistons + TWO grip plates (types 8, 9)
 #   parked 3 sigma outside the gel's x-faces.  The deck seats the plates onto the Rg
 #   x-faces (Phase 1.25, SEAT_MODE rg|bb as compress_slab) and drives them -/+z; a
 #   six_plates file works too (the deck deletes the other four plates).
 #   Copy the file to ~/Documents/lammps_data/input_data/ before sbatch.
-# The laterally periodic version of this run is shear_slab_two_pist_periodic.batch.
+# Other gels: the aligned lattice (..._tall_rho04_nowalls_1.0_1.0_8000000_x_plates, runs shear_4 / shear_5_sweep)
+# and the rot45 lattice (..._rot45_..._x_plates, run shear_6): swap DATANAME.  The laterally periodic deck and
+# its batch are in archive/simulations/shear_slab_two_pist/ (2026-10-28).
 # Analyse with DECK = "shear_slab_two_pist_iso" in the shear notebooks.
 # =======================================================================
 FOLDER="shear_slab_two_pist"
-DATANAME="final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000_x_plates"   # <- SET THIS to the converter's
-                        # output stem (the notebook prints "DATANAME for the batch files")
+DATANAME="final_config_slab_support_5beads_tall_rho04_nowalls_random_1.0_1.0_8000000_x_plates"   # <- the converter's (2026-10-28, random network;
+                        # copy the file to ~/Documents/lammps_data/input_data/ on Expanse first)
 INTERACTION="1.0_1.0"   # epsSS_epsSP
 # NSTEPS: Phase 3 production HOLD per strain level (flat; also the output-file tag).
 # Other phase lengths are index knobs in shear_slab_two_pist.lmp (-var):
@@ -95,6 +107,10 @@ export SETTLE_HALT=0
 # -----------------------------------------------------------------------
 STRAINS_LIST=(0.1)
 export STRAINS="${STRAINS_LIST[*]}"
+export REF_AVG_STEPS=1000000  # gamma = 0 reference window (1 M steps, as the sweep: the reference every G subtracts)
+# ----- UNLOAD = where D_c is read (deck Phase 2c, 2026-10-28) -----
+export UNLOAD=1               # after the hold: grips back to gamma = 0 at vshear, then a relaxation hold, files _u<strain>
+export UNLOAD_STEPS=0         # relaxation hold length; 0 = NSTEPS
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1
