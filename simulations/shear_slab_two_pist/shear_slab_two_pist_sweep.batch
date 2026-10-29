@@ -102,6 +102,10 @@ export PISTON_MASS=1000
 export C_PIST_FRAC=1.0
 export NPT_PISTON_STEPS=1000000
 export SETTLE_HALT=0
+export SEAT_MODE=rg           # the grips seat on the Rg-based x-faces (com +/- L_rg/2 = the 50 %-density planes to 0.3 sigma), NOT on
+                              # the outermost bead: the loose shell (3-5 sigma of dangling strands per side, 1 % of the beads) is
+                              # swept in by the seating plate and gripped with the face, so the whole face is sheared.  The plates
+                              # in the data file are PARKED 3 sigma outside the outermost bead; the deck's Phase 1.25 moves them in.
 
 # ----- gamma = 0 reference window (Phase 1.5), -var ref_avg_steps; deck default 150000 -----
 export REF_AVG_STEPS=1000000
