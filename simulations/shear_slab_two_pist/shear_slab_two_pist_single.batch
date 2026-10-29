@@ -51,9 +51,16 @@ module load python/3.8.12
 # with add_more_plates_to_gel.py --layout x_plates.  The aligned lattice gave G ~ 0.17-0.19 in
 # shear (C44) against 0.04-0.06 on the compression side ((C11 - C12)/2): if that gap is the
 # cubic anisotropy of the diamond lattice, this gel must read G ~ 0.05-0.07 at the same strain.
-# UNLOAD=1 (deck Phase 2c, 2026-10-28): after the hold the grips go back to gamma = 0 and the
-# gel relaxes for UNLOAD_STEPS (0 = NSTEPS), files _u0.1 -- the transverse relaxation D_c is
-# read THERE (lib/shear.py fit_Dc_unload), nothing from the hold's own transient any more.
+# PLAIN LOAD-ONLY RUN (the user's call, 2026-10-28 late): default drive speed, no unload (UNLOAD=0), no fine
+# displacement file -- G of the random gel from the hold, as shear_4.  D_c IN SHEAR IS PARKED, see the
+# commented block below the UNLOAD knob for how to switch it back on (everything it needs is in place).
+#
+# WALL TIME (--time 16 h, the user's budget): ~11.6 M steps on 0.54 M atoms = Phase 0 50 k + settle 1 M +
+#   seating 300 k + reference 1 M + drive ~260 k + HOLD 9 M; needs >= 0.76 M steps/h in 15.3 h (16 h minus
+#   run_lammps.sh's 40 min WALL_MARGIN).  No local timing exists for this deck (the .o files stay on
+#   Expanse): shear_5_sweep did 15.3 M steps inside 36 h on the same gel size (>= 0.42 M/h), shear_4 10.8 M
+#   inside 48 h -- lower bounds only.  If the budget runs out the hold is cut short (wall_timeout guard)
+#   and its files are intact.
 #
 # shear_slab_two_pist.lmp on a gel that is periodic in NO direction -- a block equilibrated
 # free in its bath by slab_with_support_single.batch (BARO_MODE=iso, PIN_GEL=1), floating in a bath
@@ -89,8 +96,8 @@ INTERACTION="1.0_1.0"   # epsSS_epsSP
 #   Phase 1.25 (plate seating) t_seat 100000 + seat_settle_steps 200000,
 #   Phase 1.5 (gamma = 0 reference) 150000,
 #   Phase 2 (shear drive) halts at each strain target (~260k steps per 0.10, cap 570000).
-# The gel is ~52 x 52 x 115 sigma; the x_plates file holds 0.53 M atoms (69k in the two plates).
-NSTEPS=9000000
+# The gel is ~52 x 52 x 115 sigma; the x_plates file holds 0.54 M atoms (69k in the two plates).
+NSTEPS=9000000          # the hold, as shear_4
 TYPE=""
 PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run
 
@@ -112,9 +119,30 @@ export SEAT_MODE=rg           # the grips seat on the Rg-based x-faces (com +/- 
 STRAINS_LIST=(0.1)
 export STRAINS="${STRAINS_LIST[*]}"
 export REF_AVG_STEPS=1000000  # gamma = 0 reference window (1 M steps, as the sweep: the reference every G subtracts)
-# ----- UNLOAD = where D_c is read (deck Phase 2c, 2026-10-28) -----
-export UNLOAD=1               # after the hold: grips back to gamma = 0 at vshear, then a relaxation hold, files _u<strain>
-export UNLOAD_STEPS=0         # relaxation hold length; 0 = NSTEPS
+# ----- no unload (the sweep batch keeps UNLOAD=1, deck Phase 2c) -----
+export UNLOAD=0
+
+# ======================= D_c IN SHEAR -- PARKED 2026-10-28 (how to switch it back on) =======================
+# Two routes exist and both are fully wired (deck knobs default off, lib/shear.py fits + figures, notebook cells
+# that skip themselves without the files); docs/running_simulations.md section 5b "D_c in shear (parked)" has
+# the full account and the physics caveat (the shear relaxation is the viscous G/eta_s mode, D_c k^2 is a
+# few-% correction on it, so the compression unload stays the project's D_c).
+# (A) FROM THE HOLD'S OWN TRANSIENT (fast drive + fine displacement file): uncomment the four exports.
+#     export NSTEPS_SHEAR_BASE=300  # drive speed: steps a 0.10 increment takes (deck default 285000). Local sweep on THIS
+#                                   # file (2026-10-28, gamma 0.10): 1000 / 300 / 100 -> grip 0.43 / 1.45 / 4.34 sigma/tau,
+#                                   # 0 FENE warnings at all three, mobile T at the drive end 0.975 / 1.016 / 1.23 (100 cools
+#                                   # over ~5 tau of the hold -> give the thermostat a streaming-unbiased temp/profile first),
+#                                   # interior strain at the drive end 0.080 / 0.056 / 0.037
+#     export HALT_EVERY=3           # halt check every N steps (overshoot ~ strain rate x N); fix print cadence stays 1000
+#     export DISP_FINE_NFREQ=250    # fine displacement block (steps); 0 = off  -> disp_z_polymer_fine_*_g<strain>
+#     export DISP_FINE_SPAN=1000000 # hold steps the fine file covers (the drive is always covered)
+#     Analysis: lib/shear.py fit_Dc_fine (sin(2 pi k zhat) modes, diffusive vs one-time verdict), single notebook figure 9b,
+#     sweep notebook 7b; kappa falls back to the fine-file D_c.  Smoke-tested end to end 2026-10-28.
+# (B) FROM A PHASE 2c UNLOAD: export UNLOAD=1 and UNLOAD_STEPS=<steps> (0 = NSTEPS) -- grips back to gamma = 0, relaxation
+#     hold, files _u<strain>; lib fit_Dc_unload, notebook figures 9/11.  Its profile is block-averaged at NSTEPS/10, too
+#     coarse for the relaxation unless NSTEPS is small or the unload gets its own logger (not built); the deck skips the
+#     unload when the wall budget died inside the hold.
+# ============================================================================================================
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

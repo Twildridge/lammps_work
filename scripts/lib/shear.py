@@ -85,7 +85,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy import stats
-from scipy.optimize import minimize_scalar
+from scipy.optimize import curve_fit, minimize_scalar
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from matplotlib.lines import Line2D
@@ -189,6 +189,12 @@ class Config:
     DC_UNLOAD_N_MODES: int = 3            # sine modes sin(k pi zhat), k = 1..N (u = 0 at both grips) of the lag-profile fit
     DC_UNLOAD_BOUNDS: tuple = (1e-4, 100.0)   # D_c search interval; the one-tau (Kelvin-Voigt) alternative is fitted beside it
     DC_UNLOAD_SKIP: float = 0.0           # tau after the grips stop left out of the fit (0 = none)
+    # ---- the FINE displacement file (runs with DISP_FINE_NFREQ > 0 after a FAST drive; 2026-10-28: the shear D_c of a
+    #      load-only run is read HERE, from the hold's own transient; fit_Dc_fine, figure 9b) ----
+    DC_USE_FINE: bool = True              # read disp_x_polymer_fine when the run has it
+    DC_FINE_N_MODES: int = 3              # sine modes sin(2 pi k zhat) projected out of the lag profile per snapshot
+    DC_FINE_FIT_T: float = 0.0            # hold window (tau) the mode decays are fitted over; 0 = the whole fine file
+    DC_FINE_BOUNDS: tuple = (1e-4, 100.0) # D_c bounds of the joint diffusive fit (a 10-tau relaxation at L = 42 reads D_c ~ 4)
     # ---- Expanse ---------------------------------------------------------
     EXPANSE_HOST: str = 'login.expanse.sdsc.edu'
     EXPANSE_USER: str = 'dpollard'
@@ -786,6 +792,87 @@ def fit_Dc_unload(cfg, R, U, cum):
                 at_bound=bool(Dc <= cfg.DC_UNLOAD_BOUNDS[0] * 1.02 or Dc >= cfg.DC_UNLOAD_BOUNDS[1] / 1.02))
 
 
+def _fine_curve_idx(F, n):
+    """Hold snapshots to draw: n of them, denser early (the relaxation) than late."""
+    h = np.where(F['hold'])[0]
+    if len(h) <= n:
+        return h
+    pick = np.unique(np.round(np.geomspace(1, len(h), n)).astype(int) - 1)
+    return h[pick]
+
+
+def fit_Dc_fine(cfg, R, fine, cum, L):
+    """Transverse relaxation from the FINE displacement file (isolated deck, disp_fine_nfreq > 0,
+    2026-10-22, restored 2026-10-28 as THE shear D_c after a fast drive): the cumulative u_x(z)
+    every disp_fine_nf steps over the drive and the first disp_fine_span steps of the hold.  The late plateau of the coarse _cum file (the same quantity
+    on the same bins) is the reference, so the hold-onset displace/atom snapshot drops out:
+        du(zhat, t) = [u_late(zhat) - u(zhat, t)] / L        (the lag still to relax)
+    projected per snapshot on sin(2 pi k zhat), k = 1..DC_FINE_N_MODES (least squares over the
+    bulk bins) -> a_k(t); each a_k over the hold is fitted with A_k exp(-t/tau_k) + c_k.
+    Readings: tau_k; the diffusive (Tanaka-Fillmore) reading D_c,k = L^2/(4 pi^2 k^2 tau_k),
+    the same for every k if the modes are diffusive; and 1/tau_1 as the Kelvin-Voigt rate G/eta_s
+    of the two-fluid picture (the same tau for every k).  A joint fit with one D_c and a joint
+    fit with one tau (free amplitudes and offsets) are compared by their residuals -> `pref`."""
+    if fine is None or cum is None or L.get('t_hold') is None:
+        return None
+    B = _disp_bins(cfg, R, fine)
+    if B is None:
+        return None
+    zhat_all, idx = B
+    Lp = float(R['plate_sep'])
+    late = cum['ts'] >= L['halt_ts']
+    if late.sum() < 1:
+        late[-1] = True
+    u_late_c = cum['ux'][late].mean(axis=0)
+    u_late = u_late_c if len(u_late_c) == fine['ux'].shape[1] else np.interp(fine['zf'], cum['zf'], u_late_c)
+    du = (u_late[None, :] - fine['ux']) / Lp
+    t_lj = (fine['ts'] - L['t_hold']) * cfg.dt_lj
+    zf = zhat_all[idx]
+    kk = np.arange(1, cfg.DC_FINE_N_MODES + 1, dtype=float)
+    S = np.sin(2.0 * np.pi * np.outer(zf, kk))                       # (n_bins, n_modes)
+    a = np.linalg.lstsq(S, du[:, idx].T, rcond=None)[0].T            # (n_t, n_modes)
+    hold = t_lj >= 0
+    if hold.sum() < 6:
+        return None
+    w = hold & (t_lj <= (cfg.DC_FINE_FIT_T if cfg.DC_FINE_FIT_T else np.inf))
+    th, ah = t_lj[w], a[w]
+    n_tail = max(3, len(th) // 5)
+    modes = []
+    for j, k in enumerate(kk):
+        y = ah[:, j]
+        c0 = float(y[-n_tail:].mean()); A0 = float(y[0] - c0)
+        noise = float(y[-n_tail:].std())
+        try:
+            popt, pcov = curve_fit(lambda t, A, tau, c: A * np.exp(-t / tau) + c, th, y, p0=(A0, max(th[-1] / 5.0, 1e-3), c0),
+                                   bounds=([-np.inf, 1e-3, -np.inf], [np.inf, 1e7, np.inf]), maxfev=20000)
+            perr = np.sqrt(np.diag(pcov))
+        except Exception:
+            popt, perr = (A0, np.nan, c0), (np.nan, np.nan, np.nan)
+        A, tau, c = (float(v) for v in popt)
+        modes.append(dict(k=int(k), A=A, tau=tau, tau_err=float(perr[1]), c=c, noise=noise,
+                          Dc=float(Lp ** 2 / (4.0 * np.pi ** 2 * k ** 2 * tau)) if np.isfinite(tau) and tau > 0 else np.nan,
+                          snr=float(abs(A) / noise) if noise > 0 else np.nan))
+    # joint fits over the hold window (free amplitude + offset per mode): one D_c vs one tau
+    Y = du[w][:, idx].ravel()
+
+    def _resid(E):                                                   # E: (n_t, n_modes) decay factors
+        X = np.vstack([np.hstack([E[i][None, :] * S, S]) for i in range(len(th))])
+        coef = np.linalg.lstsq(X, Y, rcond=None)[0]
+        return float(np.sum((X @ coef - Y) ** 2))
+    r_diff = lambda Dc: _resid(np.exp(-4.0 * np.pi ** 2 * np.outer(th, kk ** 2) * Dc / Lp ** 2))
+    r_one = lambda lt: _resid(np.exp(-np.outer(th, np.ones_like(kk)) / np.exp(lt)))
+    Dc_joint = float(minimize_scalar(r_diff, bounds=cfg.DC_FINE_BOUNDS, method='bounded').x)
+    tau_joint = float(np.exp(minimize_scalar(r_one, bounds=(np.log(1e-2), np.log(1e6)), method='bounded').x))
+    res_d, res_1 = r_diff(Dc_joint), r_one(np.log(tau_joint))
+    ratio = res_1 / res_d if res_d > 0 else np.nan
+    pref = 'diffusive (tau_k ~ 1/k^2)' if ratio > 1.1 else ('one time for every mode (Kelvin-Voigt)' if ratio < 1 / 1.1 else 'undecided')
+    dt_snap = float(np.median(np.diff(fine['ts']))) * cfg.dt_lj if len(fine['ts']) > 1 else np.nan
+    return dict(t_lj=t_lj, du=du, a=a, idx=idx, zf=zf, zhat_all=zhat_all, kk=kk, S=S, hold=hold, w=w, modes=modes, L=Lp,
+                Dc_joint=Dc_joint, tau_joint=tau_joint, res_ratio=float(ratio), pref=pref, n_hold=int(hold.sum()),
+                n_drive=int((~hold).sum()), dt_snap=dt_snap, hold_T=float(t_lj[-1]), ts=fine['ts'],
+                at_bound=(Dc_joint >= 0.999 * cfg.DC_FINE_BOUNDS[1] or Dc_joint <= 1.001 * cfg.DC_FINE_BOUNDS[0]))
+
+
 def _finish_unload(cfg, R, L, say):
     """Residual stresses of the Phase 4 unload hold (gamma driven back to 0): plateau
     sigma'_xz (profile interior), sigma^t_xz (series) and the plate sigma_xz, each as an
@@ -1153,12 +1240,33 @@ def load_level(cfg, R, lvl, verbose=True, phase='c'):
                 if L['kappa']:
                     say('  kappa = D_c(unload)/G:  ' + '   '.join(f"{k}: {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" for k, v in L['kappa'].items()))
         else:
-            say('  no unload files for this level (run without UNLOAD=1): D_c and kappa skipped')
+            say('  no unload files for this level (run without UNLOAD=1): D_c from the unload skipped')
+    L['Dc_val'], L['Dc_src'] = (L['Dc']['Dc'], 'unload relaxation') if L['Dc'] is not None else (None, None)
+    # ---- the FINE file (DISP_FINE_NFREQ runs, fast drive): the hold's own transient; the D_c of a load-only run ----
+    L['Dc_fine'] = None
+    if cfg.DC_USE_FINE and phase == 'c':
+        fine = read_disp(cfg.path('disp_x_polymer_fine', lvl))
+        if fine is not None:
+            L['Dc_fine'] = fit_Dc_fine(cfg, R, fine, read_disp(cfg.path('disp_x_polymer_cum', lvl)), L)
+    if L['Dc_fine'] is not None:
+        F = L['Dc_fine']
+        say(f"  FINE file: {F['n_drive']} drive + {F['n_hold']} hold snapshots every {F['dt_snap']:.2f} tau, hold window {F['hold_T']:.0f} tau;  "
+            f"mode times tau_k = " + ', '.join(f"{m['tau']:.1f}" for m in F['modes']) + ' tau  (S/N '
+            + ', '.join(f"{m['snr']:.1f}" for m in F['modes']) + ')')
+        say(f"    diffusive reading per mode D_c,k = " + ', '.join(f"{m['Dc']:.3g}" for m in F['modes'])
+            + f" sigma^2/tau;  joint one-D_c fit {F['Dc_joint']:.3g}{' (AT BOUND)' if F['at_bound'] else ''};  joint one-tau fit {F['tau_joint']:.1f} tau"
+            f" (= G/eta_s rate {1.0 / F['tau_joint']:.3g}/tau);  residual one-tau / diffusive = {F['res_ratio']:.2f} -> {F['pref']}")
+        if L['Dc'] is None and not F['at_bound']:          # no unload: kappa from the fine-file joint D_c
+            L['Dc_val'], L['Dc_src'] = F['Dc_joint'], 'hold transient (fine file, joint one-D_c fit)'
+            for key in ('net', 'ser'):
+                Gd = L['G'].get(key)
+                if Gd and Gd['G'] > 0 and Gd['lo'] > 0:
+                    L['kappa'][key] = dict(k=F['Dc_joint'] / Gd['G'], lo=F['Dc_joint'] / Gd['hi'], hi=F['Dc_joint'] / Gd['lo'])
+            if L['kappa']:
+                say('  kappa = D_c(fine)/G:  ' + '   '.join(f"{k}: {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" for k, v in L['kappa'].items()))
+    elif phase == 'c':
+        say('  no fine displacement file for this level (DISP_FINE_NFREQ = 0 run): D_c from the hold transient skipped')
     return L
-
-
-# ===========================================================================
-#  5. EXPANSE SYNC    return L
 
 
 # ===========================================================================
@@ -1168,7 +1276,7 @@ _REF_DAT = ('stress_tensor_polymer_ref', 'stress_tensor_solvent_ref', 'stress_pr
             'stress_profile_z_solvent_ref', 'stress_series_ref', 'disp_x_polymer_cum_ref')
 _RUN_DAT = ('shear_strain', 'shear_strain_rg', 'plate_pressure', 'box_dimensions', 'box_bounds', 'gel_dimensions_rg', 'gel_volume_rg', 'gel_volume_bb')
 _PROD_DAT = ('stress_tensor_polymer', 'stress_tensor_solvent', 'stress_profile_z_polymer', 'stress_profile_z_solvent',
-             'stress_series', 'shear_strain', 'shear_strain_surface', 'disp_x_polymer_cum',
+             'stress_series', 'shear_strain', 'shear_strain_surface', 'disp_x_polymer_cum', 'disp_x_polymer_fine',
              'gel_dimensions_rg',
              'gel_dimensions_bb', 'gel_volume_rg', 'gel_volume_bb', 'box_dimensions', 'polymer_com')
 _REQUIRED = ('stress_tensor_polymer', 'stress_profile_z_polymer', 'shear_strain')
@@ -1630,6 +1738,55 @@ def fig_Dc_unload(cfg, R, L):
     return _save(fig, cfg, 'Dc_unload_fit', L['lvl'])
 
 
+def fig_Dc_fine(cfg, R, L):
+    """Fine-cadence relaxation at the start of the hold (DISP_FINE_NFREQ runs): (a) the lag still to
+    relax, [u_late - u(zhat, t)]/L, hold snapshots (drive snapshots grey); (b) its sine-mode amplitudes
+    a_k(t) over the hold with the exponential fits; (c) |a_k - c_k| / |A_k| on a log axis (a straight
+    line = one exponential; parallel lines = one time for every mode, slopes ~ k^2 = diffusive)."""
+    F = L.get('Dc_fine')
+    if F is None:
+        print('fine D_c figure skipped (no disp_x_polymer_fine file for this level: DISP_FINE_NFREQ = 0 run)')
+        return None
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(24, 7), constrained_layout=True)
+    hi = _fine_curve_idx(F, cfg.n_curves)
+    cmap = plt.cm.viridis
+    tmax = max(float(F['t_lj'][hi[-1]]), 1e-9)
+    norm = Normalize(vmin=0.0, vmax=tmax)
+    for i in np.where(~F['hold'])[0][-5:]:
+        ax1.plot(F['zf'], F['du'][i][F['idx']], '-', color='0.75', lw=1.0)
+    for i in hi:
+        ax1.plot(F['zf'], F['du'][i][F['idx']], 'o-', color=cmap(norm(F['t_lj'][i])), ms=3, lw=1.3, alpha=0.8)
+    ax1._tri_has_colorbar = True
+    ax1.axhline(0, color='0.5', lw=1, alpha=0.6)
+    ax1.set(xlabel=r'$\hat z$', ylabel=r'$[u_{\rm late}-u_x(\hat z,t)]\,/\,L$', xlim=(0, 1))
+    ax1.set_title(f'(a) lag still to relax, hold snapshots every {F["dt_snap"]:.2f} $\\tau$ (grey: last drive snapshots)', fontsize=13)
+    ax1.grid(alpha=0.3)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
+    fig.colorbar(sm, ax=ax1, fraction=0.04, pad=0.02).set_label(r'hold time  ($\tau$)')
+    cols = [WONG['blue'], WONG['vermillion'], WONG['green'], WONG['orange'], WONG['reddishpurple']]
+    th = F['t_lj'][F['hold']]
+    for j, m in enumerate(F['modes']):
+        c = cols[j % len(cols)]
+        ax2.plot(th, F['a'][F['hold'], j], '.', color=c, ms=4, alpha=0.6, label=fr"$k={m['k']}$: $\tau_k={sig(m['tau'])}\,\tau$, $D_{{c,k}}={sig(m['Dc'])}$")
+        if np.isfinite(m['tau']):
+            tt = np.linspace(0, th[-1], 300)
+            ax2.plot(tt, m['A'] * np.exp(-tt / m['tau']) + m['c'], '-', color=c, lw=2)
+            y = (F['a'][F['hold'], j] - m['c']) / m['A'] if m['A'] != 0 else np.full_like(th, np.nan)
+            ax3.plot(th, np.abs(y), '.', color=c, ms=4, alpha=0.6, label=fr"$k={m['k']}$")
+            ax3.plot(tt, np.exp(-tt / m['tau']), '-', color=c, lw=2)
+    ax2.axhline(0, color='0.5', lw=1, alpha=0.6)
+    ax2.set(xlabel=r'hold time  ($\tau$)', ylabel=r'$a_k(t)$  (mode amplitude of the lag, $/L$)')
+    ax2.set_title('(b) sine-mode amplitudes over the hold + exponential fits', fontsize=13)
+    ax2.grid(alpha=0.3); smart_legend(ax2, fontsize=11)
+    ax3.set_yscale('log'); ax3.set_ylim(1e-3, 2)
+    ax3.set(xlabel=r'hold time  ($\tau$)', ylabel=r'$|a_k - c_k|\,/\,|A_k|$')
+    ax3.set_title(fr"(c) normalised decays:  joint one-$D_c$ fit {sig(F['Dc_joint'])}, joint one-$\tau$ fit {sig(F['tau_joint'])} $\tau$", fontsize=13)
+    ax3.grid(alpha=0.3, which='both'); smart_legend(ax3, fontsize=11)
+    fig.suptitle(f"Transverse relaxation from the FINE displacement file, level {cfg.gsuf(L['lvl'])}  |  {cfg.sim_name}  |  "
+                 f"$L={sig(F['L'])}\\,\\sigma$;  residual one-$\\tau$ / diffusive = {F['res_ratio']:.2f}: {F['pref']}", fontsize=12, fontweight='bold')
+    return _save(fig, cfg, 'Dc_fine', L['lvl'])
+
+
 def fig_kappa(cfg, R, L):
     """kappa = D_c/G for the network and the series G (CI propagated from G)."""
     K = L.get('kappa')
@@ -1646,7 +1803,7 @@ def fig_kappa(cfg, R, L):
                     label=f"{lab} = {sig(v['k'])}")
     ax.set_xticks([0, 1]); ax.set_xticklabels(['network $G$', 'series $G$'], fontsize=16)
     ax.set_ylabel(r'$\kappa = D_c/G$  (LJ: $\sigma^5/(\epsilon\,\tau)$)')
-    ax.set_title(f'Hydraulic permeability $\\kappa = D_c/G$  ($D_c$ from the unload relaxation)\n$D_c = {sig(L["Dc"]["Dc"])}$  |  $\\gamma = {sig(L["gamma"], 4)}$', fontsize=15)
+    ax.set_title(f'Hydraulic permeability $\\kappa = D_c/G$  ($D_c$ from the {L.get("Dc_src") or "unload relaxation"})\n$D_c = {sig(L["Dc_val"])}$  |  $\\gamma = {sig(L["gamma"], 4)}$', fontsize=15)
     ax.set_xlim(-0.5, 1.5); ax.grid(axis='y', alpha=0.3)
     smart_legend(ax, fontsize=13)
     return _save(fig, cfg, 'kappa', L['lvl'])
@@ -2063,6 +2220,47 @@ def fig_normal_sweep(cfg, R, levels):
     ax.set_title(r'Normal stress differences vs strain (plateau means; both $\rightarrow 0$ for a linear isotropic network)', fontsize=12)
     ax.grid(alpha=0.3); smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'sweep_normal_stress')
+
+
+def fig_Dc_fine_sweep(cfg, R, levels):
+    """Fine-file relaxation across the sweep: (a) mode times tau_k vs strain, (b) their diffusive readings
+    D_c,k = L^2/(4 pi^2 k^2 tau_k) (collapse = diffusive; spread as 1/k^2 = one time for every mode),
+    then one panel per level with a_k(t) and the fits."""
+    hd = [L for L in levels if L.get('Dc_fine') is not None]
+    if not hd:
+        print('fine D_c sweep figure skipped (no fine files)')
+        return None
+    n = len(hd)
+    fig, axes = plt.subplots(1, n + 2, figsize=(13 + 5.5 * n, 6), constrained_layout=True)
+    fig.suptitle(f'Transverse relaxation from the FINE displacement files across the sweep  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    cols = [WONG['blue'], WONG['vermillion'], WONG['green'], WONG['orange'], WONG['reddishpurple']]
+    g = np.array([L['gamma'] for L in hd])
+    nk = max(len(L['Dc_fine']['modes']) for L in hd)
+    for j in range(nk):
+        tau = np.array([L['Dc_fine']['modes'][j]['tau'] if j < len(L['Dc_fine']['modes']) else np.nan for L in hd])
+        Dc = np.array([L['Dc_fine']['modes'][j]['Dc'] if j < len(L['Dc_fine']['modes']) else np.nan for L in hd])
+        axes[0].plot(g, tau, 'o-', color=cols[j % len(cols)], ms=8, lw=1.8, label=fr'$k={j + 1}$')
+        axes[1].plot(g, Dc, 'o-', color=cols[j % len(cols)], ms=8, lw=1.8, label=fr'$k={j + 1}$')
+    axes[0].plot(g, [L['Dc_fine']['tau_joint'] for L in hd], 'k--', lw=1.5, label=r'joint one-$\tau$ fit')
+    axes[1].plot(g, [L['Dc_fine']['Dc_joint'] for L in hd], 'k--', lw=1.5, label=r'joint one-$D_c$ fit')
+    axes[0].set(xlabel=r'held shear strain  $\gamma$', ylabel=r'$\tau_k$  ($\tau$)', yscale='log'); axes[0].set_title(r'(a) mode relaxation times', fontsize=14)
+    axes[1].set(xlabel=r'held shear strain  $\gamma$', ylabel=r'$D_{c,k}=L^2/(4\pi^2k^2\tau_k)$  ($\sigma^2/\tau$)', yscale='log')
+    axes[1].set_title(r'(b) diffusive reading per mode', fontsize=14)
+    for ax in axes[:2]:
+        ax.margins(x=0.12); ax.grid(alpha=0.3, which='both'); smart_legend(ax, fontsize=11)
+    for k, L in enumerate(hd):
+        ax = axes[k + 2]; F = L['Dc_fine']; th = F['t_lj'][F['hold']]
+        for j, m in enumerate(F['modes']):
+            c = cols[j % len(cols)]
+            ax.plot(th, F['a'][F['hold'], j], '.', color=c, ms=3, alpha=0.5)
+            if np.isfinite(m['tau']):
+                tt = np.linspace(0, th[-1], 300)
+                ax.plot(tt, m['A'] * np.exp(-tt / m['tau']) + m['c'], '-', color=c, lw=2, label=fr"$k={m['k']}$: $\tau_k={sig(m['tau'])}$")
+        ax.axhline(0, color='0.5', lw=1, alpha=0.6)
+        ax.set(xlabel=r'hold time  ($\tau$)', ylabel=r'$a_k(t)$  ($/L$)')
+        ax.set_title(fr"({'cdefghij'[k]}) $\gamma={sig(L['gamma'], 3)}$:  {F['pref'].split(' (')[0]}", fontsize=12, color=level_color(levels.index(L)))
+        ax.grid(alpha=0.3); smart_legend(ax, fontsize=10)
+    return _save(fig, cfg, 'sweep_Dc_fine')
 
 
 def fig_Dc_sweep(cfg, R, levels):

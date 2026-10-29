@@ -157,6 +157,9 @@
 #                                                       gamma = 0 reference: its interior slope is the network strain G divides
 #                                                       by (+ _cum_ref_${stem}: its zero); in the unload (_u<γ>) its lag to the
 #                                                       late plateau is the transverse relaxation D_c is read from
+#   displacement_data/disp_z_polymer_fine_${stem}_g<γ>.dat  (disp_fine_nfreq > 0) the same u_z(x) every disp_fine_nf steps from the
+#                                                       drive start through the first disp_fine_span hold steps: the hold's own
+#                                                       transverse transient after a FAST drive, where D_c is read (fit_Dc_fine)
 #   volume_data/{gel_volume_bb,gel_dimensions_bb,gel_volume_rg,gel_dimensions_rg,box_dimensions,polymer_com}_${stem}_g<γ>.dat
 # gamma = 0 REFERENCE (Phase 1.5): the stress / profile / disp_cum files above with the tag _ref_${stem}.
 # Whole-run (stem only, from step 0):
@@ -235,6 +238,25 @@ variable core_margin_z index 20.0   # core stops this far inside each free z fac
 # ----- Output Frequencies -----
 variable thermo_freq index 250000
 variable stress_freq index 1000     # fix print cadence (strain, gel/box dims, COM)
+# ----- Halt-check cadence (2026-10-28): the drive's `fix halt` tests gamma every halt_every steps (0 = stress_freq).
+# A fast drive (nsteps_shear_base 1000 = a 0.10 increment in ~900 steps) needs ~10 to keep the overshoot at ~0.001
+# without pushing the fix print cadence that high; HALT_EVERY in the batch (run_lammps.sh -var halt_every).
+variable halt_every index 0
+variable halt_chk   equal floor((v_halt_every>0)*v_halt_every+(v_halt_every<=0)*v_stress_freq)
+
+# ----- Fine-cadence displacement profile (2026-10-22, restored 2026-10-28; DISP_FINE_NFREQ / DISP_FINE_SPAN in the batch) -----
+# disp_fine_nfreq > 0: the cumulative polymer displacement u_z(x) (v_uz_cum, the quantity and the bins of
+# disp_z_polymer_cum) is ALSO block-averaged every disp_fine_nfreq steps, from the start of each level's
+# drive through the first disp_fine_span steps of its hold -> disp_z_polymer_fine_*_g<strain>.dat.  The
+# standard file's first block closes nfreq_stress (hold/10) into the hold, long after any transverse
+# relaxation; this file is where D_c is read from the hold's own transient (lib/shear.py fit_Dc_fine:
+# the lag to the late plateau of the coarse _cum file, sine modes, diffusive vs one-time reading).
+# It needs a FAST drive (nsteps_shear_base, halt_every) so the interior is left behind.  0 = off.
+variable disp_fine_nfreq   index 0
+variable disp_fine_span    index 100000   # hold steps the fine file covers (the drive before them is always covered)
+variable disp_fine_nevery  equal 10
+variable disp_fine_nrepeat equal floor(${disp_fine_nfreq}/v_disp_fine_nevery)
+variable disp_fine_nf      equal v_disp_fine_nevery*v_disp_fine_nrepeat
 variable volume_freq index 5000     # piston logs
 
 # ---- UNLOAD (Phase 2c, optional: -var unload 1 / UNLOAD=1 in the batch; 2026-10-28) ----
@@ -276,6 +298,7 @@ variable nevery_stress equal floor(v_nfreq_raw/v_nrepeat_stress)
 variable nfreq_stress  equal v_nevery_stress*v_nrepeat_stress
 print ">>> Stress averaging: nevery=${nevery_stress}  nrepeat=${nrepeat_stress}  nfreq=${nfreq_stress}"
 print ">>> Unload after every hold: ${unload} (1 = grips back to gamma = 0 at vshear, then unload_steps=${unload_steps} steps of relaxation (0 = nsteps); files _u<strain>)"
+print ">>> Fine displacement profile: every ${disp_fine_nf} steps over the drive + the first ${disp_fine_span} hold steps (0 = off);  halt check every ${halt_chk} steps"
 print ">>> Mode: SHEAR, ISOLATED GEL in a two-piston bath (grip plates seated on the x-faces, driven -/+z; wet pistons hold the bath at P_target)"
 
 # ----- Spatial Binning -----
@@ -891,6 +914,7 @@ compute chunk_z_solvent   solvent chunk/atom bin/1d z lower ${binWidth_rz} units
 compute  displace_cum polymer displace/atom
 variable uz_cum atom c_displace_cum[3]
 compute  chunk_x_poly_cum polymer chunk/atom bin/1d x lower ${binWidth_rx} units reduced region reg_core_yz
+compute  chunk_x_poly_fine polymer chunk/atom bin/1d x lower ${binWidth_rx} units reduced region reg_core_yz   # fine-cadence file (own compute: chunk lock)
 
 
 # ==========================================================================
@@ -985,11 +1009,16 @@ fix out_polymer_com all print ${stress_freq} &
     "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
     file output_files/volume_data/polymer_com_${dataname}_${interaction}_${nsteps}_g${strains}.dat screen no
 
+# ----- fine-cadence u_z(x): from the drive start through the first disp_fine_span steps of the hold -----
+# (v_uz_cum is never reset, so one fix spans the drive run and the first hold segment; unfixed there)
+if "${disp_fine_nfreq} > 0" then &
+    "print '>>> [strain=${strains}] fine displacement profile: v_uz_cum every ${disp_fine_nf} steps (nevery=${disp_fine_nevery} nrepeat=${disp_fine_nrepeat}) over the drive + the first ${disp_fine_span} hold steps'" &
+    "fix avg_disp_fine polymer ave/chunk ${disp_fine_nevery} ${disp_fine_nrepeat} ${disp_fine_nf} chunk_x_poly_fine v_uz_cum file output_files/displacement_data/disp_z_polymer_fine_${dataname}_${interaction}_${nsteps}_g${strains}.dat"
 # ----- PHASE 2: drive -- the grips translate at -/+vshear (left -z, right +z) until gamma >= ${strains} -----
 # (all forces on the grips are zeroed by setforce, so the velocity set here persists unchanged)
 velocity grip_r set 0.0 0.0  ${vshear}
 velocity grip_l set 0.0 0.0 -${vshear}
-fix halt_shear all halt ${stress_freq} v_gamma >= ${strains} error continue
+fix halt_shear all halt ${halt_chk} v_gamma >= ${strains} error continue
 variable drive_dump_freq equal floor(${nsteps_shear_base}*1.1/5)
 if "${movie_open} == 1" then "dump_modify traj_setup every ${drive_dump_freq}"
 print ">>> [strain=${strains}] driving the grips at -/+${vshear} sigma/tau (z) until gamma >= ${strains} (cap ${nsteps_shear} steps)..."
@@ -1047,7 +1076,16 @@ print "========================================"
 print ">>> [strain=${strains}] measurement HOLD (grips frozen, stress relaxes) for ${hold_steps} steps (>= nsteps=${nsteps}, aligned to nfreq_stress=${nfreq_stress})"
 print ">>> [strain=${strains}] gamma = $(v_gamma:%.4f) (grips);  tracking-slab strain = $(v_gamma_trk:%.4f)"
 print "========================================"
-run ${hold_steps}
+# hold segment 1 carries the fine displacement fix (padded to a disp_fine_nf epoch, capped at the hold); segment 2 is the rest
+variable fine_run equal 0
+if "${disp_fine_nfreq} > 0" then "variable fine_run delete" "variable fine_run equal (floor(($(step)+${disp_fine_span}-1)/${disp_fine_nf})+1)*${disp_fine_nf}-$(step)"
+if "${fine_run} > ${hold_steps}" then "variable fine_run delete" "variable fine_run equal ${hold_steps}"
+if "${fine_run} > 0" then &
+    "print '>>> [strain=${strains}] hold segment 1: ${fine_run} steps with the fine displacement profile, then ${hold_steps} - ${fine_run} without'" &
+    "run ${fine_run}" &
+    "unfix avg_disp_fine"
+run $(v_hold_steps-v_fine_run)
+variable fine_run delete
 
 unfix avg_disp_x_cum
 unfix avg_prof_z_solv
@@ -1079,6 +1117,12 @@ variable drive_dump_freq delete
 # hold with the faces at gamma = 0, files _${nsteps}_u${strains}  (2026-10-28; see the UNLOAD knobs)
 # ==========================================================================
 if "${unload} == 0" then "jump SELF label_after_unload"
+# Budget spent inside this level (timer timeout fired: every later `run` would return at once and
+# the _u files would be headers only, which the notebook cannot read): skip the unload and go to
+# the loop exit; the hold's files are complete and the final write_data still runs.  2026-10-28.
+if "${wall_timeout} > 0 && $(timeremain) <= 0.0" then &
+    "print '>>> [unload ${strains}] SKIPPED: the wall-clock budget was spent inside the hold (lengthen --time or shorten NSTEPS / UNLOAD_STEPS)'" &
+    "jump SELF label_after_unload"
 
 print "########################################################"
 print "  UNLOAD after strain ${strains}: grips back to gamma = 0, relaxation hold"
@@ -1115,7 +1159,7 @@ fix uout_polymer_com all print ${stress_freq} &
 # ----- retraction: the grips translate back at -/+vshear until gamma <= 0 -----
 velocity grip_r set 0.0 0.0 -${vshear}
 velocity grip_l set 0.0 0.0  ${vshear}
-fix halt_unload all halt ${stress_freq} v_gamma <= 0.0 error continue
+fix halt_unload all halt ${halt_chk} v_gamma <= 0.0 error continue
 print ">>> [unload ${strains}] driving the grips back at -/+${vshear} sigma/tau until gamma <= 0 (cap ${nsteps_shear} steps)..."
 run ${nsteps_shear}
 unfix halt_unload

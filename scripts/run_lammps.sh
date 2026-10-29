@@ -26,7 +26,7 @@ if [ $# -lt 4 ]; then
     echo "  to continue a finished run, use continue_sim.sh instead of resubmitting this script"
     echo "  press_target: optional, overrides press_target in .lmp file (default: 1.5)"
     echo "  vel_seed: optional, RNG seed for create_velocity and fix langevin (default: 12345)"
-    echo "  env knobs: PISTON_TRANSPARENT BARO_MODE (slab_with_support); STRAINS / COMPRESSIONS (sweeps); REF_AVG_STEPS; NSTEPS_SHEAR_BASE DISP_FINE_SPAN STRESS_FREQ (shear fine run);"
+    echo "  env knobs: PISTON_TRANSPARENT BARO_MODE (slab_with_support); STRAINS / COMPRESSIONS (sweeps); REF_AVG_STEPS; NSTEPS_SHEAR_BASE DISP_FINE_NFREQ DISP_FINE_SPAN STRESS_FREQ HALT_EVERY (shear fast drive + fine file);"
     echo "             DP_PISTON PISTON_MASS C_PIST_FRAC NPT_PISTON_STEPS SETTLE_HALT (triaxial_*_two_pist)"
     echo "             DRIVE_SPLIT (triaxial_compression*: piston share of the gap closure, 0.5 = symmetric)"
     echo "             UNLOAD / UNLOAD_STEPS / UNLOAD_MARGIN (triaxial_compression_two_pist and compress_slab: re-swelling hold after each level)"
@@ -123,6 +123,8 @@ REF_AVG_STEPS=${REF_AVG_STEPS:-}
 NSTEPS_SHEAR_BASE=${NSTEPS_SHEAR_BASE:-}
 DISP_FINE_SPAN=${DISP_FINE_SPAN:-}
 STRESS_FREQ=${STRESS_FREQ:-}
+HALT_EVERY=${HALT_EVERY:-}                  # shear_slab_two_pist (2026-10-28): the drive's halt-check cadence alone (-var halt_every;
+                                            # 0 / unset = stress_freq), so a ~900-step drive can be halted every 10 steps
 
 # P-sweep parameters (only used for pure_solvent; ignored by other scripts)
 NSTEPS_EQ=200000    # equilibration steps per state point
@@ -333,6 +335,7 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     ${NSTEPS_SHEAR_BASE:+-var nsteps_shear_base "$NSTEPS_SHEAR_BASE"} \
     ${DISP_FINE_SPAN:+-var disp_fine_span "$DISP_FINE_SPAN"} \
     ${STRESS_FREQ:+-var stress_freq "$STRESS_FREQ"} \
+    ${HALT_EVERY:+-var halt_every "$HALT_EVERY"} \
     -in $LAMMPS_FILE &
 MPIRUN_PID=$!
 
