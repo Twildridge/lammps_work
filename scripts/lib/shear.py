@@ -408,7 +408,16 @@ def _geometry(cfg, R, lvl_for_fallback=None):
         ps = _first_col(cfg.path('shear_strain', lvl_for_fallback), 4, 2)
     R['plate_sep'] = float(ps[0]) if ps is not None else np.nan
     PP = tri.load2c(cfg.path('plate_pressure'), 5)
-    R['z_top_abs'], R['z_bot_abs'] = (float(PP[0, 1]), float(PP[0, 2])) if PP is not None else (np.nan, np.nan)
+    if PP is None:
+        R['z_top_abs'] = R['z_bot_abs'] = np.nan
+    elif cfg.iso:
+        # isolated-gel deck: x_face_* are live from step 0 and the seating (Phase 1.25) carries the plates
+        # ~5 sigma inward from the PARKED row-0 positions; the grips never move in x afterwards, so the
+        # last row is the seated plane.  (Until 2026-10-31 row 0 was used: the 'grip' lines sat outside
+        # the grip layers and the low-stress grip bins leaked into the interior mask.)
+        R['z_top_abs'], R['z_bot_abs'] = float(PP[-1, 1]), float(PP[-1, 2])
+    else:
+        R['z_top_abs'], R['z_bot_abs'] = float(PP[0, 1]), float(PP[0, 2])
     if np.isfinite(R['z_top_abs']) and not np.isfinite(R['plate_sep']):
         R['plate_sep'] = R['z_top_abs'] - R['z_bot_abs']
     BB = tri.load2c(cfg.path('box_bounds'), 7)
@@ -1496,6 +1505,155 @@ def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
         h.append(Patch(alpha=0, label=note)); lb.append(note)
         smart_legend(ax, handles=h, labels=lb, fontsize=12)
     return _save(fig, cfg, stem, L['lvl'])
+
+
+def fig_geometry(cfg, R, L=None, stem='geometry'):
+    """Schematic of the ISOLATED-gel shear cell in the NOTEBOOK frame (the deck's x <-> z are
+    relabelled at read time): (a) the (gap, drive) plane -- seated grips, free faces in the
+    bath, the measurement core; (b) the (gap, y) end view; (c) which total-stress component
+    is which.  The grip-normal traction N (net x-force on a grip / face area, plate file cols
+    N_r N_l) over the gamma = 0 reference window is the seated preload: the only reason the
+    total sigma_zz of figure 2 sits above P_bath while sigma_xx and sigma_yy sit on it."""
+    if not cfg.iso:
+        print('geometry figure: drawn for the isolated-gel deck (shear_slab_two_pist_iso) only')
+        return None
+    zb, zt = R.get('zf_bot', np.nan), R.get('zf_top', np.nan)
+    Lg, Ld, Ly = R['LZ'], R['LX'], R['LY']           # box lengths: gap axis (deck x), drive axis (deck z), y
+    if not all(np.isfinite(v) for v in (zb, zt, Lg, Ld, Ly)):
+        print('geometry figure skipped (plate planes / box unknown)')
+        return None
+    lvl = L['lvl'] if L is not None else cfg.STRAINS[0]
+    Gd = tri.load2c(cfg.path('gel_dimensions_bb', lvl), 4)
+    gel_d = float(np.nanmean(Gd[-20:, 3])) if Gd is not None else 0.7 * Ld      # deck lz_bb = extent along the drive
+    gel_y = float(np.nanmean(Gd[-20:, 2])) if Gd is not None else 0.7 * Ly
+    # deck defaults (shear_slab_two_pist.lmp): grip layer, plate stand-off, core margins, plate thickness
+    layer, cgap, cm_y, cm_d, tpl = 3.0, 1.12, 6.0, 20.0, 1.0
+    xl, xr = zb * Lg, zt * Lg                        # seated faces (absolute, gap axis)
+    d0, d1 = 0.5 * (Ld - gel_d), 0.5 * (Ld + gel_d)
+    y0, y1 = 0.5 * (Ly - gel_y), 0.5 * (Ly + gel_y)
+    # seated preload over the reference window
+    Npre = np.nan
+    PP = tri.load2c(cfg.path('plate_pressure'), 9)
+    Rf = R.get('ref')
+    if PP is not None:
+        m = (PP[:, 0] >= Rf['ts'][0]) & (PP[:, 0] <= Rf['ts'][-1]) if Rf is not None else PP[:, 0] >= 0.9 * PP[-1, 0]
+        if m.sum() >= 2:
+            Npre = float(np.nanmean(PP[m][:, 7:9]))
+    gam = L['gamma'] if L is not None else 0.0
+    Gn = (L or {}).get('G', {}).get('net', {}).get('G', np.nan)
+
+    fig, (axA, axB, axC) = plt.subplots(1, 3, figsize=(26, 9.5), constrained_layout=True, gridspec_kw=dict(width_ratios=[1.0, 1.0, 1.45]))
+    fig.suptitle(f'Geometry of the isolated-gel shear cell in the NOTEBOOK frame (deck $x \\leftrightarrow z$ relabelled)  |  '
+                 f'$\\gamma = {sig(gam, 4)}$  |  {cfg.sim_name}', fontsize=13, fontweight='bold')
+    bath = dict(facecolor=WONG['skyblue'], alpha=0.18, edgecolor='none')
+    gel = dict(facecolor='0.78', edgecolor='0.3', lw=1.2)
+    grip = dict(facecolor='none', edgecolor=WONG['vermillion'], hatch='////', lw=0)
+    plate = dict(facecolor='k', edgecolor='k')
+    core = dict(facecolor='none', edgecolor=WONG['blue'], ls=':', lw=2.0)
+    cB, cV, cO = WONG['blue'], WONG['vermillion'], WONG['orange']
+
+    def cell(ax, Lv, g0, g1, cm):
+        """bath, gel, grip layers, plates, core window in a (gap, v) view."""
+        ax.add_patch(plt.Rectangle((0, 0), Lg, Lv, **bath))
+        ax.add_patch(plt.Rectangle((xl, g0), xr - xl, g1 - g0, **gel))
+        ax.add_patch(plt.Rectangle((xl, g0), layer, g1 - g0, **grip))
+        ax.add_patch(plt.Rectangle((xr - layer, g0), layer, g1 - g0, **grip))
+        ax.add_patch(plt.Rectangle((xl - cgap - tpl, g0), tpl, g1 - g0, **plate))
+        ax.add_patch(plt.Rectangle((xr + cgap, g0), tpl, g1 - g0, **plate))
+        ax.add_patch(plt.Rectangle((0, g0 + cm), Lg, g1 - g0 - 2 * cm, **core))
+        for z in (zb, zt):
+            ax.axvline(z * Lg, color='k', ls='-.', lw=1.5, alpha=0.85)
+        ax.set_xlim(-0.5, Lg + 0.5); ax.set_ylim(-0.5, Lv + 0.5); ax.set_aspect('equal')
+        ax.set_xlabel(r'gap axis = notebook $z$ = deck $x$   [$\sigma$]')
+        ax.grid(alpha=0.25)
+
+    # ---------------- (a) side view: gap (horizontal) x drive (vertical) ----------------
+    ax = axA
+    cell(ax, Ld, d0, d1, cm_d)
+    for dd, lab in ((0.0, 'permeate'), (Ld - 2.0, 'feed')):                 # wet pistons at the drive-axis ends
+        ax.add_patch(plt.Rectangle((0, dd), Lg, 2.0, facecolor='0.45', edgecolor='k', lw=0.8))
+    ax.text(0.5 * Lg, Ld - 2.8, f'wet piston  ($P_{{\\rm bath}} = {sig(cfg.P_BARO)}$)', ha='center', va='top', fontsize=10.5, color='0.25')
+    dlt = 0.06 * gel_d                                                        # sheared outline, exaggerated
+    ax.add_patch(plt.Polygon([(xl, d0 - dlt), (xr, d0 + dlt), (xr, d1 + dlt), (xl, d1 - dlt)], closed=True,
+                             facecolor='none', edgecolor=cO, ls='--', lw=1.8))
+    aw = dict(arrowstyle='-|>', lw=2.5, color=cO, mutation_scale=22)
+    ax.annotate('', xy=(xr + cgap + 0.5, d1 + 0.5), xytext=(xr + cgap + 0.5, d1 - 12), arrowprops=aw)
+    ax.annotate('', xy=(xl - cgap - 0.5, d0 - 0.5), xytext=(xl - cgap - 0.5, d0 + 12), arrowprops=aw)
+    ax.text(xr + cgap + 2.2, d1 - 5, '$+v$', ha='left', va='center', fontsize=12, color=cO)
+    ax.text(xl - cgap - 2.2, d0 + 5, '$-v$', ha='right', va='center', fontsize=12, color=cO)
+    xm = 0.5 * (xl + xr)
+    ax.text(xm, d1 + dlt + 1.5, r'free face: $\sigma^t_{xx} = P_{\rm bath}$', ha='center', va='bottom', fontsize=11.5, color=cB)
+    ax.text(xm, d0 - dlt - 1.5, r'free face: $\sigma^t_{xx} = P_{\rm bath}$', ha='center', va='top', fontsize=11.5, color=cB)
+    ax.text(xm, 0.5 * Ld, r'$\sigma^t_{yy} = P_{\rm bath}$' + '\n(free $y$ faces,\ninto the page)', ha='center', va='center', fontsize=11.5, color=cB)
+    for x in (xl - cgap - tpl - 4.5, xr + cgap + tpl + 4.5):
+        ax.text(x, 0.5 * Ld, r'gripped face: $\sigma^t_{zz} = P_{\rm bath} + N$', rotation=90, ha='center', va='center', fontsize=11.5, color=cV)
+    ax.text(1.0, d0 + cm_d + 1.0, 'core', ha='left', va='bottom', fontsize=10.5, color=cB)
+    im = R.get('interior')
+    if im is not None and im.any():                                           # the profile figures' interior mask
+        zf = R['zf']; dz = cfg.binWidth / Lg
+        a, b = (zf[im].min() - 0.5 * dz) * Lg, (zf[im].max() + 0.5 * dz) * Lg
+        ax.annotate('', xy=(a, d0 - 14.0), xytext=(b, d0 - 14.0), arrowprops=dict(arrowstyle='|-|', lw=1.8, color='0.2', mutation_scale=6))
+        ax.text(0.5 * (a + b), d0 - 15.0, f'"interior" of the profile figures ({int(im.sum())} bins)', ha='center', va='top', fontsize=10, color='0.2')
+    for z in (zb, zt):
+        ax.text(z * Lg, Ld + 0.8, R.get('plane_label', 'grip'), ha='center', va='bottom', fontsize=9, color='0.25')
+    ax.set_ylabel(r'drive axis = notebook $x$ = deck $z$   [$\sigma$]')
+    ax.set_title('(a) side view: the (gap, drive) plane', pad=30)
+    sec = ax.secondary_xaxis('top', functions=(lambda v: v / Lg, lambda f: f * Lg))
+    sec.set_xlabel(r'$z/L$ of the profile figures', fontsize=11)
+
+    # ---------------- (b) end view: gap (horizontal) x y (vertical) ----------------
+    ax = axB
+    cell(ax, Ly, y0, y1, cm_y)
+    ax.text(xm, y1 + 1.2, r'free $y$ face: $\sigma^t_{yy} = P_{\rm bath}$', ha='center', va='bottom', fontsize=11.5, color=cB)
+    ax.text(xm, y0 - 1.2, r'free $y$ face: $\sigma^t_{yy} = P_{\rm bath}$', ha='center', va='top', fontsize=11.5, color=cB)
+    ax.text(xm, 0.5 * Ly, 'drive $\\pm v$ is\nout of / into the page\n(notebook $x$)', ha='center', va='center', fontsize=11.5, color=cO)
+    ax.text(0.5 * Lg, Ly - 0.8, 'bath, periodic in $y$ and along the gap axis', ha='center', va='top', fontsize=10.5, color='0.25')
+    ax.text(1.0, y0 + cm_y + 0.8, 'core', ha='left', va='bottom', fontsize=10.5, color=cB)
+    ax.set_ylabel(r'$y$ (same in both frames)   [$\sigma$]')
+    ax.set_title('(b) end view: the (gap, $y$) plane')
+    h = [Patch(facecolor='0.78', edgecolor='0.3', label='gel'), Patch(**grip, label='grip layer (rigid with its plate)'),
+         Patch(facecolor='k', label='grip plate (solvent-transparent)'), Patch(facecolor=WONG['skyblue'], alpha=0.35, label='solvent bath'),
+         Line2D([0], [0], color=cB, ls=':', lw=2, label='measurement core (profile bins)'),
+         Line2D([0], [0], color=cO, ls='--', lw=1.8, label='sheared outline (exaggerated)'),
+         Line2D([0], [0], color='k', ls='-.', lw=1.5, label='grip plane (seated face)')]
+    ax.legend(handles=h, loc='upper center', bbox_to_anchor=(0.5, -0.10), ncol=2, fontsize=10.5, frameon=False)
+
+    # ---------------- (c) what each component is ----------------
+    ax = axC
+    ax.set_axis_off()
+    ax.set_title('(c) which stress is which', loc='left')
+    npre = (f'$N = {Npre:.3f} = {Npre / cfg.P_BARO:.3f}\\,P_{{\\rm bath}}$ over the $\\gamma = 0$ reference' if np.isfinite(Npre)
+            else '$N$ = plate file cols N_r, N_l')
+    gg2 = (f'$G\\gamma^2 \\approx {Gn * gam**2:.4f} = {Gn * gam**2 / cfg.P_BARO:.3f}\\,P_{{\\rm bath}}$' if np.isfinite(Gn) and gam > 0
+           else '$G\\gamma^2$')
+    blocks = [
+        ('FRAME MAP  (lib/shear.py relabels the isolated deck at read time)', '0.15', 12, True),
+        ('notebook $z$ = gap axis = deck $x$  (the profile axis, $z/L$)\n'
+         'notebook $x$ = drive axis = deck $z$\n'
+         '$y$ = $y$', '0.15', 11.5, False),
+        ('TOTAL STRESS  $\\sigma^t$ = polymer + solvent virial, compression-positive, drawn / $P_{\\rm bath}$', '0.15', 12, True),
+        (r'$\sigma^t_{zz}$ (= deck $\sigma_{xx}$): normal to the GRIPPED faces.  The plates were seated onto the' '\n'
+         'gel (Phase 1.25) and are frozen in the gap direction, so this component is whatever the\n'
+         'seating left: $P_{\\rm bath} + N$,  ' + npre + '.\n'
+         'It is already there at $\\gamma = 0$ (the dashed reference hides under the plateau in fig. 2d).', cV, 11.5, False),
+        (r'$\sigma^t_{xx}$ (= deck $\sigma_{zz}$): normal to the FREE faces along the drive.  They sit in the bath,' '\n'
+         'so the gel swells/shrinks until $\\sigma^t_{xx} = P_{\\rm bath}$ (fig. 2b).', cB, 11.5, False),
+        (r'$\sigma^t_{yy}$: normal to the free $y$ faces, also in the bath  $\Rightarrow$  $P_{\rm bath}$ (fig. 2c).', cB, 11.5, False),
+        (r'$\sigma^t_{xz}$: the shear.  $S_{r}, S_{l}$ = traction at each grip (plate file); $G$ is read from the' '\n'
+         "network stress $\\sigma'_{xz} = \\sigma^t_{xz} - p_{\\rm pore}$ (fig. 5).", '0.15', 11.5, False),
+        ('WHY ONLY $\\sigma_{xz}$ MOVES UNDER SHEAR', '0.15', 12, True),
+        ('Simple shear at fixed gap and free lateral faces changes the normal stresses only at second\n'
+         'order, ' + gg2 + ', below the bin noise of fig. 2.  The $\\sigma^t_{zz}$ offset is the\n'
+         'seated preload, not a shear normal stress.', '0.15', 11.5, False),
+        ('stress_profile_x_* are the "$z$" profiles;  disp_z_polymer_* is $u_x$;  plate_pressure_* x_face_* are the\n'
+         'seated grip planes (dash-dot lines; the parked row-0 positions sit 5$\\sigma$ further out).', '0.4', 10.5, False),
+    ]
+    yy = 0.98
+    for txt, col, fs, bold in blocks:
+        ax.text(0.0, yy, txt, transform=ax.transAxes, ha='left', va='top', fontsize=fs, color=col,
+                fontweight=('bold' if bold else 'normal'), linespacing=1.35)
+        yy -= (0.042 if bold else 0.038 * (txt.count('\n') + 1) + 0.016)
+    return _save(fig, cfg, stem, lvl)
 
 
 def fig_total_stress(cfg, R, L):
