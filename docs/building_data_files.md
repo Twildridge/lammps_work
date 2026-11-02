@@ -71,7 +71,7 @@ Shear-modulus pipeline **from the periodic slab (the archived `shear_slab` deck,
 
 ### Workflow for a new gel
 
-1. Open `data_file_generator.ipynb` (isolated gel; pick `NETWORK`) or `slab_with_support_periodic.ipynb` (x/y-periodic slab).
+1. Open `data_file_generator.ipynb` (isolated gel; pick `NETWORK`) or `slab_with_support_periodic.ipynb` (x/y-periodic slab; `NETWORK = "tetrahedral" | "random"` since 2026-11-02, code in `lib/periodic_data_file_generator.py`, also a CLI: `python lib/periodic_data_file_generator.py --network random --output <file>` builds `slab_support_periodic_5beads_tall_rho04_random.data`, the reference slab's 9 × 9 × 23 cells with the lattice re-wired by bond switching periodic across x and y — strands and repulsions across the x/y boundaries are minimum-image, only the z faces are tethered; same recipe as the isolated random gel, start = the aligned lattice. It is the random-network input of the two-piston compression deck: `slab_with_support_periodic_random.batch` equilibrates it, `chain_random_periodic.batch` converts and submits; see `scripts/submit_random_periodic_pipeline.sh`).
 2. Set the unit-cell count, beads per chain, pre-swell and solvent density.
 3. Run all cells. The `.data` file lands in `../../lammps_data_files_local/`; its name encodes the parameters.
 4. Copy it to `~/Documents/lammps_data/input_data/` on the cluster and run the equilibration batch.

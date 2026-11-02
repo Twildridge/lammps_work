@@ -258,3 +258,7 @@ bash volmix_sweep.sh --from 6 --skip-slab
 **Analysis:** `volume_of_mixing.ipynb` ([§7b, Jupyter analysis notebooks](analysis.md#7b-jupyter-analysis-notebooks)) syncs `box_dimensions_*.dat` files from Expanse and computes ΔV_mix(P*).
 
 ---
+
+### Random-network periodic slab → two-piston compression, in one submission (2026-11-02)
+
+`bash scripts/submit_random_periodic_pipeline.sh` (once, from the login node) builds `slab_support_periodic_5beads_tall_rho04_random.data` into `input_data/` if it is missing (`lib/periodic_data_file_generator.py --network random`), submits `simulations/slab_with_support/slab_with_support_periodic_random.batch` (14 M steps, 4 nodes, 24 h, `PISTON_TRANSPARENT=1`, `BARO_MODE=aniso`, `CHAIN=1`) and then `simulations/triaxial_compression_two_pist/chain_random_periodic.batch` with `--dependency=afterany` on it. The bridge runs on one `shared` core when the slab job ends: it finds the `final_config_…_14000000.data` (continuation subdirs included; if the slab chained a continuation it re-submits itself after that job), copies it to `input_data/`, converts it with `lib/slab_two_pistons_periodic.py` (`…_two_pist.data`) and submits `triaxial_compression_two_pist_random.batch` (the `_single` protocol: ε = 0.10, `NSTEPS=9000000` hold, fine cadence, 25 M-step unload, 48 h). Outputs: `slab_periodic_random.o<job>.*`, `chain_random_periodic.o<job>.*`, `triax_comp2p_random.o<job>.*` in their simulation folders.

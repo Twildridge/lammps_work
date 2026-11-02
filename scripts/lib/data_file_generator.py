@@ -15,6 +15,46 @@ written file back and judges the strand-orientation statistics against random di
 """
 import numpy as np
 
+
+# ---------------------------------------------------------------------------
+# PERIODIC BOXES (2026-11-02): the bond-switching code below works on an isolated block
+# by default.  `periodic` = (Lx, Ly, Lz) with 0 for a non-periodic axis (the x/y-periodic
+# slab of periodic_data_file_generator.py passes (box_x, box_y, 0)) makes every strand
+# and repulsion distance a minimum-image distance and the neighbour trees toroidal along
+# those axes; junctions on a periodic axis have no faces, so none are tethered there.
+# periodic=None leaves the isolated path byte-identical to before.
+# ---------------------------------------------------------------------------
+def _min_image(d, periodic):
+    """Minimum-image displacement(s) d (..., 3) for the periodic axes of `periodic`."""
+    if periodic is None:
+        return d
+    d = np.array(d, dtype=float, copy=True)
+    for ax in range(3):
+        L = periodic[ax]
+        if L and L > 0:
+            d[..., ax] -= L * np.round(d[..., ax] / L)
+    return d
+
+
+def _wrap(P, periodic):
+    """Copy of P with the periodic coordinates wrapped into [0, L) (what cKDTree(boxsize=) needs)."""
+    if periodic is None:
+        return P
+    P = np.array(P, dtype=float, copy=True)
+    for ax in range(3):
+        L = periodic[ax]
+        if L and L > 0:
+            P[..., ax] = np.mod(P[..., ax], L)
+    return P
+
+
+def _tree(P, periodic):
+    """cKDTree of the junctions, toroidal along the periodic axes (boxsize 0 = open axis)."""
+    from scipy.spatial import cKDTree
+    if periodic is None:
+        return cKDTree(P)
+    return cKDTree(_wrap(P, periodic), boxsize=[float(L) if (L and L > 0) else 0.0 for L in periodic])
+
 # ---------------------------------------------------------------------------
 # RANDOM f = 4 NETWORK BY BOND SWITCHING (2026-10-25)
 #
@@ -50,12 +90,12 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 
-def _strand_energy(x, edges, r0, rep_pairs, rep_cut, w_rep, teth_idx, teth_rel, teth_mask, centre, w_teth, all_rel, w_all, all_w, free_scale, grad=True):
+def _strand_energy(x, edges, r0, rep_pairs, rep_cut, w_rep, teth_idx, teth_rel, teth_mask, centre, w_teth, all_rel, w_all, all_w, free_scale, periodic=None, grad=True):
     if free_scale:
         lam = x[-1]; P = x[:-1].reshape(-1, 3)
     else:
         lam = 1.0; P = x.reshape(-1, 3)
-    d = P[edges[:, 1]] - P[edges[:, 0]]
+    d = _min_image(P[edges[:, 1]] - P[edges[:, 0]], periodic)
     L = np.linalg.norm(d, axis=1)
     s = (L - r0) / r0
     E = np.sum(s * s)
@@ -65,7 +105,7 @@ def _strand_energy(x, edges, r0, rep_pairs, rep_cut, w_rep, teth_idx, teth_rel, 
         np.add.at(G, edges[:, 1], f)
         np.add.at(G, edges[:, 0], -f)
     if len(rep_pairs):
-        dr = P[rep_pairs[:, 1]] - P[rep_pairs[:, 0]]
+        dr = _min_image(P[rep_pairs[:, 1]] - P[rep_pairs[:, 0]], periodic)
         Lr = np.linalg.norm(dr, axis=1)
         m = Lr < rep_cut
         if m.any():
@@ -93,7 +133,7 @@ def _strand_energy(x, edges, r0, rep_pairs, rep_cut, w_rep, teth_idx, teth_rel, 
 
 
 def _relax_junctions(P, edges, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w,
-                     lam=1.0, free_scale=False, rounds=8, maxiter=80):
+                     lam=1.0, free_scale=False, rounds=8, maxiter=80, periodic=None):
     """L-BFGS on the junction positions (and the block scale when free_scale), in rounds so
     that the repulsion pair list follows the positions."""
     from scipy.optimize import minimize
@@ -101,11 +141,11 @@ def _relax_junctions(P, edges, r0, teth_idx, teth_rel, teth_mask, centre, rep_cu
     bonded = set(map(tuple, np.sort(edges, axis=1)))
     Ef = 0.0
     for _ in range(rounds):
-        pairs = cKDTree(P).query_pairs(1.6 * rep_cut, output_type='ndarray')
+        pairs = _tree(P, periodic).query_pairs(1.6 * rep_cut, output_type='ndarray')
         pairs = np.array([p for p in map(tuple, np.sort(pairs, axis=1)) if p not in bonded], dtype=np.int64).reshape(-1, 2)
         x0 = np.append(P.ravel(), lam) if free_scale else P.ravel()
         res = minimize(_strand_energy, x0, jac=True, method='L-BFGS-B',
-                       args=(edges, r0, pairs, rep_cut, w_rep, teth_idx, teth_rel, teth_mask, centre, w_teth, all_rel, w_all, all_w, free_scale),
+                       args=(edges, r0, pairs, rep_cut, w_rep, teth_idx, teth_rel, teth_mask, centre, w_teth, all_rel, w_all, all_w, free_scale, periodic),
                        options={'maxiter': maxiter})
         Pn = (res.x[:-1] if free_scale else res.x).reshape(-1, 3)
         if free_scale:
@@ -120,7 +160,7 @@ def _relax_junctions(P, edges, r0, teth_idx, teth_rel, teth_mask, centre, rep_cu
 def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0, seed=7,
                     T_hi=4.0, T_lo=0.01, n_sweeps=16, n_random=6, rep_cut=0.9, w_rep=1.0, w_teth=4.0, w_all=0.1,
                     max_len=1.9, max_len_hard=2.45, face_tol=0.3, keep_size=True, reset_anchors=False,
-                    face_full=True, anchor_jitter=0.25, forbid_lattice=True, log=print):
+                    face_full=True, anchor_jitter=0.25, forbid_lattice=True, periodic=None, log=print):
     """Return (P, edges, report).  P0 (n, 3) junction positions, edges0 (m, 2) int junction
     indices (any order), r0 the lattice strand length.  block_lo / block_hi: the block
     faces (junctions within face_tol * r0 of a face are tethered).
@@ -149,13 +189,18 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
     lattice strands that survive the randomising sweeps are switched away afterwards (a
     purge pass).  Without it 7 % of the strands were still lattice pairs, concentrated at
     the tethered faces; the big x-faces hold strands with no x component, which showed as
-    a 2 % deficit of x-strands through the whole block (second-rank texture)."""
+    a 2 % deficit of x-strands through the whole block (second-rank texture).
+    periodic (2026-11-02): (Lx, Ly, Lz) with 0 for an open axis, see _min_image above; the
+    x/y-periodic slab passes (box_x, box_y, 0) so that strands and repulsions across the
+    x/y boundaries are minimum-image and only the two z faces are tethered."""
     rng = np.random.default_rng(seed)
     P = P0.copy()
     n = len(P)
     rep_cut = rep_cut * r0
     face_mask = np.zeros((n, 3))
     for ax in range(3):
+        if periodic is not None and periodic[ax] and periodic[ax] > 0:
+            continue                              # a periodic axis has no faces
         face_mask[(P[:, ax] - block_lo[ax] < face_tol * r0) | (block_hi[ax] - P[:, ax] < face_tol * r0), ax] = 1.0
     teth_idx = np.flatnonzero(face_mask.any(axis=1))
     teth_mask = face_mask[teth_idx]
@@ -180,7 +225,10 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
         return (a, b) if a < b else (b, a)
 
     def elen(a, b):
-        return np.linalg.norm(P[a] - P[b])
+        return np.linalg.norm(_min_image(P[a] - P[b], periodic))
+
+    def slen(E):
+        return np.linalg.norm(_min_image(P[E[:, 1]] - P[E[:, 0]], periodic), axis=1)
 
     def sweep(T, n_trials, greedy=False):
         acc = 0
@@ -220,8 +268,8 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
         acc = sweep(T, m)
         accepted += acc
         E = edge_array()
-        P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale)
-        L = np.linalg.norm(P[E[:, 1]] - P[E[:, 0]], axis=1) / r0
+        P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic)
+        L = slen(E) / r0
         log(f"    sweep {k + 1:2d}  T {T:.3f}  accepted {acc:6d} (total {accepted:7d})  E/strand {Ef / m:.4f}  "
             f"strand length / r0: mean {L.mean():.3f}  max {L.max():.3f}  block scale {lam:.3f}")
         if reset_anchors and k + 1 == n_random:
@@ -235,7 +283,7 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
     extra = 0
     while accepted < target and extra < 10:
         acc = sweep(T_lo, m); accepted += acc; extra += 1
-        E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale)
+        E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic)
         log(f"    top-up {extra}  accepted {acc} (total {accepted})")
     # clean-up: every strand longer than max_len * r0 is attacked directly.  To remove a
     # strand A-C the pivot is another strand A-B of A (or C-B of C): A-C and B-D go, A-D
@@ -245,7 +293,7 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
 
     def shorten(limit, targets=None):
         E = edge_array()
-        L = np.linalg.norm(P[E[:, 1]] - P[E[:, 0]], axis=1) / r0
+        L = slen(E) / r0
         n_fixed = 0
         for a, c in (E[np.argsort(-L)] if targets is None else targets):
             if c not in adj[a]:          # already re-wired by an earlier move of this pass
@@ -276,10 +324,10 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
             # junctions as a rule): exchange partners with a strand E-F that has E near a and
             # F near c, (a-c, E-F) -> (a-F, E-c), degrees unchanged; the one move that can split
             # the graph, so it is undone if the network is no longer one piece.
-            tree = cKDTree(P)
+            tree = _tree(P, periodic)
             best = None
             for a_, c_ in ((a, c), (c, a)):
-                for E in tree.query_ball_point(P[a_], 2.5 * r0):
+                for E in tree.query_ball_point(_wrap(P[a_], periodic), 2.5 * r0):
                     if E == a_ or E == c_:
                         continue
                     for F in adj[E]:
@@ -317,22 +365,22 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
             if not left:
                 break
             nf = shorten(max_len, targets=left)
-            E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale)
+            E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic)
             log(f"    lattice purge {k + 1}: {len(left)} lattice strands left, {nf} switched away")
     for k in range(30):
         E = edge_array()
-        L = np.linalg.norm(P[E[:, 1]] - P[E[:, 0]], axis=1) / r0
+        L = slen(E) / r0
         if L.max() <= max_len:
             break
         nf = shorten(max_len)
         if nf == 0:
-            E = edge_array(); L = np.linalg.norm(P[E[:, 1]] - P[E[:, 0]], axis=1) / r0
+            E = edge_array(); L = slen(E) / r0
             for a, c in E[L > max_len]:
                 log(f"      stuck strand {a}-{c}: {L[(E[:, 0] == a) & (E[:, 1] == c)][0]:.2f} r0, degrees {len(adj[a])}/{len(adj[c])}, "
                     f"on face {bool(face_mask[a].any())}/{bool(face_mask[c].any())}")
             break
-        E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale)
-        L = np.linalg.norm(P[E[:, 1]] - P[E[:, 0]], axis=1) / r0
+        E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic)
+        L = slen(E) / r0
         log(f"    clean-up {k + 1}: {nf} long strands re-wired, max strand {L.max():.3f} r0, mean {L.mean():.3f}, "
             f"{int((L > max_len).sum())} still over {max_len}")
     # Strands still over the limit end on tethered low-functionality face junctions whose
@@ -340,7 +388,7 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
     # face, nothing else) and relax again.
     for k in range(3):
         E = edge_array()
-        L = np.linalg.norm(P[E[:, 1]] - P[E[:, 0]], axis=1) / r0
+        L = slen(E) / r0
         if L.max() <= max_len:
             break
         rel = np.unique(E[L > max_len].ravel())
@@ -349,11 +397,11 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
         for j in rel:
             if j in pos_in_teth:
                 teth_mask[pos_in_teth[j]] = 0.0     # a freed face junction may dent the face
-        P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale)
-        L = np.linalg.norm(P[E[:, 1]] - P[E[:, 0]], axis=1) / r0
+        P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic)
+        L = slen(E) / r0
         log(f"    release {k + 1}: {len(rel)} junctions freed from their tethers, max strand {L.max():.3f} r0, {int((L > max_len).sum())} still over {max_len}")
     E = edge_array()
-    L = np.linalg.norm(P[E[:, 1]] - P[E[:, 0]], axis=1) / r0
+    L = slen(E) / r0
     deg = np.array([len(s) for s in adj])
     assert np.array_equal(deg, deg0), "bond switching changed a functionality"
     assert len(E) == m, "bond switching changed the strand count"
@@ -387,7 +435,7 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
 # ---------------------------------------------------------------------------
 # Isotropy report
 # ---------------------------------------------------------------------------
-def _strand_vectors_from_data(data_file):
+def _strand_vectors_from_data(data_file, periodic=None):
     L = open(data_file).read().split('\n')
     ia = L.index('Atoms'); ib = L.index('Bonds')
     A = np.array([l.split()[:6] for l in L[ia + 2:ib] if l.strip()], dtype=float)
@@ -406,7 +454,7 @@ def _strand_vectors_from_data(data_file):
             while typ[idx[q]] != 1:
                 r = [s for s in adj[q] if s != p][0]; p, q = q, r
             if q > c:
-                vec.append(pos[idx[q]] - pos[idx[c]]); pairs.append((c, q))
+                vec.append(_min_image(pos[idx[q]] - pos[idx[c]], periodic)); pairs.append((c, q))
     deg = Counter(len(adj[c]) for c in cl)
     return np.array(vec), np.array(pairs), dict(sorted(deg.items())), pos[(typ == 1) | (typ == 2)]
 
@@ -435,13 +483,13 @@ def isotropy_metrics(V):
                 nx4=float(nx4), nx2ny2=float(nx2ny2), nx2nz2=float(nx2nz2), A_xz=float(A_xz))
 
 
-def surface_recess(cl, lo, hi, patch=4.0):
+def surface_recess(cl, lo, hi, patch=4.0, axes=(0, 1, 2)):
     """Height map of the six faces of a junction cloud: for every patch x patch window of
     a face, how far inside the nominal face (lo / hi of the cloud) the outermost junction
     sits.  Returns mean / sd / max recess (sigma) and the fractions of patches recessed by
     more than 2 and 4 sigma.  A lattice block gives ~0."""
     rec = []
-    for ax in range(3):
+    for ax in axes:
         u, v = [a for a in range(3) if a != ax]
         nu = max(int(round((hi[u] - lo[u]) / patch)), 1); nv = max(int(round((hi[v] - lo[v]) / patch)), 1)
         iu = np.minimum(((cl[:, u] - lo[u]) / (hi[u] - lo[u]) * nu).astype(int), nu - 1)
@@ -457,7 +505,7 @@ def surface_recess(cl, lo, hi, patch=4.0):
                 frac2=float((rec > 2).mean()), frac4=float((rec > 4).mean()))
 
 
-def verify_network_isotropy(data_file, label=None, seed=0, n_ref=20, face_depth=None, log=print):
+def verify_network_isotropy(data_file, label=None, seed=0, n_ref=20, face_depth=None, log=print, periodic=None):
     """Read a gel data file back and print the orientation report of its strands next to
     the same numbers for as many random directions (mean +/- sd over n_ref draws).  The
     strands are also split into INTERIOR (midpoint more than face_depth inside the
@@ -469,21 +517,24 @@ def verify_network_isotropy(data_file, label=None, seed=0, n_ref=20, face_depth=
     The equilibration run relaxes that skin with the pre-stretch; the shear deck's grips
     and core margins sit on it.  The verdict is the interior's: each metric within 3 sd
     of random directions.
+    periodic (2026-11-02): (Lx, Ly, 0) for the x/y-periodic slab -- strand vectors are then
+    minimum-image and only the z faces count as faces (depth, surface recess).
     Returns (metrics_all, metrics_interior, passed)."""
-    V, pairs, deg, pol = _strand_vectors_from_data(data_file)
+    V, pairs, deg, pol = _strand_vectors_from_data(data_file, periodic)
+    open_axes = tuple(ax for ax in range(3) if periodic is None or not (periodic[ax] and periodic[ax] > 0))
     L = open(data_file).read().split('\n')
     ia = L.index('Atoms'); ib = L.index('Bonds')
     A = np.array([l.split()[:6] for l in L[ia + 2:ib] if l.strip()], dtype=float)
     idx = {int(i): k for k, i in enumerate(A[:, 0])}
     cl = A[A[:, 2] == 1, 3:6]
     lo, hi = cl.min(0), cl.max(0)
-    mid = np.array([(A[idx[a], 3:6] + A[idx[b], 3:6]) / 2 for a, b in pairs])
-    depth = np.minimum(mid - lo, hi - mid).min(axis=1)
+    mid = np.array([A[idx[a], 3:6] for a, b in pairs]) + 0.5 * V          # minimum-image midpoint
+    depth = np.minimum(mid - lo, hi - mid)[:, list(open_axes)].min(axis=1)
     if face_depth is None:
         face_depth = 7.0       # three lattice strand lengths (2.29 sigma each): the skin the tethered faces imprint
     rng = np.random.default_rng(seed)
     Lr = np.linalg.norm(V, axis=1)
-    rec = surface_recess(cl, lo, hi)
+    rec = surface_recess(cl, lo, hi, axes=open_axes)
     log(f"=== strand orientation report: {label or data_file} ===")
     log(f"  surface: outermost junction per 4 x 4 sigma patch of each face sits {rec['mean']:.2f} sigma inside the face on average "
         f"(sd {rec['sd']:.2f}, worst {rec['max']:.1f}); {100 * rec['frac2']:.1f} % of patches recessed > 2 sigma, {100 * rec['frac4']:.1f} % > 4 sigma  <- voids / dents")

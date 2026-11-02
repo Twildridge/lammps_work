@@ -31,7 +31,7 @@ lammps_work/                    ← This git repository
 │   │
 │   │   # ── data-file builders / converters (notebooks; converter code in lib/) ──
 │   ├── data_file_generator.ipynb       ← Finite gel block in a bath (was slab_with_support.ipynb until 2026-10-28): knobs only; NETWORK = tetrahedral | rot45 | random; code in lib/data_file_generator.py
-│   ├── slab_with_support_periodic.ipynb ← xy-periodic crosslinked slab (bonds wrap x,y only; finite-z; p p p; one support+piston per z-period). The reference 14000002 slab
+│   ├── slab_with_support_periodic.ipynb ← xy-periodic crosslinked slab (bonds wrap x,y only; finite-z; p p p; one support+piston per z-period). The reference 14000002 slab. Knobs only since 2026-11-02 (NETWORK = tetrahedral | random); code in lib/periodic_data_file_generator.py
 │   ├── slab_two_pistons_periodic.ipynb          ← CONVERTER notebook (code: lib/slab_two_pistons_periodic.py): equilibrated periodic slab → two-piston (feed/permeate) data file (input for triaxial_*_two_pist, shear_slab_two_pist)
 │   ├── pure_polymer.ipynb              ← Build pure polymer data file (polymer_phase)
 │   ├── pure_solvent_1.ipynb            ← Build pure solvent data file (solvent_phase)
@@ -59,7 +59,8 @@ lammps_work/                    ← This git repository
 │   │   │   # data-file converters / CLI tools (imported by the converter notebooks, or run as `python scripts/lib/<tool>.py`)
 │   │   ├── slab_two_pistons_periodic.py              ← CONVERTER: equilibrated periodic slab → two-piston (feed/permeate) data file
 │   │   ├── add_more_plates_to_gel.py        ← CONVERTER (2026-09-29, layouts 2026-10-14): isolated gel → plates by layout + two wet pistons (compress_slab / shear_slab_two_pist inputs); imports slab_two_pistons_periodic
-│   │   ├── data_file_generator.py           ← GENERATOR (2026-10-28, from slab_with_support.ipynb): diamond-lattice gel block in a bath; build(network='tetrahedral'|'rot45'|'random'), WWW bond switching, isotropy check
+│   │   ├── data_file_generator.py           ← GENERATOR (2026-10-28, from slab_with_support.ipynb): diamond-lattice gel block in a bath; build(network='tetrahedral'|'rot45'|'random'), WWW bond switching (periodic= option 2026-11-02), isotropy check
+│   │   ├── periodic_data_file_generator.py  ← GENERATOR (2026-11-02, from slab_with_support_periodic.ipynb): the x/y-periodic slab; build(network='tetrahedral'|'random'); CLI --network random --output <file>
 │   │   ├── slab_shear_plates_periodic.py             ← CONVERTER (2026-09-22): periodic slab → isolate + z-normal plates on its faces = shear_slab input; imports isolate_gel + add_plates_to_gel_periodic
 │   │   ├── add_plates_to_gel_periodic.py             ← plate builder (module extracted from the notebook 2026-09-22)
 │   │   ├── isolate_gel.py                   ← CLI: strip bath/walls and define interior control volume (calibration_sweep, archived volmix_sweep)
