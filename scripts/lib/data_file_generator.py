@@ -90,14 +90,15 @@ def _tree(P, periodic):
 # ---------------------------------------------------------------------------
 
 
-def _strand_energy(x, edges, r0, rep_pairs, rep_cut, w_rep, teth_idx, teth_rel, teth_mask, centre, w_teth, all_rel, w_all, all_w, free_scale, periodic=None, grad=True):
+def _strand_energy(x, edges, r0, rep_pairs, rep_cut, w_rep, teth_idx, teth_rel, teth_mask, centre, w_teth, all_rel, w_all, all_w, free_scale, periodic=None, grad=True, r0_strand=None):
+    r0s = r0 if r0_strand is None else r0_strand      # rest length of the strand term (r0 normalises everything)
     if free_scale:
         lam = x[-1]; P = x[:-1].reshape(-1, 3)
     else:
         lam = 1.0; P = x.reshape(-1, 3)
     d = _min_image(P[edges[:, 1]] - P[edges[:, 0]], periodic)
     L = np.linalg.norm(d, axis=1)
-    s = (L - r0) / r0
+    s = (L - r0s) / r0
     E = np.sum(s * s)
     G = np.zeros_like(P); dlam = 0.0
     if grad:
@@ -133,7 +134,7 @@ def _strand_energy(x, edges, r0, rep_pairs, rep_cut, w_rep, teth_idx, teth_rel, 
 
 
 def _relax_junctions(P, edges, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w,
-                     lam=1.0, free_scale=False, rounds=8, maxiter=80, periodic=None):
+                     lam=1.0, free_scale=False, rounds=8, maxiter=80, periodic=None, r0_strand=None):
     """L-BFGS on the junction positions (and the block scale when free_scale), in rounds so
     that the repulsion pair list follows the positions."""
     from scipy.optimize import minimize
@@ -145,7 +146,7 @@ def _relax_junctions(P, edges, r0, teth_idx, teth_rel, teth_mask, centre, rep_cu
         pairs = np.array([p for p in map(tuple, np.sort(pairs, axis=1)) if p not in bonded], dtype=np.int64).reshape(-1, 2)
         x0 = np.append(P.ravel(), lam) if free_scale else P.ravel()
         res = minimize(_strand_energy, x0, jac=True, method='L-BFGS-B',
-                       args=(edges, r0, pairs, rep_cut, w_rep, teth_idx, teth_rel, teth_mask, centre, w_teth, all_rel, w_all, all_w, free_scale, periodic),
+                       args=(edges, r0, pairs, rep_cut, w_rep, teth_idx, teth_rel, teth_mask, centre, w_teth, all_rel, w_all, all_w, free_scale, periodic, True, r0_strand),
                        options={'maxiter': maxiter})
         Pn = (res.x[:-1] if free_scale else res.x).reshape(-1, 3)
         if free_scale:
@@ -160,7 +161,7 @@ def _relax_junctions(P, edges, r0, teth_idx, teth_rel, teth_mask, centre, rep_cu
 def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0, seed=7,
                     T_hi=4.0, T_lo=0.01, n_sweeps=16, n_random=6, rep_cut=0.9, w_rep=1.0, w_teth=4.0, w_all=0.1,
                     max_len=1.9, max_len_hard=2.45, face_tol=0.3, keep_size=True, reset_anchors=False,
-                    face_full=True, anchor_jitter=0.25, forbid_lattice=True, periodic=None, log=print):
+                    face_full=True, anchor_jitter=0.25, forbid_lattice=True, periodic=None, rest_len=1.0, log=print):
     """Return (P, edges, report).  P0 (n, 3) junction positions, edges0 (m, 2) int junction
     indices (any order), r0 the lattice strand length.  block_lo / block_hi: the block
     faces (junctions within face_tol * r0 of a face are tethered).
@@ -192,11 +193,23 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
     a 2 % deficit of x-strands through the whole block (second-rank texture).
     periodic (2026-11-02): (Lx, Ly, Lz) with 0 for an open axis, see _min_image above; the
     x/y-periodic slab passes (box_x, box_y, 0) so that strands and repulsions across the
-    x/y boundaries are minimum-image and only the two z faces are tethered."""
+    x/y boundaries are minimum-image and only the two z faces are tethered.
+    rest_len (2026-11-03): the rest length of the strand energy and of the switch acceptance
+    in units of r0.  At 1.0 (the default, every random file up to 2026-11-02) the relaxation
+    pulled the junctions into clumps -- a random f = 4 network at the lattice's junction
+    density wants strands ~1.5 r0 long, and shortening them towards r0 means piling junctions
+    together -- which left 3-5 sigma voids inside the gel (nearest other junction 0.84 r0 on
+    average, up to 11 within 0.9 r0; polymer density on 5 sigma voxels CoV 0.38 against 0.035
+    for the lattice).  The random presets pass RANDOM_RELAX (rest_len 1.4, rep_cut 1.3, w_rep
+    3): the junctions are spaced like a soft-sphere liquid (CoV 0.09, largest empty sphere
+    2.1 sigma, the junction count within 2 r0 as uniform as the lattice's), strands 1.43 +/-
+    0.21 r0, isotropy unchanged, the face junctions recessed a uniform 1.2 sigma.  The
+    defaults here stay the old ones so that switch_options={} reproduces the old files."""
     rng = np.random.default_rng(seed)
     P = P0.copy()
     n = len(P)
     rep_cut = rep_cut * r0
+    r0s = rest_len * r0                       # rest length of the strand energy and of the switch acceptance
     face_mask = np.zeros((n, 3))
     for ax in range(3):
         if periodic is not None and periodic[ax] and periodic[ax] > 0:
@@ -246,8 +259,8 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
             D = Ds[rng.integers(len(Ds))]
             if forbid_lattice and (lkey(A, D) in lattice_edges or lkey(B, C) in lattice_edges):
                 continue
-            dE = ((elen(A, D) - r0) ** 2 + (elen(B, C) - r0) ** 2
-                  - (elen(A, C) - r0) ** 2 - (elen(B, D) - r0) ** 2) / r0 ** 2
+            dE = ((elen(A, D) - r0s) ** 2 + (elen(B, C) - r0s) ** 2
+                  - (elen(A, C) - r0s) ** 2 - (elen(B, D) - r0s) ** 2) / r0 ** 2
             if dE < 0 or (not greedy and T > 0 and rng.random() < np.exp(-dE / T)):
                 adj[A].remove(C); adj[C].remove(A); adj[B].remove(D); adj[D].remove(B)
                 adj[A].add(D); adj[D].add(A); adj[B].add(C); adj[C].add(B)
@@ -268,7 +281,7 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
         acc = sweep(T, m)
         accepted += acc
         E = edge_array()
-        P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic)
+        P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic, r0_strand=r0s)
         L = slen(E) / r0
         log(f"    sweep {k + 1:2d}  T {T:.3f}  accepted {acc:6d} (total {accepted:7d})  E/strand {Ef / m:.4f}  "
             f"strand length / r0: mean {L.mean():.3f}  max {L.max():.3f}  block scale {lam:.3f}")
@@ -283,7 +296,7 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
     extra = 0
     while accepted < target and extra < 10:
         acc = sweep(T_lo, m); accepted += acc; extra += 1
-        E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic)
+        E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic, r0_strand=r0s)
         log(f"    top-up {extra}  accepted {acc} (total {accepted})")
     # clean-up: every strand longer than max_len * r0 is attacked directly.  To remove a
     # strand A-C the pivot is another strand A-B of A (or C-B of C): A-C and B-D go, A-D
@@ -365,7 +378,7 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
             if not left:
                 break
             nf = shorten(max_len, targets=left)
-            E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic)
+            E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic, r0_strand=r0s)
             log(f"    lattice purge {k + 1}: {len(left)} lattice strands left, {nf} switched away")
     for k in range(30):
         E = edge_array()
@@ -379,7 +392,7 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
                 log(f"      stuck strand {a}-{c}: {L[(E[:, 0] == a) & (E[:, 1] == c)][0]:.2f} r0, degrees {len(adj[a])}/{len(adj[c])}, "
                     f"on face {bool(face_mask[a].any())}/{bool(face_mask[c].any())}")
             break
-        E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic)
+        E = edge_array(); P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic, r0_strand=r0s)
         L = slen(E) / r0
         log(f"    clean-up {k + 1}: {nf} long strands re-wired, max strand {L.max():.3f} r0, mean {L.mean():.3f}, "
             f"{int((L > max_len).sum())} still over {max_len}")
@@ -397,7 +410,7 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
         for j in rel:
             if j in pos_in_teth:
                 teth_mask[pos_in_teth[j]] = 0.0     # a freed face junction may dent the face
-        P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic)
+        P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic, r0_strand=r0s)
         L = slen(E) / r0
         log(f"    release {k + 1}: {len(rel)} junctions freed from their tethers, max strand {L.max():.3f} r0, {int((L > max_len).sum())} still over {max_len}")
     E = edge_array()
@@ -461,7 +474,12 @@ def _strand_vectors_from_data(data_file, periodic=None):
 
 def isotropy_metrics(V):
     """V (m, 3) strand vectors.  Returns a dict of orientation metrics."""
-    from scipy.special import sph_harm
+    try:
+        from scipy.special import sph_harm            # scipy < 1.17: sph_harm(m, l, azimuth, polar)
+    except ImportError:                                # scipy >= 1.17 renamed it (2026-11-03)
+        from scipy.special import sph_harm_y
+        def sph_harm(mm, l, theta, phi):
+            return sph_harm_y(l, mm, phi, theta)       # sph_harm_y(l, m, polar, azimuth)
     n = V / np.linalg.norm(V, axis=1)[:, None]
     m = len(n)
     F2 = n.T @ n / m
@@ -505,6 +523,69 @@ def surface_recess(cl, lo, hi, patch=4.0, axes=(0, 1, 2)):
                 frac2=float((rec > 2).mean()), frac4=float((rec > 4).mean()))
 
 
+def verify_density_uniformity(data_file, label=None, voxel=5.0, margin=6.0, h=0.5, probe=3.0,
+                              cov_max=0.15, log=print, periodic=None, scale=1.0):
+    """Interior density report of a gel data file (2026-11-03): the polymer beads (types 1, 2)
+    are binned on `voxel`-sigma cubes more than `margin` sigma inside the gel (the gel
+    extent along each open axis comes from the polymer density profile; a `periodic` axis
+    spans the box) and the distance from a grid of points (spacing h) to the nearest polymer
+    bead is measured.  Reports the coefficient of variation of the voxel density, the
+    emptiest voxel, the largest empty sphere and the volume fraction farther than `probe`
+    sigma from any polymer.  Verdict DENSITY OK when CoV <= cov_max and no empty sphere
+    reaches `probe` sigma.  The as-built lattice gives CoV 0.035 and 1.8 sigma; the random
+    network relaxed with the old knobs 0.35-0.41 and 4-5 sigma (empty 5-sigma voxels), with
+    RANDOM_RELAX 0.08-0.10 and 1.9-2.3 sigma; the equilibrated lattice slab 0.13 and 2.2.
+    `scale` multiplies voxel, margin and probe: the numbers are calibrated on the 5-bead
+    mesh (a = 4.46 sigma pre-swollen); a coarser mesh is judged on the same number of meshes
+    per voxel with scale = a / 4.46 (the builders pass it).  Returns the numbers as a dict."""
+    from scipy.spatial import cKDTree
+    voxel, margin, probe = voxel * scale, margin * scale, probe * scale
+    L = open(data_file).read().split('\n')
+    box = np.array([[float(v) for v in l.split()[:2]] for l in L[:40] if 'xlo' in l or 'ylo' in l or 'zlo' in l])
+    ia = L.index('Atoms'); ib = L.index('Bonds')
+    A = np.array([l.split()[:6] for l in L[ia + 2:ib] if l.strip()], dtype=float)
+    typ = A[:, 2].astype(int)
+    Lb = box[:, 1] - box[:, 0]
+    pol = (A[typ <= 2][:, 3:6] - box[:, 0]) % Lb
+    per = [bool(periodic is not None and periodic[ax] and periodic[ax] > 0) for ax in range(3)]
+    lo = np.zeros(3); hi = Lb.copy()
+    for ax in range(3):
+        if not per[ax]:
+            hist, edges = np.histogram(pol[:, ax], bins=max(10, int(Lb[ax])), range=(0, Lb[ax]))
+            on = np.flatnonzero(hist > 0.1 * hist.max())
+            lo[ax], hi[ax] = edges[on[0]], edges[on[-1] + 1]
+    ilo = np.where(per, 0.0, lo + margin); ihi = np.where(per, Lb, hi - margin)
+    tree = cKDTree(pol, boxsize=[Lb[ax] if per[ax] else 0.0 for ax in range(3)])
+    axes = [np.arange(h / 2, Lb[ax], h) if per[ax] else np.arange(ilo[ax], ihi[ax], h) for ax in range(3)]
+    G = np.array(np.meshgrid(*axes, indexing='ij')).reshape(3, -1).T
+    d, _ = tree.query(G, workers=-1)
+    inside = np.all((pol > ilo) & (pol < ihi), axis=1)
+    nv = [max(1, int(round((ihi[ax] - ilo[ax]) / voxel))) for ax in range(3)]
+    H, _ = np.histogramdd(pol[inside], bins=nv, range=[(ilo[ax], ihi[ax]) for ax in range(3)])
+    rho = H / np.prod((ihi - ilo) / nv)
+    cov = float(rho.std() / rho.mean())
+    big = np.flatnonzero(d > probe)
+    n_void = 0
+    if len(big):
+        taken = np.zeros(len(big), bool)
+        gt = cKDTree(G[big], boxsize=[Lb[ax] if per[ax] else 0.0 for ax in range(3)])
+        for k in np.argsort(-d[big]):
+            if taken[k]:
+                continue
+            taken[gt.query_ball_point(G[big[k]], 4.0)] = True
+            n_void += 1
+    ok = cov <= cov_max and d.max() < probe
+    log(f"=== density report: {label or data_file} ===")
+    log(f"  interior = " + ", ".join(f"{'xyz'[ax]} {'box (periodic)' if per[ax] else f'{ilo[ax]:.1f}..{ihi[ax]:.1f}'}" for ax in range(3)) +
+        f"; polymer density {inside.sum() / np.prod(ihi - ilo):.3f}")
+    log(f"  polymer density on {voxel:g} sigma voxels: CoV {cov:.3f} (lattice 0.035), emptiest / mean {rho.min() / rho.mean():.2f}, fullest / mean {rho.max() / rho.mean():.2f}")
+    log(f"  nearest polymer bead from the interior grid: mean {d.mean():.2f}, p99 {np.percentile(d, 99):.2f}, largest empty sphere {d.max():.2f} sigma (lattice 1.8); "
+        f"{100 * (d > probe).mean():.3f} % of the volume > {probe:g} sigma from any bead in {n_void} void(s)")
+    log(f"  DENSITY {'OK' if ok else 'NOT uniform'} (CoV <= {cov_max} and no empty sphere of {probe:g} sigma)")
+    return dict(cov=cov, rho_min_rel=float(rho.min() / rho.mean()), rho_max_rel=float(rho.max() / rho.mean()),
+                d_mean=float(d.mean()), d_max=float(d.max()), frac_over_probe=float((d > probe).mean()), n_void=n_void, ok=ok)
+
+
 def verify_network_isotropy(data_file, label=None, seed=0, n_ref=20, face_depth=None, log=print, periodic=None):
     """Read a gel data file back and print the orientation report of its strands next to
     the same numbers for as many random directions (mean +/- sd over n_ref draws).  The
@@ -534,9 +615,16 @@ def verify_network_isotropy(data_file, label=None, seed=0, n_ref=20, face_depth=
         face_depth = 7.0       # three lattice strand lengths (2.29 sigma each): the skin the tethered faces imprint
     rng = np.random.default_rng(seed)
     Lr = np.linalg.norm(V, axis=1)
-    rec = surface_recess(cl, lo, hi, axes=open_axes)
+    # The face planes for the recess map are the 0.2 / 99.8 percentiles of the junction cloud
+    # (2026-11-03): a handful of junctions pushed out through a face (the random presets'
+    # junction repulsion does that to a few of 15 000) used to set lo / hi and read as a
+    # 1-2 sigma recess of every patch.  They are counted separately as pop-outs.
+    lo_r, hi_r = np.percentile(cl, 0.2, axis=0), np.percentile(cl, 99.8, axis=0)
+    rec = surface_recess(cl, lo_r, hi_r, axes=open_axes)
+    n_pop = int(sum(((cl[:, ax] < lo_r[ax] - 1.0) | (cl[:, ax] > hi_r[ax] + 1.0)).sum() for ax in open_axes))
     log(f"=== strand orientation report: {label or data_file} ===")
-    log(f"  surface: outermost junction per 4 x 4 sigma patch of each face sits {rec['mean']:.2f} sigma inside the face on average "
+    log(f"  surface: {n_pop} junction(s) poke > 1 sigma out of the faces (the 0.2 / 99.8 percentile planes of the junctions); "
+        f"outermost junction per 4 x 4 sigma patch of each face sits {rec['mean']:.2f} sigma inside the face on average "
         f"(sd {rec['sd']:.2f}, worst {rec['max']:.1f}); {100 * rec['frac2']:.1f} % of patches recessed > 2 sigma, {100 * rec['frac4']:.1f} % > 4 sigma  <- voids / dents")
     log(f"  strands {len(V)}, functionality histogram {deg}, strand end-to-end {Lr.mean():.3f} +/- {Lr.std():.3f} sigma (min {Lr.min():.3f}, max {Lr.max():.3f})")
     out = {}
@@ -569,7 +657,8 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
                                    piston_height=0.5,
                                    output_file="gel_slab.data",
                                    pre_swell=1.0, include_walls=True, rot45_y=False,
-                                   bond_switch=0.0, bond_switch_seed=7, bond_switch_keep_size=True):
+                                   bond_switch=0.0, bond_switch_seed=7, bond_switch_keep_size=True,
+                                   switch_options=None):
     """
     Generate a tetrahedral (diamond lattice) polymer gel slab in solvent bath.
 
@@ -616,6 +705,8 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
                no strand is longer than 1.9 r0 (4.3 sigma end-to-end, bead spacing < 1.1 sigma against FENE R0 = 1.5).  The
                result has no lattice directions left: C44 = (C11 - C12)/2, the shear G is the
                same for every orientation.  Check it with verify_network_isotropy(<file>).
+               switch_options (2026-11-03): dict of extra www_bond_switch keywords, the
+               junction-relaxation knobs (rest_len, rep_cut, w_rep, ...; see RANDOM_RELAX).
                bond_switch_keep_size False lets the block scale relax as well (the random
                network's own size, ~0.8 of the lattice block: strands then sit at ~1.0 r0
                instead of ~1.17 r0; the default keeps the block the size the lattice had).
@@ -800,7 +891,7 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
         lo = offset; hi = offset + np.array([gel_x, gel_y, gel_z])
         cl_pos, edges_new, switch_report = www_bond_switch(
             cl_pos, edges0, bond_distance, lo, hi, switches_per_strand=bond_switch,
-            seed=bond_switch_seed, keep_size=bond_switch_keep_size)
+            seed=bond_switch_seed, keep_size=bond_switch_keep_size, **(switch_options or {}))
         for k, cid in enumerate(cl_ids):
             particles[cid - 1]['pos'] = cl_pos[k].copy()
         neighbors = defaultdict(list)
@@ -960,7 +1051,10 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
 
     # Write LAMMPS data file
     with open(output_file, 'w') as f:
-        f.write("LAMMPS data file for tetrahedral gel slab with piston\n\n")
+        tag = ""
+        if bond_switch > 0:          # the relaxation knobs in the header (see submit_random_periodic_pipeline.sh)
+            tag = " (random f=4 bond-switched, relax " + " ".join(f"{k}={v}" for k, v in (switch_options or {}).items()) + ")"
+        f.write(f"LAMMPS data file for tetrahedral gel slab with piston{tag}\n\n")
         f.write(f"{len(particles)} atoms\n")
         f.write(f"{len(bonds)} bonds\n")
         f.write("0 angles\n")
@@ -1027,13 +1121,19 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
 # ---------------------------------------------------------------------------
 # THE KNOB: which network, with the presets the three current gels were built with
 # ---------------------------------------------------------------------------
+# Junction-relaxation knobs of the random presets (2026-11-03, see the note above
+# www_bond_switch): strand rest length 1.4 r0, non-bonded junction repulsion out to 1.3 r0
+# at weight 3.  The old defaults (1.0 r0, 0.9 r0, weight 1; switch_options={}) clumped the
+# junctions and left 3-5 sigma voids inside the as-built gel.
+RANDOM_RELAX = dict(rest_len=1.4, rep_cut=1.3, w_rep=3.0)
+
 NETWORKS = {
     # the aligned diamond lattice: units count CUBIC cells (a = 4.8 pre_swell sigma)
     'tetrahedral': dict(rot45_y=False, bond_switch=0.0),
     # rotated 45 deg about y: units_x / units_z count BCT cells of a / sqrt2 (3.73 sigma at a = 5.28)
     'rot45':       dict(rot45_y=True, bond_switch=0.0),
     # the rot45 block randomised by bond switching (3 accepted switches per strand, seed 7)
-    'random':      dict(rot45_y=True, bond_switch=3.0, bond_switch_seed=7),
+    'random':      dict(rot45_y=True, bond_switch=3.0, bond_switch_seed=7, switch_options=RANDOM_RELAX),
 }
 
 
@@ -1064,4 +1164,5 @@ def build(network='tetrahedral', output_file=None, beads_per_chain=5, units_x=9,
     if check_isotropy:
         print()
         verify_network_isotropy(output_file, f"{network} network")
+        verify_density_uniformity(output_file, f"{network} network", scale=1.2 * (beads_per_chain - 1) * pre_swell / 4.464)
     return output_file

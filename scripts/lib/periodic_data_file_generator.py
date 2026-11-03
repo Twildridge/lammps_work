@@ -17,7 +17,10 @@ Two networks, chosen by `network` in build():
                    bond switching (data_file_generator.www_bond_switch with periodic=(box_x,
                    box_y, 0): strands and repulsions across the x/y boundaries are minimum-image,
                    only the two z faces are tethered).  Same recipe and knobs as the isolated
-                   'random' gel (3 accepted switches per strand, seed 7); the start is the
+                   'random' gel (3 accepted switches per strand, seed 7, since 2026-11-03 the
+                   junctions relaxed with RANDOM_RELAX -- strand rest length 1.4 r0, repulsion
+                   to 1.3 r0 at weight 3 -- so that they do not clump into dense knots and
+                   3-5 sigma voids, which the old relaxation did); the start is the
                    aligned lattice, not rot45 -- the rotated cell does not tile a 9 x 9 box and
                    the switching leaves no lattice strand either way.  A random f = 4 network
                    spans less volume per strand than the open diamond lattice, so at the lattice
@@ -36,7 +39,7 @@ import numpy as np
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
-from data_file_generator import www_bond_switch, verify_network_isotropy  # noqa: E402
+from data_file_generator import www_bond_switch, verify_network_isotropy, verify_density_uniformity, RANDOM_RELAX  # noqa: E402
 
 
 def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=21,
@@ -49,7 +52,8 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
                                output_file="gel_slab_periodic.data",
                                pre_swell=1.0,
                                bond_switch=0.0, bond_switch_seed=7,
-                               chain_placement='straight', walk_seed=11, walk_bond=0.97, log=print):
+                               chain_placement='straight', walk_seed=11, walk_bond=0.97,
+                               switch_options=None, log=print):
     """
     Generate a tetrahedral (diamond-lattice) polymer gel slab that spans the whole
     x-y plane and is crosslinked PERIODICALLY across the x and y boundaries.
@@ -93,6 +97,8 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
                        the line).  Walk beads are kept out of the support / piston planes
                        (reflected into [gel bottom - 1, gel top + 2]); x, y wrap.
     walk_seed, walk_bond : RNG seed and step length (sigma) of the 'walk' placement.
+    switch_options   : dict of extra keyword arguments for www_bond_switch (e.g. rep_cut, w_rep,
+                       w_all): the junction-relaxation knobs of the random network.
     """
 
     bead_spacing = 1.2
@@ -209,7 +215,8 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
         lo = offset.copy(); hi = offset + np.array([gel_x, gel_y, gel_z])
         cl_pos, edges_new, switch_report = www_bond_switch(
             cl_pos, edges0, bond_distance, lo, hi, switches_per_strand=bond_switch,
-            seed=bond_switch_seed, keep_size=True, periodic=(box_x, box_y, 0.0), log=log)
+            seed=bond_switch_seed, keep_size=True, periodic=(box_x, box_y, 0.0), log=log,
+            **(switch_options or {}))
         cl_pos[:, 0] %= box_x
         cl_pos[:, 1] %= box_y
         for k, cid in enumerate(cl_ids):
@@ -317,6 +324,8 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
 
     # ---- Write LAMMPS data file -----------------------------------------------------
     kind = "random f=4 (bond-switched)" if bond_switch > 0 else "tetrahedral"
+    if bond_switch > 0:          # the relaxation knobs in the header: the pipeline script rebuilds a file without them
+        kind += " relax " + " ".join(f"{k}={v}" for k, v in (switch_options or {}).items())
     with open(output_file, 'w') as f:
         f.write(f"LAMMPS data file: periodic (x,y) {kind} gel slab with support + piston\n\n")
         f.write(f"{len(particles)} atoms\n{len(bonds)} bonds\n0 angles\n0 dihedrals\n0 impropers\n\n")
@@ -362,7 +371,10 @@ NETWORKS = {
     'tetrahedral': dict(bond_switch=0.0),
     # the lattice slab randomised by bond switching (3 accepted switches per strand, seed 7,
     # the isolated 'random' gel's recipe)
-    'random':      dict(bond_switch=3.0, bond_switch_seed=7),
+    # 2026-11-03: switch_options = RANDOM_RELAX (strand rest length 1.4 r0, junction repulsion
+    # to 1.3 r0 at weight 3) keeps the junction density uniform; the old relaxation
+    # (switch_options={}) clumped the junctions and left 3-5 sigma voids in the gel.
+    'random':      dict(bond_switch=3.0, bond_switch_seed=7, switch_options=RANDOM_RELAX),
 }
 
 
@@ -394,6 +406,8 @@ def build(network='tetrahedral', output_file=None, beads_per_chain=5, units_x=9,
         log("")
         bx, by, _ = info['box']
         verify_network_isotropy(output_file, f"{network} periodic slab", periodic=(bx, by, 0.0), log=log)
+        verify_density_uniformity(output_file, f"{network} periodic slab", periodic=(bx, by, 0.0), log=log,
+                                  scale=1.2 * (beads_per_chain - 1) * pre_swell / 4.464)
     return output_file
 
 

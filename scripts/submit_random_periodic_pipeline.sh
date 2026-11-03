@@ -8,7 +8,9 @@
 #   1. builds ~/Documents/lammps_data/input_data/slab_support_periodic_5beads_tall_rho04_random.data
 #      if it is not there yet (scripts/lib/periodic_data_file_generator.py --network random:
 #      the reference 9 x 9 x 23 periodic slab with its lattice re-wired into a random f = 4
-#      network; ~10 min on the login node with the anaconda3 module);
+#      network; ~10 min on the login node with the anaconda3 module).  A file from before
+#      2026-11-03 (old junction relaxation, interior voids; no "relax rest_len" tag in its
+#      header) is moved to <name>.old_relax.data and rebuilt;
 #   2. sbatch simulations/slab_with_support/slab_with_support_periodic_random.batch
 #      (14 M steps, 4 nodes, 24 h, CHAIN=1);
 #   3. sbatch simulations/triaxial_compression_two_pist/chain_random_periodic.batch with
@@ -37,6 +39,12 @@ done
 
 # ---- 1. the data file -----------------------------------------------------------------
 mkdir -p "$INPUT_DATA"
+# A random file built before 2026-11-03 (no "relax rest_len=..." tag in its header line) has
+# the junction clumps / interior voids of the old relaxation: set it aside and rebuild.
+if [ -s "$INPUT_DATA/$DATANAME.data" ] && ! head -1 "$INPUT_DATA/$DATANAME.data" | grep -q "relax rest_len"; then
+    echo ">>> $INPUT_DATA/$DATANAME.data was built with the old junction relaxation (interior voids): moving it to $DATANAME.old_relax.data and rebuilding"
+    mv "$INPUT_DATA/$DATANAME.data" "$INPUT_DATA/$DATANAME.old_relax.data"
+fi
 if [ -s "$INPUT_DATA/$DATANAME.data" ]; then
     echo ">>> data file present: $INPUT_DATA/$DATANAME.data"
 else
@@ -52,6 +60,7 @@ else
         exit 1
     fi
     grep -q "ISOTROPY OK" "$LOG" || echo "WARNING: the isotropy check did not pass (see $LOG) -- submitting anyway."
+    grep -q "DENSITY OK" "$LOG" || echo "WARNING: the density check did not pass (see $LOG) -- submitting anyway."
 fi
 ls -la "$INPUT_DATA/$DATANAME.data"
 
