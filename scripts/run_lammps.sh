@@ -125,6 +125,15 @@ DISP_FINE_SPAN=${DISP_FINE_SPAN:-}
 STRESS_FREQ=${STRESS_FREQ:-}
 HALT_EVERY=${HALT_EVERY:-}                  # shear_slab_two_pist (2026-10-28): the drive's halt-check cadence alone (-var halt_every;
                                             # 0 / unset = stress_freq), so a ~900-step drive can be halted every 10 steps
+# Rg-plateau halt of slab_with_support.lmp (2026-11-03, chain_length_testing_sweep.batch), forwarded only when set:
+# RG_HALT=1 ends production once the gel Rg's block mean has stopped moving (RG_BLOCK steps per block, one sample every
+# RG_EVERY, RG_NCONSEC consecutive blocks under RG_TOL, then a tail of RG_EXTRA x the steps done); the deck reports STATUS COMPLETE then, so CHAIN=1 stops too.
+RG_HALT=${RG_HALT:-}
+RG_BLOCK=${RG_BLOCK:-}
+RG_EVERY=${RG_EVERY:-}
+RG_TOL=${RG_TOL:-}
+RG_NCONSEC=${RG_NCONSEC:-}
+RG_EXTRA=${RG_EXTRA:-}
 
 # P-sweep parameters (only used for pure_solvent; ignored by other scripts)
 NSTEPS_EQ=200000    # equilibration steps per state point
@@ -336,6 +345,12 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     ${DISP_FINE_SPAN:+-var disp_fine_span "$DISP_FINE_SPAN"} \
     ${STRESS_FREQ:+-var stress_freq "$STRESS_FREQ"} \
     ${HALT_EVERY:+-var halt_every "$HALT_EVERY"} \
+    ${RG_HALT:+-var rg_halt "$RG_HALT"} \
+    ${RG_BLOCK:+-var rg_block "$RG_BLOCK"} \
+    ${RG_EVERY:+-var rg_every "$RG_EVERY"} \
+    ${RG_TOL:+-var rg_tol "$RG_TOL"} \
+    ${RG_NCONSEC:+-var rg_nconsec "$RG_NCONSEC"} \
+    ${RG_EXTRA:+-var rg_extra "$RG_EXTRA"} \
     -in $LAMMPS_FILE &
 MPIRUN_PID=$!
 

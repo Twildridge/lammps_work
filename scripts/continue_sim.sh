@@ -381,7 +381,15 @@ if [ "$MODE" != "run" ]; then
     PRESS_TARGET="${PRESS_TARGET:-$(batch_value PRESS_TARGET)}";        PRESS_TARGET="${PRESS_TARGET:-1.5}"
     CHAIN="${CHAIN:-$(batch_value CHAIN)}";                             CHAIN="${CHAIN:-0}"
     WALL_MARGIN="${WALL_MARGIN:-$(batch_value WALL_MARGIN)}";           WALL_MARGIN="${WALL_MARGIN:-2400}"
-    echo "Deck knobs        : BARO_MODE=${BARO_MODE} PIN_GEL=${PIN_GEL} PISTON_TRANSPARENT=${PISTON_TRANSPARENT} PRESS_TARGET=${PRESS_TARGET} CHAIN=${CHAIN} WALL_MARGIN=${WALL_MARGIN}"
+    # Rg-plateau halt knobs (slab_with_support.lmp, 2026-11-03): environment first (the chain hop runs inside the job
+    # that exported them, possibly computed from a sweep variable), then the batch file; empty = the deck's defaults.
+    RG_HALT="${RG_HALT:-$(batch_value RG_HALT)}"
+    RG_BLOCK="${RG_BLOCK:-$(batch_value RG_BLOCK)}"
+    RG_EVERY="${RG_EVERY:-$(batch_value RG_EVERY)}"
+    RG_TOL="${RG_TOL:-$(batch_value RG_TOL)}"
+    RG_NCONSEC="${RG_NCONSEC:-$(batch_value RG_NCONSEC)}"
+    RG_EXTRA="${RG_EXTRA:-$(batch_value RG_EXTRA)}"
+    echo "Deck knobs        : BARO_MODE=${BARO_MODE} PIN_GEL=${PIN_GEL} PISTON_TRANSPARENT=${PISTON_TRANSPARENT} PRESS_TARGET=${PRESS_TARGET} CHAIN=${CHAIN} WALL_MARGIN=${WALL_MARGIN} RG_HALT=${RG_HALT:-0} RG_BLOCK=${RG_BLOCK:-} RG_TOL=${RG_TOL:-}"
     echo "======================================"
 
     # Extract #SBATCH directives (skip --output/--error/--job-name so we set our own)
@@ -407,6 +415,12 @@ export PISTON_TRANSPARENT="${PISTON_TRANSPARENT}"
 export PRESS_TARGET="${PRESS_TARGET}"
 export CHAIN="${CHAIN}"
 export WALL_MARGIN="${WALL_MARGIN}"
+export RG_HALT="${RG_HALT}"
+export RG_BLOCK="${RG_BLOCK}"
+export RG_EVERY="${RG_EVERY}"
+export RG_TOL="${RG_TOL}"
+export RG_NCONSEC="${RG_NCONSEC}"
+export RG_EXTRA="${RG_EXTRA}"
 export CONT_BATCH_FILE="${BATCH_FILE}"
 
 cd "${SIM_FOLDER}" || exit 1
@@ -506,6 +520,13 @@ LAMMPS_VARS=(
     -var piston_transparent "$PISTON_TRANSPARENT"
     -var wall_timeout "$WALL_TIMEOUT"
 )
+# Rg-plateau halt knobs, only when set (slab_with_support.lmp keeps its defaults otherwise)
+[ -n "${RG_HALT:-}" ]    && LAMMPS_VARS+=(-var rg_halt    "$RG_HALT")
+[ -n "${RG_BLOCK:-}" ]   && LAMMPS_VARS+=(-var rg_block   "$RG_BLOCK")
+[ -n "${RG_EVERY:-}" ]   && LAMMPS_VARS+=(-var rg_every   "$RG_EVERY")
+[ -n "${RG_TOL:-}" ]     && LAMMPS_VARS+=(-var rg_tol     "$RG_TOL")
+[ -n "${RG_NCONSEC:-}" ] && LAMMPS_VARS+=(-var rg_nconsec "$RG_NCONSEC")
+[ -n "${RG_EXTRA:-}" ]   && LAMMPS_VARS+=(-var rg_extra   "$RG_EXTRA")
 if [ -n "$SWEEP_TAG" ] && [ -n "$SWEEP_LEVEL" ]; then
     LAMMPS_VARS+=(-var "${FOLDER_SWEEP_VAR[$FOLDER]}" "$SWEEP_LEVEL")
 fi

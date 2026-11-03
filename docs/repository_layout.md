@@ -8,6 +8,7 @@ lammps_work/                    ← This git repository
 ├── simulations/                ← One folder per simulation type
 │   ├── slab_with_support/      ← Gel equilibration and compression (main workhorse)
 │   ├── triaxial_compression_two_pist/  ← STANDARD compression workflow (two-piston, 2026-09-16; standard since 2026-09-22): NPT-pistons on both reservoirs + load piston; cumulative strain sweep
+│   ├── chain_length_testing/       ← beads-per-strand sweep of the periodic random slab (2026-11-03): slab_with_support.lmp (symlink) with the Rg-plateau halt, one job per N (submit_chain_length_sweep.sh)
 │   ├── triaxial_permeation_two_pist/   ← STANDARD permeation workflow (two-piston): feed/permeate NPT-pistons, one constant-dP drive (no sweep)
 │   │                              (the one-piston triaxial_compression/ and triaxial_permeation/ moved to archive/simulations/ on 2026-09-22)
 │   │                              (shear_slab/, the plate-driven periodic-slab shear, moved to archive/simulations/ on 2026-10-28)

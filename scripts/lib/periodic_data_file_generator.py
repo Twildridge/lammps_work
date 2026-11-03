@@ -48,7 +48,8 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
                                piston_height=0.8,
                                output_file="gel_slab_periodic.data",
                                pre_swell=1.0,
-                               bond_switch=0.0, bond_switch_seed=7, log=print):
+                               bond_switch=0.0, bond_switch_seed=7,
+                               chain_placement='straight', walk_seed=11, walk_bond=0.97, log=print):
     """
     Generate a tetrahedral (diamond-lattice) polymer gel slab that spans the whole
     x-y plane and is crosslinked PERIODICALLY across the x and y boundaries.
@@ -82,6 +83,16 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
                        switches per strand (data_file_generator.www_bond_switch, periodic in
                        x and y); 0 keeps the lattice (byte-identical to the notebook build).
     bond_switch_seed : RNG seed of the switching.
+    chain_placement  : 'straight' (default; every file up to 2026-11-03) puts the interior beads
+                       on the straight line between the two junctions, bead spacing = strand
+                       length / (beads_per_chain - 1).  'walk' (2026-11-03, the beads-per-chain
+                       sweep) lays them on a random walk of walk_bond-long steps pinned to both
+                       junctions (a Brownian bridge), so a strand whose end-to-end distance is
+                       shorter than its contour starts coiled instead of as a line of overlapping
+                       beads (10-30 beads at the equilibrium mesh would sit 0.24-0.4 sigma apart on
+                       the line).  Walk beads are kept out of the support / piston planes
+                       (reflected into [gel bottom - 1, gel top + 2]); x, y wrap.
+    walk_seed, walk_bond : RNG seed and step length (sigma) of the 'walk' placement.
     """
 
     bead_spacing = 1.2
@@ -211,6 +222,12 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
             neighbors[id1].sort()
 
     # ---- Build chains; interior beads along the minimum-image vector, then wrapped --
+    if chain_placement not in ('straight', 'walk'):
+        raise ValueError(f"chain_placement must be 'straight' or 'walk' (got {chain_placement!r})")
+    walk_rng = np.random.default_rng(walk_seed)
+    n_int = beads_per_chain - 2
+    z_lo_walk = offset[2] - 1.0          # support sheet sits support_thickness/2 + ... below the gel
+    z_hi_walk = gel_top_z + 2.0
     for id1 in cl_ids:
         pos1 = particles[id1 - 1]['pos']
         for id2 in neighbors.get(id1, ()):
@@ -219,10 +236,24 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
             delta[0] -= box_x * round(delta[0] / box_x)
             delta[1] -= box_y * round(delta[1] / box_y)
 
+            if chain_placement == 'walk' and n_int > 0:
+                # Brownian bridge: a free random walk of beads_per_chain - 1 steps, then the
+                # linear correction that pins its end on the partner junction.
+                steps = walk_rng.normal(size=(beads_per_chain - 1, 3))
+                steps *= walk_bond / np.linalg.norm(steps, axis=1)[:, None]
+                walk = np.cumsum(steps, axis=0)                     # w_1 .. w_{n-1}
+                fr = np.arange(1, beads_per_chain)[:, None] / (beads_per_chain - 1)
+                interior = pos1 + walk[:-1] + fr[:-1] * (delta - walk[-1])
+                # keep the coil between the support and the piston planes (reflect in z)
+                zz = interior[:, 2]
+                span = z_hi_walk - z_lo_walk
+                zz = span - np.abs((zz - z_lo_walk) % (2 * span) - span)   # triangle wave -> [0, span]
+                interior[:, 2] = z_lo_walk + zz
+
             chain_ids = [id1]
             for b in range(1, beads_per_chain - 1):
                 frac = b / (beads_per_chain - 1)
-                pos = pos1 + frac * delta
+                pos = pos1 + frac * delta if chain_placement == 'straight' else interior[b - 1].copy()
                 pos[0] %= box_x   # wrap into box for periodic dims
                 pos[1] %= box_y
                 particles.append({'id': particle_id, 'type': 2, 'pos': pos.copy(), 'mol': molecule_id})
@@ -308,7 +339,8 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
     num_piston = sum(1 for p in particles if p['type'] == 5)
     num_chains = len(bonds) // (beads_per_chain - 1) if beads_per_chain > 1 else 0
     log(f"Generated PERIODIC {kind} gel slab (boundary p p p):")
-    log(f"  Unit cells: {units_x} x {units_y} x {units_z}   beads/chain: {beads_per_chain}")
+    log(f"  Unit cells: {units_x} x {units_y} x {units_z}   beads/chain: {beads_per_chain}   "
+        f"pre_swell: {pre_swell}   a = {a:.3f}   chain placement: {chain_placement}")
     log(f"  Box (= gel in x,y): {box_x:.2f} x {box_y:.2f} x {box_z:.2f}")
     log(f"  Gel top z: {gel_top_z:.3f}   Piston z: {piston_z:.3f}   Bond length: {bond_distance:.4f}")
     log(f"  Wall tiling: {nx} x {ny} atoms/sheet, snapped spacing dx={snap_dx:.4f} dy(row)={snap_dy:.4f}")
@@ -381,6 +413,9 @@ if __name__ == '__main__':
     ap.add_argument('--piston-height', type=float, default=0.85)
     ap.add_argument('--bond-switch', type=float, default=None, help='override the preset: accepted switches per strand')
     ap.add_argument('--bond-switch-seed', type=int, default=None)
+    ap.add_argument('--chain-placement', choices=('straight', 'walk'), default='straight',
+                    help="interior beads on the junction-junction line (default) or on a random walk pinned to both junctions")
+    ap.add_argument('--walk-seed', type=int, default=11)
     ap.add_argument('--no-check', action='store_true', help='skip the isotropy report')
     args = ap.parse_args()
     ov = {}
@@ -392,4 +427,5 @@ if __name__ == '__main__':
           below_thickness=args.below_thickness, top_thickness=args.top_thickness,
           support_thickness=args.support_thickness, support_spacing=args.support_spacing,
           piston_exclusion=args.piston_exclusion, piston_height=args.piston_height, pre_swell=args.pre_swell,
-          check_isotropy=False if args.no_check else None, **ov)
+          check_isotropy=False if args.no_check else None, chain_placement=args.chain_placement,
+          walk_seed=args.walk_seed, **ov)

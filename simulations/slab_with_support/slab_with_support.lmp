@@ -87,6 +87,37 @@ variable baro_mode index aniso
 variable pin_gel       index 0
 variable pin_gel_every index 100
 
+# ----- Rg-plateau halt (2026-11-03, chain_length_testing) -----
+# rg_halt = 1 ends production early once the gel's radius of gyration has stopped
+# moving: production runs in blocks of rg_block steps (n_snaps is then
+# ceil(nsteps / rg_block), a snapshot after every block as before); fix rg_block_avg
+# averages c_rg_polymer over each block (one sample every rg_every steps) and after
+# each block the relative change of the block mean from the previous block's is
+# compared with rg_tol.  rg_nconsec consecutive blocks under rg_tol = the plateau is
+# DETECTED (RG_PLATEAU_DETECTED); the deck then runs a TAIL of rg_extra x the
+# production steps done so far, rounded up to whole blocks (at least one), prints
+# RG_PLATEAU_CONVERGED, leaves the loop and reports STATUS COMPLETE (the final_config
+# is written and the chain stops) -- the <totsteps> tag of the file names stays the
+# requested budget; the log says how many steps were run.  The 5-bead random slab's
+# Rg (14 M steps) changed by 2.7 % over its first 1 M-step block and by 0.02-0.14 %
+# per block after 10 M (block-to-block noise ~0.05 %); on its convergence plot the
+# Rg^3 trace is flat from ~13-14 M, and the user wants the run 5-10 % longer than
+# that point (2026-11-03).  rg_tol 0.0015 with THREE consecutive blocks detects the
+# plateau there at 13 M and the 10 % tail (2 blocks) ends it at 15 M.  Longer
+# strands relax more slowly (the collective time scales with the mesh size), so give
+# them LONGER blocks (chain_length_testing_sweep.batch: 1.5-3 M) rather than a
+# looser tolerance: a slow drift inside a short block would pass as a plateau.  A
+# continuation job starts its count afresh (the previous blocks' means are not
+# carried over), so a chain hop costs rg_nconsec + tail extra blocks at most.  Knobs
+# come from the batch through run_lammps.sh / continue_sim.sh (RG_HALT, RG_BLOCK,
+# RG_EVERY, RG_TOL, RG_NCONSEC, RG_EXTRA); rg_every must divide rg_block.
+variable rg_halt    index 0
+variable rg_block   index 1000000
+variable rg_every   index 10000
+variable rg_tol     index 0.0015
+variable rg_nconsec index 3
+variable rg_extra   index 0.10
+
 # Equilibration parameters
 variable temp_target equal 1.0
 variable press_target index 1.5 # APPROPRIATE VALUE IMPORTANT — overridden by -var on command line
@@ -421,7 +452,14 @@ fix stress_aniso_output all ave/time ${aniso_nevery} ${aniso_nrepeat} ${aniso_nf
 # volmix_sweep isolates each snapshot independently so ΔV_mix error bars capture
 # both snapshot-to-snapshot composition variance AND thermal (NPT-replica) variance.
 variable n_snaps        index 3   # snapshots per run; override with -var n_snaps N
-variable steps_per_snap equal round(${nsteps}/${n_snaps})
+# With the Rg-plateau halt the block IS the test window: rg_block steps per snapshot,
+# as many blocks as the budget holds (the last may run past nsteps by < rg_block).
+if "${rg_halt} == 1" then &
+    "variable n_blocks       equal ceil(${nsteps}/${rg_block})" &
+    "variable steps_per_snap equal ${rg_block}" &
+else &
+    "variable n_blocks       equal ${n_snaps}" &
+    "variable steps_per_snap equal round(${nsteps}/${n_snaps})"
 
 if "${cont} == 1" then "print '>>> Continuing after ${oldsteps} timesteps'"
 fix remove_drift mobile momentum 1000 linear 1 1 1 angular
@@ -431,21 +469,75 @@ if "${pin_gel} == 1" then &
 
 variable prod_start  equal $(step)             # absolute step at which production starts
 variable prod_done   equal step-v_prod_start    # production steps completed so far
-variable prod_target equal ${nsteps}-${n_snaps}   # "all of nsteps" up to the steps_per_snap rounding
+variable prod_target equal ${nsteps}-${n_blocks}   # "all of nsteps" up to the steps_per_snap rounding
 
-variable snap_i loop ${n_snaps}
+# Rg-plateau bookkeeping (rg_halt = 1 only; see the knob block).  rg_prev = the previous
+# block's mean Rg (0 before the first), rg_ok = consecutive blocks under rg_tol,
+# rg_conv = 1 once converged.  The three are re-set each block with `variable delete`
+# + redefine; rg_dev / rg_ok_next are formulas evaluated at that moment.  The block
+# mean is read as f_rg_block_avg right after the block's run: fix ave/time completes a
+# window every rg_block steps, so each block ends with a fresh window (its samples lag
+# the block by the warm-up offset, the same for every block).  A block whose window
+# could not complete (a continuation starting mid-window) reads 0 and is never
+# counted as converged (the f_rg_block_avg > 0 factor; the denominator guard avoids
+# a divide by zero).
+variable rg_prev      equal 0.0
+variable rg_ok        equal 0
+variable rg_conv      equal 0      # 1 once the plateau is detected (the tail is running)
+variable rg_tail_left equal 0      # tail blocks still to run after detection
+# tail length in blocks = max(1, ceil(rg_extra * prod_done / rg_block)), written without max() (a
+# vector-only special function in LAMMPS formulas): x + (x < 1) * (1 - x)
+variable rg_tail_calc equal ceil(v_rg_extra*v_prod_done/v_rg_block)+(ceil(v_rg_extra*v_prod_done/v_rg_block)<1)*(1-ceil(v_rg_extra*v_prod_done/v_rg_block))
+if "${rg_halt} == 1" then &
+    "variable rg_nrep equal round(${rg_block}/${rg_every})" &
+    "fix rg_block_avg all ave/time ${rg_every} ${rg_nrep} ${rg_block} c_rg_polymer" &
+    "variable rg_dev     equal abs(f_rg_block_avg-v_rg_prev)/(f_rg_block_avg+(f_rg_block_avg==0))" &
+    "variable rg_ok_next equal (f_rg_block_avg>0)*(v_rg_dev<v_rg_tol)*(v_rg_ok+1)" &
+    "print '>>> RG_HALT armed: block ${rg_block} steps (${n_blocks} blocks budgeted), tol ${rg_tol}, ${rg_nconsec} consecutive blocks, then a tail of ${rg_extra} x the steps done'"
+
+variable snap_i loop ${n_blocks}
 label snap_loop
     run ${steps_per_snap}
     variable snap_outfile string "final_config_${dataname}_${interaction}_${totsteps}_snap${snap_i}"
     write_data ${snap_outfile}.data
-    print ">>> Wrote snapshot ${snap_i}/${n_snaps} at step $(step)"
+    print ">>> Wrote snapshot ${snap_i}/${n_blocks} at step $(step)"
     # Wall-clock budget spent (timeremain = seconds left on `timer timeout`, 0 once it
     # fired): the run above returned early and the snapshot just written is the resume
     # point, so leave the loop instead of starting the next block.
     if "${wall_timeout} > 0 && $(timeremain) <= 0.0" then "jump SELF snap_done"
+    # Rg-plateau test on the block just finished
+    if "${rg_halt} == 0" then "jump SELF rg_skip"
+    print ">>> RG_BLOCK step $(step) Rg_block $(f_rg_block_avg:%.5f) Rg_prev $(v_rg_prev:%.5f) rel_change $(v_rg_dev:%.3e) consecutive_under_tol_after $(v_rg_ok_next:%.0f)"
+    variable rg_ok_tmp equal $(v_rg_ok_next)
+    variable rg_ok delete
+    variable rg_ok equal $(v_rg_ok_tmp)
+    variable rg_ok_tmp delete
+    variable rg_prev_tmp equal $(f_rg_block_avg)
+    variable rg_prev delete
+    variable rg_prev equal $(v_rg_prev_tmp)
+    variable rg_prev_tmp delete
+    if "${rg_conv} == 1" then "jump SELF rg_tail"
+    if "${rg_ok} >= ${rg_nconsec}" then &
+        "variable rg_tail_left delete" &
+        "variable rg_tail_left equal $(v_rg_tail_calc)" &
+        "print '>>> RG_PLATEAU_DETECTED at step $(step) after $(v_prod_done) production steps: ${rg_ok} consecutive ${rg_block}-step blocks changed Rg by less than ${rg_tol}; running $(v_rg_tail_calc) more blocks (rg_extra ${rg_extra})'" &
+        "variable rg_conv delete" &
+        "variable rg_conv equal 1"
+    jump SELF rg_skip
+    # the tail after detection: count the blocks down, then leave
+    label rg_tail
+    variable rg_tail_tmp equal $(v_rg_tail_left-1)
+    variable rg_tail_left delete
+    variable rg_tail_left equal $(v_rg_tail_tmp)
+    variable rg_tail_tmp delete
+    if "${rg_tail_left} <= 0" then &
+        "print '>>> RG_PLATEAU_CONVERGED at step $(step) after $(v_prod_done) production steps (plateau detected, tail of ${rg_extra} x the steps done run)'" &
+        "jump SELF snap_done"
+    label rg_skip
     next snap_i
     jump SELF snap_loop
 label snap_done
+if "${rg_halt} == 1" then "unfix rg_block_avg"
 
 
 
@@ -467,7 +559,7 @@ undump poly_traj
 # its presence remains the completion marker; continue_sim.sh resumes from the
 # newest final_config_*_snap<N>.data when it is missing.
 variable outfile string "final_config_${dataname}_${interaction}_${totsteps}"
-if "${prod_done} >= ${prod_target}" then &
+if "${prod_done} >= ${prod_target} || ${rg_conv} == 1" then &
     "print '>>> PRODUCTION_STEPS_DONE ${prod_done} OF ${nsteps} OLDSTEPS ${oldsteps} TOTSTEPS ${totsteps} STATUS COMPLETE'" &
     "write_restart ${outfile}.restart" &
     "write_data ${outfile}.data" &

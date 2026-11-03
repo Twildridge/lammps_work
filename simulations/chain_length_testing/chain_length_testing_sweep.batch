@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=chain_len
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=36:00:00
+#SBATCH --output=%x.o%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD: sbatch submits whatever copy of this file is on disk; pull
+# first, then re-exec the fresh batch by its repo path (under sbatch this file runs
+# from the SLURM spool, so the path is spelled out; the environment, NBEADS
+# included, survives the exec).  Mirrors triaxial_compression_two_pist_sweep.batch.
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${CHAINLEN_BATCH_SYNCED:-}" ] && [ -d "$LAMMPS_WORK_DIR/.git" ]; then
+    ( cd "$LAMMPS_WORK_DIR" && git pull --rebase --quiet 2>/dev/null ) || true
+    export CHAINLEN_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/chain_length_testing/chain_length_testing_sweep.batch"
+fi
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# =======================================================================
+# CHAIN-LENGTH SWEEP OF THE x/y-PERIODIC RANDOM SLAB (2026-11-03).  5 beads per
+# strand is too short -- the gel is elastic rather than osmotic (mixing) -- so the
+# same slab is equilibrated with 10, 15, 20 and 30-bead strands, one SLURM job per
+# N, all four submitted by  bash submit_chain_length_sweep.sh  [N ...]  from this
+# folder (sbatch --export=ALL,NBEADS=<N>; the job name is chain_len_<N>b).
+#
+# INPUT FILES: slab_support_periodic_<N>beads_tall_rho04_random.data, built by
+# scripts/lib/build_beads_sweep.py (slab_data_file_info.md, 2026-11-03): every one at
+# the 5-bead slab's physical size (~43 sigma in plane, ~111 sigma thick, 180-256 k
+# atoms) -- fewer cells and a pre_swell that puts the lattice at the mesh the gel
+# is expected to swell to, a_eq(N) = 4.82 ((N-1)/4)^0.59 -- with the strands laid
+# as random walks and the lattice re-wired into a random f = 4 network.
+#
+# DECK: chain_length_testing.lmp is a symlink to ../slab_with_support/
+# slab_with_support.lmp (one deck, no divergent copy); run_lammps.sh keys the
+# run directories and file names on this folder.  Same protocol as the 5-bead
+# reference (slab_with_support_periodic_random.batch): aniso NPH + Langevin at
+# P* = 1.5, piston transparent, no pinning, 4 nodes.
+#
+# WHEN TO STOP (Rg-plateau halt, slab_with_support.lmp 2026-11-03): the deck ends
+# production on its own once the gel's Rg block mean has stopped moving (RG_HALT=1:
+# RG_NCONSEC consecutive RG_BLOCK-step blocks whose mean Rg changed by less than
+# RG_TOL, then a tail of RG_EXTRA x the steps done so far), reports STATUS COMPLETE
+# and writes the final_config; NSTEPS is only the BUDGET (the <totsteps> tag of the
+# file names), reached if the plateau never comes.  On the 5-bead reference's Rg
+# trace the plateau is detected at 13 M and the tail ends the run at 15 M (its
+# convergence plot is flat from ~13-14 M; the run is meant to go 5-10 % past that
+# point); longer strands relax more slowly (the collective
+# time scales with the mesh size: x1.6, 2.1, 2.5, 3.2), hence the longer blocks and
+# budgets below (23-45 M = 14 M x the ratio, at ~310 steps/s on 4 nodes = 21-36 h).
+# CHAIN=1 chains a continuation if the 36 h limit comes first (the chain inherits
+# every knob here through the job environment); a continuation restarts the block
+# count, so it may cost RG_NCONSEC + 1 extra blocks.
+#
+# THEN: pull final_config_<DATANAME>_1.0_1.0_<NSTEPS>.data to input_data/, convert
+# with lib/slab_two_pistons_periodic.py and run triaxial_compression_two_pist on it
+# (the compression notebook chain_length_comparison.ipynb compares the N).
+# =======================================================================
+NBEADS="${NBEADS:?set NBEADS (10 | 15 | 20 | 30 | 5) -- use submit_chain_length_sweep.sh}"
+case "$NBEADS" in
+    5)  NSTEPS=14000000; RG_BLOCK=1000000 ;;   # the reference's size, re-run with the halt
+    10) NSTEPS=24000000; RG_BLOCK=1500000 ;;
+    15) NSTEPS=30000000; RG_BLOCK=2000000 ;;
+    20) NSTEPS=35000000; RG_BLOCK=2500000 ;;
+    30) NSTEPS=45000000; RG_BLOCK=3000000 ;;
+    *)  echo "NBEADS=$NBEADS has no entry in the sweep table"; exit 1 ;;
+esac
+FOLDER="chain_length_testing"
+DATANAME="slab_support_periodic_${NBEADS}beads_tall_rho04_random"   # scripts/lib/build_beads_sweep.py (2026-11-03)
+INTERACTION="1.0_1.0"   # the interaction of the triaxial runs
+TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
+PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
+SEED=12345          # RNG seed for create_velocity / langevin
+
+export PISTON_TRANSPARENT=1   # the piston is parked in the bath and transparent to solvent (the 14000002 protocol)
+export BARO_MODE=aniso        # lx, ly, lz relax independently: the periodic slab finds its own lateral size
+export PIN_GEL=0              # a laterally periodic slab cannot turn; no momentum pinning
+export CHAIN=1                # chain continuation jobs until the plateau or NSTEPS
+export WALL_MARGIN=2400       # seconds before the SLURM limit at which the deck stops
+
+export RG_HALT=1              # end production once the gel Rg has plateaued (see above)
+export RG_BLOCK               # steps per block (per N, table above)
+export RG_EVERY=10000         # Rg samples per block: RG_BLOCK / RG_EVERY
+export RG_TOL=0.0015          # relative change of the block mean Rg that counts as "not moving"
+export RG_NCONSEC=3           # consecutive blocks under RG_TOL = plateau detected
+export RG_EXTRA=0.10          # then run this fraction of the steps done so far more (whole blocks, >= 1) before stopping
+
+echo "chain_length_testing: NBEADS=$NBEADS DATANAME=$DATANAME NSTEPS=$NSTEPS RG_BLOCK=$RG_BLOCK"
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET VEL_SEED
+bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET" "$SEED"

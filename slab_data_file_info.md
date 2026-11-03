@@ -664,3 +664,56 @@ Converted x_plates + two-wet-piston data file  [2026-10-28 18:32, add_more_plate
   Plates: parked 3.0 sigma outside the BB faces, overhang 6.0, spacing 0.5 (65928 beads in 2 plate(s)); wet pistons 14220 beads each, z = 10.00 / 154.71, vacuum margins 10.0 / 10.0
   Crosslinks: 15257   Chain beads: 86562   Solvent: 345817   Plates: 65928   Feed piston: 14220   Permeate piston: 14220
   Total atoms: 542004   Total bonds: 115416   Output: final_config_slab_support_5beads_tall_rho04_nowalls_random_1.0_1.0_8000000_x_plates.data
+
+Converted two-piston (feed/permeate) data file  [2026-11-03 04:27, slab_two_pistons_periodic.py]:
+  Input: final_config_slab_support_periodic_5beads_tall_rho04_random_1.0_1.0_14000000.data   (SMOKE-TEST input: 14000000 snapshot, not the production 14000002)
+  Box: 43.4924 x 43.0814 x 240.408   (lx, ly unchanged from the input; zlo = 0)
+  z: perm piston 43.31 | support 54.31 | gel BB [71.22, 187.10] (L_bb 115.87, L_rg 109.60) | load piston 206.25 | feed piston 225.41
+  Reservoirs: permeate 10.0 sigma (padded +3075 beads at rho=0.4701), feed 38.31 sigma; margins perm 43.3 / feed 15.0 sigma (vacuum)
+  Sheets: 23316 beads each (support pattern, spacing 0.2164); piston_clearance 1.0, load_piston_frac 0.5, seed 42
+  Crosslinks: 15066   Chain beads: 89424   Solvent: 90670   Support: 23316   Feed piston: 23316   Permeate piston: 23316   Load piston: 23316
+  Total atoms: 288424   Total bonds: 119232   Output: final_config_slab_support_periodic_5beads_tall_rho04_random_1.0_1.0_14000000_two_pist.data
+
+Beads-per-chain sweep of the periodic RANDOM slab  [2026-11-03, scripts/lib/build_beads_sweep.py -> ~/Documents/lammps_data/input_data/ on Expanse]:
+  Same physical size as the 5-bead random slab (box ~43 x 43, gel ~111 sigma thick); cells and pre_swell derived from a_eq(N) = 4.82 ((N-1)/4)^0.59;
+  interior beads on a random walk pinned to both junctions (chain_placement='walk'); bond_switch 3/strand, seed 7 (N = 20: seed 11).
+
+  Unit cells: 6 x 6 x 14   beads/chain: 10   pre_swell: 0.7201301074539482   a = 7.777   chain placement: walk
+  Box (= gel in x,y): 46.66 x 46.66 x 141.88
+  Gel top z: 116.884   Piston z: 138.134   Bond length: 3.3677
+  Wall tiling: 233 x 136 atoms/sheet, snapped spacing dx=0.2003 dy(row)=0.3431
+  Crosslinks: 4104   Chains: 8064   Polymer beads: 68616
+  Support: 31688   Piston: 31688   Solvent: 123584
+  Bond switching: 33101 switches (4.10 per strand), strands 1.259 +/- 0.188 r0 (max 1.896), 0.0 % lattice strands left
+  Total atoms: 255576   Total bonds: 72576   Output: slab_support_periodic_10beads_tall_rho04_random.data
+  ISOTROPY OK (verdict = the interior strands, every metric within 3 sd of random directions)
+
+  Unit cells: 4 x 4 x 11   beads/chain: 15   pre_swell: 0.6008110377573335   a = 10.094   chain placement: walk
+  Box (= gel in x,y): 40.37 x 40.37 x 144.03
+  Gel top z: 119.030   Piston z: 140.280   Bond length: 4.3707
+  Wall tiling: 202 x 118 atoms/sheet, snapped spacing dx=0.1999 dy(row)=0.3422
+  Crosslinks: 1440   Chains: 2816   Polymer beads: 38048
+  Support: 23836   Piston: 23836   Solvent: 93913
+  Bond switching: 11802 switches (4.19 per strand), strands 1.254 +/- 0.191 r0 (max 1.870), 0.0 % lattice strands left
+  Total atoms: 179633   Total bonds: 39424   Output: slab_support_periodic_15beads_tall_rho04_random.data
+  ISOTROPY OK (verdict = the interior strands, every metric within 3 sd of random directions)
+
+  Unit cells: 4 x 4 x 9   beads/chain: 20   pre_swell: 0.5301044145522714   a = 12.086   chain placement: walk
+  Box (= gel in x,y): 48.35 x 48.35 x 141.78
+  Gel top z: 116.777   Piston z: 138.027   Bond length: 5.2336
+  Wall tiling: 242 x 140 atoms/sheet, snapped spacing dx=0.1998 dy(row)=0.3453
+  Crosslinks: 1184   Chains: 2304   Polymer beads: 42656
+  Support: 33880   Piston: 33880   Solvent: 132549
+  Bond switching: 9287 switches (4.03 per strand), strands 1.264 +/- 0.189 r0 (max 1.898), 0.0 % lattice strands left
+  Total atoms: 242965   Total bonds: 43776   Output: slab_support_periodic_20beads_tall_rho04_random.data (bond_switch_seed 11)
+  ISOTROPY OK (verdict = the interior strands, every metric within 3 sd of random directions)
+
+  Unit cells: 3 x 3 x 7   beads/chain: 30   pre_swell: 0.44572523042859324   a = 15.511   chain placement: walk
+  Box (= gel in x,y): 46.53 x 46.53 x 141.58
+  Gel top z: 116.579   Piston z: 137.829   Bond length: 6.7166
+  Wall tiling: 233 x 134 atoms/sheet, snapped spacing dx=0.1997 dy(row)=0.3473
+  Crosslinks: 522   Chains: 1008   Polymer beads: 28746
+  Support: 31222   Piston: 31222   Solvent: 122629
+  Bond switching: 4296 switches (4.26 per strand), strands 1.254 +/- 0.186 r0 (max 1.881), 0.0 % lattice strands left
+  Total atoms: 213819   Total bonds: 29232   Output: slab_support_periodic_30beads_tall_rho04_random.data
+  ISOTROPY OK (verdict = the interior strands, every metric within 3 sd of random directions)
