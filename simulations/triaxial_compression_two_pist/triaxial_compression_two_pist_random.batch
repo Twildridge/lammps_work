@@ -51,8 +51,14 @@ module load python/3.8.12
 # chain_random_periodic.batch.  NSTEPS = 9 M (the hold; the single batch's 10 M); eps 0.10 as there.
 # WHY: the lattice gel's compression-side G (0.04-0.06) and shear G (0.15-0.18) differ; the random
 # network has no lattice constants, so its K, M and D_c here are compared with the isolated random
-# gel's shear G and the lattice slab's run 7 / fine results.  Wall time: ~34.5 M steps on ~290 k atoms
-# (settle 1 M + ramp + 9 M + retraction + 25 M unload) at >= 1.1 M steps/h -> ~31 h, 48 h requested.
+# gel's shear G and the lattice slab's run 7 / fine results.  Wall time: ~37.5 M steps on ~288 k atoms
+# (settle 1 M + ramp + 9 M + retraction + 25.74 M unload, aligned to nfreq_stress) at >= 1.1 M steps/h
+# -> ~34 h, 48 h requested.
+# RESULT (job 55517273, 2026-11-03..05): the random slab ran at only ~0.75 M steps/h (4 nodes x 32
+# tasks x 4 threads) and the wall-clock guard killed it at 35.75 M steps, 47 h 55 min in: the hold
+# (_c0.10) is complete, the unload (_u0.10) stopped ~1.75 M steps (7 %) short.  run_lammps.sh now
+# post-processes such a partial run (tagged PARTIAL).  To finish an unload within 48 h on this deck
+# (no wall_timeout / restart support) cut UNLOAD_STEPS to <= 20 M, or request more nodes.
 # -----------------------------------------------------------------------
 # The protocol header of triaxial_compression_two_pist_single.batch follows (2026-10-09):
 # FULL GEL, ONE LEVEL, FINE CADENCE, WITH UNLOAD (2026-10-09): the D_c test in one job.

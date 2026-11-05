@@ -391,7 +391,24 @@ if grep -q "Total wall time" "$LAMMPS_LOG" 2>/dev/null; then
     fi
 else
     echo "LAMMPS did not reach 'Total wall time' in ${LAMMPS_LOG} (mpirun RC ${LAMMPS_RC})."
-    echo "Treating as a genuine failure — skipping post-processing."
+    # Wall-clock kill (2026-11-05): RC 124 with an incomplete log means the timeout
+    # guard fired while LAMMPS was still RUNNING, i.e. the job outran its SLURM limit
+    # (first seen on the random-lattice triaxial run 55517273: 35.75 M of 37.5 M steps
+    # at ~0.75 M steps/h against the batch's assumed 1.1 M/h).  Every ave/time,
+    # ave/chunk and dump file is on disk up to its last completed block, so the plots
+    # are still worth making -- tagged PARTIAL below -- before exiting nonzero.  A
+    # genuine crash (any other RC) still skips post-processing.
+    if [ "$LAMMPS_RC" -eq 124 ] && [ -d "${WORK_DIR}/output_files" ]; then
+        echo "PARTIAL RUN: killed by the wall-clock guard mid-run; post-processing the output written so far."
+        echo "             Plots and per-block files cover only the completed blocks -- treat the last phase as truncated."
+        export SKIP_WIDOM STRAINS COMPRESSIONS
+        bash "$SCRIPT_DIR/postprocess.sh" \
+            "$WORK_DIR" "$FOLDER" "$DATANAME" "$INTERACTION" "$TOTSTEPS" 0 "$PRESS_TARGET" \
+            || echo "WARNING: post-processing of the partial run failed."
+        echo "PARTIAL RUN: exiting ${LAMMPS_RC} (the simulation did NOT finish)."
+    else
+        echo "Treating as a genuine failure — skipping post-processing."
+    fi
     # Never propagate a zero here: ${LAMMPS_RC:-1} substitutes only when RC is
     # unset or empty, so an RC of 0 on an incomplete log would exit 0 and report
     # a crashed run as a success. The log check is the authority, so a failure
