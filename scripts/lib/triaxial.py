@@ -3142,13 +3142,89 @@ def sync_from_expanse(cfg, levels=None, force=False):
               refresh=lambda: sync_files(cfg, levels))
 
 
+def expanse_login(host='login.expanse.sdsc.edu', user='dpollard'):
+    """One interactive Expanse login (password + TOTP prompts) -> (paramiko SSHClient, Transport).
+    Shared by sync_pull (triaxial / shear decks) and lib/chain_length.sync_equilibration (2026-11-05).
+    Raises ConnectionError with the usual advice when the host is unreachable or the login is refused."""
+    import paramiko
+    import getpass
+    import socket
+    password = getpass.getpass(f'Expanse password for {user}: ')
+    totp = getpass.getpass('TOTP / verification code: ')
+
+    def auth_handler(title, instructions, prompt_list):
+        return [password if 'password' in p.strip().lower() else totp for p, _ in prompt_list]
+
+    print(f'Connecting to {host} ...')
+    if 'expanse' in socket.gethostname().lower() or 'sdsc' in socket.gethostname().lower():
+        print('  NOTE: this notebook seems to be running ON Expanse; the login node may not accept an SSH\n'
+              '  connection from here.  Turn the sync off and read the run directories directly instead.')
+    try:
+        sock = socket.create_connection((host, 22), timeout=30)
+    except (socket.timeout, OSError) as e:
+        raise ConnectionError(f'cannot reach {host}:22 ({type(e).__name__}: {e}).  '
+                              'Check network / VPN / that the host name resolves, then re-run this cell.') from e
+    transport = paramiko.Transport(sock)
+    transport.banner_timeout = 60
+    transport.set_keepalive(30)
+    try:
+        transport.connect()
+        transport.auth_interactive(user, auth_handler)
+    except paramiko.AuthenticationException as e:
+        transport.close()
+        raise ConnectionError('Expanse rejected the login: wrong password, or the TOTP code expired '
+                              '(codes last 30 s -- have the code ready before running the cell).') from e
+    except (paramiko.SSHException, OSError) as e:
+        transport.close()
+        raise ConnectionError(f'SSH handshake with {host} failed ({type(e).__name__}: {e}).  '
+                              'Repeated failed logins get the connection dropped for a while; wait a minute and retry.') from e
+    if not transport.is_authenticated():
+        transport.close()
+        raise ConnectionError('Expanse login did not complete (transport not authenticated).')
+    ssh = paramiko.SSHClient()
+    ssh._transport = transport
+    return ssh, transport
+
+
+def expanse_run_script(ssh, transport, script, what='the command', timeout=600):
+    """Run a bash script (its text on stdin) on the logged-in host -> (stdout, stderr); closes the
+    transport and raises ConnectionError when the channel fails."""
+    import paramiko
+    import socket
+    try:
+        _, stdout, stderr = ssh.exec_command('bash -s', get_pty=False, timeout=timeout)
+        stdout.channel.sendall(script.encode())
+        stdout.channel.shutdown_write()
+        return stdout.read().decode(), stderr.read().decode()
+    except (socket.timeout, OSError, paramiko.SSHException) as e:
+        transport.close()
+        raise ConnectionError(f'{what} on Expanse failed ({type(e).__name__}: {e}).') from e
+
+
+def sftp_pull_tree(sftp, remote_dir, local_dir):
+    """Recursive SFTP download of remote_dir into local_dir (created), skipping files whose local
+    copy is at least as new; a missing remote_dir is silently nothing to pull."""
+    local_dir = Path(local_dir)
+    local_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        entries = sftp.listdir_attr(remote_dir)
+    except FileNotFoundError:
+        return
+    for e in entries:
+        rp, lp = f'{remote_dir}/{e.filename}', local_dir / e.filename
+        if stat.S_ISDIR(e.st_mode):
+            sftp_pull_tree(sftp, rp, lp)
+            continue
+        if lp.exists() and lp.stat().st_mtime >= e.st_mtime:
+            continue
+        sftp.get(rp, str(lp))
+
+
 def sync_pull(cfg, data_files, traj_files, required, optional, force=False, refresh=None):
     """The Expanse login + staging + SFTP pull behind sync_from_expanse, for any
     file list (2026-09-23: shared with lib/shear.py).  `optional` = basenames whose
     absence never triggers a login; `refresh()` -> (data_files, traj_files, required)
     is called after the pull to re-resolve file tags."""
-    import paramiko
-    import getpass
     import json
     absent_f = cfg.DATA_DIR / '.sync_absent.json'
     absent = set()
@@ -3203,73 +3279,17 @@ echo "  staged: $(ls "$STAGE/data" 2>/dev/null | wc -l) data, $(ls "$STAGE/traj"
     script = (script.replace('__RUNS__', cfg.RUNS_ROOT).replace('__TRAJ__', cfg.TRAJ_ROOT)
               .replace('__STAGE__', stage).replace('__DATA_BN__', bn(data_files))
               .replace('__TRAJ_BN__', bn(traj_files)))
-    password = getpass.getpass(f'Expanse password for {cfg.EXPANSE_USER}: ')
-    totp = getpass.getpass('TOTP / verification code: ')
-
-    def auth_handler(title, instructions, prompt_list):
-        return [password if 'password' in p.strip().lower() else totp for p, _ in prompt_list]
-
-    import socket
-    print(f'Connecting to {cfg.EXPANSE_HOST} ...')
-    if 'expanse' in socket.gethostname().lower() or 'sdsc' in socket.gethostname().lower():
-        print('  NOTE: this notebook seems to be running ON Expanse; the login node may not accept an SSH\n'
-              '  connection from here.  Set SYNC=False and point cfg.base_dir at the run directory instead.')
-    try:
-        sock = socket.create_connection((cfg.EXPANSE_HOST, 22), timeout=30)
-    except (socket.timeout, OSError) as e:
-        raise ConnectionError(f'cannot reach {cfg.EXPANSE_HOST}:22 ({type(e).__name__}: {e}).  '
-                              'Check network / VPN / that the host name resolves, then re-run this cell.') from e
-    transport = paramiko.Transport(sock)
-    transport.banner_timeout = 60
-    transport.set_keepalive(30)
-    try:
-        transport.connect()
-        transport.auth_interactive(cfg.EXPANSE_USER, auth_handler)
-    except paramiko.AuthenticationException as e:
-        transport.close()
-        raise ConnectionError('Expanse rejected the login: wrong password, or the TOTP code expired '
-                              '(codes last 30 s -- have the code ready before running the cell).') from e
-    except (paramiko.SSHException, OSError) as e:
-        transport.close()
-        raise ConnectionError(f'SSH handshake with {cfg.EXPANSE_HOST} failed ({type(e).__name__}: {e}).  '
-                              'Repeated failed logins get the connection dropped for a while; wait a minute and retry.') from e
-    if not transport.is_authenticated():
-        transport.close()
-        raise ConnectionError('Expanse login did not complete (transport not authenticated).')
-    ssh = paramiko.SSHClient()
-    ssh._transport = transport
+    ssh, transport = expanse_login(cfg.EXPANSE_HOST, cfg.EXPANSE_USER)
     print('Step 1 -- staging files on Expanse (find over the runs tree; can take a minute)...')
-    try:
-        _, stdout, stderr = ssh.exec_command('bash -s', get_pty=False, timeout=600)
-        stdout.channel.sendall(script.encode())
-        stdout.channel.shutdown_write()
-        out, err = stdout.read().decode(), stderr.read().decode()
-    except (socket.timeout, OSError, paramiko.SSHException) as e:
-        transport.close()
-        raise ConnectionError(f'the staging command on Expanse failed ({type(e).__name__}: {e}).') from e
+    out, err = expanse_run_script(ssh, transport, script, what='the staging command')
     print(out)
     if err.strip():
         print('  (stderr) ' + err.strip().replace('\n', '\n  (stderr) '))
     print('Step 2 -- downloading via SFTP (skips files already present)...')
     sftp = ssh.open_sftp()
 
-    def pull(remote_dir, local_dir):
-        local_dir = Path(local_dir)
-        local_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            entries = sftp.listdir_attr(remote_dir)
-        except FileNotFoundError:
-            return
-        for e in entries:
-            rp, lp = f'{remote_dir}/{e.filename}', local_dir / e.filename
-            if stat.S_ISDIR(e.st_mode):
-                pull(rp, lp)
-                continue
-            if lp.exists() and lp.stat().st_mtime >= e.st_mtime:
-                continue
-            sftp.get(rp, str(lp))
-    pull(f'{stage}/data', cfg.DATA_DIR)
-    pull(f'{stage}/traj', cfg.TRAJ_DIR)
+    sftp_pull_tree(sftp, f'{stage}/data', cfg.DATA_DIR)
+    sftp_pull_tree(sftp, f'{stage}/traj', cfg.TRAJ_DIR)
     sftp.close()
     ssh.close()
     if not isinstance(cfg.NSTEPS, (int, dict)):
