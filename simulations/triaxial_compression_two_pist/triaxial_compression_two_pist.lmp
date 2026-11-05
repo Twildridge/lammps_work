@@ -566,6 +566,14 @@ variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
 # choice of triaxial_compression.lmp; nothing streams in compression).
 unfix lang_settle
 unfix nve_mob
+# Lateral momentum pin (2026-11-05).  The Langevin phases leave the mobile group with the
+# thermal COM velocity of its ~290 k atoms (kT/M_tot ~ 2.6e-3 sigma/tau in the plane) and
+# Nose-Hoover never removes it: in every run so far the gel slid along the (laterally pinned,
+# full-width periodic) pistons for 100-200 sigma per hold -- 2-4 box widths -- and the x/y
+# stress-profile regions, centred on the UNWRAPPED polymer COM, emptied once it left the box.
+# Zero the x/y linear momentum once and keep it zero; z is left free (the consolidation flow).
+velocity mobile zero linear
+fix mom_prod mobile momentum 100 linear 1 1 0
 fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
 
 # ----- dynamic regions + chunks (one chunk/atom per reduce/chunk user) -----

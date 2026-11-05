@@ -5062,8 +5062,12 @@ def fig_Dc_timevarying(cfg, R, L):
         axb.errorbar(tn[okb], ratio[okb], yerr=rse[okb], fmt='o', color=c, ms=3, alpha=0.6, elinewidth=0.7, capsize=0,
                      label=f"{d['label']}: cumulative $\\theta_i/(D_c t)$, constant-fit $D_c$ = {sig(d['Dc_const'])} ($t > 0.05\\,\\tau_1$)")
         se_typ = np.exp(np.nanmedian(d['se_logD'][np.isfinite(d['se_logD'])])) if np.isfinite(d['se_logD']).any() else np.nan
-        axb.stairs(d['D'] / d['Dc_const'], d['edges'] / d['tau1'], baseline=None, color=c, lw=1.8, alpha=0.4,
-                   label=f"{k.replace('unload', 're-swelling')}: {d['K']}-bin local $D_c(t)/D_c$ (slope of the (a) line; s.e. x/ {se_typ:.2f} at fixed amplitudes)")
+        _lab = f"{k.replace('unload', 're-swelling')}: {d['K']}-bin local $D_c(t)/D_c$ (slope of the (a) line; s.e. x/ {se_typ:.2f} at fixed amplitudes)"
+        _vals, _edges = d['D'] / d['Dc_const'], d['edges'] / d['tau1']
+        if hasattr(axb, 'stairs'):
+            axb.stairs(_vals, _edges, baseline=None, color=c, lw=1.8, alpha=0.4, label=_lab)
+        else:   # matplotlib < 3.4 (the Expanse anaconda3/2021.05 module): step plot of the same bins
+            axb.step(_edges, np.append(_vals, _vals[-1]), where='post', color=c, lw=1.8, alpha=0.4, label=_lab)
     axb.axhline(1.0, color='k', ls='--', lw=1.2, label=r'$\theta = D_c t$ (constant $D_c$)')
     axb.axhspan(0.8, 1.2, color='0.5', alpha=0.12, label=r'$\pm 20\%$')
     axb.axvline(1.0, color='0.5', ls=':', lw=1)
