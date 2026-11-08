@@ -21,10 +21,10 @@ in `scripts/lib/site.sh`; the knob table and the launch / completion logic share
 the trajectory files routed to scratch, the wall-clock budget, and the post-processing after LAMMPS finishes.
 `DRY_RUN=1 bash <file>.batch` (outside SLURM) prints the resolved run and the full `mpirun` line without creating anything.
 
-**Resources (allocation benchmark, 2026-11-07):** every production batch requests 4 nodes x 128 tasks x 1 thread, and
+**Resources (allocation benchmark, 2026-11-07):** every production batch requests 6 nodes x 128 tasks x 1 thread, and
 `run_lammps.sh` maps ranks with `--map-by ppr:128:node:pe=1` (`MPI_MAP_BY=core`; `node` restores the old round-robin placement).
-With the comm cutoff of 2.5 in the decks this is 2.3-3.0x the 2026-11-06 production speed at a third to 43 % of its SU per step
-(§5f). 6 nodes is about 25 % faster for 20 % more SU; 1 node is the cheapest per step at half the speed.
+With the comm cutoff of 2.5 in the decks this is 2.9-3.8x the 2026-11-06 production speed at 40-52 % of its SU per step
+(§5f). 4 nodes is about 20 % cheaper per step and 25 % slower (`sbatch --nodes=4 …`); 1 node is the cheapest per step.
 
 ### 5b. Simulation types
 
@@ -245,8 +245,8 @@ then gave, against the 2026-11-06 production setup (4 nodes, 128 x 1, map-by nod
 | 15 | 8 | 501 | 567 | 3.2x | 0.63x |
 
 Repeat spread at 3-6 nodes is 20-30 % (node placement), so 4 and 6 nodes tie in speed at N = 5. **Adopted 2026-11-08:**
-4 nodes x 128 x 1 in every production batch, `MPI_MAP_BY=core` in `scripts/lib/site.sh`, cutoff 2.5 in the decks (since
-2026-11-07). 6 nodes when wall time matters more than SUs (`sbatch --nodes=6 …`). Data: `~/Documents/lammps_runs/allocation_benchmark/`
+6 nodes x 128 x 1 in every production batch, `MPI_MAP_BY=core` in `scripts/lib/site.sh`, cutoff 2.5 in the decks (since
+2026-11-07). 4 nodes when SUs matter more than wall time (`sbatch --nodes=4 …`). Data: `~/Documents/lammps_runs/allocation_benchmark/`
 (`nodescan_rot45.{png,txt}`, `layouts_rot45.{png,txt}`), README in the benchmark folder. The two-piston batches ran 32 x 4 until
 2026-11-08 (0.55-0.75 M steps/h); their `--time` budgets were set for that layout and now have slack.
 

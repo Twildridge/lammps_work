@@ -2,7 +2,7 @@
 #SBATCH --job-name=triax_perm2p
 #SBATCH --partition=compute
 #SBATCH --account=csb197
-#SBATCH --nodes=4
+#SBATCH --nodes=6
 #SBATCH --ntasks-per-node=128
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
@@ -21,7 +21,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # _two_pist_pm40 file the compression deck reads). Variants:
 #     DATANAME=<stem> sbatch triaxial_permeation_two_pist_single.batch
 #     DATANAME=<15-bead stem> DP_PISTON=<0.24 M> sbatch ...        dP from the 15-bead compression's M (eps_F = dP/(2M) ~ 0.12);
-#                                                                  1.9x the atoms: add --nodes=8 or halve the budgets
+#                                                                  1.9x the atoms: add --nodes=10 or halve the budgets
 #     FROZEN_AT=ref NSTEPS_OVERRIDE=4000000 DATANAME=<stem> sbatch ...   network frozen in the reference state BEFORE the
 #                                                                  ramp: the undeformed gel's kappa (~6 M steps)
 # Analysis: triaxial_permeation_single_two_pist.ipynb (figure 9 kappa, 9f frozen, 12 drive D_c, 12u unload).

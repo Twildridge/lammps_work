@@ -2,7 +2,7 @@
 #SBATCH --job-name=triax_comp2p_fine
 #SBATCH --partition=compute
 #SBATCH --account=csb197
-#SBATCH --nodes=4
+#SBATCH --nodes=6
 #SBATCH --ntasks-per-node=128
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
@@ -23,7 +23,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # _two_pist_pm40 file is the converter output with --margin-perm 40, shared with the permeation
 # deck; chain_random_periodic.batch makes and submits it, or by hand:
 #     DATANAME=<stem> sbatch triaxial_compression_two_pist_single.batch
-# The 15-bead gel (…_15beads_…_30000000_two_pist_pm40) has 1.9x the atoms: add --nodes=8 or
+# The 15-bead gel (…_15beads_…_30000000_two_pist_pm40) has 1.9x the atoms: add --nodes=10 or
 # halve NSTEPS / UNLOAD_STEPS. Analysis: triaxial_compression_single_two_pist.ipynb, LEVEL "0.10".
 
 FOLDER=triaxial_compression_two_pist

@@ -2,7 +2,7 @@
 #SBATCH --job-name=triax_comp2p_random
 #SBATCH --partition=compute
 #SBATCH --account=csb197
-#SBATCH --nodes=4
+#SBATCH --nodes=6
 #SBATCH --ntasks-per-node=128
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
