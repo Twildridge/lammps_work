@@ -101,7 +101,7 @@ fi
 # results so far: csv + verdict + the layout figure, refreshed by every job of the sweep
 cd "$BENCH_DIR" || exit 0
 python3 collect_results.py --out "$LOG_DIR/../results.csv" || true
-( module reset; module load anaconda3/2021.05/q4munrg
+( module reset; module load cpu/0.17.3b anaconda3/2021.05/q4munrg   # anaconda3 sits under the cpu hierarchy
   python plot_layouts.py "$LOG_DIR/../results.csv" --network "$NETWORK" \
       --out "$LOG_DIR/../layouts_${NETWORK}.png" > "$LOG_DIR/../layouts_${NETWORK}.txt" 2>&1 ) || true
 echo "debug sweep job done ($(( $(date +%s) - T_START ))s)"

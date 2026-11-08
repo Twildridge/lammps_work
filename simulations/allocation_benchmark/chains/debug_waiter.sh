@@ -3,8 +3,8 @@
 # line) one at a time, whenever fewer than 2 debug jobs of this user are queued or running
 # (debug-normal MaxSubmitPU = 2, and a job cannot submit its successor while it still counts).
 # Started by submit_debug_sweep.sh with nohup; it exits when the queue file is empty.
-cd "$(dirname "${BASH_SOURCE[0]}")"
-Q=debug_queue.txt; LOG=debug_waiter.log
+cd "$(dirname "${BASH_SOURCE[0]}")/.."   # the benchmark folder: the sbatch lines name debug_sweep.batch relative to it
+Q=chains/debug_queue.txt; LOG=chains/debug_waiter.log
 while [ -s "$Q" ]; do
     n=$(squeue -h -u "$USER" -p debug 2>/dev/null | wc -l)
     if [ "$n" -lt 2 ]; then
