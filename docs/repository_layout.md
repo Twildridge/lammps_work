@@ -27,7 +27,10 @@ lammps_work/                    ← This git repository
 │   ├── postprocess.sh          ← Post-run plotting (calls lib/plot_*.py; run by the job runners and continue_sim.sh)
 │   ├── git_sync.sh             ← One-command GitHub sync (MacBook + clusters) — this is what `lsync` runs
 │   ├── install_lsync.sh        ← One-time-per-machine setup: registers `lsync` + nbstripout (see github_sync.md)
-│   ├── node_git_sync.sh        ← Sourced by run_lammps.sh: best-effort git pull on the compute node
+│   ├── batch_prologue.sh       ← Sourced first by every .batch: git pull + re-exec, MPI env, modules
+│   ├── node_git_sync.sh        ← Serialised fast-forward git pull on the compute node (used by batch_prologue.sh)
+│   ├── lib/site.sh             ← Site settings: LAMMPS binary, paths, MPI_MAP_BY, WALL_MARGIN, modules
+│   ├── lib/run_common.sh       ← Knob table + launch / verdict / chaining shared by run_lammps.sh and continue_sim.sh
 │   ├── continue_sim.sh         ← Resume a finished run without redoing setup (see running_simulations.md)
 │   │
 │   │   # ── data-file builders / converters (notebooks; converter code in lib/) ──

@@ -1,36 +1,22 @@
 #!/usr/bin/env bash
-# ---------------------------------------------------------------------------
-# chain_random_periodic.batch (2026-11-02) -- the bridge between a periodic slab equilibration
-# and its two-piston run(s).  Submitted by scripts/submit_random_periodic_pipeline.sh as
-#     sbatch --dependency=afterany:<slab job> --export=ALL,SLAB_JOB=<slab job> chain_random_periodic.batch
-# so it starts when that job ends, on ONE core of the shared partition (a few SU).
-# GENERALISED 2026-11-07 (env knobs, defaults = the 2026-11-02 random pipeline):
-#     SLAB_FOLDER   run folder of the equilibration (slab_with_support | chain_length_testing)
-#     SLAB_DATANAME the equilibration's DATANAME, SLAB_NSTEPS its budget NSTEPS (the final_config tag)
-#     MARGIN_PERM   converter --margin-perm (empty = the converter's default -> <stem>_two_pist;
-#                   40 -> <stem>_two_pist_pm40, the file both two-piston decks read since 2026-11-07)
-#     SUBMIT        which runs to submit on the converted file: "compression" (default; the
-#                   TRIAX_BATCH below) and/or "permeation" (triaxial_permeation_two_pist_single.batch),
-#                   each with DATANAME exported; DP_PISTON is passed through when set
-# e.g. the rot45 5-bead standard gel, after  NETWORK=rot45 bash submit_chain_length_sweep.sh 5  (job J):
+# chain_random_periodic.batch -- the bridge between a periodic slab equilibration and its two-piston
+# run(s), on one core of the shared partition. Submit it with --dependency=afterany on the slab job
+# (scripts/submit_random_periodic_pipeline.sh does, for the random pipeline):
+#     sbatch --dependency=afterany:<job> --export=ALL,SLAB_JOB=<job>[,knobs...] chain_random_periodic.batch
+# Knobs (environment; defaults = the random pipeline):
+#     SLAB_FOLDER    run folder of the equilibration (slab_with_support | chain_length_testing)
+#     SLAB_DATANAME  its DATANAME; SLAB_NSTEPS its budget NSTEPS (the final_config tag)
+#     MARGIN_PERM    converter --margin-perm (empty = default -> <stem>_two_pist; 40 -> <stem>_two_pist_pm40,
+#                    the file both two-piston decks read since 2026-11-07)
+#     SUBMIT         "compression" (default) and/or "permeation"; DP_PISTON is passed through when set
+# e.g. the rot45 standard gel after  NETWORK=rot45 bash submit_chain_length_sweep.sh 5  (job J):
 #     sbatch --dependency=afterany:J --export=ALL,SLAB_JOB=J,SLAB_FOLDER=chain_length_testing,\
 #       SLAB_DATANAME=slab_support_periodic_5beads_tall_rho04_rot45,SLAB_NSTEPS=14000000,MARGIN_PERM=40,\
 #       SUBMIT="compression permeation" chain_random_periodic.batch
-# (15 beads: SLAB_NSTEPS=30000000 and SUBMIT=compression first -- its M sets the permeation dP.)
-# It
-#   1. finds the slab run's final_config_<DATANAME>_1.0_1.0_14000000.data (newest run dir,
-#      continuation_* subdirs included);
-#   2. if there is none and the slab job chained a continuation (CHAIN=1: run_lammps.sh prints
-#      the continuation's "Submitted batch job N" into the slab job's output file), re-submits
-#      ITSELF with --dependency=afterany on that job and exits (at most 6 hops);
-#   3. copies the final config to ~/Documents/lammps_data/input_data/ (the slab run dir keeps its
-#      copy), converts it with scripts/lib/slab_two_pistons_periodic.py into the two-piston
-#      geometry (<stem>_two_pist.data, an entry in slab_data_file_info.md), and
-#   4. submits triaxial_compression_two_pist_random.batch from this folder.
-# Everything is idempotent: an existing copy / converted file is kept, not rewritten.
-# Successor of archive/simulations/triaxial_compression/chain_after_slab.batch (2026-09-07),
-# which ran the one-piston deck inside its own 4-node allocation; this one only bridges.
-# ---------------------------------------------------------------------------
+# It finds the slab run's final_config (continuation_* subdirs included); if the slab job chained a
+# continuation instead, it re-submits itself after that job (at most 6 hops). Then it copies the final
+# config to input_data/, converts it (lib/slab_two_pistons_periodic.py) and submits the run(s) with
+# DATANAME exported. Existing copies and converted files are kept.
 #SBATCH --job-name=chain_random_periodic
 #SBATCH --partition=shared
 #SBATCH --account=csb197
@@ -42,12 +28,11 @@
 #SBATCH --output=%x.o%j.%N
 {
 set -u
-LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
-SLAB_DIR="$LAMMPS_WORK_DIR/simulations/slab_with_support"
+source "$HOME/Documents/lammps_work/scripts/lib/site.sh"
 TRIAX_DIR="$LAMMPS_WORK_DIR/simulations/triaxial_compression_two_pist"
 SLAB_FOLDER="${SLAB_FOLDER:-slab_with_support}"
-RUNS="$HOME/Documents/lammps_runs/$SLAB_FOLDER"
-INPUT_DATA="$HOME/Documents/lammps_data/input_data"
+RUNS="$RUNS_DIR/$SLAB_FOLDER"
+INPUT_DATA="$INPUT_DATA_DIR"
 DATANAME="${SLAB_DATANAME:-slab_support_periodic_5beads_tall_rho04_random}"
 INTERACTION="1.0_1.0"
 NSTEPS="${SLAB_NSTEPS:-14000000}"
@@ -125,10 +110,7 @@ ls -la "$INPUT_DATA/$FINAL"
 if [ -e "$INPUT_DATA/$TWO_PIST" ]; then
     echo ">>> $INPUT_DATA/$TWO_PIST already exists; keeping it."
 else
-    source /etc/profile.d/modules.sh
-    module reset 2>/dev/null || true
-    module unload python/3.8.12 2>/dev/null || true
-    module load anaconda3/2021.05/q4munrg
+    load_python_module
     python -c "import numpy, scipy; print('numpy', numpy.__version__, 'scipy', scipy.__version__)"
     echo ">>> converting to the two-piston geometry (scripts/lib/slab_two_pistons_periodic.py ${CONV_OPTS[*]})..."
     cd "$LAMMPS_WORK_DIR/scripts/lib" || exit 1

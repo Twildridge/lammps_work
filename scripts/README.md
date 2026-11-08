@@ -6,12 +6,15 @@ Rule (same as `lammps_data_files_local/`): a notebook or script lives here while
 
 | Script | Role |
 |---|---|
-| `run_lammps.sh` | **The Expanse job runner.** Every `.batch` in `simulations/` calls it: finds the deck by folder name, forwards the env knobs as `-var`s, runs `mpirun lmp`, then `postprocess.sh`; with `CHAIN=1` hands over to `continue_sim.sh --chain`. |
+| `run_lammps.sh` | **The Expanse job runner.** Every `.batch` in `simulations/` calls it with `<folder> <dataname> <interaction> <nsteps>`: finds the deck by folder name, forwards the exported knobs as `-var`s (table in `lib/run_common.sh`), runs `mpirun lmp`, then `postprocess.sh`; with `CHAIN=1` hands over to `continue_sim.sh --chain`. `DRY_RUN=1` prints the run instead. |
+| `batch_prologue.sh` | Sourced first by every `.batch`: pulls the repo and re-runs the fresh batch, sets the MPI environment, loads the modules, exports `LAMMPS_WORK_DIR`. |
+| `lib/site.sh` | Site settings: LAMMPS binary, data / runs / scratch paths, `MPI_MAP_BY` (core), `WALL_MARGIN`, module names. |
+| `lib/run_common.sh` | Shared by the two runners: the knob table (`KNOBS`), run-dir creation, the guarded `mpirun` launch with its completion verdict, the chaining step. |
 | `postprocess.sh` | Regenerates every post-run plot of a finished run directory (calls `lib/plot_*.py`); run automatically by the runners, or by hand. |
 | `continue_sim.sh` | Resume a finished run, or chain a run that hit its wall-clock budget, from the simulation folder (`docs/running_simulations.md` §5e). |
 | `git_sync.sh` | What `lsync` runs: pull --rebase, stage, commit, push (`docs/github_sync.md`). |
 | `install_lsync.sh` | One-time per machine: registers the `lsync` alias and nbstripout. |
-| `node_git_sync.sh` | Sourced by `run_lammps.sh`: best-effort `git pull` on the compute node before a job starts. |
+| `node_git_sync.sh` | Sourced by `batch_prologue.sh` and `run_lammps.sh`: serialised, fast-forward-only `git pull` on the compute node. |
 
 ## Data-file builders and converters (notebooks; converter code in `lib/`)
 
@@ -42,4 +45,4 @@ Rule (same as `lammps_data_files_local/`): a notebook or script lives here while
 
 Moved out on 2026-10-11: the Pod and Bridges-2 runners (with every `*_pod.batch` / `*_bridges.batch` and the Pod benchmarks) → `../archive/pod_bridges/`; the LAMMPS build script and its log → `../lammps_build/`; the one-piston analysis notebooks (`triaxial_compression{,_single,_sweep}`, `triaxial_permeation`), the walled / angled / isolate / split / add_plates builders and `run_analysis_notebook.sh` → `../archive/scripts/`.
 
-**Batch files (2026-10-28):** every simulation folder keeps at most two, `<folder>_single.batch` and `<folder>_sweep.batch` (`run_lammps.sh` keys on the folder, not the batch name; the self-sync guard in each batch re-execs its own file). Everything else — the fine-cadence and periodic shear batches, the half / quarter triaxial gels, the small-dP permeation, the older `slab_with_support` inputs and the plate-driven `shear_slab` deck — is in `archive/simulations/` with a note in `archive/README.md`.
+**Batch files (2026-11-08):** every simulation folder keeps `<folder>_single.batch` and, where there is a sweep, `<folder>_sweep.batch` (`run_lammps.sh` keys on the folder, not the batch name). A batch is its `#SBATCH` header, `source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"`, a short description, `FOLDER` / `DATANAME` / `INTERACTION` / `NSTEPS`, the exported knobs and the `run_lammps.sh` call; all production batches request 4 nodes x 128 x 1 (allocation benchmark, 2026-11-07). Older batches are in `archive/simulations/` with a note in `archive/README.md`.

@@ -4,15 +4,27 @@
 
 ### 5a. How it works
 
-When you submit a job, the flow is:
-
 ```
-edit the .batch file → sbatch → SLURM queues the job → nodes allocated →
-run_lammps.sh creates a timestamped lammps_runs/ directory →
-pulls the latest scripts from GitHub → runs LAMMPS → post-processing plots
+edit the .batch file → sbatch → batch_prologue.sh pulls the repo and re-runs the fresh batch →
+run_lammps.sh creates a timestamped lammps_runs/ directory → mpirun lmp → continuation (CHAIN=1) → postprocess.sh
 ```
 
-`run_lammps.sh` does the bookkeeping: the timestamped working directory, the symlink to the data file, the trajectory files routed to scratch, and the post-processing after LAMMPS finishes. The `.batch` file is the only thing to edit.
+A `.batch` (2026-11-08 layout) is its `#SBATCH` header, one line `source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"`,
+a short description, the four run parameters (`FOLDER`, `DATANAME`, `INTERACTION`, `NSTEPS`), the exported deck knobs, and the call
+`bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"`. The prologue does what every batch used
+to repeat: the git pull and re-exec (so the knobs are read from the current file, not the copy `sbatch` took), the Open MPI / UCX
+environment, the module loads. Site settings (LAMMPS binary, data / runs / scratch paths, `MPI_MAP_BY`, `WALL_MARGIN`, modules) live
+in `scripts/lib/site.sh`; the knob table and the launch / completion logic shared by `run_lammps.sh` and `continue_sim.sh` in
+`scripts/lib/run_common.sh`.
+
+`run_lammps.sh` does the bookkeeping: the timestamped working directory, the deck copied into it, the symlink to the data file,
+the trajectory files routed to scratch, the wall-clock budget, and the post-processing after LAMMPS finishes.
+`DRY_RUN=1 bash <file>.batch` (outside SLURM) prints the resolved run and the full `mpirun` line without creating anything.
+
+**Resources (allocation benchmark, 2026-11-07):** every production batch requests 4 nodes x 128 tasks x 1 thread, and
+`run_lammps.sh` maps ranks with `--map-by ppr:128:node:pe=1` (`MPI_MAP_BY=core`; `node` restores the old round-robin placement).
+With the comm cutoff of 2.5 in the decks this is 2.3-3.0x the 2026-11-06 production speed at a third to 43 % of its SU per step
+(§5f). 6 nodes is about 25 % faster for 20 % more SU; 1 node is the cheapest per step at half the speed.
 
 ### 5b. Simulation types
 
@@ -52,7 +64,7 @@ Knobs exported by the `*_two_pist.batch` files and forwarded by `run_lammps.sh` 
 
 | env var | `-var` | default | meaning |
 |---|---|---|---|
-| `PRESS_TARGET` (positional) | `press_target` | 1.5 | bath pressure on the wet pistons |
+| `PRESS_TARGET` | `press_target` | 1.5 | bath pressure on the wet pistons |
 | `DP_PISTON` | `dp_piston` | 0.1 | permeation only: `P_feed = P_target + dP` (a single value, never a list) |
 | `PISTON_MASS` | `piston_mass` | 1000 | mass of every piston bead (types 5/6/7), applied with `mass` after `read_data` |
 | `C_PIST_FRAC` | `c_pist_frac` | 1.0 | damping / critical damping; the deck prints `C_crit`, ω and the piston period |
@@ -76,21 +88,21 @@ from the converter's data file.
 
 ### 5c. Editing the batch file
 
-Open the `.batch` file for your target cluster. The section you edit is at the bottom:
+The section you edit is below the `source` line:
 
 ```bash
-FOLDER="triaxial_compression_two_pist"
-DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist"
-INTERACTION="1.0_1.0"   # epsSS_epsSP
+FOLDER=triaxial_compression_two_pist
+DATANAME=final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist
+INTERACTION=1.0_1.0
 NSTEPS=9000000          # flat-hold fallback + setup-file tag (the holds themselves are auto-sized per level)
-TYPE=""                 # stress, volume, stressvol, or leave empty
-PRESS_TARGET=1.5        # bath pressure on the wet pistons
+export PRESS_TARGET=1.5
+export COMPRESSIONS="0.10 0.15 0.20"
 ```
 
 - **`DATANAME`**: the filename of your `.data` file in `lammps_data/input_data/`, without the `.data` extension. A driver can point `run_lammps.sh` at another folder with `LAMMPS_INPUT_DATA_OVERRIDE`; `calibration_sweep.sh` uses `input_data/calibration_sweep/` for its ~370 prep files and run symlinks.
 - **`INTERACTION`**: `epsSS_epsSP` — solvent–solvent and polymer–solvent LJ well depths (see cheat sheet)
 - **`NSTEPS`**: number of timesteps to run (1 million steps ≈ 4100 τ ≈ 19 ns for PEG)
-- **`TYPE`**: optional suffix that gets appended to the data file name in output (for labelling stress/volume variants)
+- **Deck knobs** are exported environment variables named like the deck's LAMMPS variable in upper case (`PRESS_TARGET` → `-var press_target`). `run_lammps.sh` forwards a knob only when it is set, so a knob left out keeps the deck's own default; the full list is `KNOBS` in `scripts/lib/run_common.sh`, and the decks' `variable … index` lines give the defaults. `STRAINS` / `COMPRESSIONS` are space-separated lists. `CHAIN=1` chains continuation jobs (§5e), `WALL_MARGIN` sets the deck's stopping margin, `VEL_SEED` the RNG seed (default 12345), `COMM_CUTOFF=5.0` restores the pre-2026-11-07 communication cutoff.
 
 To extend a finished run, use `continue_sim.sh` ([§5e below](#5e-continuing-a-run-with-continue_simsh)) rather than resubmitting this batch file — there's no more `OLDSTEPS`-based resubmission path (removed 2026-08-06; it always reran full setup from the prior run's final `.data` file anyway, `continue_sim.sh` is the real restart).
 
@@ -98,19 +110,16 @@ For the archived `shear_slab`, `NSTEPS` is the Phase 3 production hold per strai
 
 For `shear_slab_two_pist`, `NSTEPS` is likewise the hold per strain level and the file tag; the other lengths are index knobs (`phase0_steps` = 50k, `npt_piston_steps` = `NPT_PISTON_STEPS`, `ref_avg_steps` = 150k, drive cap `nsteps_shear` = 570k). Local smoke test of the **isolated-gel deck** (verified 2026-10-14 with the LAMMPS GUI `lmp -sf omp -pk omp 4`, 24 s on a 3 × 3 × 7-cell mini gel converted with `add_more_plates_to_gel.py` layout `x_plates`; the generator's random solvent must be pushed off first — soft pair + `nve/limit`, then LJ — or the converter's overlap check and the deck's minimize both fail): `-var phase0_steps 200 -var npt_piston_steps 400 -var min_iter 50 -var ref_avg_steps 400 -var ref_nfreq 200 -var series_freq 100 -var stress_freq 100 -var nsteps_shear_base 3000 -var nsteps_shear 6000 -var num_dump_frames 1 -var thermo_freq 500 -var core_margin_y 3 -var core_margin_z 6 -var t_seat 400 -var seat_settle_steps 400 -var strains 0.005 0.01 -var nsteps 2000` (the two core margins must leave a core thicker than 2 bins on the mini gel; the deck quits with a message otherwise). Pass: the plates seat at the Rg faces (`plate_pressure_*` columns 2–3 move from the parked to the seat planes), γ held exactly through each hold (`shear_strain_*` column 4 constant), zero FENE warnings, all `stress_profile_x_*` / `stress_profile_z_*` / `disp_z_polymer*` files written, and `lib/shear.py` (`DECK = "shear_slab_two_pist_iso"`) finds the exact grip planes and runs. **With the unload** (verified 2026-10-28 with the LAMMPS GUI `lmp -sf omp -pk omp 8` on the 542k-atom random-gel `_x_plates` file): add `-var unload 1 -var unload_steps 2000` (and `-var strains 0.02 -var strains_list "0.02" -var nsteps_shear_base 2000 -var nsteps_shear 6000 -var seat_mode rg` on the full-size file); pass = the log's `[unload 0.02] retraction done: gamma = ...` line near 0, the level's file set written again tagged `_2000_u0.02`, and `lib/shear.py` reading the level with `L['U']` and a `D_c` from `fit_Dc_unload` every figure. The periodic deck's smoke test (verified 2026-10-03, ~4 min on the 290k-atom file) is the same line without the core margins and with `-var nsteps_shear_base 30000`, run as `-in shear_slab_two_pist_periodic.lmp`. Submit with `sbatch shear_slab_two_pist_single.batch` (isolated: `DATANAME` = the `..._x_plates` stem, copy it to `input_data/` first) or `sbatch shear_slab_two_pist_periodic.batch` (periodic: the data file is the one already in `input_data/` for the compression runs); defaults `STRAINS_LIST=(0.1)`, `NSTEPS=9000000`, `UNLOAD=0`, 4 nodes × 32 tasks × 4 threads, `--time 16:00:00` (~11.4 M steps, needs ≥ 0.75 M steps/h; a short budget cuts the hold, whose files stay intact). The single batch is a plain load-only run (shear_7, the random gel, 2026-10-28). **D_c in shear (parked 2026-10-28).** Two routes are wired and switched off; the batch carries the exact exports in a commented block. (A) *Hold transient*: a fast drive (`NSTEPS_SHEAR_BASE`, steps per 0.10 increment, deck default 285000; `HALT_EVERY`, the drive's halt check alone so the fix print cadence can stay at 1000) plus the fine displacement file (`DISP_FINE_NFREQ`, `DISP_FINE_SPAN`: `disp_z_polymer_fine_*_g<γ>`, the cumulative u_z(x) every N steps from the drive start through the first span of the hold, own chunk compute, hold run in two segments); `lib/shear.py fit_Dc_fine` fits the lag to the coarse file's late plateau in sin(2πkẑ) modes (the drive lag is antisymmetric about the mid-plane) and gives the diffusive reading per mode beside the one-time (G/η_s) reading; single notebook figure 9b, sweep notebook 7b, κ falls back to it. A local sweep on the random gel (γ 0.10) found no FENE or neighbour-list trouble at `NSTEPS_SHEAR_BASE` 1000 / 300 / 100 (grip 0.43 / 1.45 / 4.34 σ/τ); 100 heats the free group to T 1.23 and the global Nosé–Hoover takes ~5 τ to settle it, so a faster drive wants a streaming-unbiased thermostat temperature (`compute temp/profile` binned along the gap on `nvt_prod`), never Langevin (a fixed-frame drag immobilizes the solvent and manufactures the diffusive mode). (B) *Phase 2c unload*: `UNLOAD=1`, `UNLOAD_STEPS`; `fit_Dc_unload`, figures 9/11; its profile is block-averaged at NSTEPS/10, too coarse unless the unload gets its own logger (not built); the deck skips the unload when the wall budget died inside the hold. **Why parked:** the same sweep showed the interior reaching 80 % of the applied strain within 4.5 τ, i.e. the relaxation is the viscous G/η_s mode of the entrained solvent (2026-10-21), on which D_c k² is a few-percent correction; the project's D_c stays the compression unload's free re-swelling. **Strain sweep (2026-10-19): `sbatch shear_slab_two_pist_sweep.batch`** — the isolated-gel deck through the cumulative levels `STRAINS_LIST=(0.01 0.03 0.05 0.1)` in one job (the question: is the G ≈ 0.19 of the single 0.1 level strain-dependent?), `NSTEPS=3000000` per hold (the 0.01 level's core σ_xz is read to ~6 % from the shear_4 noise; the whole run is ~14.6 M steps, shear_4's 10.8 M took under ~30 h) and `REF_AVG_STEPS=1000000` (env, new in `run_lammps.sh`: `-var ref_avg_steps`, forwarded only when set; the γ = 0 reference is subtracted from every level and its 150 k default was 20 % of the 0.01 signal). The deck honours **`-var wall_timeout`** since the same date (`timer timeout`, as `slab_with_support.lmp`): a sweep that outruns the job ends cleanly — the level in flight is cut short, the loop exits (later levels are not started; drop the cut level from the notebook's `STRAINS`) and the final `write_data` still runs. **Loop-exit fix (2026-10-21):** sweep 55082229 finished all four levels and then died on `Substitution for illegal variable strains` (no final `write_data`): `next` deletes the index variable once the list is exhausted and skips the following command, so the `sweep_cut` print after the loop read an undefined `${strains}`. The deck now saves each level's tag in `last_strain` before `next` and the normal exit jumps over the budget-cut message; nothing after the loop may reference `${strains}`. Every level's files were intact, and `postprocess.sh` (run by hand) now also draws the stress-strain curve for this deck. LAMMPS checks the clock every `wall_check_every` (1000) steps counted within each `run`, so a run shorter than that is never checked (every production run here is ≥ 26 k steps; a smoke test sets `-var wall_check_every 100`). Analyse with `shear_analysis_sweep.ipynb`, `DECK = "shear_slab_two_pist_iso"`, `STRAINS = ["0.01", "0.03", "0.05", "0.1"]`, `NSTEPS = None`. **Fine-cadence run (2026-10-22): `sbatch shear_slab_two_pist_fine.batch`** — the same four levels with three changes aimed at the transverse relaxation at the start of each hold, which sweep 55082229 could not see (its hold-referenced `disp_z_polymer` is a static pattern from the first 300k-step block on, pinned to the hold-onset `displace/atom` snapshot, and the 5000-step series are at plateau in their first block). `DISP_FINE_NFREQ=250` / `DISP_FINE_SPAN=200000` (`-var disp_fine_nfreq` / `disp_fine_span`, deck defaults 0 / 100000): the cumulative profile `v_uz_cum` on the `disp_z_polymer_cum` bins every 250 steps from the drive start through the first 200k steps of the hold → `disp_z_polymer_fine_*_g<strain>`; the hold is run as two segments (the first padded to a `disp_fine_nf` epoch and capped at the hold, the fine fix unfixed between them; all other hold fixes span both). `NSTEPS_SHEAR_BASE=10000` (`-var nsteps_shear_base`): the drive ~28× faster (0.046 σ/τ per grip, a 0.10 increment in ~9k steps) so the ramp does not hide the relaxation; `STRESS_FREQ=100` (`-var stress_freq`): the halt check every 100 steps keeps the overshoot at ~0.001 (it is also the fix print cadence). `run_lammps.sh` forwards the three new knobs only when set. `lib/shear.py` `fit_Dc_fine` reads the fine file against the late plateau of the coarse `_cum` file (same quantity, same bins, so the onset snapshot cancels) and the notebooks' figures 9b / 7b draw it. Smoke-tested locally 2026-10-22 (LAMMPS GUI `lmp -sf omp -pk omp 6`, the full 435k-atom `_x_plates` file, 9.5 min) with the isolated deck's smoke line plus `-var disp_fine_nfreq 100 -var disp_fine_span 700 -var wall_check_every 100`: fine files with one block per 100 steps from the drive start to hold + 700, both hold segments, the coarse files unchanged (10 blocks), no FENE warnings, `lib/shear.py` runs every figure including the two new ones. Not submitted. **Single-level 5 % run (2026-10-25): `sbatch shear_slab_two_pist_fine_g005.batch`** — the fine batch with `STRAINS_LIST=(0.05)` (one ~4.5 k-step drive from the γ = 0 reference to 0.05, the largest one-step transient the protocol allows, then the 3 M-step hold; ~5.1 M steps, `--time 24:00:00`). Analyse with `shear_analysis_single.ipynb`, `STRAINS = ["0.05"]`. The same batch with `DATANAME` set to the rotated gel's `_x_plates` stem is the anisotropy comparison (same level, same cadence, orientation the only difference).
 
-**`DECK_FILE`** (env, optional, 2026-10-13): run `simulations/$FOLDER/$DECK_FILE.lmp` instead of `$FOLDER.lmp` — for a folder that keeps more than one deck (the archived `shear_slab_two_pist_periodic.batch` exported `DECK_FILE=shear_slab_two_pist_periodic`; no current batch uses it). Output folders and file names still key on `FOLDER`.
+**`DECK_FILE`** (env, optional, 2026-10-13): run `simulations/$FOLDER/$DECK_FILE.lmp` instead of `$FOLDER.lmp` — for a folder that keeps more than one deck (`shear_slab_two_pist_periodic.batch` exports `DECK_FILE=shear_slab_two_pist_periodic`). Output folders and file names still key on `FOLDER`.
 
 ### 5d. Submitting a job
 
 ```bash
 # SSH into the cluster, then:
 cd ~/Documents/lammps_work/simulations/triaxial_compression_two_pist
-sbatch triaxial_compression_two_pist_sweep.batch   # Expanse (the two-piston decks have Expanse batch files only)
-# every folder keeps TWO batch files (2026-10-28): <folder>_single.batch (one level / one run) and <folder>_sweep.batch
-# (the strain sweep); here _single = one level 0.10 with the fine-cadence displacement files and the UNLOAD (plates back
-# to the seated gap + a 25M-step free re-swelling hold tagged _u0.10, the trusted D_c; knobs UNLOAD / UNLOAD_STEPS /
-# UNLOAD_MARGIN), _sweep = the cumulative strain sweep.  The _half / _quarter gels and the permeation _quarter /
-# _quarter_smalldp batches are in archive/simulations/ (see archive/README.md).
+sbatch triaxial_compression_two_pist_sweep.batch
+# every folder keeps <folder>_single.batch (one level / one run) and, where there is a sweep, <folder>_sweep.batch;
+# a knob can be set for one submission on the command line: DATANAME=<stem> sbatch triaxial_compression_two_pist_single.batch
 ```
 
 `sbatch` submits the job script to SLURM's queue and returns a job ID at once; SLURM starts the job when the requested nodes are free.
@@ -137,8 +146,7 @@ tail -f ~/Documents/lammps_runs/triaxial_compression_two_pist/triaxial_compressi
 
 `continue_sim.sh` continues a finished run without restart files or batch edits. It reads the SLURM output file to find the original working directory and takes every run parameter from there. It is a restart in the proper sense (setup skipped, production continued), unlike editing `NSTEPS` in a `.batch` file and resubmitting, which is a fresh job that redoes the setup ([§5c above](#5c-editing-the-batch-file)).
 
-**When to use it:** to add steps to a completed run. Not for the two-piston decks
-(`triaxial_*_two_pist`, the standard triaxial workflow, which are always fresh starts). As of 2026-08-06, supported for `slab_with_support`, `solvent_pure`, `polymer_pure`, `shear_slab`, and the archived one-piston `triaxial_compression` / `triaxial_permeation` (run it from a folder that holds the original SLURM output file next to the archived `.lmp` / `.batch`; the script keys on the folder name). Not supported: `solvent_phase`/`polymer_phase` (their internal P-sweeps complete in one invocation — "continuing" isn't a meaningful operation) or the `volmix_sweep` pipeline (its own SLURM-chained orchestration). `compress_slab` is a separate project — not wired up here.
+**When to use it:** to add steps to a completed run, or to finish one that hit its wall-clock budget (`--chain`, below). Supported folders (the ones whose decks have a `cont=1` path): `slab_with_support`, `chain_length_testing`, `solvent_pure`, `polymer_pure`. Not for the two-piston decks (`triaxial_*_two_pist`, `compress_slab`, `shear_slab_two_pist`: always fresh starts) or the phase sweeps (their internal P-sweeps complete in one invocation). Support for the archived one-piston `triaxial_compression` / `triaxial_permeation` and plate-driven `shear_slab` decks was dropped on 2026-11-08 with the rewrite; the 2026-11-07 version of the script is in git history if one of them is ever revived.
 
 #### What it does per folder
 
@@ -146,13 +154,8 @@ The script skips the setup and resumes the folder's production behaviour. For a 
 
 | Folder | Skipped | Runs |
 |--------|---------|------|
-| `slab_with_support` | Soft push-off, minimize, NVT ramp, NPT (`aniso`) warm-up | `aniso` NPT production with volume/dimension outputs |
+| `slab_with_support`, `chain_length_testing` | Soft push-off, minimize, NVT ramp, NPT (`aniso`) warm-up | `aniso` NPT production with volume/dimension outputs |
 | `solvent_pure`, `polymer_pure` | Box rescale/harmonic pre-relax, gentle Langevin ramp | More NPT production steps |
-| `triaxial_compression` (sweep; archived deck) | Phase 0/1.25/1.5 setup, **and** the non-equilibrium piston drive-to-target | Equilibration-only measurement hold, extended — at whichever `_c<level>` was last reached (auto-detected, never re-sweeps) |
-| `shear_slab` (sweep; archived deck) | Phase 1a/1b equilibration, **and** the non-equilibrium plate shear drive | Equilibration-only production hold, extended — at whichever `_g<strain>` was last reached (auto-detected, never re-sweeps) |
-| `triaxial_permeation` (not a sweep; archived deck) | Phase 0/0.5/1.5 setup, **and** the piston reposition/WCA-relax/force-ramp | The constant-pressure forcing drive itself, extended — continuation here means **keep forcing solvent through the gel**, never a passive hold |
-
-For the two sweep folders, `continue_sim.sh` scans the original run's `output_files/stress_data/` for the highest `_c<level>`/`_g<level>` tag present and passes just that one value back — the `.lmp` script's sweep variable becomes a one-element list, so it runs exactly once at that level and exits, instead of re-driving through the whole ladder.
 
 All the same output files are produced (stress profiles, chemical potential, piston/permeate data, trajectories, `log.lammps`) into a fresh `continuation_{timestamp}/` subfolder, so nothing from the original run is overwritten. The only intentional omissions are the setup trajectory and any ε=0/zero-flux reference files — those already exist from the original run.
 
@@ -171,7 +174,7 @@ All the same output files are produced (stress profiles, chemical potential, pis
    ```bash
    ~/Documents/lammps_work/scripts/continue_sim.sh 49772594 500000
    ```
-   No other arguments are needed: the current folder determines the data-file naming, whether the run is a sweep and which level to pick up.
+   No other arguments are needed: the current folder determines the data-file naming.
 
    With `~/Documents/lammps_work/scripts` on `$PATH` in `~/.bashrc`, the command is `continue_sim.sh 49772594 500000`.
 
@@ -190,11 +193,11 @@ All the same output files are produced (stress profiles, chemical potential, pis
 
 1. Finds `*.o{job_id}.*` in the current directory (the SLURM output file).
 2. Reads the line `Working directory: /path/...` that `run_lammps.sh` printed when the job ran — this gives the original output folder.
-3. Looks up the current folder's output-file prefix (`final_config`, `final_tricomp`, `final_triperm`, `final_shear`, `puresolv`, or `purepol`) and finds `<prefix>_*.data` inside that folder.
+3. Looks up the current folder's output-file prefix (`final_config`, `puresolv` or `purepol`) and finds `<prefix>_*.data` inside that folder.
 4. Parses `dataname`, `epsSS`, `epsSP` from the filename (last three `_`-delimited tokens).
-5. For `triaxial_compression`/`shear_slab` only: scans `output_files/stress_data/` for the highest `_c<level>`/`_g<level>` tag and passes that single value back as the sweep variable.
-6. Creates `continuation_{timestamp}/` inside the original folder and symlinks the data file in.
-7. Passes `-var cont 1` (plus the sweep variable where there is one) to LAMMPS; the `jump`/`if` logic in each `.lmp` script then skips the setup and, for the driven decks, the drive or ramp as well, so the continuation carries on the production block rather than adding a hold.
+5. Borrows the `#SBATCH` lines of the `.batch` whose `--job-name` matches the output file (else the batch a chained job inherited, else `<folder>_single.batch`, else the folder's only batch; `--batch <file>` overrides) and every deck knob: the environment first, then the batch's assignment lines.
+6. Creates `continuation_{timestamp}/` inside the original folder, copies the deck and symlinks the data file in.
+7. Passes `-var cont 1` to LAMMPS; the `jump`/`if` logic in the deck then skips the setup and carries on the production block.
 
 #### Runs longer than the wall limit: automatic chaining (2026-09-30)
 
@@ -226,14 +229,26 @@ Benchmarks across system sizes are in [`archive/pod_bridges/documenting_pod_runs
 
 **Expanse allocation benchmark (2026-11-07, `simulations/allocation_benchmark/`, rot45 slab, N = 5 and 15).**
 The debug-partition layout scan found, for both N: 128 ranks x 1 thread per node beats every hybrid split
-(64x2 by 7-30 %, 32x4 and 16x8 by 2-3x); `mpirun --map-by ppr:128:node:pe=1` (ranks fill a node before the
-next one, "core" in the benchmark) instead of `run_lammps.sh`'s `--map-by node` gives 1.4-1.6x on 2 nodes; and
-a comm cutoff of 2.5 instead of 5.0 gives another 1.4x with identical step-0 forces. With `--map-by node`
-1, 2, 4 and 8 nodes all run within 20 % of each other, which is why adding nodes never helped. The cutoff
-change is in every active deck since that evening (`variable comm_cutoff index 2.5`, applied once the bonds
-are relaxed; `-var comm_cutoff 5.0` restores the old value). The mapping in `run_lammps.sh` and the node
-count are still the user's decision: the compute-partition node scan (`nodescan` tier, 1-16 nodes) is the
-data for it; see the README there and `~/Documents/lammps_runs/allocation_benchmark/layouts_rot45.{png,txt}`.
+(64x2 by 7-30 %, 32x4 and 16x8 by 2-3x); `--map-by ppr:128:node:pe=1` (ranks fill a node before the next one,
+"core") instead of `--map-by node` gives 1.4-1.6x on 2 nodes; and a comm cutoff of 2.5 instead of 5.0 gives
+another 1.4x with identical step-0 forces. The compute-partition node scan (1-16 nodes, 128 x 1, core, cutoff 2.5)
+then gave, against the 2026-11-06 production setup (4 nodes, 128 x 1, map-by node, cutoff 5.0):
+
+| N | nodes | steps/s | SU per M steps | speed vs baseline | SU vs baseline |
+|---|---|---|---|---|---|
+| 5 | 1 | 362 | 98 | 1.5x | 0.16x |
+| 5 | 4 | 710 | 200 | 3.0x | 0.33x |
+| 5 | 6 | 893 | 239 | 3.8x | 0.40x |
+| 15 | 1 | 189 | 188 | 1.2x | 0.21x |
+| 15 | 4 | 368 | 387 | 2.3x | 0.43x |
+| 15 | 6 | 460 | 463 | 2.9x | 0.52x |
+| 15 | 8 | 501 | 567 | 3.2x | 0.63x |
+
+Repeat spread at 3-6 nodes is 20-30 % (node placement), so 4 and 6 nodes tie in speed at N = 5. **Adopted 2026-11-08:**
+4 nodes x 128 x 1 in every production batch, `MPI_MAP_BY=core` in `scripts/lib/site.sh`, cutoff 2.5 in the decks (since
+2026-11-07). 6 nodes when wall time matters more than SUs (`sbatch --nodes=6 …`). Data: `~/Documents/lammps_runs/allocation_benchmark/`
+(`nodescan_rot45.{png,txt}`, `layouts_rot45.{png,txt}`), README in the benchmark folder. The two-piston batches ran 32 x 4 until
+2026-11-08 (0.55-0.75 M steps/h); their `--time` budgets were set for that layout and now have slack.
 
 ### 5g. Volume-of-mixing sweep (`volmix_sweep.sh`)
 

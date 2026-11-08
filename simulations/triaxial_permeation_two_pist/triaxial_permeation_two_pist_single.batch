@@ -1,158 +1,39 @@
 #!/usr/bin/env bash
-
 #SBATCH --job-name=triax_perm2p
 #SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=4
-#SBATCH --ntasks-per-node=32
-#SBATCH --cpus-per-task=4
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=48:00:00
 #SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 
-# -----------------------------------------------------------------------
-# SELF-SYNC GUARD (mirrors triaxial_compression.batch): pull the repo FIRST,
-# then re-exec the freshly pulled batch so every exported knob below is read
-# from the current file, not a stale local copy.  The guard var prevents a loop.
-# -----------------------------------------------------------------------
-LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
-if [ -z "${TRIAX_BATCH_SYNCED:-}" ]; then
-    echo ">>> [self-sync] pulling lammps_work before defining the run knobs..."
-    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
-    export TRIAX_BATCH_SYNCED=1
-    exec bash "$LAMMPS_WORK_DIR/simulations/triaxial_permeation_two_pist/triaxial_permeation_two_pist_single.batch"
-fi
-echo ">>> [self-sync] running freshly synced batch (TRIAX_BATCH_SYNCED=1)"
-echo ">>> DATANAME=${DATANAME:-<default>}  DP_PISTON=${DP_PISTON:-0.1}  UNLOAD=${UNLOAD:-0}  FROZEN_AT=${FROZEN_AT:-end}  NSTEPS_OVERRIDE=${NSTEPS_OVERRIDE:-}"
+# Two-piston permeation: one constant-pressure drive at a single dP (P_feed = PRESS_TARGET +
+# DP_PISTON, P_perm = PRESS_TARGET) for NSTEPS after the settle, reference window and dP ramp.
+# Then FROZEN=1 (Phase 2d): the polymer is stopped in its steady state and the same dP drives
+# solvent through the rigid network for FROZEN_STEPS (files _<NSTEPS>_f; kappa_f against the
+# live kappa). UNLOAD=1 (Phase 2c, off by default) adds a ramp back to zero dP and a free
+# re-swelling hold (files _<NSTEPS>_u; costs ~10 M steps). The deck has no wall_timeout.
+#
+# DATANAME comes from the environment (default: the 5-bead rot45 standard gel, the same
+# _two_pist_pm40 file the compression deck reads). Variants:
+#     DATANAME=<stem> sbatch triaxial_permeation_two_pist_single.batch
+#     DATANAME=<15-bead stem> DP_PISTON=<0.24 M> sbatch ...        dP from the 15-bead compression's M (eps_F = dP/(2M) ~ 0.12);
+#                                                                  1.9x the atoms: add --nodes=8 or halve the budgets
+#     FROZEN_AT=ref NSTEPS_OVERRIDE=4000000 DATANAME=<stem> sbatch ...   network frozen in the reference state BEFORE the
+#                                                                  ramp: the undeformed gel's kappa (~6 M steps)
+# Analysis: triaxial_permeation_single_two_pist.ipynb (figure 9 kappa, 9f frozen, 12 drive D_c, 12u unload).
 
-# Set environment variables
-declare -xr OMPI_UNIT='core'
-declare -xr OMPI_MCA_btl='self,vader'
-
-declare -xr UCX_LOG_LEVEL='ERROR'
-declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
-declare -xr UCX_NET_DEVICES='mlx5_2:1'
-declare -xir UCX_MAX_RNDV_RAILS=1
-
-declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
-
-# Load required modules for LAMMPS on Expanse (use this order)
-module reset
-module load gcc/10.2.0
-module load openmpi/4.1.3
-module load python/3.8.12
-
-# =======================================================================
-# STANDARD GEL SINCE 2026-11-07: the x/y-PERIODIC rot45 LATTICE SLAB (5 and 15 beads per strand,
-# 15 % taller than the 14000002 slab; see triaxial_compression_two_pist_single.batch).  DATANAME
-# comes from the environment so one batch serves both gels:
-#     DATANAME=final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_14000000_two_pist_pm40  sbatch triaxial_permeation_two_pist_single.batch
-#     DATANAME=final_config_slab_support_periodic_15beads_tall_rho04_rot45_1.0_1.0_30000000_two_pist_pm40 DP_PISTON=<see below> sbatch triaxial_permeation_two_pist_single.batch
-# The _two_pist_pm40 file (converter --margin-perm 40) is the same file the compression deck reads.
-#
-# FROZEN NETWORK (2026-11-07, deck Phase 2d, FROZEN=1 -- the default ending): straight after the
-# drive the deck stops every polymer bead in its steady state (velocities zeroed, polymer out of
-# the integrator, solvent-only thermostat) and keeps the SAME dP on the pistons for FROZEN_STEPS;
-# the flux loggers re-open on files _<NSTEPS>_f.  lib/triaxial.py add_perm_frozen reads kappa_f =
-# Q L/(A dP) of the rigid network and its ratio to the live kappa (notebook figure 9f): flow through
-# a frozen network should equal weak flow through the swollen one to leading order.  D_c comes from
-# the drive transient (figure 12), which needs no re-swelling.
-#
-# UNLOAD (deck Phase 2c, UNLOAD=1; OFF by default): the deck can also ramp P_feed back to P_target
-# and record a free re-swelling hold at zero dP (files _<NSTEPS>_u; add_perm_unload fits D_c and M
-# to it, figure 12u) -- an optional cross-check of the drive D_c, after the frozen stage if both
-# are on.  Costs ~10 M steps; turn it on only when the budget allows (see WALL TIME).
-#
-# dP FOR THE 15-BEAD GEL: dP sets the support-face strain, eps_F = dP/(2M) (0.1/(2 x 0.42) = 0.12
-# on the 5-bead lattice).  The 15-bead gel's M is unknown until its compression run is in; a
-# crosslink-density estimate ((5.28/11.06)^3 x 0.4 ~ 0.04) says dP = 0.1 would crush it.  Run the
-# compression FIRST, read M from its notebook, then set DP_PISTON = 0.24 M (eps_F 0.12), e.g.
-# DP_PISTON=0.02 for M 0.08.  The flux falls with dP (Q = kappa A dP/L), but the N_permeate slope
-# over a 10 M-step drive resolves Q to a few % even at dP 0.01 (perm_3: 2e-4 sigma/tau per unit
-# area at dP 0.1 with kappa 0.23; a 15-bead mesh should have kappa several times larger).
-#
-# FROZEN REFERENCE RUN (2026-11-07, later; the Darcy-kappa question): the live drive compacts the support
-# side (phi_s 0.33 against 0.447 at zero flux), so its Darcy kappa is a harmonic mean over a compressed
-# profile; the quarter-gel runs read kappa 0.30-0.32 at dP 0.02-0.05 against 0.24 at dP 0.1.  The
-# undeformed gel's kappa -- the one to hold against the compression side's D_c/M at small strain -- comes
-# from a run with the network frozen in the reference state before the ramp:
-#     FROZEN_AT=ref NSTEPS_OVERRIDE=4000000 DATANAME=<stem> sbatch triaxial_permeation_two_pist_single.batch
-# (settle 1 M + reference 0.15 M + ramp 1 M + 4 M drive on the rigid network = ~6 M steps, ~11 h).  Analyse
-# it with the permeation notebook (RUN_ID of its own, NSTEPS 4000000): figure 9's Darcy kappa is the answer;
-# the D_c / M cells read zeros (the polymer does not move) and can be ignored.  Compare with the live run's
-# kappa (dP 0.1) and with its end-of-drive frozen kappa (Phase 2d): live -> compaction + network response;
-# end-frozen -> compaction only; ref-frozen -> neither.
-#
-# WALL TIME (2026-11-07): ~400 k atoms after conversion at ~0.55 M steps/h on this layout (the
-# random slab did 0.75 M/h at 288 k): settle 1 M + reference 0.15 M + ramp 1 M + DRIVE 10.8 M +
-# FROZEN 4 M = ~17 M steps = ~31 h; 48 h requested (was 30 h) so that UNLOAD=1 UNLOAD_STEPS=8e6
-# (+ ramp-down 1 M) still fits (~26 M steps, ~47 h -- tight).  Drive 10.8 M = 54 k tau = 4.1 tau_1
-# at the drive D_c 0.147 (tau_1 = L^2/(pi^2 D_c) = 13 k tau at L 138; perm_3 ran 5.5 tau_1 at
-# L 123), its steady window (last 25 %) beyond 3.1 tau_1 (first mode 4 % unrelaxed; the Darcy
-# kappa reads the flux, which is steady earlier).  Frozen 4 M = 20 k tau: the flux through a rigid
-# network has no slow transient (the solvent relaxes in ~tau), so the drift-tested window covers
-# most of it; perm_3's live steady window was 2.7 M steps.  The deck has no wall_timeout: a run
-# that outgrows 48 h loses the end of its last stage.  The permeate margin (40 sigma) takes the
-# 5-bead drive's ~15 sigma of consolidation + flux and the frozen stage's ~5 sigma with room to
-# spare; a 15-bead gel passes more solvent per unit dP but is driven at a smaller dP (above).
-# The 15-bead slab has 2.4x the cross-section (660 k atoms before conversion; the 5-bead slab's polymer
-# beads per z-bin): about twice the cost per step -- sbatch --nodes=8, or halve NSTEPS / FROZEN_STEPS.
-# -----------------------------------------------------------------------
-# TWO-PISTON PERMEATION (2026-09-16): feed and permeate reservoirs each closed by
-# an NPT-piston (Marioni et al. 2026, Eq. 3).  NO SWEEP of any kind: one continuous
-# constant-pressure drive at ONE dP (P_feed = P_target + DP_PISTON, P_perm =
-# P_target) for NSTEPS, exactly like triaxial_permeation.batch.
-#
-# DATANAME is the CONVERTER output (scripts/lib/slab_two_pistons_periodic.py) of the
-# 2026-09-07 piston-transparent slab; copy it to ~/Documents/lammps_data/input_data/.
-#   _two_pist       (2026-09-17): permeate vacuum margin 18.7 sigma (auto).  perm_2 (9M steps
-#                   requested) ended at step 7.67M when the permeate piston reached the box-face
-#                   guard: 16 sigma of travel = the gel's ~16 sigma transient (3 sigma rigid drop
-#                   onto the support + 13 sigma consolidation) with the Darcy throughflow
-#                   (~1.2 sigma per M steps at dP = 0.1) hardly started.
-#   _two_pist_pm40  (2026-09-29): same gel, same reservoirs, --margin-perm 40 (box lz 186.6 ->
-#                   207.8, all of it vacuum; atom count unchanged).  ~38 sigma of piston travel
-#                   before the guard: the transient plus ~18M steps of steady flow.  The feed
-#                   reservoir (13.7 sigma, thinning ~0.5 sigma per M steps late in perm_2) is
-#                   the next limit at ~20M+ steps.
-# =======================================================================
-FOLDER="triaxial_permeation_two_pist"
-# DATANAME: from the environment (see the header), default the 5-bead rot45 slab (2026-11-07).  perm_3
-# (2026-09-29) ran final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist_pm40.
+FOLDER=triaxial_permeation_two_pist
 DATANAME="${DATANAME:-final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_14000000_two_pist_pm40}"
-INTERACTION="1.0_1.0"   # epsSS_epsSP
-NSTEPS="${NSTEPS_OVERRIDE:-10800000}"   # production steps (constant-dP drive); also the output-file tag (perm_3's 10.8 M: perm_2
-                         # asked 9M and was cut at 7.67M by the permeate guard; 10.8M after the 1M ramp was ~5.5
-                         # tau_1 at L 123, 4.1 tau_1 at the rot45 gel's L 138 -- see WALL TIME).
-TYPE=""                 # stress, volume, stressvol, or leave empty
-PRESS_TARGET=1.5        # bath pressure P* (both pistons in the settle; permeate piston in production)
+INTERACTION=1.0_1.0
+NSTEPS="${NSTEPS_OVERRIDE:-10800000}"   # drive length and output-file tag: 54 k tau = 4.1 tau_1 at the drive D_c 0.147, L 138
+export PRESS_TARGET=1.5
+export DP_PISTON="${DP_PISTON:-0.1}"
+export FROZEN=1 FROZEN_STEPS=4000000 FROZEN_AT="${FROZEN_AT:-end}"
+export UNLOAD="${UNLOAD:-0}" UNLOAD_STEPS="${UNLOAD_STEPS:-8000000}"
+echo ">>> DATANAME=$DATANAME DP_PISTON=$DP_PISTON FROZEN_AT=$FROZEN_AT UNLOAD=$UNLOAD NSTEPS=$NSTEPS"
 
-# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var; see the .lmp for the rationale) -----
-export DP_PISTON="${DP_PISTON:-0.1}"   # SINGLE pressure step dP (not a list); env-overridable -- the 15-bead gel needs a smaller dP (header)
-export FROZEN=1               # Phase 2d (2026-11-07): polymer stopped in the steady state, same dP on the solvent, files _<NSTEPS>_f
-export FROZEN_STEPS=4000000   # frozen-network flux stage: 20,000 tau (see WALL TIME)
-export FROZEN_AT="${FROZEN_AT:-end}"   # end (default) | ref: FROZEN_AT=ref NSTEPS_OVERRIDE=4000000 sbatch ... = a SEPARATE short run with
-                              # the network frozen in the zero-flux REFERENCE state before the ramp -> the undeformed gel's kappa
-                              # (the production files ARE the frozen flux; no Phase 2d/2c; ~6 M steps, ~11 h).  Give it its own
-                              # NSTEPS tag so the sync never confuses it with the live run of the same DATANAME.
-export UNLOAD="${UNLOAD:-0}"  # Phase 2c (optional): dP ramped back to 0 + free re-swelling hold, files _<NSTEPS>_u (UNLOAD=1 sbatch ...)
-export UNLOAD_STEPS="${UNLOAD_STEPS:-8000000}"   # re-swelling hold when UNLOAD=1: 40,000 tau = 2.5 tau_1 at D_c 0.12, L 138
-export PISTON_MASS=1000       # mass per piston bead (paper's value)
-export C_PIST_FRAC=1.0        # damping / critical damping (the .lmp prints C_crit and the piston period)
-#   C_PIST_FRAC now acts on the settle + reference window only: the .lmp drops the
-#   damper at the start of production (damp_prod=0 in the .lmp; 2026-09-23).
-export NPT_PISTON_STEPS=1000000   # Phase-1 settle; check the printed piston period (aim >= 3-5 periods)
-export SETTLE_HALT=0          # 1 = end the settle early once both pistons are at rest
-
-# >>> WALL TIME <<<  see the header (2026-11-07).  Before: setup ~ 50k + NPT_PISTON_STEPS + 150k
-# (reference) + 1M (ramp: n_ramp x ramp_steps in the .lmp, 100 x 10k since 2026-09-28; was 5k)
-# before the NSTEPS production; ~290k atoms (the converter adds ~55k sheet/pad beads to the
-# 239k slab); 13M steps in total for NSTEPS = 10.8M (perm_2: 8.9M within its 16 h); --time 30 h.
-# Every output file is streamed, so an early cut only shortens the unload (or the steady window).
-
-# Navigate to the scripts directory
-cd ~/Documents/lammps_work/scripts || exit 1
-
-# Run the simulation
-# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
-bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

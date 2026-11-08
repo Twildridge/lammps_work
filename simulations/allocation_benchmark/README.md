@@ -88,16 +88,23 @@ after the last job run on the login node:
 python3 collect_results.py
 module load cpu/0.17.3b anaconda3/2021.05/q4munrg
 python plot_layouts.py ~/Documents/lammps_runs/allocation_benchmark/results.csv --network rot45 \
-    --out ~/Documents/lammps_runs/allocation_benchmark/layouts_rot45.png > ~/Documents/lammps_runs/allocation_benchmark/layouts_rot45.txt
+    --out ~/Documents/lammps_runs/allocation_benchmark/layouts_rot45.png > ~/Documents/lammps_runs/allocation_benchmark/layouts_rot45.txtpython plot_nodescan.py ~/Documents/lammps_runs/allocation_benchmark/results.csv --network rot45 \
+    --out ~/Documents/lammps_runs/allocation_benchmark/nodescan_rot45.png > ~/Documents/lammps_runs/allocation_benchmark/nodescan_rot45.txt
 ```
+
+`plot_nodescan.py` is the figure for the node-count decision: steps/s and SU per 1 M steps against
+nodes at 128 x 1, one line per setting (production today, map core only, map core + cutoff 2.5),
+the bar through each point spanning the slowest and fastest repeat.  Completed 2026-11-07 23:42,
+56 runs, all valid, about 420 SU.  Repeat spread on the compute partition reached 20-30 % at 3-6
+nodes (node placement differs between jobs), so neighbouring node counts inside the bars are ties.
 
 **Deck change made the same evening.** Every active deck under `simulations/` now sets
 `variable comm_cutoff index 2.5` and issues `comm_modify cutoff ${comm_cutoff}` once the bonds
 are relaxed: `slab_with_support.lmp` (and its symlink `chain_length_testing.lmp`) and
 `polymer_pure.lmp` keep 5.0 through the push-off of a fresh file and switch right after it; the
 two-piston, phase and solvent decks, which read relaxed files, switch at start-up. `-var
-comm_cutoff 5.0` restores the old behaviour. `--map-by` is still `node` in `scripts/run_lammps.sh`:
-that change waits for the user's decision on the node count.
+comm_cutoff 5.0` restores the old behaviour. **Decision 2026-11-08:** `MPI_MAP_BY=core` in `scripts/lib/site.sh` (the runner maps `ppr:128:node:pe=1`) and 4 nodes x 128 x 1 in
+every production batch; the summary table is in `docs/running_simulations.md` §5f.
 
 ## Running it on Expanse
 

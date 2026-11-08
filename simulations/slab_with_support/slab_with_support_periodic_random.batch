@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-
 #SBATCH --job-name=slab_periodic_random
 #SBATCH --partition=compute
 #SBATCH --account=csb197
@@ -9,66 +8,20 @@
 #SBATCH --mem=0
 #SBATCH --time=24:00:00
 #SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 
-# Set environment variables
-declare -xr OMPI_UNIT='core'
-declare -xr OMPI_MCA_btl='self,vader'
+# The x/y-periodic random f = 4 network slab (scripts/lib/periodic_data_file_generator.py
+# --network random), equilibrated like the 14000002 reference slab: aniso NPH at P* = 1.5 with
+# the piston parked in the bath and transparent to solvent. Submitted by
+# scripts/submit_random_periodic_pipeline.sh, whose bridge job (chain_random_periodic.batch)
+# then converts the final configuration and submits the two-piston compression.
 
-declare -xr UCX_LOG_LEVEL='ERROR'
-declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
-declare -xr UCX_NET_DEVICES='mlx5_2:1'
-declare -xir UCX_MAX_RNDV_RAILS=1
-
-declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
-
-# Load required modules for LAMMPS on Expanse (use this order)
-module reset
-module load gcc/10.2.0
-module load openmpi/4.1.3
-module load python/3.8.12
-
-# =======================================================================
-# x/y-PERIODIC SLAB, RANDOM f = 4 NETWORK (2026-11-02): the reference periodic slab
-# (slab_support_periodic_5beads_tall_rho04_new: 9 x 9 x 23 cells, pre_swell 0.93, rho 0.40,
-# 15066 crosslinks, 29808 five-bead strands, support + parked piston, 239 k atoms) with its
-# lattice strands re-wired by Wooten-Winer-Weaire bond switching, periodic across x and y
-# (scripts/lib/periodic_data_file_generator.py --network random: 3 accepted switches per
-# strand, seed 7, the isolated 'random' gel's recipe; strands and repulsions across the x/y
-# boundaries are minimum-image, only the two z faces are tethered).  The isotropy check of
-# the written file is in slab_data_file_info.md.
-#
-# WHY: the random ISOLATED gel (slab_with_support_single.batch, 2026-10-28) feeds the shear
-# and compress_slab decks; the two-piston compression deck (triaxial_compression_two_pist)
-# needs the periodic slab geometry (fixed lx, ly; NPT pistons in z), so the random network
-# is built in that geometry too and equilibrated exactly like the reference 14000002 slab
-# (PISTON_TRANSPARENT=1, aniso NPH at P* = 1.5, 1.0_1.0).  The random network starts
-# pre-stretched at the lattice box size; the aniso barostat sets lx, ly and the thickness.
-#
-# Same protocol as archive/simulations/slab_with_support/slab_with_support_piston_transparent.batch
-# (the 14000002 run: ~16 h on 4 x 128 for 14 M steps of 239 k atoms), 24 h requested,
-# CHAIN=1 as the safety net.  THEN (automatic): chain_random_periodic.batch in
-# simulations/triaxial_compression_two_pist (submitted with --dependency=afterany on this job
-# by scripts/submit_random_periodic_pipeline.sh) copies the final_config to
-# ~/Documents/lammps_data/input_data/, converts it with lib/slab_two_pistons_periodic.py and
-# submits triaxial_compression_two_pist_random.batch (eps 0.10, 9 M-step hold).
-# =======================================================================
-FOLDER="slab_with_support"
-DATANAME="slab_support_periodic_5beads_tall_rho04_random"   # scripts/lib/periodic_data_file_generator.py --network random (2026-11-02)
-INTERACTION="1.0_1.0"   # the interaction of the triaxial runs
+FOLDER=slab_with_support
+DATANAME=slab_support_periodic_5beads_tall_rho04_random
+INTERACTION=1.0_1.0
 NSTEPS=14000000
-TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
-PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
-SEED=12345          # RNG seed for create_velocity / langevin
+export PRESS_TARGET=1.5
+export PISTON_TRANSPARENT=1 BARO_MODE=aniso PIN_GEL=0
+export CHAIN=1      # continue in a new job if the wall limit comes first
 
-export PISTON_TRANSPARENT=1   # the piston is parked in the bath and transparent to solvent (the 14000002 protocol)
-export BARO_MODE=aniso        # lx, ly, lz relax independently: the periodic slab finds its own lateral size
-export PIN_GEL=0              # a laterally periodic slab cannot turn; no momentum pinning
-export CHAIN=1                # chain continuation jobs until all NSTEPS are done
-export WALL_MARGIN=2400       # seconds before the SLURM limit at which the deck stops
-
-# Navigate to the scripts directory
-cd ~/Documents/lammps_work/scripts || exit 1
-
-# Run the simulation
-# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET VEL_SEED
-bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET" "$SEED"
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

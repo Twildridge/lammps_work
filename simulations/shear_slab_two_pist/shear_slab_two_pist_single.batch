@@ -1,151 +1,31 @@
 #!/usr/bin/env bash
-
 #SBATCH --job-name=shear_2p
 #SBATCH --partition=compute
 #SBATCH --account=csb197
 #SBATCH --nodes=4
-#SBATCH --ntasks-per-node=32
-#SBATCH --cpus-per-task=4
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 #SBATCH --time=16:00:00
 #SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 
-# -----------------------------------------------------------------------
-# SELF-SYNC GUARD (must run BEFORE STRAINS is defined below).  sbatch
-# submits whatever copy of this file is on disk; if it is stale the sweep list
-# is wrong and run_lammps.sh's own git pull is too late (STRAINS is already
-# exported).  Pull first, then re-exec the fresh batch.  (Mirrors
-# triaxial_compression.batch / shear_slab.batch.)
-# -----------------------------------------------------------------------
-LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
-if [ -z "${SHEAR2P_BATCH_SYNCED:-}" ]; then
-    echo ">>> [self-sync] pulling lammps_work before defining STRAINS..."
-    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
-    export SHEAR2P_BATCH_SYNCED=1
-    exec bash "$LAMMPS_WORK_DIR/simulations/shear_slab_two_pist/shear_slab_two_pist_single.batch"
-fi
-echo ">>> [self-sync] running freshly synced batch (SHEAR2P_BATCH_SYNCED=1)"
-
-# Set environment variables
-declare -xr OMPI_UNIT='core'
-declare -xr OMPI_MCA_btl='self,vader'
-
-declare -xr UCX_LOG_LEVEL='ERROR'
-declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
-declare -xr UCX_NET_DEVICES='mlx5_2:1'
-declare -xir UCX_MAX_RNDV_RAILS=1
-
-declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
-
-# Load required modules for LAMMPS on Expanse (use this order)
-module reset
-module load gcc/10.2.0
-module load openmpi/4.1.3
-module load python/3.8.12
-
-# =======================================================================
-# ISOLATED-GEL SHEAR, ONE LEVEL (the SINGLE batch; the sweep is shear_slab_two_pist_sweep.batch).
-# 2026-10-28: the RANDOM f = 4 NETWORK at gamma = 0.10 -- the gel built by
-# scripts/data_file_generator.ipynb (NETWORK = "random": the rot45 block re-wired by bond
-# switching, no lattice directions), equilibrated by slab_with_support_single.batch, converted
-# with add_more_plates_to_gel.py --layout x_plates.  The aligned lattice gave G ~ 0.17-0.19 in
-# shear (C44) against 0.04-0.06 on the compression side ((C11 - C12)/2): if that gap is the
-# cubic anisotropy of the diamond lattice, this gel must read G ~ 0.05-0.07 at the same strain.
-# PLAIN LOAD-ONLY RUN (the user's call, 2026-10-28 late): default drive speed, no unload (UNLOAD=0), no fine
-# displacement file -- G of the random gel from the hold, as shear_4.  D_c IN SHEAR IS PARKED, see the
-# commented block below the UNLOAD knob for how to switch it back on (everything it needs is in place).
-#
-# WALL TIME (--time 16 h, the user's budget): ~11.6 M steps on 0.54 M atoms = Phase 0 50 k + settle 1 M +
-#   seating 300 k + reference 1 M + drive ~260 k + HOLD 9 M; needs >= 0.76 M steps/h in 15.3 h (16 h minus
-#   run_lammps.sh's 40 min WALL_MARGIN).  No local timing exists for this deck (the .o files stay on
-#   Expanse): shear_5_sweep did 15.3 M steps inside 36 h on the same gel size (>= 0.42 M/h), shear_4 10.8 M
-#   inside 48 h -- lower bounds only.  If the budget runs out the hold is cut short (wall_timeout guard)
-#   and its files are intact.
-#
-# shear_slab_two_pist.lmp on a gel that is periodic in NO direction -- a block equilibrated
-# free in its bath by slab_with_support_single.batch (BARO_MODE=iso, PIN_GEL=1), floating in a bath
-# that the two wet NPT-pistons hold at PRESS_TARGET.  The grips are the polymer beads
-# within 3 sigma of the gel's LEFT and RIGHT (x) faces -- its long sides -- rigid in
-# all three directions and driven -z (left) / +z (right): x is the gap, z the shear
-# direction (the transpose of the periodic deck's axes).  Strain-controlled like
-# shear_slab.batch: each level shears until gamma reaches its target, then holds;
-# G = sigma_xz(core) / gamma_network.  Stresses are measured in a core that stops
-# 5 sigma inside the gripped faces, 6 sigma inside the free y faces and 20 sigma
-# inside the free z faces (core_margin_y / core_margin_z, -var knobs in the deck).
-#
-# DATANAME: the converter output (layout = x_plates) of the equilibrated isolated gel --
-#   scripts/lib/add_more_plates_to_gel.py (lib/add_more_plates_to_gel.py) on
-#   final_config_slab_support_5beads_tall_rho04_nowalls_random_1.0_1.0_8000000.data
-#   -> ..._x_plates.data: gel + bath + two wet pistons + TWO grip plates (types 8, 9)
-#   parked 3 sigma outside the gel's x-faces.  The deck seats the plates onto the Rg
-#   x-faces (Phase 1.25, SEAT_MODE rg|bb as compress_slab) and drives them -/+z; a
-#   six_plates file works too (the deck deletes the other four plates).
-#   Copy the file to ~/Documents/lammps_data/input_data/ before sbatch.
-# Other gels: the aligned lattice (..._tall_rho04_nowalls_1.0_1.0_8000000_x_plates, runs shear_4 / shear_5_sweep)
-# and the rot45 lattice (..._rot45_..._x_plates, run shear_6): swap DATANAME.  The laterally periodic deck and
-# its batch are in archive/simulations/shear_slab_two_pist/ (2026-10-28).
+# ISOLATED-gel shear, one strain level (the sweep is shear_slab_two_pist_sweep.batch). A free
+# block in a bath held at PRESS_TARGET by two wet NPT pistons; two grip plates seat on the
+# gel's x faces (SEAT_MODE=rg, the Rg-based face, is the deck default) and are driven -z / +z
+# until gamma reaches the target, then held NSTEPS steps; G = sigma_xz(core) / gamma. Input:
+# lib/add_more_plates_to_gel.py --layout x_plates on an equilibrated slab_with_support_single
+# run (here the random f = 4 network). Load-only run: no unload, no fine displacement file;
+# docs/running_simulations.md 5b ("D_c in shear (parked)") lists the knobs that switch them on.
 # Analyse with DECK = "shear_slab_two_pist_iso" in the shear notebooks.
-# =======================================================================
-FOLDER="shear_slab_two_pist"
-DATANAME="final_config_slab_support_5beads_tall_rho04_nowalls_random_1.0_1.0_8000000_x_plates"   # <- the converter's (2026-10-28, random network;
-                        # copy the file to ~/Documents/lammps_data/input_data/ on Expanse first)
-INTERACTION="1.0_1.0"   # epsSS_epsSP
-# NSTEPS: Phase 3 production HOLD per strain level (flat; also the output-file tag).
-# Other phase lengths are index knobs in shear_slab_two_pist.lmp (-var):
-#   Phase 0 (Langevin NVT) 50000, Phase 1 (piston settle) NPT_PISTON_STEPS,
-#   Phase 1.25 (plate seating) t_seat 100000 + seat_settle_steps 200000,
-#   Phase 1.5 (gamma = 0 reference) 150000,
-#   Phase 2 (shear drive) halts at each strain target (~260k steps per 0.10, cap 570000).
-# The gel is ~52 x 52 x 115 sigma; the x_plates file holds 0.54 M atoms (69k in the two plates).
-NSTEPS=9000000          # the hold, as shear_4
-TYPE=""
-PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run
 
-# ----- NPT-piston knobs (forwarded by run_lammps.sh as -var) -----
-export PISTON_MASS=1000
-export C_PIST_FRAC=1.0
-export NPT_PISTON_STEPS=1000000
-export SETTLE_HALT=0
-export SEAT_MODE=rg           # the grips seat on the Rg-based x-faces (com +/- L_rg/2 = the 50 %-density planes to 0.3 sigma), NOT on
-                              # the outermost bead: the loose shell (3-5 sigma of dangling strands per side, 1 % of the beads) is
-                              # swept in by the seating plate and gripped with the face, so the whole face is sheared.  The plates
-                              # in the data file are PARKED 3 sigma outside the outermost bead; the deck's Phase 1.25 moves them in.
-
-# -----------------------------------------------------------------------
-# Cumulative shear strains (as shear_slab.batch): shear to the first, hold NSTEPS,
-# shear FURTHER to the next, ...; files tagged _g<strain>.  The list must be exported
-# as a SCALAR string (bash does not export arrays).
-# -----------------------------------------------------------------------
-STRAINS_LIST=(0.1)
-export STRAINS="${STRAINS_LIST[*]}"
-export REF_AVG_STEPS=1000000  # gamma = 0 reference window (1 M steps, as the sweep: the reference every G subtracts)
-# ----- no unload (the sweep batch keeps UNLOAD=1, deck Phase 2c) -----
+FOLDER=shear_slab_two_pist
+DATANAME=final_config_slab_support_5beads_tall_rho04_nowalls_random_1.0_1.0_8000000_x_plates
+INTERACTION=1.0_1.0
+NSTEPS=9000000          # hold per strain level, and the output-file tag
+export PRESS_TARGET=1.5
+export STRAINS="0.1"
+export REF_AVG_STEPS=1000000   # gamma = 0 reference window (deck default 150000); every G subtracts it
 export UNLOAD=0
 
-# ======================= D_c IN SHEAR -- PARKED 2026-10-28 (how to switch it back on) =======================
-# Two routes exist and both are fully wired (deck knobs default off, lib/shear.py fits + figures, notebook cells
-# that skip themselves without the files); docs/running_simulations.md section 5b "D_c in shear (parked)" has
-# the full account and the physics caveat (the shear relaxation is the viscous G/eta_s mode, D_c k^2 is a
-# few-% correction on it, so the compression unload stays the project's D_c).
-# (A) FROM THE HOLD'S OWN TRANSIENT (fast drive + fine displacement file): uncomment the four exports.
-#     export NSTEPS_SHEAR_BASE=300  # drive speed: steps a 0.10 increment takes (deck default 285000). Local sweep on THIS
-#                                   # file (2026-10-28, gamma 0.10): 1000 / 300 / 100 -> grip 0.43 / 1.45 / 4.34 sigma/tau,
-#                                   # 0 FENE warnings at all three, mobile T at the drive end 0.975 / 1.016 / 1.23 (100 cools
-#                                   # over ~5 tau of the hold -> give the thermostat a streaming-unbiased temp/profile first),
-#                                   # interior strain at the drive end 0.080 / 0.056 / 0.037
-#     export HALT_EVERY=3           # halt check every N steps (overshoot ~ strain rate x N); fix print cadence stays 1000
-#     export DISP_FINE_NFREQ=250    # fine displacement block (steps); 0 = off  -> disp_z_polymer_fine_*_g<strain>
-#     export DISP_FINE_SPAN=1000000 # hold steps the fine file covers (the drive is always covered)
-#     Analysis: lib/shear.py fit_Dc_fine (sin(2 pi k zhat) modes, diffusive vs one-time verdict), single notebook figure 9b,
-#     sweep notebook 7b; kappa falls back to the fine-file D_c.  Smoke-tested end to end 2026-10-28.
-# (B) FROM A PHASE 2c UNLOAD: export UNLOAD=1 and UNLOAD_STEPS=<steps> (0 = NSTEPS) -- grips back to gamma = 0, relaxation
-#     hold, files _u<strain>; lib fit_Dc_unload, notebook figures 9/11.  Its profile is block-averaged at NSTEPS/10, too
-#     coarse for the relaxation unless NSTEPS is small or the unload gets its own logger (not built); the deck skips the
-#     unload when the wall budget died inside the hold.
-# ============================================================================================================
-
-# Navigate to the scripts directory
-cd ~/Documents/lammps_work/scripts || exit 1
-
-# Positional args to run_lammps.sh: FOLDER DATANAME INTERACTION NSTEPS TYPE PRESS_TARGET
-bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE" "$PRESS_TARGET"
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

@@ -1,193 +1,46 @@
 #!/bin/bash
-# ==============================================================================
-# postprocess.sh — regenerate ALL analysis plots for a completed LAMMPS run.
+# postprocess.sh -- the plots of a finished run directory. run_lammps.sh and continue_sim.sh call
+# it; run it by hand on any run dir whose job skipped the step (no MD, no MPI):
 #
-# This is the single source of truth for post-processing. run_lammps.sh calls it
-# automatically at the end of every run, and you can call it BY HAND on any
-# finished run directory — no MD, no MPI, just the plotting scripts in the right
-# order with the right module loaded. Use the manual path whenever a teardown
-# hang or job kill skipped the automatic step (log ends at "Total wall time"
-# with no post-processing banner) — all the output files are already on disk.
+#   bash postprocess.sh <run_dir> <folder> <dataname> <interaction> <totsteps> [oldsteps]
 #
-# Usage:
-#   bash postprocess.sh <run_dir> <folder> <dataname> <interaction> <totsteps> [oldsteps] [press_target]
-#
-# Example (regenerate the non-periodic slab_with_support run):
-#   bash scripts/postprocess.sh \
-#     ~/Documents/lammps_runs/slab_with_support/slab_with_support_slab_support_5beads_tall_rho04_1.0_1.0_20260705_124556 \
-#     slab_with_support slab_support_5beads_tall_rho04 1.0_1.0 3000000
-#
-# Optional env vars (default to the run_lammps.sh defaults):
-#   SKIP_WIDOM=1        minimize/skip cavity_widom.py (slab_with_flow only)
-#   STRAINS="..."       space-separated shear-strain list (shear_slab only)
-#   COMPRESSIONS="..."  space-separated compression-strain list (triaxial_compression_two_pist
-#                       sweep, compress_slab [volumetric strain], or the archived one-piston
-#                       triaxial_compression); the consolidated plotter overlays all _c<level>
-#                       stems onto one figure per quantity (one curve per level)
-# ==============================================================================
+# STRAINS / COMPRESSIONS (environment, space-separated) are the sweep levels whose _g<level> /
+# _c<level> files the sweep plotters overlay.
 set -u
-
 if [ $# -lt 5 ]; then
-    echo "Usage: bash postprocess.sh <run_dir> <folder> <dataname> <interaction> <totsteps> [oldsteps] [press_target]"
-    echo "Example:"
-    echo "  bash postprocess.sh ~/Documents/lammps_runs/slab_with_support/<run_dir> \\"
-    echo "       slab_with_support slab_support_5beads_tall_rho04 1.0_1.0 3000000"
+    sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 1
 fi
-
-RUN_DIR=$1
-FOLDER=$2
-DATANAME=$3
-INTERACTION=$4
-TOTSTEPS=$5
-OLDSTEPS=${6:-0}
-PRESS_TARGET=${7:-1.5}
-SKIP_WIDOM=${SKIP_WIDOM:-0}
-STRAINS=${STRAINS:-0.1}
-# COMPRESSIONS: space-separated cumulative compression-strain list (triaxial_compression_two_pist
-# sweep, or the archived one-piston triaxial_compression). Each level's output files are tagged _c<level>, so the plotters are called
-# once per level with a per-level stem. Empty -> treat as a single un-swept run.
-COMPRESSIONS=${COMPRESSIONS:-}
-
-# Directory this script lives in (lammps_work/scripts/) — holds the plotters.
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-
-# Derive per-species epsilons from the interaction string (epsSS_epsSP).
-IFS='_' read -r EPSSS EPSSP <<< "$INTERACTION"
-
-# Plot-file stem shared by every analysis script.
+RUN_DIR=$1; FOLDER=$2; DATANAME=$3; INTERACTION=$4; TOTSTEPS=$5; OLDSTEPS=${6:-0}
 STEM="${DATANAME}_${INTERACTION}_${TOTSTEPS}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/site.sh"
+LIB="$SCRIPT_DIR/lib"
 
-if [ ! -d "$RUN_DIR" ]; then
-    echo "Error: run directory not found: $RUN_DIR"
-    exit 1
-fi
-cd "$RUN_DIR" || { echo "Error: cannot cd into $RUN_DIR"; exit 1; }
-
+cd "$RUN_DIR" || { echo "Error: run directory not found: $RUN_DIR"; exit 1; }
 echo "======================================"
-echo "Running post-processing..."
-echo "  run_dir     = $RUN_DIR"
-echo "  folder      = $FOLDER"
-echo "  stem        = $STEM"
+echo "Post-processing $FOLDER  stem $STEM  in $RUN_DIR"
 echo "======================================"
+load_python_module
+python -c "import numpy; print('numpy', numpy.__version__)"
 
-# Load the Python stack used for plotting (same order as before).
-source /etc/profile.d/modules.sh
-module unload python/3.8.12 2>/dev/null
-module load anaconda3/2021.05/q4munrg
-python -c "import numpy; print(numpy.__version__)"
+FAILED=0
+try() { "$@" || { echo "  WARNING: $(basename "$2") failed (skipping)"; FAILED=1; }; }
 
-echo "Generating convergence plot..."
-# Pass --p-ext for slab_with_flow so the pore-pressure panel uses the barostat target
-if [ "$FOLDER" = "slab_with_flow" ]; then
-    python "$SCRIPT_DIR/lib/plot_lammps_log.py" "." "$STEM" --p-ext 1.8
-else
-    python "$SCRIPT_DIR/lib/plot_lammps_log.py" "." "$STEM"
-fi
-
-# ── Cavity-biased Widom insertion (slab_with_flow only) ───────────────────────
-if [ "$FOLDER" != "slab_with_flow" ] || [ "$SKIP_WIDOM" = "1" ]; then
-    echo "Cavity Widom post-processing applies only to slab_with_flow (and not when SKIP_WIDOM=1) — skipping for ${FOLDER}."
-else
-    WIDOM_TRAJ="${RUN_DIR}/traj_files/widom_${STEM}.lammpstrj"
-    echo "======================================"
-    echo "Cavity Widom check:"
-    echo "  Looking for: $WIDOM_TRAJ"
-    echo "  traj_files/ contents:"
-    ls -lh "${RUN_DIR}/traj_files/" 2>&1 | head -20
-    echo "======================================"
-    if [ -f "$WIDOM_TRAJ" ]; then
-        echo "Running cavity-biased Widom insertion..."
-        WIDOM_PEXT="1.8"
-        WIDOM_EXCL="2.0"
-        WIDOM_PISTON_EPS="0.0"
-
-        WIDOM_EXCL_ARGS=()
-        if [ -n "$WIDOM_EXCL" ]; then
-            WIDOM_EXCL_ARGS=(--exclusion-buffer "$WIDOM_EXCL")
-        fi
-
-        python "$SCRIPT_DIR/cavity_widom.py" \
-            --traj      "$WIDOM_TRAJ" \
-            --out-dir   "output_files/chemical_potential" \
-            --out-stem  "$STEM" \
-            --eps-sp    "$EPSSP" \
-            --eps-ss    "$EPSSS" \
-            --n-bins    40 \
-            --n-trial   50000 \
-            --r-cavity  0.5 \
-            --temperature 1.0 \
-            --p-ext     "$WIDOM_PEXT" \
-            --piston-eps "$WIDOM_PISTON_EPS" \
-            "${WIDOM_EXCL_ARGS[@]}"
-
-        echo "Re-generating convergence plot with cavity Widom panel..."
-        python "$SCRIPT_DIR/lib/plot_lammps_log.py" "." "$STEM" --p-ext "$WIDOM_PEXT"
-    else
-        echo "WARNING: Widom trajectory not found — skipping cavity_widom.py"
-        echo "  Expected path: $WIDOM_TRAJ"
-    fi
-fi
-
-# Pure solvent / polymer P-sweep: EOS plot instead of stress/piston scripts.
-if [ "$FOLDER" = "solvent_phase" ] || [ "$FOLDER" = "polymer_phase" ]; then
-    echo "${FOLDER} phase-sweep run detected — generating EOS plot..."
-    python "$SCRIPT_DIR/lib/plot_eos.py" "." "$DATANAME" "$INTERACTION"
-    echo "======================================"
-    echo "Done! Results are in: $RUN_DIR"
-    echo "======================================"
-    exit 0
-fi
-
-if [ "$FOLDER" = "shear_slab" ] || [ "$FOLDER" = "shear_slab_two_pist" ]; then
-    echo "Generating shear stress-strain sweep plots (per strain: $STRAINS)..."
-    python "$SCRIPT_DIR/lib/plot_shear_strain_sweep.py" "." "$STEM" "$STRAINS" \
-        || echo "  WARNING: plot_shear_strain_sweep.py failed (skipping)"
-    # shear_slab_two_pist (2026-10-21): the wet-piston bath-pressure check and the
-    # whole-run piston file are drawn by plot_piston_data.py as for the other two-piston decks.
-    if [ "$FOLDER" = "shear_slab_two_pist" ]; then
-        echo "Generating two-piston bath-pressure plots..."
-        python "$SCRIPT_DIR/lib/plot_piston_data.py" "." "$STEM" "$OLDSTEPS" \
-            || echo "  WARNING: plot_piston_data.py failed (skipping)"
-    fi
-elif { [ "$FOLDER" = "triaxial_compression" ] || [ "$FOLDER" = "triaxial_compression_two_pist" ] || [ "$FOLDER" = "compress_slab" ]; } && [ -n "$COMPRESSIONS" ]; then
-    # Compression sweep: every level's output files are tagged _c<level>. Rather
-    # than emit one plot PER LEVEL, the consolidated plotter overlays every
-    # level's curves onto a single figure per quantity (one color per level) --
-    # so the output_plots folder holds ONE piston plot and ONE stress-profile
-    # plot for the whole sweep instead of a pair per level. Non-fatal so a bad
-    # level cannot abort the chain.
-    echo "Generating consolidated compression sweep plots (levels: $COMPRESSIONS)..."
-    python "$SCRIPT_DIR/lib/plot_compression_strain_sweep.py" "." "$STEM" "$COMPRESSIONS" "$OLDSTEPS" \
-        || echo "  WARNING: plot_compression_strain_sweep.py failed (skipping)"
-    # compress_slab (2026-09-29) writes the two-piston file set for its z axis (the z-hi plate
-    # is the "load piston", the z-lo plate the "support"), so the same plotters apply.
-    if [ "$FOLDER" = "triaxial_compression_two_pist" ] || [ "$FOLDER" = "compress_slab" ]; then
-        # Two-piston (2026-09-16): the wet-piston bath-pressure check spans the whole
-        # run in the stem-tagged piston_pressure file; plot_piston_data.py draws it
-        # (multi-piston aware) alongside the per-level files.
-        echo "Generating two-piston bath-pressure plots..."
-        python "$SCRIPT_DIR/lib/plot_piston_data.py" "." "$STEM" "$OLDSTEPS" \
-            || echo "  WARNING: plot_piston_data.py failed (skipping)"
-    fi
-elif [ "$FOLDER" = "triaxial_permeation_two_pist" ]; then
-    # Two-piston permeation (2026-09-16): a single run (no sweep), same plot set as
-    # triaxial_permeation; plot_piston_data.py / plot_stress_profiles.py /
-    # plot_lammps_log.py detect the multi-piston column headers and add the
-    # per-piston panels (P_feed / P_perm measured vs applied, Q_perm vs time).
-    echo "Generating stress profiles (two-piston)..."
-    python "$SCRIPT_DIR/lib/plot_stress_profiles.py" "." "$STEM" "$OLDSTEPS"
-
-    echo "Generating piston / permeation plots (two-piston)..."
-    python "$SCRIPT_DIR/lib/plot_piston_data.py" "." "$STEM" "$OLDSTEPS"
-else
-    echo "Generating stress profiles..."
-    python "$SCRIPT_DIR/lib/plot_stress_profiles.py" "." "$STEM" "$OLDSTEPS"
-
-    echo "Generating piston plots..."
-    python "$SCRIPT_DIR/lib/plot_piston_data.py" "." "$STEM" "$OLDSTEPS"
-fi
-
-echo "======================================"
-echo "Done! Results are in: $RUN_DIR"
-echo "======================================"
+try python "$LIB/plot_lammps_log.py" . "$STEM"
+case "$FOLDER" in
+    solvent_phase|polymer_phase)
+        try python "$LIB/plot_eos.py" . "$DATANAME" "$INTERACTION" ;;
+    shear_slab_two_pist)
+        try python "$LIB/plot_shear_strain_sweep.py" . "$STEM" "${STRAINS:-0.1}"
+        try python "$LIB/plot_piston_data.py" . "$STEM" "$OLDSTEPS" ;;
+    triaxial_compression_two_pist|compress_slab)
+        # every level's _c<level> curves on one figure per quantity, plus the whole-run piston file
+        try python "$LIB/plot_compression_strain_sweep.py" . "$STEM" "${COMPRESSIONS:-0.1}" "$OLDSTEPS"
+        try python "$LIB/plot_piston_data.py" . "$STEM" "$OLDSTEPS" ;;
+    *)  # slab_with_support, chain_length_testing, triaxial_permeation_two_pist, pure phases
+        try python "$LIB/plot_stress_profiles.py" . "$STEM" "$OLDSTEPS"
+        try python "$LIB/plot_piston_data.py" . "$STEM" "$OLDSTEPS" ;;
+esac
+echo "Done: $RUN_DIR"
+exit $FAILED

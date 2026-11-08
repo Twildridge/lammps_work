@@ -34,9 +34,9 @@ lsync "my custom message"    # use a specific commit message
 
 ### Clusters → GitHub
 
-Scripts or `.batch` files edited directly on a cluster must be committed there with `lsync`, or they never reach GitHub. The batch files self-sync with `git pull --rebase --autostash` at job start, which only stashes an uncommitted cluster-side edit and reapplies it; nothing saves it anywhere else.
+Scripts or `.batch` files edited directly on a cluster must be committed there with `lsync`, or they never reach GitHub. At job start `batch_prologue.sh` pulls fast-forward only (`node_git_sync.sh`) and re-runs the fresh batch; an uncommitted cluster-side edit blocks that pull, so the job then runs with the on-disk checkout. Nothing saves such an edit anywhere else.
 
-Clusters also pull automatically at the start of every job (built into `run_lammps.sh`; the archived Bridges-2 / Pod runners had it too). To pull manually at any time:
+Clusters also pull automatically at the start of every job (`batch_prologue.sh`). To pull manually at any time:
 ```bash
 cd ~/Documents/lammps_work && git pull
 ```

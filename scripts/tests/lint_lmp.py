@@ -268,7 +268,19 @@ class Lint:
             if lab and lab not in self.labels:
                 self.err(n, f'jump to undefined label {lab}')
         if run_lammps:
-            fw = set(re.findall(r'-var\s+(\w+)', Path(run_lammps).read_text()))
+            # literal -var names in run_lammps.sh plus the KNOBS table of lib/run_common.sh
+            # (each knob k is forwarded as -var k; strains/compressions also as k_list)
+            text = Path(run_lammps).read_text()
+            common = Path(run_lammps).parent / 'lib' / 'run_common.sh'
+            if common.exists():
+                text += common.read_text()
+            fw = set(re.findall(r'-var\s+(\w+)', text))
+            m = re.search(r'KNOBS=\((.*?)\n\)', text, re.S)
+            if m:
+                knobs = re.findall(r'^\s*([a-z_][\w ]*?)\s*(?:#.*)?$', m.group(1), re.M)
+                for line in knobs:
+                    fw.update(line.split())
+                fw.update({'strains_list', 'compressions_list'})
             missing = sorted(v for v in self.external if v not in fw and v not in LAMMPS_KEYWORDS)
             if missing:
                 self.errors.append(f'run_lammps.sh does not forward -var for: {", ".join(missing)}')
