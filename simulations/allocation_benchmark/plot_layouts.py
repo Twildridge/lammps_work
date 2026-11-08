@@ -24,7 +24,7 @@ import numpy as np  # noqa: E402
 from collect_results import PRODUCTION_STEPS  # noqa: E402
 from plot_results import SERIES, SURFACE, INK, INK2, style  # noqa: E402
 
-NODE_ORDER = (1, 2, 4, 8, 16)          # fixed colour per node count, never cycled
+NODE_ORDER = (1, 2, 3, 4, 6, 8, 16)    # fixed colour per node count, never cycled
 
 
 def load(path, network):

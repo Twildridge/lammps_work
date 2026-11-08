@@ -282,7 +282,12 @@ mass 5 ${piston_mass}
 mass 6 ${piston_mass}
 mass 7 ${piston_mass}
 
-comm_modify cutoff 5.0
+# Ghost-atom cutoff (2026-11-07): this deck starts from a relaxed configuration (FENE bonds
+# <= 1.5 sigma, or no bonds), so 2.5 reaches every bonded partner; the allocation benchmark
+# (simulations/allocation_benchmark/layouts_rot45.txt) measured 1.4-1.6x more steps/s than 5.0
+# with identical step-0 forces.  Override with -var comm_cutoff.
+variable comm_cutoff index 2.5
+comm_modify cutoff ${comm_cutoff}
 
 print "========================================"
 print "Triaxial permeation, TWO-PISTON: ${dataname}"
@@ -376,7 +381,7 @@ neigh_modify exclude type 3 7
 # z-split of the long box.  `shift z` re-cuts the z planes every 1000 steps so
 # every rank carries ~equal atoms (the pistons also move the atom-dense region).
 # `rcb` would work too but shift keeps the simple brick decomposition and is
-# cheaper; comm_modify cutoff 5.0 stays.
+# cheaper; the comm cutoff (comm_cutoff, 2.5) is unchanged by it.
 balance 1.05 shift z 20 1.05
 fix lb all balance 1000 1.05 shift z 20 1.05
 

@@ -119,6 +119,10 @@ read_data data_files/${dataname}.data
 
 print ">>> polymer_pure(generic): T*=${temp_target} P*=${press_target} eps=${epsSS} nsteps=${nsteps}"
 
+# Ghost-atom cutoff (2026-11-07): 5.0 through Stage 0 (a fresh file may hold long bonds until
+# the harmonic push-off shortens them), then comm_cutoff (2.5) once the FENE bonds are set
+# below; see simulations/allocation_benchmark/layouts_rot45.txt for the 1.4-1.6x speed gain.
+variable comm_cutoff index 2.5
 comm_modify cutoff 5.0
 
 # `mobile` = everything we integrate. For a pure-polymer file type 3 is absent,
@@ -188,6 +192,9 @@ pair_coeff * * ${epsSS} ${sigma} 1.122
 
 bond_style fene
 bond_coeff 1 30.0 1.5 1.0 1.0
+
+# Bonds are relaxed from here on: shrink the ghost cutoff (see comm_cutoff above).
+comm_modify cutoff ${comm_cutoff}
 
 # cont=1: the continued data file already holds beads thermalized at
 # temp_target — skip the gentle ramp entirely.

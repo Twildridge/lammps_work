@@ -217,7 +217,12 @@ mass 5 ${piston_mass}
 mass 6 ${piston_mass}
 mass 7 ${piston_mass}
 
-comm_modify cutoff 5.0
+# Ghost-atom cutoff (2026-11-07): this deck starts from a relaxed configuration (FENE bonds
+# <= 1.5 sigma, or no bonds), so 2.5 reaches every bonded partner; the allocation benchmark
+# (simulations/allocation_benchmark/layouts_rot45.txt) measured 1.4-1.6x more steps/s than 5.0
+# with identical step-0 forces.  Override with -var comm_cutoff.
+variable comm_cutoff index 2.5
+comm_modify cutoff ${comm_cutoff}
 
 print "========================================"
 print "Shear slab, TWO-PISTON (rigid-layer driven): ${dataname}"

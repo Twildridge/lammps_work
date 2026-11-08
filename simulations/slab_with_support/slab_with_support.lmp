@@ -33,6 +33,14 @@ variable volume_freq equal 10000
 # warm-up are all skipped — the data file already holds an equilibrated config.
 variable cont       index 0
 
+# ----- Ghost-atom (comm) cutoff (2026-11-07) -----
+# comm_modify cutoff must reach every bonded partner.  A fresh walk-placed file holds a few
+# bonds of several sigma until the push-off shortens them, so start-up keeps 5.0; once the
+# bonds sit near 0.96 sigma (after the minimize, or straight away with cont=1) the cutoff
+# drops to comm_cutoff.  The allocation benchmark (simulations/allocation_benchmark,
+# layouts_rot45.txt) measured 1.4-1.6x more steps/s at 2.5 with identical step-0 forces.
+variable comm_cutoff index 2.5
+
 # ----- Wall-clock budget (2026-09-30) -----
 # wall_timeout = seconds LAMMPS may run (counted from the `timer timeout` command
 # below, i.e. from start-up) before it ends the production loop on its own;
@@ -295,6 +303,9 @@ neigh_modify exclude type 5 5   # piston-piston
 
 if "${is_restart} == 0 && ${cont} == 0" then &
     "minimize 1.0e-4 1.0e-6 10000 100000"
+
+# Bonds are relaxed from here on: shrink the ghost cutoff (see comm_cutoff at the top).
+comm_modify cutoff ${comm_cutoff}
 
 # Release piston: free to fluctuate in z, frozen and PERIODIC in x/y.
 # NOTE: do NOT use `fix rigid` here — the piston sheet now spans the entire

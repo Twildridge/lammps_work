@@ -67,6 +67,38 @@ below). The 15-bead rot45 file in `input_data/` on 2026-11-07 was a byte-identic
 5-bead one; the scan uses the file rebuilt by `scripts/lib/build_beads_sweep.py --network rot45
 --beads 15` in `input_data/allocation_benchmark/rot45_rebuilt/` when that exists.
 
+## Node-count scan on the compute partition (2026-11-07, evening)
+
+The debug scan settled the ranks x threads question (128 x 1 wins everywhere) and the two
+settings (`--map-by core`, comm cutoff 2.5) but could only reach 1 and 2 nodes. `nodescan` fills
+in the node axis on the compute partition, with the same 10 k-step blocks as the debug jobs:
+
+```bash
+NETWORK=rot45 bash submit_benchmark.sh nodescan --dry-run   # 56 runs, about 800 SU at the assumed speeds
+NETWORK=rot45 bash submit_benchmark.sh nodescan             # submitted 2026-11-07 23:35, jobs 55604446-55604501
+```
+
+Per N (5 and 15): 128 x 1 core cc2.5 on 1/2/3/4/6/8 nodes three times each and once on 16;
+128 x 1 core cc5.0 (the Slurm-only answer, deck unchanged) once on 1/3/4/6/8; 128 x 1 node
+cc2.5 and 64 x 2 core cc2.5 once on 2 and 4 nodes. `submit_benchmark.sh` now honours
+`NETWORK` and `NS` for every tier. `allocation_benchmark.batch` does not refresh the figure, so
+after the last job run on the login node:
+
+```bash
+python3 collect_results.py
+module load cpu/0.17.3b anaconda3/2021.05/q4munrg
+python plot_layouts.py ~/Documents/lammps_runs/allocation_benchmark/results.csv --network rot45 \
+    --out ~/Documents/lammps_runs/allocation_benchmark/layouts_rot45.png > ~/Documents/lammps_runs/allocation_benchmark/layouts_rot45.txt
+```
+
+**Deck change made the same evening.** Every active deck under `simulations/` now sets
+`variable comm_cutoff index 2.5` and issues `comm_modify cutoff ${comm_cutoff}` once the bonds
+are relaxed: `slab_with_support.lmp` (and its symlink `chain_length_testing.lmp`) and
+`polymer_pure.lmp` keep 5.0 through the push-off of a fresh file and switch right after it; the
+two-piston, phase and solvent decks, which read relaxed files, switch at start-up. `-var
+comm_cutoff 5.0` restores the old behaviour. `--map-by` is still `node` in `scripts/run_lammps.sh`:
+that change waits for the user's decision on the node count.
+
 ## Running it on Expanse
 
 Run from this folder on the login node, after `git pull`. Add `--dry-run` to any `submit` line to see its

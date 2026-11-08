@@ -224,6 +224,17 @@ Note the classic `continue_sim.sh <job_id> <nsteps>` *adds* `<nsteps>` on top of
 
 Benchmarks across system sizes are in [`archive/pod_bridges/documenting_pod_runs.md`](../archive/pod_bridges/documenting_pod_runs.md).
 
+**Expanse allocation benchmark (2026-11-07, `simulations/allocation_benchmark/`, rot45 slab, N = 5 and 15).**
+The debug-partition layout scan found, for both N: 128 ranks x 1 thread per node beats every hybrid split
+(64x2 by 7-30 %, 32x4 and 16x8 by 2-3x); `mpirun --map-by ppr:128:node:pe=1` (ranks fill a node before the
+next one, "core" in the benchmark) instead of `run_lammps.sh`'s `--map-by node` gives 1.4-1.6x on 2 nodes; and
+a comm cutoff of 2.5 instead of 5.0 gives another 1.4x with identical step-0 forces. With `--map-by node`
+1, 2, 4 and 8 nodes all run within 20 % of each other, which is why adding nodes never helped. The cutoff
+change is in every active deck since that evening (`variable comm_cutoff index 2.5`, applied once the bonds
+are relaxed; `-var comm_cutoff 5.0` restores the old value). The mapping in `run_lammps.sh` and the node
+count are still the user's decision: the compute-partition node scan (`nodescan` tier, 1-16 nodes) is the
+data for it; see the README there and `~/Documents/lammps_runs/allocation_benchmark/layouts_rot45.{png,txt}`.
+
 ### 5g. Volume-of-mixing sweep (`volmix_sweep.sh`)
 
 > **Archived 2026-08** — superseded by the calibration sweep (partial-molar-volume NPT sweeps; see `lammps_work/archive/README.md` and `simulations/calibration_sweep/README.md`). The script now lives in `lammps_work/archive/volmix_sweep.sh`; this section is kept because the calibration driver inherits its SLURM machinery. Its data files were deleted on 2026-11-07: `lammps_data/slab_with_support/` is gone, as are the old `pstar*`/`snap*`/`rep*` `_polymer_only` / `_solvent_only` / `_volmix_manifest` files in `input_data/`. The current calibration inputs live in `input_data/calibration_sweep/`.

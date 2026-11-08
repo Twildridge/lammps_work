@@ -19,6 +19,13 @@
 #   repeat      repeat N NODES TASKS CPUS MAP CUT [REPS]: extra copies of one layout, to measure noise
 #   one         one N SCALE NODES TASKS CPUS MAP CUT: one more layout, e.g. 16 nodes if 8 is still
 #               the fastest, or the tasks x cpus layouts of a 0.5x or 2x slab
+#   nodescan    (2026-11-07, after the debug layout scan) the node-count question at 128 x 1 on the
+#               compute partition, 10 k steps like the debug scan: --map-by core + cutoff 2.5 on
+#               1/2/3/4/6/8 nodes three times each and once on 16; core + cutoff 5.0 (Slurm-only
+#               answer) once on 1/3/4/6/8; node + 2.5 on 2/4 and 64 x 2 core + 2.5 on 2/4, once
+#
+# NETWORK=rot45 (default random) selects the slab family: prepared states, tags and inputs then
+# carry a _<network> suffix, as in debug_sweep.batch / run_benchmark.sh.  NS="5 15" limits the N.
 #
 # A run whose log already exists, or that is already queued, is skipped, so a tier can be re-submitted
 # after a failure.  A tier that would take the total past SU_CAP is refused.
@@ -35,6 +42,9 @@ ARGS=()
 for a in "$@"; do if [ "$a" = "--dry-run" ]; then DRY=1; else ARGS+=("$a"); fi; done
 
 ALL_N=(5 10 15 20 25 30)
+NETWORK="${NETWORK:-random}"
+NET_SUFFIX=""; [ "$NETWORK" = random ] || NET_SUFFIX="_${NETWORK}"
+read -r -a SCAN_N <<<"${NS:-5 15}"
 ENDS=(5 30)
 THREE=(5 15 30)
 NODE_COUNTS=(1 2 4 8)
@@ -47,12 +57,12 @@ EST_SU=0
 
 # Assumed steps/s at scale 1: anchored on ~310 steps/s for 4 x 128 (chain_length_testing_sweep.batch);
 # the other values are guesses until the pilot replaces them through RATE_MULT.
-rate() { case "$1" in 32c) echo 80;; 64c) echo 130;; 1) echo 200;; 2) echo 260;; 4) echo 310;; 8|16|32) echo 350;; esac; }
+rate() { case "$1" in 32c) echo 80;; 64c) echo 130;; 1) echo 200;; 2) echo 260;; 3) echo 290;; 4) echo 310;; 6|8|16|32) echo 350;; esac; }
 
 # add_run ROLE N SCALE PARTITION NODES TASKS CPUS MAP CUT REP STEPS
 add_run() {
     local role=$1 n=$2 scale=$3 part=$4 nodes=$5 tasks=$6 cpus=$7 map=$8 cut=$9 rep=${10} steps=${11}
-    local tag="${role}_N${n}_s${scale}_${part}_n${nodes}_t${tasks}_c${cpus}_${map}_cc${cut}_r${rep}"
+    local tag="${role}_N${n}_s${scale}${NET_SUFFIX}_${part}_n${nodes}_t${tasks}_c${cpus}_${map}_cc${cut}_r${rep}"
     if grep -qs '^complete=1$' "$LOG_DIR/$tag.meta" || grep -qx "$tag" <<<"$QUEUED"; then
         SKIPPED=$((SKIPPED + 1)); return 0
     fi
@@ -121,6 +131,19 @@ case "$TIER" in
             tuned "$n" "$nodes" 128 1 "$s"
         done; done; done
         ;;
+    nodescan)
+        for n in "${SCAN_N[@]}"; do
+            for nodes in 1 2 3 4 6 8; do for r in 1 2 3; do
+                add_run bench "$n" 1.0 compute "$nodes" 128 1 core 2.5 "$r" 10000
+            done; done
+            add_run bench "$n" 1.0 compute 16 128 1 core 2.5 1 10000
+            for nodes in 1 3 4 6 8; do add_run bench "$n" 1.0 compute "$nodes" 128 1 core 5.0 1 10000; done
+            for nodes in 2 4; do
+                add_run bench "$n" 1.0 compute "$nodes" 128 1 node 2.5 1 10000
+                add_run bench "$n" 1.0 compute "$nodes" 64 2 core 2.5 1 10000
+            done
+        done
+        ;;
     repeat)
         [ "${#ARGS[@]}" -ge 6 ] || { echo "usage: submit_benchmark.sh repeat N NODES TASKS CPUS MAP CUT [REPS]"; exit 1; }
         for ((r = 2; r <= ${ARGS[6]:-3}; r++)); do
@@ -144,12 +167,12 @@ fi
 for item in "${PENDING[@]:-}"; do
     [ -n "$item" ] || continue
     IFS='|' read -r tag role n scale _ <<<"$item"
-    stem="slab_support_periodic_${n}beads_tall_rho04_random"
+    stem="slab_support_periodic_${n}beads_tall_rho04_${NETWORK}"
     if [ "$role" = "prep" ]; then
         if [ "$scale" = "1.0" ]; then f="$INPUT_DIR/$stem.data"; else f="$INPUT_DIR/allocation_benchmark/scale$scale/$stem.data"; fi
         hint="python build_benchmark_data.py"
     else
-        f="$INPUT_DIR/allocation_benchmark/prepared/prep_${n}b_s${scale}.data"
+        f="$INPUT_DIR/allocation_benchmark/prepared/prep_${n}b_s${scale}${NET_SUFFIX}.data"
         hint="bash submit_benchmark.sh prep, and wait for it"
     fi
     [ -s "$f" ] || { echo "missing input file: $f  ($hint); nothing submitted."; exit 1; }
@@ -161,7 +184,7 @@ for item in "${PENDING[@]:-}"; do
     # shellcheck disable=SC2086  # $mem is one flag
     jid=$(sbatch --parsable --job-name="$tag" --partition="$part" --nodes="$nodes" --ntasks-per-node="$tasks" \
         --cpus-per-task="$cpus" $mem --time="$limit" \
-        --export=ALL,ROLE="$role",NBEADS="$n",SCALE="$scale",MAP="$map",COMM_CUT="$cut",NSTEPS="$steps",PREP_STEPS="$steps",REP="$rep",TAG="$tag" \
+        --export=ALL,ROLE="$role",NETWORK="$NETWORK",NBEADS="$n",SCALE="$scale",MAP="$map",COMM_CUT="$cut",NSTEPS="$steps",PREP_STEPS="$steps",REP="$rep",TAG="$tag" \
         allocation_benchmark.batch)
     echo "$tag: job $jid"
 done
