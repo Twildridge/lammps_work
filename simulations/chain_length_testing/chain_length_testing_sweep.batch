@@ -18,7 +18,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 #   NETWORK=random  10 / 15 / 20 / 30 beads at the 5-bead slab's physical size (2026-11-03)
 #   NETWORK=rot45   the standard gel since 2026-11-07: 5 and 15 beads, 15 % taller than the
 #                   14000002 slab; the 15-bead slab has 2.4x the cross-section (~2x the cost)
-# NSTEPS is a BUDGET (and the <totsteps> file tag): with RG_HALT=1 the deck ends production once
+# NSTEPS is a BUDGET (and the <totsteps> file tag; rot45 budgets below the table): with RG_HALT=1 the deck ends production once
 # the gel Rg's block mean has stopped moving (RG_NCONSEC blocks of RG_BLOCK steps within RG_TOL,
 # then RG_EXTRA x the steps done as a tail). Longer strands relax more slowly, hence the table.
 # Then convert the final configuration (slab_two_pistons_periodic.py --margin-perm 40) and run
@@ -33,6 +33,17 @@ case "$NBEADS" in
     30) NSTEPS=45000000; RG_BLOCK=3000000 ;;
     *)  echo "NBEADS=$NBEADS has no entry in the sweep table"; exit 1 ;;
 esac
+# rot45 budgets (2026-11-08): the random sweep's 10- and 15-bead runs ran their whole budget without
+# the halt firing (block-to-block Rg changes 0.1-0.7 %, above RG_TOL), so the rot45 budgets are
+# generous and the halt is what should end the run. At 6 nodes x 128 x 1 (nodescan_rot45.txt:
+# 893 steps/s for N5, 460 for N15) 20 M steps is ~6.5 h / <=4.8k SU and 60 M is ~37 h / <=28k SU
+# (one CHAIN=1 continuation past the 36 h wall).
+if [ "${NETWORK:-random}" = rot45 ]; then
+    case "$NBEADS" in
+        5)  NSTEPS=20000000 ;;
+        15) NSTEPS=60000000 ;;
+    esac
+fi
 FOLDER=chain_length_testing
 NETWORK="${NETWORK:-random}"
 DATANAME="slab_support_periodic_${NBEADS}beads_tall_rho04_${NETWORK}"
