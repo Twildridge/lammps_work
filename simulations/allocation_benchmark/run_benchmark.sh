@@ -13,6 +13,12 @@
 # If the deck ever stops matching those patterns the run aborts rather than time the wrong thing.
 #
 # Input (environment): ROLE NBEADS SCALE MAP(node|core) COMM_CUT NSTEPS REP TAG
+#   NETWORK      random (default) | rot45: the slab family (2026-11-07; prepared states and
+#                tags of a non-random network carry a _<network> suffix)
+#   BENCH_TASKS / BENCH_CPUS  the ranks per node and threads per rank for THIS run, when they
+#                differ from the Slurm allocation (debug_sweep.batch cycles layouts inside one
+#                full-node allocation); default: the allocation's own values
+#   BENCH_FRESH  path of the fresh data file for ROLE=prep when it is not input_data/<stem>.data
 {
 set -uo pipefail
 
@@ -26,6 +32,7 @@ PREP_STEPS="${PREP_STEPS:-50000}"
 THERMO_EVERY="${THERMO_EVERY:-5000}"
 REP="${REP:-1}"
 TAG="${TAG:?}"
+NETWORK="${NETWORK:-random}"
 PARTITION="${SLURM_JOB_PARTITION:-local}"
 INTERACTION="1.0_1.0"
 PRESS_TARGET=1.5
@@ -47,14 +54,18 @@ else
     LOG_DIR="$HOME/Documents/lammps_runs/allocation_benchmark/logs"
     # the same binary as run_lammps.sh
     LMP=/home/dpollard/software/lammps/22Jul2025_update3/mpi-omp/gcc/10.2.0/openmpi/4.1.3/lammps-22Jul2025/build/lmp
-    NODES="$SLURM_NNODES"; TASKS_PER_NODE="$SLURM_NTASKS_PER_NODE"; CPUS="$SLURM_CPUS_PER_TASK"
+    NODES="$SLURM_NNODES"; TASKS_PER_NODE="${BENCH_TASKS:-$SLURM_NTASKS_PER_NODE}"; CPUS="${BENCH_CPUS:-${SLURM_CPUS_PER_TASK:-1}}"
+    export OMP_NUM_THREADS="$CPUS"
 fi
+NTASKS=$((NODES * TASKS_PER_NODE))
 
-STEM="slab_support_periodic_${NBEADS}beads_tall_rho04_random"
+STEM="slab_support_periodic_${NBEADS}beads_tall_rho04_${NETWORK}"
+NET_SUFFIX=""; [ "$NETWORK" = random ] || NET_SUFFIX="_${NETWORK}"
 BENCH_DATA="$INPUT_DIR/allocation_benchmark"
 PREP_DIR="$BENCH_DATA/prepared"
-PREP_NAME="prep_${NBEADS}b_s${SCALE}"
-if [ "$SCALE" = "1.0" ]; then FRESH="$INPUT_DIR/$STEM.data"; else FRESH="$BENCH_DATA/scale$SCALE/$STEM.data"; fi
+PREP_NAME="prep_${NBEADS}b_s${SCALE}${NET_SUFFIX}"
+if [ -n "${BENCH_FRESH:-}" ]; then FRESH="$BENCH_FRESH"
+elif [ "$SCALE" = "1.0" ]; then FRESH="$INPUT_DIR/$STEM.data"; else FRESH="$BENCH_DATA/scale$SCALE/$STEM.data"; fi
 
 JOB="${SLURM_JOB_ID:-local$$}"
 WORK="$RUN_ROOT/${TAG}_$JOB"
@@ -99,7 +110,7 @@ else
     # MAP=node is the production layout (run_lammps.sh): ranks dealt round-robin across the nodes.
     # MAP=core fills each node before the next, so neighbouring ranks usually share a node.
     if [ "$MAP" = "core" ]; then MAPSPEC="ppr:${TASKS_PER_NODE}:node:pe=${CPUS}"; else MAPSPEC="node:pe=${CPUS}"; fi
-    mpirun -n "$SLURM_NTASKS" --bind-to core --map-by "$MAPSPEC" --report-bindings \
+    mpirun -n "$NTASKS" --bind-to core --map-by "$MAPSPEC" --report-bindings \
         "$LMP" -sf omp -pk omp "$CPUS" "${VARS[@]}" -in "$DECK" -log log.lammps -screen none \
         2> bindings.txt &
     PID=$!
@@ -126,6 +137,7 @@ cat > "$LOG_DIR/$TAG.meta" <<EOF
 tag=$TAG
 role=$ROLE
 nbeads=$NBEADS
+network=$NETWORK
 scale=$SCALE
 nodes=$NODES
 tasks_per_node=$TASKS_PER_NODE

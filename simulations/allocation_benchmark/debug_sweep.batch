@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# debug_sweep.batch -- several layouts of the allocation benchmark inside ONE debug-partition
+# allocation (2026-11-07).  Submitted by submit_debug_sweep.sh; do not sbatch it by hand.
+#
+# The debug partition gives at most 2 nodes, 30 minutes and 2 jobs per user, so one job per
+# layout (allocation_benchmark.batch) would need a dozen submissions that cannot all be queued.
+# Instead the allocation is always a full node (128 x 1) and mpirun is launched once per
+# layout with its own -n and --map-by ... pe=<cpus>; run_benchmark.sh takes the layout from
+# BENCH_TASKS / BENCH_CPUS.  Every layout uses all 128 cores of each node, so the SU charge is
+# the same and only the MPI x OpenMP split differs.
+#
+# Environment (--export):
+#   NETWORK NBEADS   the slab (rot45 5 / 15)
+#   LAYOUTS          space-separated "<tasks>x<cpus>:<map>:<comm_cut>", run in this order
+#   NSTEPS           production steps per timed layout (default 10000)
+#   PREP_STEPS       production steps of the prep run when the prepared state is missing (20000)
+#   BENCH_FRESH      fresh data file for the prep when it is not input_data/<stem>.data
+#   NEXT_SCRIPT      a shell file to run (from the login shell's point of view: sbatch calls) when
+#                    this job's runs are over -- the chain that keeps <= 2 debug jobs queued
+#   TIME_LIMIT_S     the job's wall limit in seconds (1800); layouts that would not finish before
+#                    it are skipped and listed in logs/<jobname>.skipped
+#SBATCH --account=csb197
+#SBATCH --output=logs_slurm/%x.o%j.%N
+
+# Same environment as production (chain_length_testing_sweep.batch)
+declare -xr OMPI_MCA_btl='self,vader'
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+BENCH_DIR="$HOME/Documents/lammps_work/simulations/allocation_benchmark"
+LOG_DIR="$HOME/Documents/lammps_runs/allocation_benchmark/logs"
+mkdir -p "$LOG_DIR"
+NETWORK="${NETWORK:-rot45}"
+NBEADS="${NBEADS:?}"
+NSTEPS="${NSTEPS:-10000}"
+PREP_STEPS="${PREP_STEPS:-10000}"
+TIME_LIMIT_S="${TIME_LIMIT_S:-1800}"
+T_START=$(date +%s)
+DEADLINE=$((T_START + TIME_LIMIT_S - 90))        # leave time for the chain + the plot
+NODES="$SLURM_NNODES"
+PART="$SLURM_JOB_PARTITION"
+NET_SUFFIX=""; [ "$NETWORK" = random ] || NET_SUFFIX="_${NETWORK}"
+PREP_FILE="$HOME/Documents/lammps_data/input_data/allocation_benchmark/prepared/prep_${NBEADS}b_s1.0${NET_SUFFIX}.data"
+SKIPPED="$LOG_DIR/${SLURM_JOB_NAME}.skipped"
+: > "$SKIPPED"
+
+echo "debug sweep: N=$NBEADS $NETWORK on $NODES node(s), layouts: $LAYOUTS"
+export NETWORK NBEADS
+
+# one run; prints its wall seconds on stdout, everything else on stderr
+one_run() {   # ROLE TASKS CPUS MAP CUT STEPS TAG
+    local t0 t1
+    t0=$(date +%s)
+    ROLE="$1" BENCH_TASKS="$2" BENCH_CPUS="$3" MAP="$4" COMM_CUT="$5" NSTEPS="$6" PREP_STEPS="$6" \
+        SCALE=1.0 REP=1 TAG="$7" bash "$BENCH_DIR/run_benchmark.sh" 1>&2
+    t1=$(date +%s)
+    echo $((t1 - t0))
+}
+
+LAST=0
+# the prepared state (the common start of every timed run) -- once, on the first job of this N
+if [ ! -s "$PREP_FILE" ]; then
+    echo ">>> prep: $PREP_FILE missing; running the deck's start-up + $PREP_STEPS steps at 128 x 1"
+    LAST=$(one_run prep 128 1 core 7.0 "$PREP_STEPS" "prep_N${NBEADS}_s1.0${NET_SUFFIX}_${PART}_n${NODES}_t128_c1_core_cc7.0_r1")
+    echo ">>> prep took ${LAST}s"
+    [ -s "$PREP_FILE" ] || { echo "ERROR: prep did not produce $PREP_FILE; nothing to time"; LAYOUTS=""; }
+    LAST=0      # a timed layout is much shorter than the prep
+fi
+
+for lay in $LAYOUTS; do
+    IFS=':' read -r tc map cut <<<"$lay"
+    tasks="${tc%x*}"; cpus="${tc#*x}"
+    tag="bench_N${NBEADS}_s1.0${NET_SUFFIX}_${PART}_n${NODES}_t${tasks}_c${cpus}_${map}_cc${cut}_r1"
+    if grep -qs '^complete=1$' "$LOG_DIR/$tag.meta"; then echo ">>> $tag done earlier, skipping"; continue; fi
+    # time guard: the next layout is assumed to take as long as the longest so far (floor 150 s) + 30 %
+    est=$(( (LAST > 150 ? LAST : 150) * 13 / 10 ))
+    now=$(date +%s)
+    if [ $((now + est)) -gt "$DEADLINE" ]; then
+        echo ">>> $tag skipped: ${est}s needed, $((DEADLINE - now))s left"; echo "$tag" >> "$SKIPPED"; continue
+    fi
+    echo ">>> $tag  ($(date +%H:%M:%S), $((DEADLINE - now))s left)"
+    dt=$(one_run bench "$tasks" "$cpus" "$map" "$cut" "$NSTEPS" "$tag")
+    echo ">>> $tag took ${dt}s"
+    [ "$dt" -gt "$LAST" ] && LAST=$dt
+done
+
+# the chain: the next debug job(s) and any compute follow-ups, submitted from here so that no
+# more than two debug jobs are ever queued at once (MaxSubmitPU = 2 on debug-normal)
+if [ -n "${NEXT_SCRIPT:-}" ] && [ -f "$NEXT_SCRIPT" ]; then
+    echo ">>> chaining: bash $NEXT_SCRIPT"
+    bash "$NEXT_SCRIPT" || echo "WARNING: chain script failed"
+fi
+
+# results so far: csv + verdict + the layout figure, refreshed by every job of the sweep
+cd "$BENCH_DIR" || exit 0
+python3 collect_results.py --out "$LOG_DIR/../results.csv" || true
+( module reset; module load anaconda3/2021.05/q4munrg
+  python plot_layouts.py "$LOG_DIR/../results.csv" --network "$NETWORK" \
+      --out "$LOG_DIR/../layouts_${NETWORK}.png" > "$LOG_DIR/../layouts_${NETWORK}.txt" 2>&1 ) || true
+echo "debug sweep job done ($(( $(date +%s) - T_START ))s)"

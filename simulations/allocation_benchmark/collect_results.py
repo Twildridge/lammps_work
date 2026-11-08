@@ -24,7 +24,7 @@ STEP0_TOL = 1e-6      # relative
 PRODUCTION_STEPS = {5: 14e6, 10: 24e6, 15: 30e6, 20: 35e6, 25: 40e6, 30: 45e6}
 CORES_PER_NODE = 128
 
-COLUMNS = ('tag role nbeads scale nodes tasks_per_node cpus_per_task partition map comm_cut rep job '
+COLUMNS = ('tag role nbeads network scale nodes tasks_per_node cpus_per_task partition map comm_cut rep job '
            'cores_charged ranks job_wall_s complete mpirun_rc natoms n_polymer n_solvent n_frozen steps '
            'loop_s steps_per_s katom_step_s su_per_Mstep hours_per_Mstep '
            'pct_pair pct_bond pct_neigh pct_comm pct_output pct_modify pct_other imbalance_pair imbalance_neigh '
@@ -110,13 +110,14 @@ def read_all(logs):
     rows = []
     for meta_file in sorted(logs.glob('*.meta')):
         row = dict(line.split('=', 1) for line in meta_file.read_text().splitlines() if '=' in line)
+        row.setdefault('network', 'random')     # metas written before 2026-11-07
         log_file = meta_file.with_suffix('.log')
         if log_file.exists():
             row.update(parse_log(log_file))
         nodes, tasks, cpus = int(row['nodes']), int(row['tasks_per_node']), int(row['cpus_per_task'])
         row['ranks'] = nodes * tasks
-        # compute charges whole nodes; shared (and a Mac) charges the cores asked for
-        row['cores_charged'] = nodes * CORES_PER_NODE if row['partition'] == 'compute' else nodes * tasks * cpus
+        # compute and debug charge whole nodes; shared (and a Mac) charges the cores asked for
+        row['cores_charged'] = nodes * CORES_PER_NODE if row['partition'] in ('compute', 'debug') else nodes * tasks * cpus
         rate = row.get('steps_per_s')
         if rate:
             row['hours_per_Mstep'] = 1e6 / rate / 3600
@@ -130,7 +131,7 @@ def validate(rows):
     groups = defaultdict(list)
     for r in rows:
         if r['role'] == 'bench':
-            groups[(r['nbeads'], r['scale'])].append(r)
+            groups[(r['nbeads'], r['network'], r['scale'])].append(r)
     for r in rows:
         why = []
         if r.get('complete') != '1':
@@ -157,7 +158,7 @@ def su_total(rows):
 
 
 def label(r):
-    tail = '' if r['partition'] == 'compute' else f" [{r['partition']}]"
+    tail = '' if r['partition'] in ('compute', 'debug') else f" [{r['partition']}]"
     return f"{r['nodes']} node(s) x {r['tasks_per_node']} tasks x {r['cpus_per_task']} cpus{tail}"
 
 
@@ -170,22 +171,22 @@ def verdict(rows):
             print(f"  {r['tag']}: {r['why_invalid']}")
     configs = defaultdict(list)
     for r in timed:
-        configs[(int(r['nbeads']), float(r['scale']), r['map'], float(r['comm_cut']), r['partition'],
+        configs[(int(r['nbeads']), r['network'], float(r['scale']), r['map'], float(r['comm_cut']), r['partition'],
                  int(r['nodes']), int(r['tasks_per_node']), int(r['cpus_per_task']))].append(r)
     medians = defaultdict(list)
     for key, group in configs.items():
         speed = statistics.median(g['steps_per_s'] for g in group)
-        medians[key[:4]].append((speed, group[0], len(group)))
+        medians[key[:5]].append((speed, group[0], len(group)))
     print('\nFor each N, scale, mapping and comm cutoff (median of repeats):')
     print('  fastest = highest steps/s;  value = fewest SU/M-step among runs within 10 % of the fastest')
     for key in sorted(medians):
-        n, scale, mapping, cut = key
+        n, network, scale, mapping, cut = key
         entries = medians[key]
         top = max(e[0] for e in entries)
         fastest = max(entries, key=lambda e: e[0])
         value = min((e for e in entries if e[0] >= 0.9 * top), key=lambda e: e[1]['su_per_Mstep'])
         budget = PRODUCTION_STEPS[n]     # the budget of the scale 1.0 slab of this N
-        print(f"\nN={n} scale={scale} map={mapping} comm_cutoff={cut}  ({fastest[1].get('natoms')} atoms, {len(entries)} layouts)")
+        print(f"\nN={n} {network} scale={scale} map={mapping} comm_cutoff={cut}  ({fastest[1].get('natoms')} atoms, {len(entries)} layouts)")
         for name, (speed, r, reps) in (('fastest', fastest), ('value  ', value)):
             hours = budget / speed / 3600
             su = hours * r['cores_charged']

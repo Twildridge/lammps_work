@@ -34,6 +34,39 @@ baseline. Keep two answers apart, because `--map-by` lives in `run_lammps.sh` an
 fastest configuration from Slurm settings alone, and the fastest with those changes too. Mac results in
 `local_test_results/` are local tests only and say nothing about MPI layouts.
 
+## Debug-partition layout scan of the rot45 standard gel (2026-11-07)
+
+`submit_debug_sweep.sh` answers the MPI x OpenMP question for one slab family quickly and almost
+for free, on the debug partition (2 nodes, 30 min, 2 jobs per user): per N it submits one 1-node
+job that preps the starting state (deck start-up + 10 k steps) and then times 128x1, 64x2, 32x4
+and 16x8 ranks x threads per node, each as its own `mpirun` inside the same allocation
+(`debug_sweep.batch`, layout via `BENCH_TASKS` / `BENCH_CPUS` of `run_benchmark.sh`), plus 128x1
+at comm cutoff 2.5. The 2-node job (the same layouts with `--map-by node` and `--map-by core`) is
+submitted by `chains/debug_waiter.sh`, a `nohup` process the submit script leaves on the login
+node, as soon as a debug slot is free (a job cannot submit its successor: the 2-job submit limit
+counts the running job too). When the 1-node job ends it submits, unless `COMPUTE=0`, the
+compute-partition follow-ups for the node counts debug cannot give: 4 nodes 128x1 node (the
+production baseline), 4 nodes 64x2 core, 8 nodes 128x1, and 1 node 128x1 as the cross-check that
+debug and compute nodes (both zen2, 128 cores, 256 GB; debug is `exp-9-[55-56]` beside the compute
+rack 9) time alike.
+Every job refreshes `~/Documents/lammps_runs/allocation_benchmark/results.csv`,
+`layouts_rot45.png` and `layouts_rot45.txt` (ranked table, gain over the baseline, hours and SUs
+of the full production budget, the `#SBATCH` lines to copy) when it finishes.
+
+```bash
+bash submit_debug_sweep.sh --dry-run
+bash submit_debug_sweep.sh                       # NS="5 15" NETWORK=rot45 COMPUTE=1 by default
+python3 collect_results.py                       # later, on the login node: csv + verdict
+module load anaconda3/2021.05/q4munrg && python plot_layouts.py ~/Documents/lammps_runs/allocation_benchmark/results.csv
+```
+
+Layouts a job could not fit before its 30 min are listed in `logs/<jobname>.skipped`; re-running
+`submit_debug_sweep.sh` skips finished runs and times only the missing ones. `NETWORK=random`
+runs the same scan on the random slab (`prep_<N>b_s1.0.data` states are shared with the tiers
+below). The 15-bead rot45 file in `input_data/` on 2026-11-07 was a byte-identical copy of the
+5-bead one; the scan uses the file rebuilt by `scripts/lib/build_beads_sweep.py --network rot45
+--beads 15` in `input_data/allocation_benchmark/rot45_rebuilt/` when that exists.
+
 ## Running it on Expanse
 
 Run from this folder on the login node, after `git pull`. Add `--dry-run` to any `submit` line to see its
