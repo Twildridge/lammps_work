@@ -3,7 +3,7 @@
 [← back to README](../README.md)
 
 **"Data file not found"**
-The `.data` file must be in `~/Documents/lammps_data/input_data/` with the exact name matching `DATANAME` in the batch file (no extra suffixes).
+The `.data` file must be in `~/Documents/lammps_data/input_data/` (or in the folder `LAMMPS_INPUT_DATA_OVERRIDE` names, e.g. `input_data/calibration_sweep/` for the calibration deck) with the exact name matching `DATANAME` in the batch file (no extra suffixes).
 
 **"Disk quota exceeded" on Bridges-2**
 Trajectory files ended up in your home directory. Verify the symlink: `ls -la ~/Documents/lammps_runs/*/traj_files` should show `→ /ocean/projects/...`. If not, move the `.lammpstrj` files to scratch manually.

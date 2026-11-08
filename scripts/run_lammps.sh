@@ -32,6 +32,7 @@ if [ $# -lt 4 ]; then
     echo "             UNLOAD / UNLOAD_STEPS / UNLOAD_MARGIN (triaxial_compression_two_pist and compress_slab: re-swelling hold after each level)"
     echo "             FROZEN / FROZEN_STEPS / FROZEN_AT (triaxial_permeation_two_pist: frozen-network flux stage after the drive, or the whole drive on the frozen reference network)"
     echo "             compress_slab reads the two-piston knobs too, plus SEAT_MODE (rg|bb) and HOLD_AUTO (1|0)"
+    echo "             LAMMPS_INPUT_DATA_OVERRIDE: folder holding <dataname>.data (default ~/Documents/lammps_data/input_data; calibration_sweep uses input_data/calibration_sweep)"
     exit 1
 fi
 
@@ -208,11 +209,15 @@ echo "Working directory: $WORK_DIR"
 echo "Trajectory directory (scratch): $TRAJ_DIR"
 echo "======================================"
 
-# Copy or link the data file — all input data lives in input_data/
-DATA_FILE_SOURCE="$HOME/Documents/lammps_data/input_data/${DATANAME}.data"
+# Copy or link the data file — all input data lives in input_data/ unless a
+# driver sets LAMMPS_INPUT_DATA_OVERRIDE (calibration_sweep.sh points it at
+# input_data/calibration_sweep/ so its ~370 prep files and run symlinks stay
+# out of the top-level folder; 2026-11-07).
+INPUT_DATA_DIR="${LAMMPS_INPUT_DATA_OVERRIDE:-$HOME/Documents/lammps_data/input_data}"
+DATA_FILE_SOURCE="${INPUT_DATA_DIR}/${DATANAME}.data"
 if [ ! -f "$DATA_FILE_SOURCE" ]; then
     echo "Error: Data file $DATA_FILE_SOURCE not found"
-    echo "Please ensure your .data file is in ~/Documents/lammps_data/input_data/"
+    echo "Please ensure your .data file is in ${INPUT_DATA_DIR}/"
     exit 1
 fi
 

@@ -104,6 +104,7 @@ lammps_work/                    ← This git repository
 ├── lammps_work/        ← This repo (git-tracked)
 ├── lammps_data/
 │   └── input_data/     ← .data files (large; NOT in git — copy manually)
+│       └── calibration_sweep/  ← calibration_sweep.sh prep files + run symlinks (~370 entries, kept out of the top level)
 └── lammps_runs/        ← Timestamped output from each job (NOT in git)
     └── slab_*_20250101_120000/
         ├── data_files/     ← symlink to input .data file

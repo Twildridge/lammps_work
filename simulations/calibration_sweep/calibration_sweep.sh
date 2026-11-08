@@ -30,6 +30,9 @@
 #   Loading file:      ${ISOLATED_STEM}_nf${NF}.data
 #   NPT run dataname:  ${ISOLATED_STEM}_nf${NF}_pstar${P}_rep${rep}   (symlink
 #                      in INPUT_DATA_DIR; pure companions analogous)
+#   INPUT_DATA_DIR:    ~/Documents/lammps_data/input_data/calibration_sweep/
+#                      (all prep artifacts + run symlinks; only the base
+#                      snapshot is read from the top-level input_data/)
 #   Manifest keys:     prep_isolated.path
 #                      prep_nf${NF}.path
 #                      p${P}_polymer.workdir
@@ -55,6 +58,7 @@
 #              cmix_p<P>_nf<NF>_r<rep>.log, csol_..., calib_launch_from<i>.log).
 #              A whole chained sweep shares one directory: the launcher passes
 #              it down through CALIB_SWEEP_LOG_DIR.
+# Input data → ~/Documents/lammps_data/input_data/calibration_sweep/
 # Run data   → ~/Documents/lammps_runs/calibration_sweep/
 # Manifests  → ~/Documents/lammps_runs/calibration_sweep/sweep_manifest/
 # =============================================================================
@@ -128,8 +132,13 @@ WINDOW=1
 
 LAMMPS_DATA="$HOME/Documents/lammps_data"
 LAMMPS_RUNS="$HOME/Documents/lammps_runs"
-INPUT_DATA_DIR="${LAMMPS_DATA}/input_data"
-SLAB_DATA_DIR="${INPUT_DATA_DIR}"
+# Base snapshot lives in the shared top-level input_data/. Everything this
+# deck generates (isolated gel, per-N_f loadings, split companions, manifests,
+# per-run symlinks) lives in its own subfolder so the top-level input_data/
+# stays browsable; run_lammps.sh is pointed there via LAMMPS_INPUT_DATA_OVERRIDE
+# (exported next to LAMMPS_RUNS_OVERRIDE in every job heredoc). (2026-11-07)
+SLAB_DATA_DIR="${LAMMPS_DATA}/input_data"
+INPUT_DATA_DIR="${LAMMPS_DATA}/input_data/calibration_sweep"
 
 CALIB_RUNS="${LAMMPS_RUNS}/calibration_sweep"
 MANIFEST_DIR="${CALIB_RUNS}/sweep_manifest"
@@ -304,7 +313,7 @@ python3 -c "import numpy, scipy; from scipy.spatial import ConvexHull, cKDTree" 
 }
 
 SNAP_FILE="${SLAB_DATA_DIR}/${BASE_SNAPSHOT}"
-ISOLATED_OUT="${SLAB_DATA_DIR}/${ISOLATED_STEM}.data"
+ISOLATED_OUT="${INPUT_DATA_DIR}/${ISOLATED_STEM}.data"
 
 if [ ! -f "\$SNAP_FILE" ]; then
     echo "ERROR: base snapshot not found: \$SNAP_FILE"
@@ -405,6 +414,7 @@ module load python/3.8.12
 
 echo ""; echo "====== cpol_p${P} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${CALIB_RUNS}"
+export LAMMPS_INPUT_DATA_OVERRIDE="${INPUT_DATA_DIR}"
 export CALIB_FRAMES="${CALIB_FRAMES}" CALIB_DUMP_EVERY="${CALIB_DUMP_EVERY}"
 # The isolated_* inputs are equilibrated FENE configurations, not fresh diamond
 # lattices: skip polymer_pure's Stage 0 harmonic pre-relax, which assumes ~0.52σ
@@ -476,6 +486,7 @@ module load python/3.8.12
 
 echo ""; echo "====== cmix_p${P}_nf${NF}_r${rep} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${CALIB_RUNS}"
+export LAMMPS_INPUT_DATA_OVERRIDE="${INPUT_DATA_DIR}"
 export CALIB_FRAMES="${CALIB_FRAMES}" CALIB_DUMP_EVERY="${CALIB_DUMP_EVERY}"
 # The isolated_* inputs are equilibrated FENE configurations, not fresh diamond
 # lattices: skip polymer_pure's Stage 0 harmonic pre-relax, which assumes ~0.52σ
@@ -535,6 +546,7 @@ module load python/3.8.12
 
 echo ""; echo "====== csol_p${P}_nf${NF}_r${rep} | \$(date) | \$(hostname) ======"
 export LAMMPS_RUNS_OVERRIDE="${CALIB_RUNS}"
+export LAMMPS_INPUT_DATA_OVERRIDE="${INPUT_DATA_DIR}"
 export CALIB_FRAMES="${CALIB_FRAMES}" CALIB_DUMP_EVERY="${CALIB_DUMP_EVERY}"
 
 SOL_SRC="${INPUT_DATA_DIR}/${ISOLATED_STEM}_nf${NF}_solvent_only.data"

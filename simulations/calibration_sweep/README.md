@@ -90,6 +90,14 @@ one polymer companion per P. Chained batches auto-pass `--skip-prep`.
 
 ## Where outputs land
 
+- Input data: `~/Documents/lammps_data/input_data/calibration_sweep/` — the
+  isolated gel, the ten `_nf<NF>.data` loadings, their `_solvent_only` /
+  `_polymer_only` companions and `_volmix_manifest.json`, and the per-run
+  `..._pstar<P>_rep<R>.data` symlinks `run_lammps.sh` resolves. Only the base
+  snapshot (`BASE_SNAPSHOT`) is read from the top-level `input_data/`. The deck
+  exports `LAMMPS_INPUT_DATA_OVERRIDE` so `run_lammps.sh` looks there; prep is
+  skip-if-present, so re-running the deck reuses these files rather than
+  generating new ones. (Moved out of the top level 2026-11-07.)
 - Run dirs: `~/Documents/lammps_runs/calibration_sweep/<engine>_<dataname>_<interaction>_<timestamp>/`
 - Manifests: `~/Documents/lammps_runs/calibration_sweep/sweep_manifest/`
   (`prep_*.path`, `p${P}_nf${NF}_rep${R}_{mixed,solvent}.workdir`,

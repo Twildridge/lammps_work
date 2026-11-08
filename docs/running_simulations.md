@@ -87,7 +87,7 @@ TYPE=""                 # stress, volume, stressvol, or leave empty
 PRESS_TARGET=1.5        # bath pressure on the wet pistons
 ```
 
-- **`DATANAME`**: the filename of your `.data` file in `lammps_data/input_data/`, without the `.data` extension
+- **`DATANAME`**: the filename of your `.data` file in `lammps_data/input_data/`, without the `.data` extension. A driver can point `run_lammps.sh` at another folder with `LAMMPS_INPUT_DATA_OVERRIDE`; `calibration_sweep.sh` uses `input_data/calibration_sweep/` for its ~370 prep files and run symlinks.
 - **`INTERACTION`**: `epsSS_epsSP` — solvent–solvent and polymer–solvent LJ well depths (see cheat sheet)
 - **`NSTEPS`**: number of timesteps to run (1 million steps ≈ 4100 τ ≈ 19 ns for PEG)
 - **`TYPE`**: optional suffix that gets appended to the data file name in output (for labelling stress/volume variants)
@@ -226,7 +226,7 @@ Benchmarks across system sizes are in [`archive/pod_bridges/documenting_pod_runs
 
 ### 5g. Volume-of-mixing sweep (`volmix_sweep.sh`)
 
-> **Archived 2026-08** — superseded by the calibration sweep (partial-molar-volume NPT sweeps; see `lammps_work/archive/README.md`). The script now lives in `lammps_work/archive/volmix_sweep.sh`; this section is kept because the calibration driver inherits its SLURM machinery.
+> **Archived 2026-08** — superseded by the calibration sweep (partial-molar-volume NPT sweeps; see `lammps_work/archive/README.md` and `simulations/calibration_sweep/README.md`). The script now lives in `lammps_work/archive/volmix_sweep.sh`; this section is kept because the calibration driver inherits its SLURM machinery. Its data files were deleted on 2026-11-07: `lammps_data/slab_with_support/` is gone, as are the old `pstar*`/`snap*`/`rep*` `_polymer_only` / `_solvent_only` / `_volmix_manifest` files in `input_data/`. The current calibration inputs live in `input_data/calibration_sweep/`.
 
 Computes ΔV_mix(P*) = V_gel_mixed − V_polymer_pure − V_solvent_pure across 11 pressures (P* = 1.0–2.0, step 0.1).
 
