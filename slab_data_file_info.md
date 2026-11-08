@@ -717,3 +717,74 @@ Beads-per-chain sweep of the periodic RANDOM slab  [2026-11-03, scripts/lib/buil
   Bond switching: 4296 switches (4.26 per strand), strands 1.254 +/- 0.186 r0 (max 1.881), 0.0 % lattice strands left
   Total atoms: 213819   Total bonds: 29232   Output: slab_support_periodic_30beads_tall_rho04_random.data
   ISOTROPY OK (verdict = the interior strands, every metric within 3 sd of random directions)
+
+## 2026-11-07  periodic_data_file_generator.py --network rot45 (build_beads_sweep.py --network rot45) -- THE STANDARD GEL: x/y-periodic rot45 lattice slab, 5 and 15 beads, 15 % taller
+
+Built locally into lammps_data_files_local/ (catalog rows in its README.md).  Knobs: a_eq(N) = 5.28 ((N-1)/4)^0.59, in-plane box ~48 sigma, thickness ceil(1.15 x 23 x 5.28 / (a_eq/sqrt2)) BCT cells, rho 0.40, 4 sigma below the support, 25 above the gel, piston at 0.85, support spacing 0.2; straight strands (5 beads) / random walk (15).  Build log:
+
+```
+
+##### N = 5 (rot45): a_eq 5.280  pre_swell 1.1000  cells 13 x 9 x 38 (BCT along x, z)  gel 48.5 x 47.5 x 141.9 sigma  placement straight  ->  slab_support_periodic_5beads_tall_rho04_rot45.data
+=== periodic_data_file_generator.build: network = 'rot45'  ->  ../../../lammps_data_files_local/slab_support_periodic_5beads_tall_rho04_rot45.data
+  Crosslinks placed: 18018; finding periodic bonds...
+  Placing up to 161333 solvent beads...
+Generated PERIODIC tetrahedral rot45_y gel slab (boundary p p p):
+  Unit cells: 13 x 9 x 38   beads/chain: 5   pre_swell: 1.1   a = 5.280   chain placement: straight   (rot45_y: x, z count BCT cells of a/sqrt2 = 3.734; lattice rotated 45 deg about y)
+  Box (= gel in x,y): 48.54 x 47.52 x 174.87
+  Gel top z: 149.874   Piston z: 171.124   Bond length: 2.2863
+  Wall tiling: 243 x 138 atoms/sheet, snapped spacing dx=0.1997 dy(row)=0.3443
+  Crosslinks: 18018   Chains: 35802   Polymer beads: 125424
+  Support: 33534   Piston: 33534   Solvent: 161333
+  Total atoms: 353825   Total bonds: 143208   Output: ../../../lammps_data_files_local/slab_support_periodic_5beads_tall_rho04_rot45.data
+
+##### N = 15 (rot45): a_eq 11.057  pre_swell 0.6581  cells 6 x 4 x 18 (BCT along x, z)  gel 46.9 x 44.2 x 140.7 sigma  placement walk  ->  slab_support_periodic_15beads_tall_rho04_rot45.data
+=== periodic_data_file_generator.build: network = 'rot45'  ->  ../../../lammps_data_files_local/slab_support_periodic_15beads_tall_rho04_rot45.data
+  Crosslinks placed: 1776; finding periodic bonds...
+  Placing up to 144179 solvent beads...
+Generated PERIODIC tetrahedral rot45_y gel slab (boundary p p p):
+  Unit cells: 6 x 4 x 18   beads/chain: 15   pre_swell: 0.658149850489361   a = 11.057   chain placement: walk   (rot45_y: x, z count BCT cells of a/sqrt2 = 7.818; lattice rotated 45 deg about y)
+  Box (= gel in x,y): 46.91 x 44.23 x 173.73
+  Gel top z: 148.732   Piston z: 169.982   Bond length: 4.7878
+  Wall tiling: 235 x 128 atoms/sheet, snapped spacing dx=0.1996 dy(row)=0.3455
+  Crosslinks: 1776   Chains: 3504   Polymer beads: 47328
+  Support: 30080   Piston: 30080   Solvent: 144179
+  Total atoms: 251667   Total bonds: 49056   Output: ../../../lammps_data_files_local/slab_support_periodic_15beads_tall_rho04_rot45.data
+built N=5 in 33 s: slab_support_periodic_5beads_tall_rho04_rot45.data
+built N=15 in 28 s: slab_support_periodic_15beads_tall_rho04_rot45.data
+```
+
+Checks (2026-11-07): 5-bead file -- all 143208 bonds 0.572 sigma, no polymer pair closer than 0.5 sigma; 15-bead file -- bonds 0.968 mean, 1.813 max (248 above the FENE R0 1.5), 8254 polymer pairs closer than 0.5 sigma (walk placement; the slab_with_support.lmp Phase-0 harmonic push-off handles both, as for the random sweep files).  Lattice test on a 6 x 4 x 10 rot45 slab: every interior junction 4-coordinated, (101) face junctions 3-coordinated, 204 strands across the x/y boundaries.
+
+## 2026-11-07 (later)  15-bead rot45 slab REBUILT wider (7 x 5 x 18, ~55 sigma) to the 5-bead atom count (user request); overwrote the 6 x 4 x 18 file
+
+```
+
+  Crosslinks placed: 2590; finding periodic bonds...
+  Placing up to 210261 solvent beads...
+Generated PERIODIC tetrahedral rot45_y gel slab (boundary p p p):
+  Unit cells: 7 x 5 x 18   beads/chain: 15   pre_swell: 0.658149850489361   a = 11.057   chain placement: walk   (rot45_y: x, z count BCT cells of a/sqrt2 = 7.818; lattice rotated 45 deg about y)
+  Box (= gel in x,y): 54.73 x 55.28 x 173.73
+  Gel top z: 148.732   Piston z: 169.982   Bond length: 4.7878
+  Wall tiling: 274 x 160 atoms/sheet, snapped spacing dx=0.1997 dy(row)=0.3455
+  Crosslinks: 2590   Chains: 5110   Polymer beads: 69020
+  Support: 43840   Piston: 43840   Solvent: 210261
+  Total atoms: 366961   Total bonds: 71540   Output: ../../../lammps_data_files_local/slab_support_periodic_15beads_tall_rho04_rot45.data
+built N=15 in 39 s: slab_support_periodic_15beads_tall_rho04_rot45.data
+```
+
+## 2026-11-07 (later still)  15-bead rot45 slab REBUILT at 9 x 7 x 18 (~70 x 77 sigma): the 5-bead slab's POLYMER BEADS PER z-BIN (883 vs 884 per sigma of height); 660 k atoms (1.9x the 5-bead file); overwrote the 7 x 5 x 18 build
+
+```
+
+  Crosslinks placed: 4662; finding periodic bonds...
+  Placing up to 378470 solvent beads...
+Generated PERIODIC tetrahedral rot45_y gel slab (boundary p p p):
+  Unit cells: 9 x 7 x 18   beads/chain: 15   pre_swell: 0.658149850489361   a = 11.057   chain placement: walk   (rot45_y: x, z count BCT cells of a/sqrt2 = 7.818; lattice rotated 45 deg about y)
+  Box (= gel in x,y): 70.37 x 77.40 x 173.73
+  Gel top z: 148.732   Piston z: 169.982   Bond length: 4.7878
+  Wall tiling: 352 x 224 atoms/sheet, snapped spacing dx=0.1999 dy(row)=0.3455
+  Crosslinks: 4662   Chains: 9198   Polymer beads: 124236
+  Support: 78848   Piston: 78848   Solvent: 378470
+  Total atoms: 660402   Total bonds: 128772   Output: ../../../lammps_data_files_local/slab_support_periodic_15beads_tall_rho04_rot45.data
+built N=15 in 73 s: slab_support_periodic_15beads_tall_rho04_rot45.data
+```

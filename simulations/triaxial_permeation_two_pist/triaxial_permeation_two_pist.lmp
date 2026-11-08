@@ -74,6 +74,35 @@
 #                pressure drive at ONE dP, exactly like triaxial_permeation.lmp; files
 #                are tagged <name>_${dataname}_${interaction}_${nsteps}).  Halts if the
 #                feed reservoir thins to feed_halt_thick or a piston nears a box face.
+#   - Phase 2d:  FROZEN NETWORK (optional, -var frozen 1 / FROZEN=1 in the batch; 2026-11-07):
+#                straight after the drive, in the steady state, every polymer bead is stopped
+#                (velocities zeroed, polymer taken out of the integrator: the thermostat is
+#                re-created on the solvent alone; forces on the polymer zeroed) and the SAME dP
+#                keeps driving the solvent through the now rigid network for frozen_steps.  The
+#                flux loggers (permeation, permeate_count, pistons, reservoir pressures, solvent
+#                density + sigma profiles) re-open on files tagged _${nsteps}_f -> kappa of the
+#                frozen steady-state network, to be compared with the live kappa of the drive
+#                (flow through a frozen network ~ weak flow through the swollen one to leading
+#                order).  The polymer is released again afterwards (Phase 2c may follow).
+#                -var frozen_at ref freezes the network BEFORE the ramp instead (the reference,
+#                undeformed state; the production files are then the frozen-network flux and
+#                Phases 2d / 2c are skipped) -- see the FROZEN knobs.
+#   - Phase 2c:  UNLOAD (optional, -var unload 1 / UNLOAD=1 in the batch; 2026-11-07): after
+#                the production run every production fix is closed, P_feed is ramped BACK
+#                to P_target in the same n_ramp x ramp_steps staircase (a step would ring
+#                the undamped sheets) and the gel is left to RE-SWELL at zero dP for
+#                unload_steps (0 -> nsteps) with both wet pistons live at P_target.  Every
+#                logger is re-opened on files tagged <name>_${dataname}_${interaction}_${nsteps}_u
+#                (pistons, permeation / flux, gel dimensions, reservoir pressures, sigma
+#                profiles + solvent density at the stress cadence, and disp_z_polymer with
+#                the displace/atom reference reset at the ramp-down START, as in Phase 2).
+#                The re-swelling is the permeation deck's free transient: the network stress
+#                falls to zero at BOTH faces at once (support: dP -> 0; feed face: free), so
+#                the strain modes are the loading transient's sin(k pi zeta), tau_1 =
+#                L^2/(pi^2 D_c), and lib/triaxial.py fits D_c (and M from the recovered
+#                thickness) exactly as for the drive -- the companion of the compression
+#                deck's Phase 2c (triaxial_compression_two_pist.lmp), the measurement the
+#                programme trusts for D_c.  Nothing changes for unload = 0.
 #   Deleted relative to triaxial_permeation.lmp (2026-09-16): the piston REPOSITION,
 #   the WCA switch-on and the overlap-relax stages (Phase 2 steps 1, 2, 2.5) and the
 #   z-only NPH Phase 0.5 -- solvent-piston WCA is ALWAYS on here and the pistons
@@ -140,6 +169,31 @@ variable ramp_steps      index 10000       # steps held at each stage (-var ramp
 variable feed_halt_thick equal 2.0         # halt when feed reservoir <= this (sigma)
 variable flux_freq       index 1000        # permeate bead-count interval (steps)
 variable box_guard_gap   equal 2.0         # halt if a piston face comes this close to a box face
+
+# ----- UNLOAD (Phase 2c, optional: -var unload 1 / UNLOAD=1 in the batch; 2026-11-07) -----
+# After the production run P_feed is ramped back to P_target (n_ramp x ramp_steps, the drive's
+# staircase reversed) and the gel re-swells at zero dP for unload_steps (0 -> nsteps), every
+# logger re-opened on files tagged _${nsteps}_u (see the header).  run_lammps.sh forwards
+# UNLOAD / UNLOAD_STEPS to every deck (UNLOAD_MARGIN too; it has no meaning here).
+variable unload        index 0
+variable unload_steps  index 0             # re-swelling hold length (steps); 0 -> nsteps
+variable unload_margin index 0.0           # unused in this deck (the compression decks' plate margin)
+
+# ----- FROZEN NETWORK (Phase 2d, optional: -var frozen 1 / FROZEN=1 in the batch; 2026-11-07) -----
+# After the drive the polymer is frozen in its steady state and the same dP drives the solvent
+# through the rigid network for frozen_steps (0 -> nsteps); flux files tagged _${nsteps}_f.
+variable frozen        index 0
+variable frozen_steps  index 0
+# frozen_at (2026-11-07, later): WHEN the network is frozen.  'end' = after the drive, in the compacted steady
+# state (Phase 2d above; kappa of the network the flow itself shaped).  'ref' = right after the zero-flux
+# reference window, BEFORE the dP ramp: the whole production (ramp + drive, the normal files) then runs on
+# the network frozen in its swollen reference state -- the permeability of the UNDEFORMED gel at zero
+# strain, the quantity the compression side's D_c/M at small strain should be compared with (the live
+# drive compacts the support side to phi_s ~0.33 and its Darcy kappa is the harmonic mean over that
+# profile; the quarter-gel runs read kappa 0.30-0.32 at dP 0.02-0.05 against 0.24 at 0.1).  With 'ref'
+# the Phase 2d and 2c blocks are skipped (the frozen network cannot compact or re-swell) and the
+# displacement files hold zeros: read the flux only.  Needs frozen = 1.
+variable frozen_at     index end
 
 # ----- Output Frequencies -----
 variable thermo_freq     index 25000
@@ -738,8 +792,20 @@ print "========================================"
 
 # Production thermostat: x,y only (z is the flow direction), as triaxial_permeation.lmp
 compute myTemp mobile temp/partial 1 1 0
-fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
-fix_modify nvt_prod temp myTemp
+# frozen_at = ref (2026-11-07): the network is frozen HERE, in the zero-flux reference state, and the whole
+# production runs on it -- solvent-only thermostat, polymer stopped (see the FROZEN knobs)
+variable frozen_ref equal 0
+if "${frozen} == 1 && ${frozen_at} == ref" then "variable frozen_ref delete" "variable frozen_ref equal 1"
+if "${frozen_ref} == 1" then &
+    "print '>>> FROZEN REFERENCE NETWORK (frozen_at = ref): polymer stopped before the dP ramp; the production files are the flux through the undeformed network'" &
+    "velocity polymer set 0.0 0.0 0.0" &
+    "fix freeze_poly polymer setforce 0.0 0.0 0.0" &
+    "compute myTemp_solv solvent temp/partial 1 1 0" &
+    "fix nvt_prod solvent nvt temp ${temp_target} ${temp_target} 1.0" &
+    "fix_modify nvt_prod temp myTemp_solv" &
+else &
+    "fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0" &
+    "fix_modify nvt_prod temp myTemp"
 
 # ----- Production piston law: drop the viscous damper (damp_prod=0, 2026-09-23) -----
 # Same delete + equal idiom as dP_now: fix aveforce looks the variable up BY NAME
@@ -1115,6 +1181,268 @@ unfix out_gel_dims_rg
 unfix out_box_dims
 unfix out_polymer_com
 unfix stress_aniso_output
+
+print ">>> Production done (step $(step)):  z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  feed_thickness=$(v_feed_thickness:%.2f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
+
+
+# ==========================================================================
+# PHASE 2d (optional, frozen = 1): FROZEN NETWORK -- the polymer stopped in its steady state, the
+# same dP driving the solvent through the rigid network; files tagged _${nsteps}_f  (2026-11-07)
+# ==========================================================================
+if "${frozen} == 0 || ${frozen_ref} == 1" then "jump SELF label_after_frozen"
+
+print "########################################################"
+print "  FROZEN NETWORK: polymer stopped in the steady state, dP ${dP_piston} kept on the solvent"
+print "########################################################"
+variable frozen_len   equal (${frozen_steps}>0)*${frozen_steps}+(${frozen_steps}<=0)*${nsteps}
+variable frozen_tag   string ${nsteps}_f
+
+# stress cadence over the frozen interval (same construction as the production's)
+variable nfreq_raw_f      equal floor(v_frozen_len/v_num_stress_curves)
+variable nrepeat_raw_f    equal floor(v_nfreq_raw_f/v_nevery_target)
+variable nr_lo_f          equal (v_nrepeat_raw_f>v_nrepeat_min)*v_nrepeat_raw_f+(v_nrepeat_raw_f<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress_f equal (v_nr_lo_f<v_nrepeat_max)*v_nr_lo_f+(v_nr_lo_f>=v_nrepeat_max)*v_nrepeat_max
+variable nevery_stress_f  equal floor(v_nfreq_raw_f/v_nrepeat_stress_f)
+variable nfreq_stress_f   equal v_nevery_stress_f*v_nrepeat_stress_f
+print ">>> [frozen] stress cadence: nevery=${nevery_stress_f} nrepeat=${nrepeat_stress_f} nfreq=${nfreq_stress_f}  (frozen_len ${frozen_len})"
+
+# ----- stop the network: no integration of the polymer, forces on it zeroed, solvent-only thermostat -----
+unfix nvt_prod
+velocity polymer set 0.0 0.0 0.0
+fix freeze_poly polymer setforce 0.0 0.0 0.0
+compute myTemp_solv solvent temp/partial 1 1 0
+fix nvt_frozen solvent nvt temp ${temp_target} ${temp_target} 1.0
+fix_modify nvt_frozen temp myTemp_solv
+print ">>> [frozen] polymer frozen at step $(step): L_bb=$(v_gel_lz_bb:%.2f) L_rg=$(v_gel_lz_rg:%.2f)  z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  P_feed_app=$(v_P_feed_app) P_perm_app=$(v_P_perm_app)"
+
+# ----- loggers (the production files' columns) -----
+fix fout_piston_pos all print ${volume_freq} "$(step) $(v_z_feed) $(v_z_perm)" &
+    title "# step z_feed z_perm" &
+    file output_files/piston_data/piston_position_${dataname}_${interaction}_${frozen_tag}.dat screen no
+fix fout_piston_vel all print ${volume_freq} "$(step) $(v_vz_feed) $(v_vz_perm)" &
+    title "# step vz_feed vz_perm" &
+    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${frozen_tag}.dat screen no
+fix fout_piston_force all print ${volume_freq} "$(step) $(c_fp_feed[3]) $(c_fp_perm[3])" &
+    title "# step F_fluid_feed F_fluid_perm   (pair force of mobile atoms on each sheet, z)" &
+    file output_files/piston_data/piston_force_${dataname}_${interaction}_${frozen_tag}.dat screen no
+fix fout_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_fp_feed[3] c_fp_perm[3] ave one &
+    title2 "# TimeStep F_fluid_feed F_fluid_perm   (block-averaged; frozen network)" &
+    file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${frozen_tag}.dat
+fix fout_support_force all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_fp_supp_poly[3] c_fp_supp_solv[3] ave one &
+    title2 "# TimeStep F_poly_supp F_solv_supp   (pair force of the polymer / solvent on the support sheet, z; block-averaged)" &
+    file output_files/piston_data/support_force_${dataname}_${interaction}_${frozen_tag}.dat
+fix fout_piston_pressure all print ${volume_freq} &
+    "$(step) $(v_P_feed_meas) $(v_P_feed_app) $(v_P_perm_meas) $(v_P_perm_app)" &
+    title "# step P_feed_meas P_feed_app P_perm_meas P_perm_app" &
+    file output_files/piston_data/piston_pressure_${dataname}_${interaction}_${frozen_tag}.dat screen no
+fix fout_gel_dims_bb all print ${volume_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb) $(c_minz) $(c_maxz)" &
+    title "# step Lx_bb Ly_bb Lz_bb zlo_poly zhi_poly" &
+    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${frozen_tag}.dat screen no
+fix fout_gel_dims_rg all print ${volume_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${frozen_tag}.dat screen no
+fix fout_permeate_flux all print ${flux_freq} '$(step) $(v_N_permeate)' &
+    file output_files/permeation_data/permeate_count_${dataname}_${interaction}_${frozen_tag}.dat screen no
+fix fout_permeation all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    v_z_feed v_z_perm c_fp_feed[3] c_fp_perm[3] v_P_feed_meas v_P_perm_meas v_q_perm_inst v_N_permeate ave one &
+    title2 "# TimeStep z_feed z_perm F_fluid_feed F_fluid_perm P_feed_meas P_perm_meas Q_perm(=A*dz_perm/dt) N_permeate" &
+    file output_files/permeation_data/permeation_${dataname}_${interaction}_${frozen_tag}.dat
+fix favg_P_feed all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} v_P_res_feed v_rho_feed &
+    title2 "# TimeStep P_res_feed rho_feed   (block-averaged, pf cadence)" &
+    file output_files/stress_data/pressure_feed_${dataname}_${interaction}_${frozen_tag}.dat
+fix favg_P_perm all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} v_P_res_perm v_rho_perm &
+    title2 "# TimeStep P_res_perm rho_perm   (block-averaged, pf cadence)" &
+    file output_files/stress_data/pressure_permeate_${dataname}_${interaction}_${frozen_tag}.dat
+fix favg_sigmazz_poly all ave/time ${nevery_stress_f} ${nrepeat_stress_f} ${nfreq_stress_f} &
+    c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${frozen_tag}.dat
+fix favg_sigmazz_solv all ave/time ${nevery_stress_f} ${nrepeat_stress_f} ${nfreq_stress_f} &
+    c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${frozen_tag}.dat
+fix favg_solv_density all ave/chunk ${nevery_stress_f} ${nrepeat_stress_f} ${nfreq_stress_f} &
+    chunk_z_solv_density density/number density/mass &
+    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${frozen_tag}.dat
+fix halt_perm_f all halt ${volume_freq} v_feed_thickness <= ${feed_halt_thick} error continue
+fix halt_box_f all halt 1000 v_box_guard > 0.5 error continue
+
+variable frozen_run equal (floor(($(step)+${frozen_len}-1)/${nfreq_stress_f})+1)*${nfreq_stress_f}-$(step)
+print ">>> [frozen] driving the solvent through the frozen network for ${frozen_run} steps (>= frozen_len=${frozen_len}, aligned to nfreq=${nfreq_stress_f}); files tagged _${frozen_tag}"
+run ${frozen_run}
+
+unfix halt_box_f
+unfix halt_perm_f
+unfix favg_solv_density
+unfix favg_sigmazz_solv
+unfix favg_sigmazz_poly
+unfix favg_P_perm
+unfix favg_P_feed
+unfix fout_permeation
+unfix fout_permeate_flux
+unfix fout_gel_dims_rg
+unfix fout_gel_dims_bb
+unfix fout_piston_pressure
+unfix fout_support_force
+unfix fout_piston_force_avg
+unfix fout_piston_force
+unfix fout_piston_vel
+unfix fout_piston_pos
+variable frozen_run delete
+print ">>> [frozen] done (step $(step)): z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)  N_permeate=$(v_N_permeate)"
+
+# ----- release the network: back to the production thermostat on polymer + solvent -----
+unfix nvt_frozen
+uncompute myTemp_solv
+unfix freeze_poly
+fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0
+fix_modify nvt_prod temp myTemp
+print ">>> [frozen] polymer released (thermostat back on polymer + solvent)"
+
+label label_after_frozen
+
+
+# ==========================================================================
+# PHASE 2c (optional, unload = 1): UNLOAD -- P_feed ramped back to P_target, then a free
+# re-swelling hold at zero dP, files tagged _${nsteps}_u  (2026-11-07; see the header and
+# the UNLOAD knobs).  Every production fix is closed above, so the production files end
+# with the drive and the notebook's steady windows (trailing fractions) stay clean.
+# ==========================================================================
+if "${unload} == 0 || ${frozen_ref} == 1" then "jump SELF label_after_unload"
+
+print "########################################################"
+print "  UNLOAD: dP ${dP_piston} -> 0 in ${n_ramp} stages of ${ramp_steps} steps, then free re-swelling"
+print "########################################################"
+variable unload_len   equal (${unload_steps}>0)*${unload_steps}+(${unload_steps}<=0)*${nsteps}
+variable unload_tag   string ${nsteps}_u
+
+# ----- stress cadence over the re-swelling hold (same construction as the production's) -----
+variable nfreq_raw_u      equal floor(v_unload_len/v_num_stress_curves)
+variable nrepeat_raw_u    equal floor(v_nfreq_raw_u/v_nevery_target)
+variable nr_lo_u          equal (v_nrepeat_raw_u>v_nrepeat_min)*v_nrepeat_raw_u+(v_nrepeat_raw_u<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress_u equal (v_nr_lo_u<v_nrepeat_max)*v_nr_lo_u+(v_nr_lo_u>=v_nrepeat_max)*v_nrepeat_max
+variable nevery_stress_u  equal floor(v_nfreq_raw_u/v_nrepeat_stress_u)
+variable nfreq_stress_u   equal v_nevery_stress_u*v_nrepeat_stress_u
+print ">>> [unload] stress cadence: nevery=${nevery_stress_u} nrepeat=${nrepeat_stress_u} nfreq=${nfreq_stress_u}  (unload_len ${unload_len})"
+
+# ----- loggers spanning the ramp-down + the re-swelling hold (the production files' columns) -----
+fix uout_piston_pos all print ${volume_freq} "$(step) $(v_z_feed) $(v_z_perm)" &
+    title "# step z_feed z_perm" &
+    file output_files/piston_data/piston_position_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_piston_vel all print ${volume_freq} "$(step) $(v_vz_feed) $(v_vz_perm)" &
+    title "# step vz_feed vz_perm" &
+    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_piston_force all print ${volume_freq} "$(step) $(c_fp_feed[3]) $(c_fp_perm[3])" &
+    title "# step F_fluid_feed F_fluid_perm   (pair force of mobile atoms on each sheet, z)" &
+    file output_files/piston_data/piston_force_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_fp_feed[3] c_fp_perm[3] ave one &
+    title2 "# TimeStep F_fluid_feed F_fluid_perm   (block-averaged; unload: ramp-down + re-swelling)" &
+    file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${unload_tag}.dat
+fix uout_support_force all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_fp_supp_poly[3] c_fp_supp_solv[3] ave one &
+    title2 "# TimeStep F_poly_supp F_solv_supp   (pair force of the polymer / solvent on the support sheet, z; block-averaged)" &
+    file output_files/piston_data/support_force_${dataname}_${interaction}_${unload_tag}.dat
+fix uout_piston_pressure all print ${volume_freq} &
+    "$(step) $(v_P_feed_meas) $(v_P_feed_app) $(v_P_perm_meas) $(v_P_perm_app)" &
+    title "# step P_feed_meas P_feed_app P_perm_meas P_perm_app" &
+    file output_files/piston_data/piston_pressure_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_gel_dims_bb all print ${volume_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb) $(c_minz) $(c_maxz)" &
+    title "# step Lx_bb Ly_bb Lz_bb zlo_poly zhi_poly" &
+    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_gel_dims_rg all print ${volume_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_box_dims all print ${volume_freq} "$(step) $(v_box_lx) $(v_box_ly) $(v_box_lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_polymer_com all print ${volume_freq} &
+    "$(step) $(c_polymer_com[1]) $(c_polymer_com[2]) $(c_polymer_com[3])" &
+    file output_files/volume_data/polymer_com_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_strain_zz all print ${volume_freq} &
+    "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
+    file output_files/stress_data/strain_zz_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_permeate_flux all print ${flux_freq} '$(step) $(v_N_permeate)' &
+    file output_files/permeation_data/permeate_count_${dataname}_${interaction}_${unload_tag}.dat screen no
+fix uout_permeation all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    v_z_feed v_z_perm c_fp_feed[3] c_fp_perm[3] v_P_feed_meas v_P_perm_meas v_q_perm_inst v_N_permeate ave one &
+    title2 "# TimeStep z_feed z_perm F_fluid_feed F_fluid_perm P_feed_meas P_perm_meas Q_perm(=A*dz_perm/dt) N_permeate" &
+    file output_files/permeation_data/permeation_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_P_feed all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} v_P_res_feed v_rho_feed &
+    title2 "# TimeStep P_res_feed rho_feed   (block-averaged, pf cadence)" &
+    file output_files/stress_data/pressure_feed_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_P_perm all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} v_P_res_perm v_rho_perm &
+    title2 "# TimeStep P_res_perm rho_perm   (block-averaged, pf cadence)" &
+    file output_files/stress_data/pressure_permeate_${dataname}_${interaction}_${unload_tag}.dat
+fix halt_box_u all halt 1000 v_box_guard > 0.5 error continue
+
+# ----- displacement reference = RAMP-DOWN START (u_z(z,0) = 0), profile live through the ramp -----
+variable uz_poly delete
+uncompute displace_poly
+compute displace_poly polymer displace/atom
+variable uz_poly atom c_displace_poly[3]
+fix uavg_disp_z_poly all ave/chunk ${disp_nevery} ${disp_nrepeat} ${disp_nfreq_eff} &
+    chunk_z_polymer v_uz_poly &
+    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${unload_tag}.dat
+
+# ----- P_feed ramp-down (permeate stays at P_target) -----
+variable ramp_stage_u loop ${n_ramp}
+label ramp_loop_u
+variable dP_now delete
+variable dP_now equal $(v_dP_piston*(v_n_ramp-v_ramp_stage_u)/v_n_ramp)
+print ">>> [unload] P_feed ramp-down stage ${ramp_stage_u}/${n_ramp}: dP_now=${dP_now}  P_feed_app=$(v_P_feed_app)"
+run ${ramp_steps}
+next ramp_stage_u
+jump SELF ramp_loop_u
+variable dP_now delete
+variable dP_now equal 0.0
+print ">>> [unload] ramp-down done (step $(step)): P_feed_app=$(v_P_feed_app) P_perm_app=$(v_P_perm_app)  z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  L_bb=$(v_gel_lz_bb:%.2f) L_rg=$(v_gel_lz_rg:%.2f)"
+
+# ----- re-swelling hold: stress profiles + solvent density at the unload cadence -----
+fix uavg_sigmazz_poly all ave/time ${nevery_stress_u} ${nrepeat_stress_u} ${nfreq_stress_u} &
+    c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmazz_solv all ave/time ${nevery_stress_u} ${nrepeat_stress_u} ${nfreq_stress_u} &
+    c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmaxx_poly all ave/time ${nevery_stress_u} ${nrepeat_stress_u} ${nfreq_stress_u} &
+    c_sigmaxx_poly mode vector file output_files/stress_data/sigmaxx_polymer_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmaxx_solv all ave/time ${nevery_stress_u} ${nrepeat_stress_u} ${nfreq_stress_u} &
+    c_sigmaxx_solv mode vector file output_files/stress_data/sigmaxx_solvent_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmayy_poly all ave/time ${nevery_stress_u} ${nrepeat_stress_u} ${nfreq_stress_u} &
+    c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_sigmayy_solv all ave/time ${nevery_stress_u} ${nrepeat_stress_u} ${nfreq_stress_u} &
+    c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${unload_tag}.dat
+fix uavg_solv_density all ave/chunk ${nevery_stress_u} ${nrepeat_stress_u} ${nfreq_stress_u} &
+    chunk_z_solv_density density/number density/mass &
+    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${unload_tag}.dat
+
+# hold length aligned to the stress cadence so the last profile window closes on the last step
+variable unload_run equal (floor(($(step)+${unload_len}-1)/${nfreq_stress_u})+1)*${nfreq_stress_u}-$(step)
+print ">>> [unload] re-swelling HOLD at zero dP for ${unload_run} steps (>= unload_len=${unload_len}, aligned to nfreq=${nfreq_stress_u}); files tagged _${unload_tag}"
+run ${unload_run}
+
+unfix uavg_solv_density
+unfix uavg_sigmayy_solv
+unfix uavg_sigmayy_poly
+unfix uavg_sigmaxx_solv
+unfix uavg_sigmaxx_poly
+unfix uavg_sigmazz_solv
+unfix uavg_sigmazz_poly
+unfix uavg_disp_z_poly
+unfix halt_box_u
+unfix uavg_P_perm
+unfix uavg_P_feed
+unfix uout_permeation
+unfix uout_permeate_flux
+unfix uout_strain_zz
+unfix uout_polymer_com
+unfix uout_box_dims
+unfix uout_gel_dims_rg
+unfix uout_gel_dims_bb
+unfix uout_piston_pressure
+unfix uout_support_force
+unfix uout_piston_force_avg
+unfix uout_piston_force
+unfix uout_piston_vel
+unfix uout_piston_pos
+variable unload_run delete
+print ">>> [unload] done (step $(step)): L_bb=$(v_gel_lz_bb:%.2f) L_rg=$(v_gel_lz_rg:%.2f) (settled L0_rg ${gel_lz_initial})  z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
+
+label label_after_unload
 
 print "========================================"
 print "Simulation complete (step $(step)):  z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  feed_thickness=$(v_feed_thickness:%.2f)"

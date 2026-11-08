@@ -25,6 +25,7 @@ if [ -z "${TRIAX_BATCH_SYNCED:-}" ]; then
     exec bash "$LAMMPS_WORK_DIR/simulations/triaxial_compression_two_pist/triaxial_compression_two_pist_single.batch"
 fi
 echo ">>> [self-sync] running freshly synced batch (TRIAX_BATCH_SYNCED=1)"
+echo ">>> DATANAME=${DATANAME:-<default>}"
 
 # Set environment variables
 declare -xr OMPI_UNIT='core'
@@ -44,6 +45,32 @@ module load openmpi/4.1.3
 module load python/3.8.12
 
 # =======================================================================
+# STANDARD GEL SINCE 2026-11-07: the x/y-PERIODIC rot45 LATTICE SLAB (diamond lattice rotated 45
+# degrees about y; the compression side then measures (C11 - C12)/2), 15 % taller than the 14000002
+# slab (lattice 141.9 sigma, ~354 k atoms before conversion), 5 beads per strand -- and the same
+# lattice with 15-bead strands (the route towards an isotropic lattice gel).  The random networks
+# were too heterogeneous to serve as the example gel.  DATANAME is read from the environment so
+# ONE batch serves both gels (and any later one):
+#     DATANAME=final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_14000000_two_pist_pm40  sbatch triaxial_compression_two_pist_single.batch
+#     DATANAME=final_config_slab_support_periodic_15beads_tall_rho04_rot45_1.0_1.0_30000000_two_pist_pm40 sbatch triaxial_compression_two_pist_single.batch
+# (the default below is the 5-bead stem).  The two_pist_pm40 file is the two-piston converter output
+# with --margin-perm 40 (one converted file per gel serves this deck AND the permeation deck; the
+# margin is vacuum), made by chain_random_periodic.batch (SLAB_FOLDER=chain_length_testing ...) or by
+# hand -- see simulations/chain_length_testing/chain_length_testing_sweep.batch.  The equilibration
+# tag (14000000 / 30000000) is the chain_length_testing budget NSTEPS for N = 5 / 15, whatever step
+# the Rg halt ended the run at.
+#
+# WALL TIME (2026-11-07): the random slab ran at only ~0.75 M steps/h on this layout (288 k atoms;
+# the 48 h guard cut its 25 M unload 7 % short) and the rot45 gel has ~400 k atoms after conversion,
+# so plan on ~0.55 M steps/h: settle 1 M + ramp ~1 M + HOLD 8 M + retraction ~0.5 M + UNLOAD 14 M
+# = ~24.5 M steps = ~45 h.  The deck has no wall_timeout, so a run that outgrows 48 h loses the end
+# of its unload (post-processed as PARTIAL).  Hold 8 M = 50 k tau > 3 tau_1 of the hold's slow
+# relaxation (L^2/(4 pi^2 D_c) at L 142, D_c 0.05: 2.0 M steps); unload 14 M = 70 k tau = 4.1 tau_1
+# at the re-swelling D_c 0.12 (L^2/(pi^2 D_c) = 3.4 M steps), 2.4 at 0.07.  The 15-bead gel is built
+# with 2.4x the cross-section (660 k atoms before conversion, ~70 x 77 sigma: the same polymer beads
+# per z-bin as the 5-bead slab) -- about twice the cost per step: submit it with  sbatch --nodes=8
+# (overrides the #SBATCH line) or halve NSTEPS / UNLOAD_STEPS; if softer it re-swells faster.
+# -----------------------------------------------------------------------
 # FULL GEL, ONE LEVEL, FINE CADENCE, WITH UNLOAD (2026-10-09): the D_c test in one job.
 #
 # Why: run 7 (this data file) gives D_c = 0.053 at eps 0.10 from the hold displacement profiles,
@@ -90,11 +117,13 @@ module load python/3.8.12
 # piston-transparent slab; it is already in ~/Documents/lammps_data/input_data/ (run 7 used it).
 # =======================================================================
 FOLDER="triaxial_compression_two_pist"
-DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist"
+# DATANAME: from the environment (see the header), default the 5-bead rot45 slab (2026-11-07).  The
+# 2026-10-09 run of this batch used the 14000002 lattice slab, final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist.
+DATANAME="${DATANAME:-final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_14000000_two_pist_pm40}"
 INTERACTION="1.0_1.0"   # epsSS_epsSP
 # NSTEPS: with HOLD_AUTO=0 this is the FLAT hold length AND the tag of every level file
-# (..._10000000_c0.10.dat, ..._10000000_u0.10.dat); the notebooks resolve the tag (NSTEPS=None).
-NSTEPS=10000000         # compression hold: 50,000 tau
+# (..._8000000_c0.10.dat, ..._8000000_u0.10.dat); the notebooks resolve the tag (NSTEPS=None).
+NSTEPS=8000000          # compression hold: 40,000 tau (10 M on the 14000002 slab; see WALL TIME)
 TYPE=""
 PRESS_TARGET=1.5        # bath pressure on BOTH wet pistons for the whole run
 
@@ -107,7 +136,7 @@ export HOLD_AUTO=0            # flat hold of NSTEPS steps (see the header)
 export DISP_FINE_NFREQ=5000   # fine-cadence displacement profiles (hold and unload): block length in steps (25 tau); 0 = off
 export DISP_FINE_BIN=1.0      # their z-bin width (sigma)
 export UNLOAD=1               # Phase 2c: after the hold, plates back to the seated gap + free re-swelling hold
-export UNLOAD_STEPS=25000000  # re-swelling hold: 125,000 tau (~6 tau_1 = L^2/(pi^2 D_c) at D_c 0.07)
+export UNLOAD_STEPS=14000000  # re-swelling hold: 70,000 tau (4.1 tau_1 = L^2/(pi^2 D_c) at D_c 0.12, L 142; 25 M on the 14000002 slab -- see WALL TIME)
 export UNLOAD_MARGIN=0.0      # retract exactly to the seated reference positions
 
 # -----------------------------------------------------------------------

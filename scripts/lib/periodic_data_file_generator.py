@@ -10,9 +10,19 @@ reference 14000002 state (slab_support_periodic_5beads_tall_rho04_new) comes fro
 'tetrahedral' build; the two-piston converter (slab_two_pistons_periodic.py) turns the
 equilibrated final configuration into the triaxial_*_two_pist input.
 
-Two networks, chosen by `network` in build():
+Three networks, chosen by `network` in build():
     'tetrahedral'  the diamond lattice with the cube axes along the box axes (every periodic
                    slab up to 2026-11-01);
+    'rot45'        (2026-11-07) the same lattice turned 45 degrees about y (box x = crystal
+                   [101], z = [-101], y = [010]), as the isolated rot45 gel of
+                   data_file_generator.py.  The rotated lattice is periodic in the box frame
+                   with the body-centred-tetragonal cell a/sqrt2 x a x a/sqrt2, so the slab
+                   tiles the x/y box when units_x counts BCT cells (a/sqrt2 = 3.73 sigma at
+                   a = 5.28) and units_y cubic cells (a); units_z counts BCT cells too.  The
+                   standard gel since 2026-11-07 (the compression side measures (C11 - C12)/2
+                   on this orientation; the random networks were too heterogeneous).  Longer
+                   strands (15 beads) on the same lattice are the route to a less anisotropic
+                   lattice gel; build_beads_sweep.py --network rot45 sets the knobs per N;
     'random'       the same lattice re-wired into a random f = 4 network by Wooten-Winer-Weaire
                    bond switching (data_file_generator.www_bond_switch with periodic=(box_x,
                    box_y, 0): strands and repulsions across the x/y boundaries are minimum-image,
@@ -53,7 +63,7 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
                                pre_swell=1.0,
                                bond_switch=0.0, bond_switch_seed=7,
                                chain_placement='straight', walk_seed=11, walk_bond=0.97,
-                               switch_options=None, log=print):
+                               switch_options=None, rot45_y=False, log=print):
     """
     Generate a tetrahedral (diamond-lattice) polymer gel slab that spans the whole
     x-y plane and is crosslinked PERIODICALLY across the x and y boundaries.
@@ -99,6 +109,13 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
     walk_seed, walk_bond : RNG seed and step length (sigma) of the 'walk' placement.
     switch_options   : dict of extra keyword arguments for www_bond_switch (e.g. rep_cut, w_rep,
                        w_all): the junction-relaxation knobs of the random network.
+    rot45_y          : True (2026-11-07) builds the diamond lattice rotated 45 degrees about y
+                       (crystal x -> box (1,0,-1)/sqrt2, crystal z -> box (1,0,1)/sqrt2), the
+                       periodic twin of data_file_generator's rot45 gel.  The lattice is then
+                       periodic in the box frame with the BCT cell a/sqrt2 x a x a/sqrt2:
+                       units_x and units_z count THOSE cells (a/sqrt2), units_y cubic ones (a),
+                       and the box (= units_x a/sqrt2 x units_y a) tiles seamlessly across
+                       x and y.  Bonds are found by distance with the same minimum-image search.
     """
 
     bead_spacing = 1.2
@@ -109,9 +126,11 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
     # stays seamless under PBC. 1.0 = original behaviour.
     a = chain_length * pre_swell  # FCC/diamond lattice constant
 
-    gel_x = units_x * a
+    # rot45_y: BCT cell a/sqrt2 along x and z (see the docstring); the aligned lattice counts cubic cells
+    cell_xz = a / np.sqrt(2) if rot45_y else a
+    gel_x = units_x * cell_xz
     gel_y = units_y * a
-    gel_z = units_z * a
+    gel_z = units_z * cell_xz
 
     # No side padding: the slab spans the full x-y box.
     box_x = gel_x
@@ -142,7 +161,36 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
         np.array([0.0, 0.5, 0.5]),
     ]
 
-    for i in range(units_x):            # periodic -> no +1
+    if rot45_y:
+        # Rotated lattice (2026-11-07; the periodic twin of data_file_generator's rot45 block): place
+        # the conventional diamond cells on a cubic index range that covers the slab, rotate every
+        # site 45 degrees about y, and keep the sites in the half-open box [0, gel_x) x [0, gel_y) and
+        # the closed slab [0, gel_z].  A site on the x or y boundary is the periodic image of one at
+        # 0, so the half-open test (with a tolerance for the rotation's rounding) keeps exactly one of
+        # the pair; the lattice is BCT-periodic in the box frame, so the bonds across the x/y
+        # boundaries are found by the minimum-image search below like any other.
+        c, s_ = np.sqrt(0.5), np.sqrt(0.5)
+        R = np.array([[c, 0.0, s_],
+                      [0.0, 1.0, 0.0],
+                      [-s_, 0.0, c]])
+        tol = 1e-6 * a
+        half = int(np.ceil((gel_x + gel_z) / a)) + 2
+        for i in range(-half, half + 1):
+            for j in range(units_y):            # periodic -> no +1
+                for k in range(-half, half + 1):
+                    for sublattice in (0, 1):
+                        for fcc_idx, fcc_frac in enumerate(fcc_positions):
+                            frac_pos = fcc_frac + (np.array([0.25, 0.25, 0.25]) if sublattice else 0.0)
+                            rel = R @ ((np.array([i, j, k]) + frac_pos) * a)
+                            if (-tol <= rel[0] < gel_x - tol and
+                                -tol <= rel[1] < gel_y - tol and
+                                -tol <= rel[2] <= gel_z + tol):
+                                key = (i, j, k, sublattice, fcc_idx)
+                                crosslinks[key] = particle_id
+                                particles.append({'id': particle_id, 'type': 1, 'pos': rel + offset, 'mol': 0})
+                                particle_id += 1
+    else:
+      for i in range(units_x):            # periodic -> no +1
         for j in range(units_y):        # periodic -> no +1
             for k in range(units_z + 1):  # finite slab -> keep top layer
                 for sublattice in (0, 1):
@@ -323,7 +371,7 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
         log(f"Warning: Only placed {solvent_count}/{num_solvent_total} solvent particles")
 
     # ---- Write LAMMPS data file -----------------------------------------------------
-    kind = "random f=4 (bond-switched)" if bond_switch > 0 else "tetrahedral"
+    kind = "random f=4 (bond-switched)" if bond_switch > 0 else ("tetrahedral rot45_y" if rot45_y else "tetrahedral")
     if bond_switch > 0:          # the relaxation knobs in the header: the pipeline script rebuilds a file without them
         kind += " relax " + " ".join(f"{k}={v}" for k, v in (switch_options or {}).items())
     with open(output_file, 'w') as f:
@@ -349,7 +397,8 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
     num_chains = len(bonds) // (beads_per_chain - 1) if beads_per_chain > 1 else 0
     log(f"Generated PERIODIC {kind} gel slab (boundary p p p):")
     log(f"  Unit cells: {units_x} x {units_y} x {units_z}   beads/chain: {beads_per_chain}   "
-        f"pre_swell: {pre_swell}   a = {a:.3f}   chain placement: {chain_placement}")
+        f"pre_swell: {pre_swell}   a = {a:.3f}   chain placement: {chain_placement}"
+        + (f"   (rot45_y: x, z count BCT cells of a/sqrt2 = {cell_xz:.3f}; lattice rotated 45 deg about y)" if rot45_y else ""))
     log(f"  Box (= gel in x,y): {box_x:.2f} x {box_y:.2f} x {box_z:.2f}")
     log(f"  Gel top z: {gel_top_z:.3f}   Piston z: {piston_z:.3f}   Bond length: {bond_distance:.4f}")
     log(f"  Wall tiling: {nx} x {ny} atoms/sheet, snapped spacing dx={snap_dx:.4f} dy(row)={snap_dy:.4f}")
@@ -360,7 +409,9 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
             f"strands {switch_report['mean_len']:.3f} +/- {switch_report['std_len']:.3f} r0 (max {switch_report['max_len']:.3f}), "
             f"{100 * switch_report['lattice_strands_left']:.1f} % lattice strands left")
     log(f"  Total atoms: {len(particles)}   Total bonds: {len(bonds)}   Output: {output_file}")
-    return output_file, dict(box=(box_x, box_y, box_z), bond_distance=bond_distance,
+    return output_file, dict(box=(box_x, box_y, box_z), bond_distance=bond_distance, a=a, cell_xz=cell_xz,
+                             gel=(gel_x, gel_y, gel_z), n_crosslinks=len(crosslinks), n_chains=num_chains,
+                             n_polymer=num_polymer, n_solvent=num_solvent_final, n_sheet=num_support,
                              n_atoms=len(particles), n_bonds=len(bonds), switch_report=switch_report)
 
 
@@ -369,6 +420,8 @@ def generate_gel_slab_periodic(beads_per_chain=5, units_x=9, units_y=9, units_z=
 # ---------------------------------------------------------------------------
 NETWORKS = {
     'tetrahedral': dict(bond_switch=0.0),
+    # the lattice rotated 45 degrees about y (2026-11-07): units_x / units_z count BCT cells of a/sqrt2
+    'rot45':       dict(bond_switch=0.0, rot45_y=True),
     # the lattice slab randomised by bond switching (3 accepted switches per strand, seed 7,
     # the isolated 'random' gel's recipe)
     # 2026-11-03: switch_options = RANDOM_RELAX (strand rest length 1.4 r0, junction repulsion
@@ -382,7 +435,7 @@ def build(network='tetrahedral', output_file=None, beads_per_chain=5, units_x=9,
           solvent_density=0.4, below_thickness=4.0, top_thickness=25.0, support_thickness=2.0,
           support_spacing=0.2, piston_exclusion=0.1, piston_height=0.85, pre_swell=0.93,
           check_isotropy=None, log=print, **overrides):
-    """Build one periodic slab data file.  `network` picks the preset ('tetrahedral' | 'random');
+    """Build one periodic slab data file.  `network` picks the preset ('tetrahedral' | 'rot45' | 'random');
     everything else is generate_gel_slab_periodic's knob of the same name (the defaults are the
     reference 14000002 slab's: 9 x 9 x 23 cells, pre_swell 0.93, rho 0.40, 4 sigma below the
     support, 25 sigma above the gel, piston at 0.85).  `overrides` go straight to the generator

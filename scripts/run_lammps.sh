@@ -30,6 +30,7 @@ if [ $# -lt 4 ]; then
     echo "             DP_PISTON PISTON_MASS C_PIST_FRAC NPT_PISTON_STEPS SETTLE_HALT (triaxial_*_two_pist)"
     echo "             DRIVE_SPLIT (triaxial_compression*: piston share of the gap closure, 0.5 = symmetric)"
     echo "             UNLOAD / UNLOAD_STEPS / UNLOAD_MARGIN (triaxial_compression_two_pist and compress_slab: re-swelling hold after each level)"
+    echo "             FROZEN / FROZEN_STEPS / FROZEN_AT (triaxial_permeation_two_pist: frozen-network flux stage after the drive, or the whole drive on the frozen reference network)"
     echo "             compress_slab reads the two-piston knobs too, plus SEAT_MODE (rg|bb) and HOLD_AUTO (1|0)"
     exit 1
 fi
@@ -70,6 +71,9 @@ DISP_FINE_BIN=${DISP_FINE_BIN:-1.0}         # hold displacement profile disp_z_p
 UNLOAD=${UNLOAD:-0}                         # triaxial_compression_two_pist (2026-10-09) + compress_slab (2026-10-28): 1 = after every level's hold drive the
 UNLOAD_STEPS=${UNLOAD_STEPS:-0}             # plates back to the seated gap and record a free re-swelling hold of UNLOAD_STEPS
 UNLOAD_MARGIN=${UNLOAD_MARGIN:-0.0}         # (0 = the level's hold length), each plate UNLOAD_MARGIN sigma beyond its seat
+FROZEN=${FROZEN:-0}                         # triaxial_permeation_two_pist (2026-11-07): 1 = after the drive freeze the polymer in its
+FROZEN_STEPS=${FROZEN_STEPS:-0}             # steady state and drive the solvent through it for FROZEN_STEPS (0 = NSTEPS); files _<NSTEPS>_f
+FROZEN_AT=${FROZEN_AT:-end}                 # end | ref: freeze after the drive (compacted steady state) or before the ramp (reference state)
 CALIB_FRAMES=${CALIB_FRAMES:-5}          # calibration-dump frames near run end (polymer_pure /
 CALIB_DUMP_EVERY=${CALIB_DUMP_EVERY:-2000}  # solvent_pure only; other engines ignore these vars)
 # PRERELAXED=1 tells polymer_pure to skip its Stage 0 harmonic pre-relaxation:
@@ -335,6 +339,9 @@ $MPIRUN_TIMEOUT mpirun -n "${SLURM_NTASKS}" --bind-to "${OMPI_UNIT}" --map-by "n
     -var unload "$UNLOAD" \
     -var unload_steps "$UNLOAD_STEPS" \
     -var unload_margin "$UNLOAD_MARGIN" \
+    -var frozen "$FROZEN" \
+    -var frozen_steps "$FROZEN_STEPS" \
+    -var frozen_at "$FROZEN_AT" \
     -var n_ramp "$N_RAMP" \
     -var ramp_steps "$RAMP_STEPS" \
     -var perm_stress_curves "$PERM_STRESS_CURVES" \

@@ -41,18 +41,34 @@ module load openmpi/4.1.3
 module load python/3.8.12
 
 # =======================================================================
-# CHAIN-LENGTH SWEEP OF THE x/y-PERIODIC RANDOM SLAB (2026-11-03).  5 beads per
+# CHAIN-LENGTH SWEEP OF THE x/y-PERIODIC SLAB (2026-11-03).  5 beads per
 # strand is too short -- the gel is elastic rather than osmotic (mixing) -- so the
 # same slab is equilibrated with 10, 15, 20 and 30-bead strands, one SLURM job per
-# N, all four submitted by  bash submit_chain_length_sweep.sh  [N ...]  from this
-# folder (sbatch --export=ALL,NBEADS=<N>; the job name is chain_len_<N>b).
+# N, all submitted by  bash submit_chain_length_sweep.sh  [N ...]  from this
+# folder (sbatch --export=ALL,NBEADS=<N>,NETWORK=<net>; the job name is
+# chain_len_<N>b[_<net>]).
 #
-# INPUT FILES: slab_support_periodic_<N>beads_tall_rho04_random.data, built by
-# scripts/lib/build_beads_sweep.py (slab_data_file_info.md, 2026-11-03): every one at
-# the 5-bead slab's physical size (~43 sigma in plane, ~111 sigma thick, 180-256 k
-# atoms) -- fewer cells and a pre_swell that puts the lattice at the mesh the gel
-# is expected to swell to, a_eq(N) = 4.82 ((N-1)/4)^0.59 -- with the strands laid
-# as random walks and the lattice re-wired into a random f = 4 network.
+# NETWORK (2026-11-07; env, default random):
+#   random  the 2026-11-03 sweep: slab_support_periodic_<N>beads_tall_rho04_random.data,
+#           built by scripts/lib/build_beads_sweep.py: every one at the 5-bead slab's
+#           physical size (~43 sigma in plane, ~111 sigma thick, 180-256 k atoms) -- fewer
+#           cells and a pre_swell that puts the lattice at the mesh the gel is expected to
+#           swell to, a_eq(N) = 4.82 ((N-1)/4)^0.59 -- with the strands laid as random
+#           walks and the lattice re-wired into a random f = 4 network.
+#   rot45   THE STANDARD GEL since 2026-11-07: the diamond lattice rotated 45 degrees
+#           about y, periodic across x and y (build_beads_sweep.py --network rot45 ->
+#           slab_support_periodic_<N>beads_tall_rho04_rot45.data; N = 5 and 15), ~48 sigma
+#           in plane for 5 beads, ~70 x 77 for 15 (its cross-section matches the 5-bead slab's
+#           POLYMER BEADS PER z-BIN, 2.4x the area) and 15 % taller than the 14000002 reference
+#           slab (38 / 18 BCT cells = 141.9 / 140.7 sigma at a_eq = 5.28 / 11.06; 354 k / 660 k
+#           atoms -- the 15-bead equilibration costs ~2x per step: 36 h may need CHAIN=1 to
+#           continue), built AT the expected equilibrium lattice constant.  The random
+#           networks were too heterogeneous to serve as the example gel; the rotated
+#           lattice is the orientation on which the compression side measures
+#           (C11 - C12)/2, and the 15-bead strands are the route towards an isotropic
+#           lattice gel.  NSTEPS below is a BUDGET: a lattice started at a_eq plateaus
+#           early and the Rg halt ends the run (the 5-bead budget is the 14000002 slab's
+#           14 M; the isolated rot45 gel was flat well inside 8 M).
 #
 # DECK: chain_length_testing.lmp is a symlink to ../slab_with_support/
 # slab_with_support.lmp (one deck, no divergent copy); run_lammps.sh keys the
@@ -78,6 +94,14 @@ module load python/3.8.12
 # THEN: pull final_config_<DATANAME>_1.0_1.0_<NSTEPS>.data to input_data/, convert
 # with lib/slab_two_pistons_periodic.py and run triaxial_compression_two_pist on it
 # (the compression notebook chain_length_comparison.ipynb compares the N).
+# rot45 (2026-11-07): ONE converted file per gel serves both decks,
+#     python slab_two_pistons_periodic.py --input input_data/final_config_<DATANAME>_1.0_1.0_<NSTEPS>.data \
+#            --margin-perm 40 --output input_data/final_config_<DATANAME>_1.0_1.0_<NSTEPS>_two_pist_pm40.data
+# then  DATANAME=<that stem> sbatch triaxial_compression_two_pist_single.batch   (hold + re-swelling unload)
+# and   DATANAME=<that stem> sbatch triaxial_permeation_two_pist_single.batch    (drive + re-swelling unload)
+# from their folders -- or let chain_random_periodic.batch do the copy / conversion / submission
+# (SLAB_FOLDER=chain_length_testing SLAB_DATANAME=<DATANAME> SLAB_NSTEPS=<NSTEPS> MARGIN_PERM=40
+# SUBMIT="compression permeation"; see its header).
 # =======================================================================
 NBEADS="${NBEADS:?set NBEADS (10 | 15 | 20 | 30 | 5) -- use submit_chain_length_sweep.sh}"
 case "$NBEADS" in
@@ -89,7 +113,8 @@ case "$NBEADS" in
     *)  echo "NBEADS=$NBEADS has no entry in the sweep table"; exit 1 ;;
 esac
 FOLDER="chain_length_testing"
-DATANAME="slab_support_periodic_${NBEADS}beads_tall_rho04_random"   # scripts/lib/build_beads_sweep.py (2026-11-03)
+NETWORK="${NETWORK:-random}"                                          # random | rot45 (see the header)
+DATANAME="slab_support_periodic_${NBEADS}beads_tall_rho04_${NETWORK}"   # scripts/lib/build_beads_sweep.py [--network rot45]
 INTERACTION="1.0_1.0"   # the interaction of the triaxial runs
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
@@ -108,7 +133,7 @@ export RG_TOL=0.0015          # relative change of the block mean Rg that counts
 export RG_NCONSEC=3           # consecutive blocks under RG_TOL = plateau detected
 export RG_EXTRA=0.10          # then run this fraction of the steps done so far more (whole blocks, >= 1) before stopping
 
-echo "chain_length_testing: NBEADS=$NBEADS DATANAME=$DATANAME NSTEPS=$NSTEPS RG_BLOCK=$RG_BLOCK"
+echo "chain_length_testing: NBEADS=$NBEADS NETWORK=$NETWORK DATANAME=$DATANAME NSTEPS=$NSTEPS RG_BLOCK=$RG_BLOCK"
 
 # Navigate to the scripts directory
 cd ~/Documents/lammps_work/scripts || exit 1

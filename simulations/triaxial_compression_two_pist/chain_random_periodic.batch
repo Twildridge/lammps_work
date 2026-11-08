@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# chain_random_periodic.batch (2026-11-02) -- the bridge between the random periodic slab
-# equilibration and its two-piston compression run.  Submitted by
-# scripts/submit_random_periodic_pipeline.sh as
+# chain_random_periodic.batch (2026-11-02) -- the bridge between a periodic slab equilibration
+# and its two-piston run(s).  Submitted by scripts/submit_random_periodic_pipeline.sh as
 #     sbatch --dependency=afterany:<slab job> --export=ALL,SLAB_JOB=<slab job> chain_random_periodic.batch
-# so it starts when that job ends, on ONE core of the shared partition (a few SU).  It
+# so it starts when that job ends, on ONE core of the shared partition (a few SU).
+# GENERALISED 2026-11-07 (env knobs, defaults = the 2026-11-02 random pipeline):
+#     SLAB_FOLDER   run folder of the equilibration (slab_with_support | chain_length_testing)
+#     SLAB_DATANAME the equilibration's DATANAME, SLAB_NSTEPS its budget NSTEPS (the final_config tag)
+#     MARGIN_PERM   converter --margin-perm (empty = the converter's default -> <stem>_two_pist;
+#                   40 -> <stem>_two_pist_pm40, the file both two-piston decks read since 2026-11-07)
+#     SUBMIT        which runs to submit on the converted file: "compression" (default; the
+#                   TRIAX_BATCH below) and/or "permeation" (triaxial_permeation_two_pist_single.batch),
+#                   each with DATANAME exported; DP_PISTON is passed through when set
+# e.g. the rot45 5-bead standard gel, after  NETWORK=rot45 bash submit_chain_length_sweep.sh 5  (job J):
+#     sbatch --dependency=afterany:J --export=ALL,SLAB_JOB=J,SLAB_FOLDER=chain_length_testing,\
+#       SLAB_DATANAME=slab_support_periodic_5beads_tall_rho04_rot45,SLAB_NSTEPS=14000000,MARGIN_PERM=40,\
+#       SUBMIT="compression permeation" chain_random_periodic.batch
+# (15 beads: SLAB_NSTEPS=30000000 and SUBMIT=compression first -- its M sets the permeation dP.)
+# It
 #   1. finds the slab run's final_config_<DATANAME>_1.0_1.0_14000000.data (newest run dir,
 #      continuation_* subdirs included);
 #   2. if there is none and the slab job chained a continuation (CHAIN=1: run_lammps.sh prints
@@ -32,14 +45,30 @@ set -u
 LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
 SLAB_DIR="$LAMMPS_WORK_DIR/simulations/slab_with_support"
 TRIAX_DIR="$LAMMPS_WORK_DIR/simulations/triaxial_compression_two_pist"
-RUNS="$HOME/Documents/lammps_runs/slab_with_support"
+SLAB_FOLDER="${SLAB_FOLDER:-slab_with_support}"
+RUNS="$HOME/Documents/lammps_runs/$SLAB_FOLDER"
 INPUT_DATA="$HOME/Documents/lammps_data/input_data"
-DATANAME="slab_support_periodic_5beads_tall_rho04_random"
+DATANAME="${SLAB_DATANAME:-slab_support_periodic_5beads_tall_rho04_random}"
 INTERACTION="1.0_1.0"
-NSTEPS=14000000
+NSTEPS="${SLAB_NSTEPS:-14000000}"
+MARGIN_PERM="${MARGIN_PERM:-}"
+SUBMIT="${SUBMIT:-compression}"
 FINAL="final_config_${DATANAME}_${INTERACTION}_${NSTEPS}.data"
-TWO_PIST="${FINAL%.data}_two_pist.data"
-TRIAX_BATCH="triaxial_compression_two_pist_random.batch"
+if [ -n "$MARGIN_PERM" ]; then
+    TWO_PIST="${FINAL%.data}_two_pist_pm${MARGIN_PERM%.*}.data"
+    CONV_OPTS=(--margin-perm "$MARGIN_PERM")
+else
+    TWO_PIST="${FINAL%.data}_two_pist.data"
+    CONV_OPTS=()
+fi
+# the compression batch: the random pipeline's own batch for its DATANAME, else the single batch with DATANAME exported
+if [ "$DATANAME" = "slab_support_periodic_5beads_tall_rho04_random" ] && [ -z "$MARGIN_PERM" ]; then
+    TRIAX_BATCH="triaxial_compression_two_pist_random.batch"
+else
+    TRIAX_BATCH="triaxial_compression_two_pist_single.batch"
+fi
+PERM_DIR="$LAMMPS_WORK_DIR/simulations/triaxial_permeation_two_pist"
+PERM_BATCH="triaxial_permeation_two_pist_single.batch"
 SLAB_JOB="${SLAB_JOB:-}"          # the slab job (or continuation) this job waited on
 CHAIN_HOPS="${CHAIN_HOPS:-0}"
 
@@ -53,8 +82,8 @@ fi
 
 # ---- 1. the slab's final configuration -----------------------------------------
 SRC=""
-for f in $(ls -t "$RUNS"/slab_with_support_${DATANAME}_${INTERACTION}_*/"$FINAL" \
-                 "$RUNS"/slab_with_support_${DATANAME}_${INTERACTION}_*/continuation_*/"$FINAL" 2>/dev/null); do
+for f in $(ls -t "$RUNS"/${SLAB_FOLDER}_${DATANAME}_${INTERACTION}_*/"$FINAL" \
+                 "$RUNS"/${SLAB_FOLDER}_${DATANAME}_${INTERACTION}_*/continuation_*/"$FINAL" 2>/dev/null); do
     SRC="$f"; break
 done
 
@@ -63,7 +92,7 @@ if [ -z "$SRC" ]; then
     # ---- 2. did the slab job chain a continuation?  ------------------------------
     NEXT=""
     if [ -n "$SLAB_JOB" ]; then
-        OUT=$(ls -t "$SLAB_DIR"/*.o${SLAB_JOB}.* 2>/dev/null | head -1 || true)
+        OUT=$(ls -t "$LAMMPS_WORK_DIR/simulations/$SLAB_FOLDER"/*.o${SLAB_JOB}.* 2>/dev/null | head -1 || true)
         if [ -n "$OUT" ]; then
             echo ">>> slab job output: $OUT"
             NEXT=$(grep -oE 'Submitted batch job [0-9]+' "$OUT" | tail -1 | awk '{print $4}' || true)
@@ -73,12 +102,12 @@ if [ -z "$SRC" ]; then
         echo ">>> the slab job chained continuation job ${NEXT}; waiting for it (hop $((CHAIN_HOPS + 1)))..."
         squeue -j "$NEXT" 2>/dev/null || true
         cd "$TRIAX_DIR" || exit 1
-        sbatch --dependency=afterany:"$NEXT" --export=ALL,SLAB_JOB="$NEXT",CHAIN_HOPS=$((CHAIN_HOPS + 1)) "$TRIAX_DIR/chain_random_periodic.batch"
+        sbatch --dependency=afterany:"$NEXT" --export=ALL,SLAB_JOB="$NEXT",CHAIN_HOPS=$((CHAIN_HOPS + 1)),SLAB_FOLDER="$SLAB_FOLDER",SLAB_DATANAME="$DATANAME",SLAB_NSTEPS="$NSTEPS",MARGIN_PERM="$MARGIN_PERM",SUBMIT="$SUBMIT" "$TRIAX_DIR/chain_random_periodic.batch"
         exit $?
     fi
     echo "ERROR: the slab run produced no $FINAL and no continuation job was found."
-    echo "       Check $SLAB_DIR/slab_periodic_random.o${SLAB_JOB}.* and the newest run dir under $RUNS."
-    echo "       When the final config exists, run by hand:  cd $TRIAX_DIR && SLAB_JOB=$SLAB_JOB bash chain_random_periodic.batch"
+    echo "       Check the slab job's output file in $LAMMPS_WORK_DIR/simulations/$SLAB_FOLDER and the newest run dir under $RUNS."
+    echo "       When the final config exists, run by hand:  cd $TRIAX_DIR && SLAB_JOB=$SLAB_JOB SLAB_FOLDER=$SLAB_FOLDER SLAB_DATANAME=$DATANAME SLAB_NSTEPS=$NSTEPS MARGIN_PERM=$MARGIN_PERM SUBMIT=\"$SUBMIT\" bash chain_random_periodic.batch"
     exit 1
 fi
 echo ">>> slab final configuration: $SRC"
@@ -101,9 +130,9 @@ else
     module unload python/3.8.12 2>/dev/null || true
     module load anaconda3/2021.05/q4munrg
     python -c "import numpy, scipy; print('numpy', numpy.__version__, 'scipy', scipy.__version__)"
-    echo ">>> converting to the two-piston geometry (scripts/lib/slab_two_pistons_periodic.py)..."
+    echo ">>> converting to the two-piston geometry (scripts/lib/slab_two_pistons_periodic.py ${CONV_OPTS[*]})..."
     cd "$LAMMPS_WORK_DIR/scripts/lib" || exit 1
-    if ! python slab_two_pistons_periodic.py --input "$INPUT_DATA/$FINAL" --output "$INPUT_DATA/$TWO_PIST"; then
+    if ! python slab_two_pistons_periodic.py --input "$INPUT_DATA/$FINAL" --output "$INPUT_DATA/$TWO_PIST" "${CONV_OPTS[@]}"; then
         echo "ERROR: the two-piston conversion failed; the triaxial run was NOT submitted."
         rm -f "$INPUT_DATA/$TWO_PIST"
         exit 1
@@ -111,11 +140,23 @@ else
 fi
 ls -la "$INPUT_DATA/$TWO_PIST"
 
-# ---- 4. the compression run -------------------------------------------------------------
-cd "$TRIAX_DIR" || exit 1
-echo ">>> submitting $TRIAX_BATCH (DATANAME ${TWO_PIST%.data})"
-grep -n '^DATANAME=\|^NSTEPS=\|^STRAIN_TARGETS=' "$TRIAX_BATCH"
-sbatch "$TRIAX_BATCH"
-exit $?
+# ---- 4. the two-piston run(s) ----------------------------------------------------------------
+RC=0
+export DATANAME="${TWO_PIST%.data}"
+case " $SUBMIT " in *" compression "*)
+    cd "$TRIAX_DIR" || exit 1
+    echo ">>> submitting $TRIAX_BATCH (DATANAME $DATANAME)"
+    grep -n '^DATANAME=\|^NSTEPS=\|^STRAIN_TARGETS=\|^export UNLOAD_STEPS=' "$TRIAX_BATCH"
+    sbatch --export=ALL,DATANAME="$DATANAME" "$TRIAX_BATCH" || RC=$?
+    ;;
+esac
+case " $SUBMIT " in *" permeation "*)
+    cd "$PERM_DIR" || exit 1
+    echo ">>> submitting $PERM_BATCH (DATANAME $DATANAME, DP_PISTON ${DP_PISTON:-batch default})"
+    grep -n '^DATANAME=\|^NSTEPS=\|^export DP_PISTON=\|^export UNLOAD_STEPS=' "$PERM_BATCH"
+    sbatch --export=ALL,DATANAME="$DATANAME"${DP_PISTON:+,DP_PISTON="$DP_PISTON"} "$PERM_BATCH" || RC=$?
+    ;;
+esac
+exit $RC
 }
 exit
