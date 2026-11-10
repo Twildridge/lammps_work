@@ -74,7 +74,7 @@ bash scripts/install_lsync.sh --no-claude
 source ~/.bashrc
 ```
 
-The first push from the cluster usually needs git credentials and possibly an SSH key. [github_sync.md](github_sync.md) has the steps and the error messages that mean each one is needed.
+The first push from a cluster needs an SSH key. [github_sync.md](github_sync.md#setting-up-pushing-from-a-cluster-expanse-bridges-2-pod-one-time-per-cluster) walks through it step by step and lists the error messages that mean you need it.
 
 That is all the one-time setup. The steps below are repeated for every simulation.
 

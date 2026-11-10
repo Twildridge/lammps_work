@@ -63,45 +63,97 @@ Conflicts are avoided by running `lsync` (or `git pull`) before editing on any m
 
 ---
 
-### SSH key setup (if `git push` gives a login error)
+### Step 0: get collaborator access (do this before anything else)
 
-Needed once per cluster, the first time a push fails with `Permission denied (publickey)` or `fatal: Authentication failed`.
+The repo belongs to Dylan's GitHub account (`Twildridge`). Anyone can *download* it, but only people he has added as **collaborators** can *upload* (push) changes. Without that access, every push fails, however the keys and passwords below are set up.
 
-**1. Generate an SSH key on the cluster:**
+**If you don't have a GitHub account yet:** sign up for free at [github.com/signup](https://github.com/signup), then send Dylan your GitHub **username** (the name shown at the top right of github.com when you're logged in; it is not your email).
+
+**Requesting access:** GitHub has no "request access" button for a personal repo, so ask Dylan directly (email, Slack or in person) and include your GitHub username.
+
+**What Dylan does (repo owner only):**
+1. Go to [github.com/Twildridge/lammps_work/settings/access](https://github.com/Twildridge/lammps_work/settings/access) (repo page → **Settings** → **Collaborators**).
+2. Click **Add people**, type the student's GitHub username, and pick them from the list.
+3. Click **Add to repository**.
+
+**What you do next:** GitHub sends you an invitation email. Click **Accept invitation** in it, or open [github.com/Twildridge/lammps_work/invitations](https://github.com/Twildridge/lammps_work/invitations) while logged in. The invite expires after 7 days; if it does, ask Dylan to send a new one.
+
+**Checking that it worked:** once you've accepted, the invitation link above says there are no pending invitations, and pushes no longer fail with `403` or `Permission to Twildridge/lammps_work.git denied`.
+
+---
+
+### Setting up pushing from a cluster (Expanse, Bridges-2, Pod), one time per cluster
+
+**Why this is needed.** GitHub has to confirm who you are before it accepts a push. On a Mac this happens automatically. On a cluster nothing is set up, so the first `lsync` usually stops at the push step with one of these errors:
+
+| Error you see | What it means |
+|---|---|
+| `fatal: could not read Username for 'https://github.com'` | Git wanted to ask for your GitHub login but couldn't. This always happens when `lsync` runs from inside Claude Code, since Claude Code can't show password prompts. |
+| `Permission denied (publickey)` | The cluster has no SSH key, or GitHub hasn't been given it yet. |
+| `fatal: Authentication failed` / `403` | GitHub doesn't recognise the login, or you aren't a collaborator yet (see Step 0). |
+
+The fix is an **SSH key**. Think of it as a password file that stays on the cluster: you give GitHub the matching public half once, and from then on every push is accepted with no prompts. Unlike a token, it doesn't expire.
+
+**Common questions**
+- *Does the cluster's two-factor login (Duo) get in the way?* No. Two-factor only applies to logging **in to** the cluster. Pushing is the cluster connecting **out** to GitHub, and the key handles that.
+- *Does it matter that the repo belongs to someone else?* No. The key goes on **your own** GitHub account and proves the push comes from you. What you're allowed to push depends on your collaborator access (Step 0). If you're ever removed as a collaborator, the key stops working for this repo by itself.
+- *Where does the key NOT go?* Not in the repo's **Settings → Deploy keys** page. It goes in your personal account settings (step 3 below).
+
+**1. Make the key on the cluster.** Log in to the cluster and run:
 ```bash
-ssh-keygen -t ed25519 -C "pollard@ucsb.edu"
-# Press Enter for all prompts (default location, no passphrase needed)
+ssh-keygen -t ed25519 -N "" -C "<your-name>@<cluster-name>"
 ```
+Press **Enter** if it asks where to save. `-N ""` means "no passphrase", so `lsync` never stops to ask for one. The text after `-C` is just a label, for example `jkapner@expanse`.
 
-**2. Print your public key:**
+**2. Show the public half of the key:**
 ```bash
 cat ~/.ssh/id_ed25519.pub
-# Copy the entire line of output
 ```
+This prints one long line starting with `ssh-ed25519`. Copy the whole line. This half is safe to share; the other file, `~/.ssh/id_ed25519` (no `.pub`), is the private half, and you should never copy or share it.
 
-**3. Add the key to GitHub:**
-- Go to [github.com/settings/ssh/new](https://github.com/settings/ssh/new)
-- Title: something descriptive like `"Bridges-2 cluster"` or `"Expanse cluster"`
-- Key: paste the full line from step 2
-- Click **Add SSH key**
+**3. Give the public key to GitHub:**
+- Log in to github.com **as yourself** and open [github.com/settings/ssh/new](https://github.com/settings/ssh/new) (profile picture → **Settings** → **SSH and GPG keys** → **New SSH key**).
+- **Title:** something you'll recognise, such as `Expanse`.
+- **Key:** paste the line from step 2.
+- Click **Add SSH key**. GitHub may ask for your password or 2FA code first.
 
-**4. Test the connection:**
+**4. Check that GitHub accepts the key:**
 ```bash
 ssh -T git@github.com
-# Expected: "Hi Twildridge! You've successfully authenticated..."
 ```
+If it asks "Are you sure you want to continue connecting?", type `yes`. Success looks like:
+`Hi <your-github-username>! You've successfully authenticated, but GitHub does not provide shell access.`
+The "no shell access" part is normal and means everything is working.
 
-**5. Switch your repo remote to SSH:**
+**5. Tell git to use the key for pushing:**
 ```bash
-git remote set-url origin git@github.com:Twildridge/lammps_work.git
+cd ~/Documents/lammps_work
+git remote set-url --push origin git@github.com:Twildridge/lammps_work.git
+git remote -v
+```
+`--push` switches only uploads to the key. Downloads stay on the plain web address, so the automatic `git pull` at the start of each job keeps working without a login. `git remote -v` should now show:
+```
+origin  https://github.com/Twildridge/lammps_work.git (fetch)
+origin  git@github.com:Twildridge/lammps_work.git (push)
 ```
 
-**6. Try pushing again:**
+**6. Run `lsync`.** If a commit is waiting to go up from an earlier failed push, `lsync` (or `git push`) sends it now.
+
+**If step 4 hangs or times out:** that cluster blocks the usual SSH port. GitHub also listens on port 443. Add this to `~/.ssh/config` on the cluster, create the file if it doesn't exist, then repeat step 4:
+```
+Host github.com
+    Hostname ssh.github.com
+    Port 443
+    User git
+```
+
+Each cluster needs its own key, so repeat these steps on each one. On a Mac they are not needed.
+
+**About the "Committer: … Your name and email address were configured automatically" message:** this is only a warning. The commit still works; it is just labelled with your cluster username (for example `jkapner@login01.expanse.sdsc.edu`). To use your real name instead, run once per cluster:
 ```bash
-git push
+git config --global user.name "Your Name"
+git config --global user.email "the-email-on-your-github-account"
 ```
-
-Each cluster needs its own key added to GitHub. On a Mac the keychain handles this, so the steps are not needed there.
 
 ---
 
