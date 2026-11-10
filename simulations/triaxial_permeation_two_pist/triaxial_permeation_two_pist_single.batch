@@ -27,7 +27,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # Analysis: triaxial_permeation_single_two_pist.ipynb (figure 9 kappa, 9f frozen, 12 drive D_c, 12u unload).
 
 FOLDER=triaxial_permeation_two_pist
-DATANAME="${DATANAME:-final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_14000000_two_pist_pm40}"
+DATANAME="${DATANAME:-final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40}"
 INTERACTION=1.0_1.0
 NSTEPS="${NSTEPS_OVERRIDE:-10800000}"   # drive length and output-file tag: 54 k tau = 4.1 tau_1 at the drive D_c 0.147, L 138
 export PRESS_TARGET=1.5

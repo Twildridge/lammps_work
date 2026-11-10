@@ -14,16 +14,24 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # DECK_FILE; the folder's default deck is the isolated-gel version). Both reservoirs are held at
 # PRESS_TARGET by the NPT pistons; the polymer beads of the gel's top and bottom face layers are
 # driven +x / -x until gamma reaches each target, then held NSTEPS steps (files _g<strain>);
-# G = sigma_xz / gamma. Input: the compression deck's converter output of the 14000002 slab.
+# G = sigma_xz / gamma. Input: the compression deck's converter output (slab_two_pistons_periodic.py
+# --margin-perm 40 --margin-feed 30 -> <stem>_two_pist_pm40, the SAME file the compression and permeation decks read:
+# the deck only needs the 7-type two-piston layout, the extra vacuum below the permeate piston is free).
+# DATANAME comes from the environment, so one batch serves every gel; the default is the standard
+# gel since 2026-11-07, the x/y-periodic rot45 lattice slab with 5-bead strands (20 M-step
+# equilibration, 2026-11-10). By hand:
+#     DATANAME=<stem> sbatch shear_slab_two_pist_periodic.batch
+# The 15-bead gel (..._15beads_..._60000000_two_pist_pm40) has 1.9x the atoms: add --nodes=10.
 # Piston knobs (PISTON_MASS, C_PIST_FRAC, NPT_PISTON_STEPS, SETTLE_HALT) at the deck defaults.
 # Analyse with DECK = "shear_slab_two_pist" in the shear notebooks.
 
 FOLDER=shear_slab_two_pist
 export DECK_FILE=shear_slab_two_pist_periodic
-DATANAME=final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist
+DATANAME="${DATANAME:-final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40}"
 INTERACTION=1.0_1.0
 NSTEPS=9000000          # hold per strain level, and the output-file tag
 export PRESS_TARGET=1.5
 export STRAINS="0.1"    # cumulative shear strains, space-separated
+echo ">>> DATANAME=$DATANAME"
 
 bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

@@ -8,6 +8,9 @@
 #     SLAB_DATANAME  its DATANAME; SLAB_NSTEPS its budget NSTEPS (the final_config tag)
 #     MARGIN_PERM    converter --margin-perm (empty = default -> <stem>_two_pist; 40 -> <stem>_two_pist_pm40,
 #                    the file both two-piston decks read since 2026-11-07)
+#     MARGIN_FEED    converter --margin-feed (empty = default 15; the rot45 gels need 30: a 0.10 strain expels
+#                    ~0.10 L_bb ~ 15 sigma of solvent into the feed reservoir and the deck halts the drive when
+#                    the feed piston comes within 2 sigma of zhi; the converter prints the strain cap)
 #     SUBMIT         "compression" (default) and/or "permeation"; DP_PISTON is passed through when set
 # e.g. the rot45 standard gel after  NETWORK=rot45 bash submit_chain_length_sweep.sh 5  (job J):
 #     sbatch --dependency=afterany:J --export=ALL,SLAB_JOB=J,SLAB_FOLDER=chain_length_testing,\
@@ -37,6 +40,7 @@ DATANAME="${SLAB_DATANAME:-slab_support_periodic_5beads_tall_rho04_random}"
 INTERACTION="1.0_1.0"
 NSTEPS="${SLAB_NSTEPS:-14000000}"
 MARGIN_PERM="${MARGIN_PERM:-}"
+MARGIN_FEED="${MARGIN_FEED:-}"
 SUBMIT="${SUBMIT:-compression}"
 FINAL="final_config_${DATANAME}_${INTERACTION}_${NSTEPS}.data"
 if [ -n "$MARGIN_PERM" ]; then
@@ -46,6 +50,7 @@ else
     TWO_PIST="${FINAL%.data}_two_pist.data"
     CONV_OPTS=()
 fi
+if [ -n "$MARGIN_FEED" ]; then CONV_OPTS+=(--margin-feed "$MARGIN_FEED"); fi
 # the compression batch: the random pipeline's own batch for its DATANAME, else the single batch with DATANAME exported
 if [ "$DATANAME" = "slab_support_periodic_5beads_tall_rho04_random" ] && [ -z "$MARGIN_PERM" ]; then
     TRIAX_BATCH="triaxial_compression_two_pist_random.batch"
@@ -87,12 +92,12 @@ if [ -z "$SRC" ]; then
         echo ">>> the slab job chained continuation job ${NEXT}; waiting for it (hop $((CHAIN_HOPS + 1)))..."
         squeue -j "$NEXT" 2>/dev/null || true
         cd "$TRIAX_DIR" || exit 1
-        sbatch --dependency=afterany:"$NEXT" --export=ALL,SLAB_JOB="$NEXT",CHAIN_HOPS=$((CHAIN_HOPS + 1)),SLAB_FOLDER="$SLAB_FOLDER",SLAB_DATANAME="$DATANAME",SLAB_NSTEPS="$NSTEPS",MARGIN_PERM="$MARGIN_PERM",SUBMIT="$SUBMIT" "$TRIAX_DIR/chain_random_periodic.batch"
+        sbatch --dependency=afterany:"$NEXT" --export=ALL,SLAB_JOB="$NEXT",CHAIN_HOPS=$((CHAIN_HOPS + 1)),SLAB_FOLDER="$SLAB_FOLDER",SLAB_DATANAME="$DATANAME",SLAB_NSTEPS="$NSTEPS",MARGIN_PERM="$MARGIN_PERM",MARGIN_FEED="$MARGIN_FEED",SUBMIT="$SUBMIT" "$TRIAX_DIR/chain_random_periodic.batch"
         exit $?
     fi
     echo "ERROR: the slab run produced no $FINAL and no continuation job was found."
     echo "       Check the slab job's output file in $LAMMPS_WORK_DIR/simulations/$SLAB_FOLDER and the newest run dir under $RUNS."
-    echo "       When the final config exists, run by hand:  cd $TRIAX_DIR && SLAB_JOB=$SLAB_JOB SLAB_FOLDER=$SLAB_FOLDER SLAB_DATANAME=$DATANAME SLAB_NSTEPS=$NSTEPS MARGIN_PERM=$MARGIN_PERM SUBMIT=\"$SUBMIT\" bash chain_random_periodic.batch"
+    echo "       When the final config exists, run by hand:  cd $TRIAX_DIR && SLAB_JOB=$SLAB_JOB SLAB_FOLDER=$SLAB_FOLDER SLAB_DATANAME=$DATANAME SLAB_NSTEPS=$NSTEPS MARGIN_PERM=$MARGIN_PERM MARGIN_FEED=$MARGIN_FEED SUBMIT=\"$SUBMIT\" bash chain_random_periodic.batch"
     exit 1
 fi
 echo ">>> slab final configuration: $SRC"

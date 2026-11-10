@@ -788,3 +788,21 @@ Generated PERIODIC tetrahedral rot45_y gel slab (boundary p p p):
   Total atoms: 660402   Total bonds: 128772   Output: ../../../lammps_data_files_local/slab_support_periodic_15beads_tall_rho04_rot45.data
 built N=15 in 73 s: slab_support_periodic_15beads_tall_rho04_rot45.data
 ```
+
+Converted two-piston (feed/permeate) data file  [2026-11-10 10:04, slab_two_pistons_periodic.py]:
+  Input: final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000.data
+  Box: 48.7433 x 47.9731 x 299.030   (lx, ly unchanged from the input; zlo = 0)
+  z: perm piston 40.00 | support 51.00 | gel BB [72.83, 220.75] (L_bb 147.92, L_rg 143.73) | load piston 244.89 | feed piston 269.03
+  Reservoirs: permeate 10.0 sigma (padded +3970 beads at rho=0.4700), feed 48.28 sigma; margins perm 40.0 / feed 30.0 sigma (vacuum)
+  Sheets: 33534 beads each (support pattern, spacing 0.2006); piston_clearance 1.0, load_piston_frac 0.5, seed 42
+  Crosslinks: 18018   Chain beads: 107406   Solvent: 165303   Support: 33534   Feed piston: 33534   Permeate piston: 33534   Load piston: 33534
+  Total atoms: 424863   Total bonds: 143208   Output: final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40.data
+
+Converted two-piston (feed/permeate) data file  [2026-11-10 10:05, slab_two_pistons_periodic.py]:
+  Input: final_config_slab_support_periodic_15beads_tall_rho04_rot45_1.0_1.0_60000000.data
+  Box: 71.4690 x 76.9020 x 256.758   (lx, ly unchanged from the input; zlo = 0)
+  z: perm piston 40.00 | support 51.00 | gel BB [52.60, 207.19] (L_bb 154.59, L_rg 146.16) | load piston 216.97 | feed piston 226.76
+  Reservoirs: permeate 10.0 sigma (padded +12459 beads at rho=0.4698), feed 19.57 sigma; margins perm 40.0 / feed 30.0 sigma (vacuum)
+  Sheets: 78848 beads each (support pattern, spacing 0.2030); piston_clearance 1.0, load_piston_frac 0.5, seed 42
+  Crosslinks: 4662   Chain beads: 119574   Solvent: 390929   Support: 78848   Feed piston: 78848   Permeate piston: 78848   Load piston: 78848
+  Total atoms: 830557   Total bonds: 128772   Output: final_config_slab_support_periodic_15beads_tall_rho04_rot45_1.0_1.0_60000000_two_pist_pm40.data
