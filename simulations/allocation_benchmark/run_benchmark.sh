@@ -133,6 +133,8 @@ T1=$(date +%s)
 COMPLETE=0; grep -q "Total wall time" log.lammps 2>/dev/null && COMPLETE=1
 
 cp log.lammps "$LOG_DIR/$TAG.log" 2>/dev/null
+# Keep the mapping evidence: a successful run deletes its run directory below.
+if [ -f bindings.txt ]; then cp bindings.txt "$LOG_DIR/$TAG.bindings"; fi
 cat > "$LOG_DIR/$TAG.meta" <<EOF
 tag=$TAG
 role=$ROLE
