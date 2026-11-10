@@ -45,6 +45,48 @@ The full tree, one line per notebook and script, is in [docs/repository_layout.m
 
 ---
 
+## Running efficiently on Expanse (allocation benchmark, 2026-11-07)
+
+`simulations/allocation_benchmark/` timed the rot45 slab (N = 5, 354 k atoms; N = 15, 660 k atoms) over
+every ranks x threads split, both MPI placements, two comm cutoffs and 1-16 nodes. The raw tables are in
+`~/Documents/lammps_runs/allocation_benchmark/{nodescan,layouts}_rot45.txt` on Expanse, the summary in
+[running_simulations.md §5f](docs/running_simulations.md). The settings below are what every production batch
+and the runner use since 2026-11-08; nothing needs to be set by hand.
+
+**The three things that matter, in order of gain:**
+
+1. **Pure MPI, 128 ranks x 1 thread per node.** Every hybrid split loses: 64 x 2 by 7-30 %, 32 x 4 and 16 x 8 by 2-3x
+   (the two-piston batches ran 32 x 4 until 2026-11-08 and were the slowest jobs in the project).
+2. **Fill each node before the next (`--map-by ppr:128:node:pe=1`, `MPI_MAP_BY=core` in `scripts/lib/site.sh`).**
+   `--map-by node` (round-robin) costs 1.4-1.6x at 2 nodes and made 2-8 nodes *slower* than 1 node.
+3. **`comm_modify cutoff 2.5` instead of 5.0** once the bonds are relaxed (`variable comm_cutoff index 2.5` in every
+   deck): another 1.4x, identical step-0 forces. `-var comm_cutoff 5.0` restores the old value.
+
+**Node count.** With all three in place (steps/s, SU per 1 M steps):
+
+| N | 1 node | 4 nodes | 6 nodes | 8 nodes | 16 nodes |
+|---|---|---|---|---|---|
+| 5 (354 k atoms) | 362 / 98 | 710 / 200 | **893 / 239** | 753 / 378 | 849 / 670 |
+| 15 (660 k atoms) | 189 / 188 | 368 / 387 | 460 / 463 | **501 / 567** | 537 / 1059 |
+
+The old production setup (4 nodes, map-by node, cutoff 5.0) ran N = 5 at 236 steps/s for 604 SU per M steps, so the
+adopted setup is ~3.8x faster at 40 % of the cost. Repeat spread at 3-6 nodes is 20-30 % (node placement differs
+between jobs), so neighbouring node counts are ties. Rules of thumb:
+
+- **6 nodes** is the production default (`#SBATCH --nodes=6 --ntasks-per-node=128 --cpus-per-task=1 --mem=0`). N = 5 peaks there.
+- **1 node** is always the cheapest per step (2.4x fewer SUs than 6 nodes at N = 5) and still 1.5x faster than the old 4-node
+  setup: use it for anything that is not on the critical path. **4 nodes** is the compromise (`sbatch --nodes=4 …` overrides the batch).
+- **Bigger gels scale further**: N = 15 keeps gaining to 16 nodes but at a steep SU price; 8-10 nodes is the sensible
+  ceiling (the 15-bead two-piston runs, 831 k atoms, go out with `sbatch --nodes=10 …`). Above ~8 nodes the extra SUs
+  buy little at either size.
+- **SUs are charged per allocated core-hour**: a job costs nodes x 128 x hours, and `sbatch` reserves that full
+  amount from the allocation at submit time, so keep `--time` close to the expected length when several jobs are queued.
+  Rates per node count are in the tables above; the decks print `Performance:` lines in `log.lammps` to check against.
+- **Partition**: `compute`, 48 h limit. The `debug` partition (2 nodes, 30 min, 2 jobs per user) is for smoke tests
+  and layout scans (`submit_debug_sweep.sh`); `shared` with one core is used for bridge jobs that only copy and convert files.
+
+---
+
 ## Where to find things
 
 | Topic | Doc |
@@ -73,4 +115,4 @@ The full tree, one line per notebook and script, is in [docs/repository_layout.m
 
 ---
 
-*Last updated: 2026-10-28 (two batch files per simulation folder, `_single` + `_sweep`, the rest in `archive/simulations/`; `shear_slab` archived; D_c read from the unload in `compress_slab` (D_m = (K/M) D_c, free re-swelling) and in `shear_slab_two_pist` (Phase 2c); generator code → `lib/data_file_generator.py` with the `NETWORK` knob, notebook renamed `data_file_generator.ipynb`; converters write no sidecar / png; 2026-10-25: shear-anisotropy test row: rot45 and random-network gels, `bond_switch` + isotropy check in `slab_with_support.ipynb`, the fine-cadence and single-level shear batches; 2026-10-11: Pod and Bridges-2 runners, batches and benchmarks → `archive/pod_bridges/`; scripts/ reorganised: one-piston notebooks and old builders → `archive/scripts/`, LAMMPS build → `lammps_build/`, `scripts/README.md` added; 2026-10-08: cross-deck comparison row: opening figures + the `r_probe` = 0.45 σ justification; 2026-10-01: every `.py` moved from `scripts/` into `scripts/lib/`). For questions, contact Dylan Pollard (pollard@ucsb.edu).*
+*Last updated: 2026-11-10 (Expanse efficiency section: 128 x 1, map-by core, cutoff 2.5, 6 nodes default, node-count table; 2026-10-28: two batch files per simulation folder, `_single` + `_sweep`, the rest in `archive/simulations/`; `shear_slab` archived; D_c read from the unload in `compress_slab` (D_m = (K/M) D_c, free re-swelling) and in `shear_slab_two_pist` (Phase 2c); generator code → `lib/data_file_generator.py` with the `NETWORK` knob, notebook renamed `data_file_generator.ipynb`; converters write no sidecar / png; 2026-10-25: shear-anisotropy test row: rot45 and random-network gels, `bond_switch` + isotropy check in `slab_with_support.ipynb`, the fine-cadence and single-level shear batches; 2026-10-11: Pod and Bridges-2 runners, batches and benchmarks → `archive/pod_bridges/`; scripts/ reorganised: one-piston notebooks and old builders → `archive/scripts/`, LAMMPS build → `lammps_build/`, `scripts/README.md` added; 2026-10-08: cross-deck comparison row: opening figures + the `r_probe` = 0.45 σ justification; 2026-10-01: every `.py` moved from `scripts/` into `scripts/lib/`). For questions, contact Dylan Pollard (pollard@ucsb.edu).*
