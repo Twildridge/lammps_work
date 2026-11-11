@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=128
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
-#SBATCH --time=48:00:00
+#SBATCH --time=28:00:00
 #SBATCH --output=%x.o%j.%N
 source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 
@@ -15,8 +15,11 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # (symmetric drive), a flat hold of NSTEPS gives M and the hold D_c; then the UNLOAD (Phase 2c):
 # plates back to the seated gap and a free re-swelling of UNLOAD_STEPS from the uniform state
 # (files _u0.10), the trusted D_c. DISP_FINE_NFREQ writes displacement profiles every 25 tau on
-# hold and unload. The deck has no wall_timeout: a run that outgrows 48 h loses the end of its
-# unload (post-processed as PARTIAL).
+# hold and unload. The deck has no wall_timeout: a run that outgrows the time limit loses the end
+# of its unload (post-processed as PARTIAL). The 28 h limit is sized on the 2026-11-10 rot45 runs
+# (25.2 M steps each): 5-bead on 6 nodes 15.8 h (job 55663497), 15-bead on 10 nodes 18.4 h
+# (55663502); it leaves 1.5x on the slower one (repeat spread is 20-30 %). Longer NSTEPS /
+# UNLOAD_STEPS or a bigger gel: scale it, `sbatch --time=...` (compute allows 48 h).
 #
 # DATANAME comes from the environment, so one batch serves every gel; the default is the
 # standard gel since 2026-11-07, the x/y-periodic rot45 lattice slab with 5-bead strands. The
@@ -24,7 +27,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # deck; chain_random_periodic.batch makes and submits it, or by hand:
 #     DATANAME=<stem> sbatch triaxial_compression_two_pist_single.batch
 # The 15-bead gel (…_15beads_…_60000000_two_pist_pm40) has 1.9x the atoms: add --nodes=10 or
-# halve NSTEPS / UNLOAD_STEPS. Analysis: triaxial_compression_single_two_pist.ipynb, LEVEL "0.10".
+# halve NSTEPS / UNLOAD_STEPS (full length on 6 nodes is untimed: also add --time=48:00:00). Analysis: triaxial_compression_single_two_pist.ipynb, LEVEL "0.10".
 
 FOLDER=triaxial_compression_two_pist
 DATANAME="${DATANAME:-final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40}"

@@ -189,6 +189,21 @@ variable seat_mode    index bb
 variable t_seat       index 143000        # common approach time (steps)
 variable nsteps_settle index 1000000      # plates fixed before the eps_vol = 0 reference
 
+# ----- reference averaging (2026-11-11; L0_AVG_STEPS in the batch; as triaxial_compression_two_pist.lmp) -----
+# The free gel breathes thermally (rms ~ sqrt(kT L/(M A)) per edge, correlation time ~ tau_1) and the
+# outermost bead adds single-step noise, so the faces the plates seat on -- which fix L0 = seated gap -
+# 2 contact_gap and V0 -- and the network's own reference readings are MOVING-WINDOW MEANS over the last
+# l0_avg_steps of the phase before them (one sample every l0_avg_every steps), not single-step readings:
+#   Phase 1 (free gel, end of the NPT-piston settle) -> the six seating faces: seat_mode bb = the mean
+#       offset of each outermost bead from the polymer COM, rg = the mean L_rg/2, both added to the COM
+#       at the seating start (a rigid drift of the gel inside the window does not bias them);
+#   Phase 1.25 (seated gel, end of nsteps_settle)    -> V0_bb, V0_rg, L0_bb, L0_rg.
+# The window removes the fast noise; it averages the slow breathing only as far as it spans tau_1.  A
+# window longer than its phase covers the whole phase; 0 = the last sample (the old readings).
+variable l0_avg_steps index 500000
+variable l0_avg_every equal 100
+variable l0_avg_nwin  equal (v_l0_avg_steps>=v_l0_avg_every)*floor(v_l0_avg_steps/v_l0_avg_every)+(v_l0_avg_steps<v_l0_avg_every)
+
 # ----- Phase 1.5: reference window -----
 variable ref_avg_steps index 150000
 variable ref_nevery    equal 100
@@ -569,6 +584,16 @@ variable settle_start equal $(step)
 variable settle_ok equal (step>=v_settle_start+v_settle_min_steps)*(abs(f_settle_win[1])<v_settle_tol_v)*(abs(f_settle_win[2])<v_settle_tol_v)*(abs(v_z_feed-f_settle_win[3])<v_settle_tol_z)*(abs(v_z_perm-f_settle_win[4])<v_settle_tol_z)
 if "${settle_halt} == 1" then "fix halt_settle all halt 10000 v_settle_ok > 0.5 error continue"
 
+# free-gel moving-window means for the six seating faces (see l0_avg_steps)
+variable off_xlo equal c_polymer_com[1]-c_minx
+variable off_xhi equal c_maxx-c_polymer_com[1]
+variable off_ylo equal c_polymer_com[2]-c_miny
+variable off_yhi equal c_maxy-c_polymer_com[2]
+variable off_zlo equal c_polymer_com[3]-c_minz
+variable off_zhi equal c_maxz-c_polymer_com[3]
+fix l0_free all ave/time ${l0_avg_every} 1 ${l0_avg_every} v_off_xlo v_off_xhi v_off_ylo v_off_yhi v_off_zlo v_off_zhi &
+    v_gel_lx_rg v_gel_ly_rg v_gel_lz_rg ave window ${l0_avg_nwin}
+
 print ">>> settle start: z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
 thermo 10000
 run ${npt_piston_steps}
@@ -576,6 +601,18 @@ thermo ${thermo_freq}
 if "${settle_halt} == 1" then "unfix halt_settle"
 unfix settle_win
 run 0
+# window means of the free gel (f_l0_free[9] = 0 only when the phase was shorter than l0_avg_every: single-step fallback)
+variable l0_free_ok  equal $(f_l0_free[9]>0.0)
+variable off_xlo_avg equal $(v_l0_free_ok*f_l0_free[1]+(1-v_l0_free_ok)*v_off_xlo)
+variable off_xhi_avg equal $(v_l0_free_ok*f_l0_free[2]+(1-v_l0_free_ok)*v_off_xhi)
+variable off_ylo_avg equal $(v_l0_free_ok*f_l0_free[3]+(1-v_l0_free_ok)*v_off_ylo)
+variable off_yhi_avg equal $(v_l0_free_ok*f_l0_free[4]+(1-v_l0_free_ok)*v_off_yhi)
+variable off_zlo_avg equal $(v_l0_free_ok*f_l0_free[5]+(1-v_l0_free_ok)*v_off_zlo)
+variable off_zhi_avg equal $(v_l0_free_ok*f_l0_free[6]+(1-v_l0_free_ok)*v_off_zhi)
+variable lx_rg_avg   equal $(v_l0_free_ok*f_l0_free[7]+(1-v_l0_free_ok)*v_gel_lx_rg)
+variable ly_rg_avg   equal $(v_l0_free_ok*f_l0_free[8]+(1-v_l0_free_ok)*v_gel_ly_rg)
+variable lz_rg_avg   equal $(v_l0_free_ok*f_l0_free[9]+(1-v_l0_free_ok)*v_gel_lz_rg)
+unfix l0_free
 print ">>> settle end (step $(step)): z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  vz_feed=$(v_vz_feed:%.2e) vz_perm=$(v_vz_perm:%.2e)"
 print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f) (applied ${P_target});  L_feed=$(v_L_feed:%.2f) L_perm=$(v_L_perm:%.2f)  T=$(c_mobile_temp:%.4f)"
 
@@ -725,20 +762,21 @@ print ">>> Phase 2 prep done"
 print '========================================'
 print 'Phase 1.25: seating of the six plates (common time)'
 print '========================================'
+# 2026-11-11: both seat modes read the Phase-1 window means (COM now + mean offset, see l0_avg_steps)
 if "${seat_mode} == bb" then &
-    "variable face_xlo equal $(c_minx)" &
-    "variable face_xhi equal $(c_maxx)" &
-    "variable face_ylo equal $(c_miny)" &
-    "variable face_yhi equal $(c_maxy)" &
-    "variable face_zlo equal $(c_minz)" &
-    "variable face_zhi equal $(c_maxz)" &
+    "variable face_xlo equal $(c_polymer_com[1]-v_off_xlo_avg)" &
+    "variable face_xhi equal $(c_polymer_com[1]+v_off_xhi_avg)" &
+    "variable face_ylo equal $(c_polymer_com[2]-v_off_ylo_avg)" &
+    "variable face_yhi equal $(c_polymer_com[2]+v_off_yhi_avg)" &
+    "variable face_zlo equal $(c_polymer_com[3]-v_off_zlo_avg)" &
+    "variable face_zhi equal $(c_polymer_com[3]+v_off_zhi_avg)" &
 elif "${seat_mode} == rg" &
-    "variable face_xlo equal $(c_polymer_com[1]-0.5*v_gel_lx_rg)" &
-    "variable face_xhi equal $(c_polymer_com[1]+0.5*v_gel_lx_rg)" &
-    "variable face_ylo equal $(c_polymer_com[2]-0.5*v_gel_ly_rg)" &
-    "variable face_yhi equal $(c_polymer_com[2]+0.5*v_gel_ly_rg)" &
-    "variable face_zlo equal $(c_polymer_com[3]-0.5*v_gel_lz_rg)" &
-    "variable face_zhi equal $(c_polymer_com[3]+0.5*v_gel_lz_rg)" &
+    "variable face_xlo equal $(c_polymer_com[1]-0.5*v_lx_rg_avg)" &
+    "variable face_xhi equal $(c_polymer_com[1]+0.5*v_lx_rg_avg)" &
+    "variable face_ylo equal $(c_polymer_com[2]-0.5*v_ly_rg_avg)" &
+    "variable face_yhi equal $(c_polymer_com[2]+0.5*v_ly_rg_avg)" &
+    "variable face_zlo equal $(c_polymer_com[3]-0.5*v_lz_rg_avg)" &
+    "variable face_zhi equal $(c_polymer_com[3]+0.5*v_lz_rg_avg)" &
 else &
     "print 'ERROR: seat_mode must be rg or bb (got ${seat_mode})'" &
     "quit 1"
@@ -749,8 +787,8 @@ variable d_xlo equal $(v_face_xlo-v_p_xlo-v_contact_gap)
 variable d_yhi equal $(v_p_yhi-v_face_yhi-v_contact_gap)
 variable d_ylo equal $(v_face_ylo-v_p_ylo-v_contact_gap)
 variable seat_T equal $(v_t_seat*v_timestep_prod)
-print ">>> seat_mode = ${seat_mode}: gel faces  x ${face_xlo} / ${face_xhi}   y ${face_ylo} / ${face_yhi}   z ${face_zlo} / ${face_zhi}"
-print ">>>   (bounding box x $(c_minx:%.2f) / $(c_maxx:%.2f)   y $(c_miny:%.2f) / $(c_maxy:%.2f)   z $(c_minz:%.2f) / $(c_maxz:%.2f))"
+print ">>> seat_mode = ${seat_mode}: gel faces  x ${face_xlo} / ${face_xhi}   y ${face_ylo} / ${face_yhi}   z ${face_zlo} / ${face_zhi}   (means over the last ${l0_avg_steps} steps of the settle)"
+print ">>>   (this step's bounding box x $(c_minx:%.2f) / $(c_maxx:%.2f)   y $(c_miny:%.2f) / $(c_maxy:%.2f)   z $(c_minz:%.2f) / $(c_maxz:%.2f))"
 print ">>> seating travel: x ${d_xlo} / ${d_xhi}   y ${d_ylo} / ${d_yhi}   z ${d_zlo} / ${d_zhi}   (t_seat=${t_seat} steps)"
 
 fix nve_plates plates nve
@@ -765,8 +803,11 @@ velocity plates set 0.0 0.0 0.0
 unfix nve_plates
 
 print ">>> settling ${nsteps_settle} steps before recording the reference..."
+fix l0_seat all ave/time ${l0_avg_every} 1 ${l0_avg_every} v_gel_vol_bb v_gel_vol_rg v_gel_lz_bb v_gel_lz_rg ave window ${l0_avg_nwin}
 run ${nsteps_settle}
 run 0
+# seated network readings: window means over the end of the settle (single-step fallback as in Phase 1)
+variable l0_seat_ok equal $(f_l0_seat[4]>0.0)
 
 variable L0_gap_x equal $(v_gap_x)
 variable L0_gap_y equal $(v_gap_y)
@@ -776,12 +817,13 @@ variable L0_x equal $(v_gap_x-2.0*v_contact_gap)
 variable L0_y equal $(v_gap_y-2.0*v_contact_gap)
 variable L0_z equal $(v_gap_z-2.0*v_contact_gap)
 variable V0   equal $(v_L0_x*v_L0_y*v_L0_z)
-variable V0_bb   equal $(v_gel_vol_bb)
-variable V0_rg   equal $(v_gel_vol_rg)
-variable L0_bb   equal $(v_gel_lz_bb)
+variable V0_bb   equal $(v_l0_seat_ok*f_l0_seat[1]+(1-v_l0_seat_ok)*v_gel_vol_bb)
+variable V0_rg   equal $(v_l0_seat_ok*f_l0_seat[2]+(1-v_l0_seat_ok)*v_gel_vol_rg)
+variable L0_bb   equal $(v_l0_seat_ok*f_l0_seat[3]+(1-v_l0_seat_ok)*v_gel_lz_bb)
 variable L0_min_xy equal (${L0_x}<${L0_y})*${L0_x}+(${L0_x}>=${L0_y})*${L0_y}
 variable L0_min  equal (${L0_min_xy}<${L0_z})*${L0_min_xy}+(${L0_min_xy}>=${L0_z})*${L0_z}
-variable gel_lz_initial equal $(v_gel_lz_rg)
+variable gel_lz_initial equal $(v_l0_seat_ok*f_l0_seat[4]+(1-v_l0_seat_ok)*v_gel_lz_rg)
+unfix l0_seat
 # applied (plate) strain: gap closure over the reference edge, per axis and volumetric
 variable eps_x equal (v_L0_gap_x-v_gap_x)/v_L0_x
 variable eps_y equal (v_L0_gap_y-v_gap_y)/v_L0_y
@@ -796,6 +838,7 @@ variable gel_strain_bb equal (v_L0_bb-v_gel_lz_bb)/v_L0_bb
 variable piston_strain equal (v_L0_gap-v_gap_z)/v_L0_gap
 print ">>> Seated plate gaps: L0_gap = ${L0_gap_x} x ${L0_gap_y} x ${L0_gap_z}"
 print ">>> Reference edges (strain denominators):  L0 = ${L0_x} x ${L0_y} x ${L0_z}   V0 = ${V0}"
+print ">>>   (V_bb, V_rg below = means over the last ${l0_avg_steps} steps of the settle; the edges are this step's)"
 print ">>>   network at the reference:  BB $(v_gel_lx_bb:%.2f) x $(v_gel_ly_bb:%.2f) x $(v_gel_lz_bb:%.2f) (V_bb = ${V0_bb})   Rg $(v_gel_lx_rg:%.2f) x $(v_gel_ly_rg:%.2f) x $(v_gel_lz_rg:%.2f) (V_rg = ${V0_rg})"
 print ">>> seated preload (compressive, per plate): x $(v_N_xlo/v_A_x:%.4f) / $(v_N_xhi/v_A_x:%.4f)   y $(v_N_ylo/v_A_y:%.4f) / $(v_N_yhi/v_A_y:%.4f)   z $(v_N_zlo/v_A_z:%.4f) / $(v_N_zhi/v_A_z:%.4f)   mean $(v_P_plates:%.4f)"
 if "$(v_core_xhi-v_core_xlo) < ${binWidth} || $(v_core_yhi-v_core_ylo) < ${binWidth} || $(v_core_zhi-v_core_zlo) < ${binWidth}" then &

@@ -172,7 +172,7 @@ loader prints κ = D_c/M next to the Darcy κ. `fig_perm_flux_check` (figure 14,
 Q(t) = A[(D_c/M) ΔP(t)/L₀ − d⟨u_z⟩/dt], against the measured piston-velocity trace, the N_perm-slope Q and the cumulative
 bead count — nothing in it is fitted to the flux. perm_2 (dP = 0.1): D_c 0.18 (profile) / 0.21 ± 0.03 (trace), M 0.48,
 κ = D_c/M 0.4 vs Darcy 0.29; the profile fit is under-determined there (six stress-cadence snapshots, the transient
-unrecorded — hence the 50 k cadence and the 1 M-step ramp in the deck). Knobs: `PERM_GAP`, `PERM_L0_STEPS`,
+unrecorded — hence the 50 k cadence and the 1 M-step ramp in the deck). Knobs: `PERM_GAP`, `PERM_L0_STEPS` (500 k steps since 2026-11-11, 100 k before: the window of the bounding-box `L_0` before the ramp and of the unload's `L_ss` before the ramp-down, ending at the last sample before the ramp),
 `PERM_DC_WINDOW_AVG`, `PERM_DC_BOUNDS`, `PERM_DISP_RESET`, `PERM_TRACE_SKIP` (leave a short-ramp run's piston ringing out
 of the trace fit).
 

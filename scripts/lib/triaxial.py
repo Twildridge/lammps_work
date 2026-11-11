@@ -218,8 +218,12 @@ class Config:
                                           # floats above the plate at zero flux (perm_2/3: 2.4 % of L_0; the quarter gel:
                                           # 10 %, the fit domain stopped at zeta ~0.8 and the modes ran wild above it).
                                           # The bounding-box L_0 still drives the thickness trace (L_bb(t) - L_bb(0)).
-    PERM_L0_STEPS: int = 100000           # steps before the production onset averaged for L_0 (bounding-box thickness; lies
-                                          # inside the zero-flux reference window)
+    PERM_L0_STEPS: int = 500000           # steps averaged for the bounding-box reference thickness: before the ramp start for
+                                          # L_0 (the zero-flux reference window + the end of the NPT-piston settle) and before
+                                          # the ramp-down for the unload's L_ss.  2026-11-11: 100000 before -- 20 samples of a
+                                          # reading whose single-sample scatter is 0.4-0.5 sigma (outermost beads; 0.7-1.0 on
+                                          # the quarter gel) on top of the gel's slow thermal breathing; 500 k = 100 samples
+                                          # (the pre-ramp 150 k-step means of the 2026-09/10 runs show no settle transient there)
     PERM_DC_WINDOW_AVG: bool = True       # the fitted modes are averaged over each ave/chunk window: the deck block-averages
                                           # u_z over the whole nfreq interval and tags the snapshot with the window END
     PERM_DISP_RESET: str = 'auto'         # where the deck reset displace/atom (u_z = 0): 'ramp_start' (decks since
@@ -7635,7 +7639,12 @@ def fit_perm_Dc(cfg, R, P, disp, free_offset=False, L0_override=None, L0_overrid
     #      thickness trace; the fit's own L_0 is chosen below (PERM_L0_MODE), once u_0 is known ----
     L0_bb_ci = (np.nan, np.nan)
     if 'bb_L' in disp:
-        w0 = (disp['bb_step'] >= t_on - cfg.PERM_L0_STEPS) & (disp['bb_step'] < t_on)
+        # the window ends at the LAST SAMPLE before the ramp (2026-11-11): the drive's own rows end within one
+        # cadence of it, but a frozen stage separates the unload's reference rows (the end of the drive) from
+        # the ramp-down, and a window anchored at t_on then held no rows at all (single-sample fallback)
+        pre0 = disp['bb_step'] < t_on
+        t_ref = float(disp['bb_step'][pre0].max()) if pre0.any() else float(t_on)
+        w0 = pre0 & (disp['bb_step'] > t_ref - cfg.PERM_L0_STEPS)
         if w0.sum() >= 4:
             L0_bb, lo, hi, *_ = block_bootstrap_ci(disp['bb_L'][w0], cfg.ci_level)
             L0_bb_ci = (lo, hi)

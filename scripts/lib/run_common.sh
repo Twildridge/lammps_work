@@ -14,6 +14,7 @@ KNOBS=(
     frozen frozen_steps frozen_at                                           # permeation, frozen network
     drive_split hold_auto seat_mode disp_fine_nfreq disp_fine_bin           # compression decks
     unload unload_steps unload_margin                                       # compression / shear unload
+    l0_avg_steps                                                            # window of the L0 / L_ss means (compression, compress_slab, permeation)
     ref_avg_steps nsteps_shear_base disp_fine_span stress_freq halt_every   # shear
     strains compressions                                                    # sweep lists (see below)
     nsteps_eq nsteps_prod                                                   # phase sweeps

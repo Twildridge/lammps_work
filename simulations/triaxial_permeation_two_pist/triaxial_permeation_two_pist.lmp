@@ -238,6 +238,18 @@ variable disp_nfreq_eff  equal v_disp_nevery*v_disp_nrepeat
 print ">>> Displacement profile: nevery=${disp_nevery} nrepeat=${disp_nrepeat} nfreq=${disp_nfreq_eff}"
 print ">>> Mode: PERMEATION, TWO-PISTON (feed/permeate NPT-piston reservoirs)"
 
+# ----- thickness averaging (2026-11-11; L0_AVG_STEPS in the batch; as triaxial_compression_two_pist.lmp) -----
+# The gel's thickness breathes thermally (rms ~ sqrt(kT L/(M A)), correlation time ~ tau_1) and the
+# outermost bead adds single-step noise, so the deck's two thickness readings are MOVING-WINDOW MEANS
+# over the last l0_avg_steps of their phase (one sample every l0_avg_every steps): L0 (Rg and BB) at the
+# end of the NPT-piston settle -- the strain_zz baseline -- and the steady thickness L_ss at the end of
+# the drive (printed; the notebook takes its own L_0 / L_ss from gel_dimensions_bb, PERM_L0_STEPS).
+# The window removes the fast noise; it averages the slow breathing only as far as it spans tau_1.  A
+# window longer than its phase covers the whole phase; 0 = the last sample (the old L0 reading).
+variable l0_avg_steps index 500000
+variable l0_avg_every equal 100
+variable l0_avg_nwin  equal (v_l0_avg_steps>=v_l0_avg_every)*floor(v_l0_avg_steps/v_l0_avg_every)+(v_l0_avg_steps<v_l0_avg_every)
+
 # ----- Phase 1.5 reference averaging -----
 variable ref_avg_steps index 150000
 variable ref_nevery    equal 100
@@ -674,6 +686,9 @@ variable settle_start equal $(step)
 variable settle_ok equal (step>=v_settle_start+v_settle_min_steps)*(abs(f_settle_win[1])<v_settle_tol_v)*(abs(f_settle_win[2])<v_settle_tol_v)*(abs(v_z_feed-f_settle_win[3])<v_settle_tol_z)*(abs(v_z_perm-f_settle_win[4])<v_settle_tol_z)
 if "${settle_halt} == 1" then "fix halt_settle all halt 10000 v_settle_ok > 0.5 error continue"
 
+# moving-window means of the settled gel thickness for the strain baseline (see l0_avg_steps)
+fix l0_free all ave/time ${l0_avg_every} 1 ${l0_avg_every} v_gel_lz_rg v_gel_lz_bb ave window ${l0_avg_nwin}
+
 print ">>> settle start: z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
 thermo 10000
 run ${npt_piston_steps}
@@ -683,10 +698,14 @@ unfix settle_win
 print ">>> settle end (step $(step)): z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  vz_feed=$(v_vz_feed:%.2e) vz_perm=$(v_vz_perm:%.2e)"
 print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f) (applied ${P_target});  L_feed=$(v_L_feed:%.2f) L_perm=$(v_L_perm:%.2f)  T=$(c_mobile_temp:%.4f)"
 
-# ----- strain baseline from the SETTLED state -----
-variable gel_lz_initial equal $(v_gel_lz_rg)
+# ----- strain baseline from the SETTLED state: window means over the end of the settle -----
+# (f_l0_free[1] = 0 only when the settle was shorter than l0_avg_every: single-step fallback)
+variable l0_free_ok     equal $(f_l0_free[1]>0.0)
+variable gel_lz_initial equal $(v_l0_free_ok*f_l0_free[1]+(1-v_l0_free_ok)*v_gel_lz_rg)
+variable L0_bb_avg      equal $(v_l0_free_ok*f_l0_free[2]+(1-v_l0_free_ok)*v_gel_lz_bb)
+unfix l0_free
 variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
-print ">>> Initial gel thickness (Rg, post-settle): L0 = ${gel_lz_initial}   (BB: $(v_gel_lz_bb))"
+print ">>> Initial gel thickness (Rg, post-settle): L0 = ${gel_lz_initial}   (BB: ${L0_bb_avg})   [means over the last ${l0_avg_steps} steps of the settle; this step: Rg $(v_gel_lz_rg)  BB $(v_gel_lz_bb)]"
 fix out_strain_zz all print ${volume_freq} &
     "$(step) ${gel_lz_initial} $(v_gel_lz_rg)" &
     file output_files/stress_data/strain_zz_${dataname}_${interaction}_${nsteps}.dat screen no
@@ -1129,7 +1148,13 @@ variable phase2_start equal $(step)
 #                         PRODUCTION RUN
 # ==========================================================================
 # Runs to completion unless halt_perm (feed reservoir thin) or halt_box fires.
+# L_ss: moving-window mean of the thickness over the last l0_avg_steps of the drive (see l0_avg_steps).
+fix lss_win all ave/time ${l0_avg_every} 1 ${l0_avg_every} v_gel_lz_rg v_gel_lz_bb ave window ${l0_avg_nwin}
 run ${nsteps}
+variable lss_ok equal $(f_lss_win[1]>0.0)
+variable L_ss_rg equal $(v_lss_ok*f_lss_win[1]+(1-v_lss_ok)*v_gel_lz_rg)
+variable L_ss_bb equal $(v_lss_ok*f_lss_win[2]+(1-v_lss_ok)*v_gel_lz_bb)
+unfix lss_win
 
 
 # ==========================================================================
@@ -1188,6 +1213,7 @@ unfix out_polymer_com
 unfix stress_aniso_output
 
 print ">>> Production done (step $(step)):  z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  feed_thickness=$(v_feed_thickness:%.2f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
+print ">>> Steady thickness (means over the last ${l0_avg_steps} steps of the drive): L_ss = ${L_ss_rg} (Rg; settled L0 ${gel_lz_initial})   ${L_ss_bb} (BB; settled ${L0_bb_avg})"
 
 
 # ==========================================================================

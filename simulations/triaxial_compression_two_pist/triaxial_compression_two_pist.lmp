@@ -150,6 +150,23 @@ variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) 
 variable t_seat       index 143000        # common approach time (steps)
 variable nsteps_settle index 1000000      # both plates fixed before the epsilon=0 reference (2026-09-05 value)
 
+# ----- reference averaging (2026-11-11; L0_AVG_STEPS in the batch) -----
+# The free gel's thickness breathes thermally, rms ~ sqrt(kT L/(M A)) with a correlation time ~ tau_1
+# (rot45 gels, 2026-11-10 runs: 0.4 sigma / ~2 M steps for 5-bead strands, 0.5-0.9 sigma for 15-bead), and
+# the outermost bead adds single-step noise on top.  So the faces the plates seat on and the reference
+# thicknesses are MOVING-WINDOW MEANS over the last l0_avg_steps of the phase before them (one sample every
+# l0_avg_every steps), not single-step readings:
+#   Phase 1 (free gel, end of the NPT-piston settle) -> the seating faces, as mean offsets of the outermost
+#       beads from the polymer COM added to the COM at the seating start (a rigid drift of the gel inside
+#       the window does not bias them), and the post-settle L0_rg;
+#   Phase 1.25 (seated gel, end of nsteps_settle)    -> L0_bb (the strain denominator) and L0_rg.
+# The window removes the fast noise; it averages the slow breathing only as far as it spans tau_1, so a
+# seating position is still one sample of it unless npt_piston_steps and l0_avg_steps are both several
+# tau_1.  A window longer than its phase covers the whole phase; 0 = the last sample (the old readings).
+variable l0_avg_steps index 500000
+variable l0_avg_every equal 100
+variable l0_avg_nwin  equal (v_l0_avg_steps>=v_l0_avg_every)*floor(v_l0_avg_steps/v_l0_avg_every)+(v_l0_avg_steps<v_l0_avg_every)
+
 # ----- Phase 1.5: reference window -----
 variable ref_avg_steps index 150000
 variable ref_nevery    equal 100
@@ -548,6 +565,11 @@ variable settle_start equal $(step)
 variable settle_ok equal (step>=v_settle_start+v_settle_min_steps)*(abs(f_settle_win[1])<v_settle_tol_v)*(abs(f_settle_win[2])<v_settle_tol_v)*(abs(v_z_feed-f_settle_win[3])<v_settle_tol_z)*(abs(v_z_perm-f_settle_win[4])<v_settle_tol_z)
 if "${settle_halt} == 1" then "fix halt_settle all halt 10000 v_settle_ok > 0.5 error continue"
 
+# free-gel moving-window means for the seating faces and the post-settle L0 (see l0_avg_steps)
+variable face_top_off equal c_maxz-c_polymer_com[3]
+variable face_bot_off equal c_polymer_com[3]-c_minz
+fix l0_free all ave/time ${l0_avg_every} 1 ${l0_avg_every} v_face_top_off v_face_bot_off v_gel_lz_rg ave window ${l0_avg_nwin}
+
 print ">>> settle start: z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
 thermo 10000
 run ${npt_piston_steps}
@@ -559,8 +581,13 @@ print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)
 
 run 0
 
-variable gel_lz_initial equal $(v_gel_lz_rg)
-print ">>> Initial gel thickness (Rg, post-settle): L0 = ${gel_lz_initial}   (BB: $(v_gel_lz_bb))"
+# window means of the free gel (f_l0_free[3] = 0 only when the phase was shorter than l0_avg_every: single-step fallback)
+variable l0_free_ok       equal $(f_l0_free[3]>0.0)
+variable face_top_off_avg equal $(v_l0_free_ok*f_l0_free[1]+(1-v_l0_free_ok)*v_face_top_off)
+variable face_bot_off_avg equal $(v_l0_free_ok*f_l0_free[2]+(1-v_l0_free_ok)*v_face_bot_off)
+variable gel_lz_initial   equal $(v_l0_free_ok*f_l0_free[3]+(1-v_l0_free_ok)*v_gel_lz_rg)
+unfix l0_free
+print ">>> Initial gel thickness (Rg, post-settle): L0 = ${gel_lz_initial}   (BB: $(v_face_top_off_avg+v_face_bot_off_avg))   [means over the last ${l0_avg_steps} steps of the settle; this step: Rg $(v_gel_lz_rg)  BB $(v_gel_lz_bb)]"
 variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
 
 
@@ -741,13 +768,16 @@ print ">>> Phase 2 prep done: load_z=$(v_z_load:%.2f)  gel_top_rg=$(v_gel_top_rg
 # support is transparent too, so moving it does not push the permeate solvent
 # (the permeate piston holds P_target regardless).  After nsteps_settle with both
 # plates fixed, L0_bb = the BB gel thickness is the strain DENOMINATOR.
+# 2026-11-11: the faces seated on are the Phase-1 window means (COM now + mean offset of the
+# outermost bead, see l0_avg_steps), and L0_bb / L0_rg are window means over the end of the settle.
 print '========================================'
 print 'Phase 1.25: symmetric seating (load piston down + support up, common time)'
 print '========================================'
 print ">>> approach start: piston_gel_gap=$(v_piston_gel_gap:%.2f)  gel_bot_gap=$(v_gel_bot_gap:%.2f)  piston_support_gap=$(v_piston_support_gap:%.2f)"
 
-variable gel_top_bb0 equal $(c_maxz)
-variable gel_bot_bb0 equal $(c_minz)
+variable gel_top_bb0 equal $(c_polymer_com[3]+v_face_top_off_avg)
+variable gel_bot_bb0 equal $(c_polymer_com[3]-v_face_bot_off_avg)
+print ">>> seating faces (window means): top ${gel_top_bb0}  bottom ${gel_bot_bb0}   [this step: top $(c_maxz)  bottom $(c_minz)]"
 variable piston_z0   equal $(c_load_com[3])
 variable support_z0  equal $(c_support_com[3])
 variable d_piston    equal $(v_piston_z0 - v_gel_top_bb0 - v_contact_gap)
@@ -768,17 +798,22 @@ unfix nve_support
 print ">>> seated: load_z=$(c_load_com[3]:%.2f)  support_z=$(c_support_com[3]:%.2f)  gel_top_bb=$(c_maxz:%.2f)  gel_bot_bb=$(c_minz:%.2f)"
 
 print ">>> settling ${nsteps_settle} steps before recording the reference..."
+fix l0_seat all ave/time ${l0_avg_every} 1 ${l0_avg_every} v_gel_lz_bb v_gel_lz_rg ave window ${l0_avg_nwin}
 run ${nsteps_settle}
 
-variable L0_bb         equal $(v_gel_lz_bb)
+# seated reference thicknesses: window means over the end of the settle (single-step fallback as in Phase 1)
+variable l0_seat_ok    equal $(f_l0_seat[2]>0.0)
+variable L0_bb         equal $(v_l0_seat_ok*f_l0_seat[1]+(1-v_l0_seat_ok)*v_gel_lz_bb)
 variable gel_strain_bb equal (v_L0_bb - v_gel_lz_bb)/v_L0_bb
 variable piston_seat_z  equal $(c_load_com[3])
 variable support_seat_z equal $(c_support_com[3])
 variable L0_gap        equal $(v_piston_support_gap)
 variable piston_strain equal (v_L0_gap-v_piston_support_gap)/v_L0_gap
 variable gel_lz_initial delete
-variable gel_lz_initial equal $(v_gel_lz_rg)
+variable gel_lz_initial equal $(v_l0_seat_ok*f_l0_seat[2]+(1-v_l0_seat_ok)*v_gel_lz_rg)
+unfix l0_seat
 print ">>> Reference thicknesses:  L0_bb=${L0_bb} (authoritative)  L0_rg=${gel_lz_initial}  L0_gap=${L0_gap}  piston_seat_z=${piston_seat_z}  support_seat_z=${support_seat_z}"
+print ">>>   (L0_bb, L0_rg = means over the last ${l0_avg_steps} steps of the settle; this step: BB $(v_gel_lz_bb)  Rg $(v_gel_lz_rg))"
 # solvent-expelled reference: wet-piston positions at the seated state
 variable z_feed0 equal $(v_z_feed)
 variable z_perm0 equal $(v_z_perm)

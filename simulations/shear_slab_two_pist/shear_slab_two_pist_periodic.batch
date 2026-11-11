@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=128
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
-#SBATCH --time=48:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=%x.o%j.%N
 source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 
@@ -22,6 +22,10 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # equilibration, 2026-11-10). By hand:
 #     DATANAME=<stem> sbatch shear_slab_two_pist_periodic.batch
 # The 15-bead gel (..._15beads_..._60000000_two_pist_pm40) has 1.9x the atoms: add --nodes=10.
+# The 12 h limit is sized on the 2026-11-10 rot45 runs (10.8 M steps, one strain level): 5-bead on
+# 6 nodes 6.8 h (job 55663498), 15-bead on 10 nodes 7.2 h (55663503). The deck has no
+# wall_timeout, so more levels in STRAINS or a longer NSTEPS need `sbatch --time=...` (~6.5 h per
+# extra 9 M-step level; compute allows 48 h).
 # Piston knobs (PISTON_MASS, C_PIST_FRAC, NPT_PISTON_STEPS, SETTLE_HALT) at the deck defaults.
 # Analyse with DECK = "shear_slab_two_pist" in the shear notebooks.
 
