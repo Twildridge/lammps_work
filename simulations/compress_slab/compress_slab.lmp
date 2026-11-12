@@ -788,7 +788,7 @@ variable d_yhi equal $(v_p_yhi-v_face_yhi-v_contact_gap)
 variable d_ylo equal $(v_face_ylo-v_p_ylo-v_contact_gap)
 variable seat_T equal $(v_t_seat*v_timestep_prod)
 print ">>> seat_mode = ${seat_mode}: gel faces  x ${face_xlo} / ${face_xhi}   y ${face_ylo} / ${face_yhi}   z ${face_zlo} / ${face_zhi}   (means over the last ${l0_avg_steps} steps of the settle)"
-print ">>>   (this step's bounding box x $(c_minx:%.2f) / $(c_maxx:%.2f)   y $(c_miny:%.2f) / $(c_maxy:%.2f)   z $(c_minz:%.2f) / $(c_maxz:%.2f))"
+print ">>>   (bounding box at this step x $(c_minx:%.2f) / $(c_maxx:%.2f)   y $(c_miny:%.2f) / $(c_maxy:%.2f)   z $(c_minz:%.2f) / $(c_maxz:%.2f))"
 print ">>> seating travel: x ${d_xlo} / ${d_xhi}   y ${d_ylo} / ${d_yhi}   z ${d_zlo} / ${d_zhi}   (t_seat=${t_seat} steps)"
 
 fix nve_plates plates nve
@@ -838,7 +838,7 @@ variable gel_strain_bb equal (v_L0_bb-v_gel_lz_bb)/v_L0_bb
 variable piston_strain equal (v_L0_gap-v_gap_z)/v_L0_gap
 print ">>> Seated plate gaps: L0_gap = ${L0_gap_x} x ${L0_gap_y} x ${L0_gap_z}"
 print ">>> Reference edges (strain denominators):  L0 = ${L0_x} x ${L0_y} x ${L0_z}   V0 = ${V0}"
-print ">>>   (V_bb, V_rg below = means over the last ${l0_avg_steps} steps of the settle; the edges are this step's)"
+print ">>>   (V_bb, V_rg below = means over the last ${l0_avg_steps} steps of the settle; the edges are those of this step)"
 print ">>>   network at the reference:  BB $(v_gel_lx_bb:%.2f) x $(v_gel_ly_bb:%.2f) x $(v_gel_lz_bb:%.2f) (V_bb = ${V0_bb})   Rg $(v_gel_lx_rg:%.2f) x $(v_gel_ly_rg:%.2f) x $(v_gel_lz_rg:%.2f) (V_rg = ${V0_rg})"
 print ">>> seated preload (compressive, per plate): x $(v_N_xlo/v_A_x:%.4f) / $(v_N_xhi/v_A_x:%.4f)   y $(v_N_ylo/v_A_y:%.4f) / $(v_N_yhi/v_A_y:%.4f)   z $(v_N_zlo/v_A_z:%.4f) / $(v_N_zhi/v_A_z:%.4f)   mean $(v_P_plates:%.4f)"
 if "$(v_core_xhi-v_core_xlo) < ${binWidth} || $(v_core_yhi-v_core_ylo) < ${binWidth} || $(v_core_zhi-v_core_zlo) < ${binWidth}" then &
