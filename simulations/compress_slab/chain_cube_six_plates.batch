@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# chain_cube_six_plates.batch -- the bridge between an isolated-cube slab_with_support equilibration
+# and its compress_slab run, on one core of the shared partition. Copied from
+# simulations/triaxial_compression_two_pist/chain_random_periodic.batch with the converter
+# (lib/add_more_plates_to_gel.py --layout six_plates) and the final batch (compress_slab_single.batch)
+# swapped. Submitted by scripts/submit_cube_pipeline.sh with --dependency=afterany on the slab job:
+#     sbatch --dependency=afterany:<job> --export=ALL,SLAB_JOB=<job>,STEM=<stem>,SLAB_NSTEPS=8000000 chain_cube_six_plates.batch
+# Knobs (environment):
+#     STEM         the slab run's DATANAME (the generator output stem in input_data/)   [required]
+#     SLAB_NSTEPS  its budget NSTEPS (the final_config tag)                               [8000000]
+#     SLAB_JOB     the slab job (or continuation) this job waited on
+#     CHAIN_HOPS   continuation hops so far (at most 6)
+# It finds the slab run's final_config (continuation_* subdirs included); if the slab job chained a
+# continuation instead, it re-submits itself after that job. Then it copies the final config to
+# input_data/, converts it to the six-plate geometry and submits compress_slab_single.batch with
+# DATANAME exported. Existing copies and converted files are kept.
+#SBATCH --job-name=chain_cube_six_plates
+#SBATCH --partition=shared
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --time=01:00:00
+#SBATCH --output=%x.o%j.%N
+{
+set -u
+source "$HOME/Documents/lammps_work/scripts/lib/site.sh"
+COMP_DIR="$LAMMPS_WORK_DIR/simulations/compress_slab"
+COMP_BATCH="compress_slab_single.batch"
+SLAB_FOLDER=slab_with_support
+RUNS="$RUNS_DIR/$SLAB_FOLDER"
+INPUT_DATA="$INPUT_DATA_DIR"
+DATANAME="${STEM:-}"
+INTERACTION="1.0_1.0"
+NSTEPS="${SLAB_NSTEPS:-8000000}"
+SLAB_JOB="${SLAB_JOB:-}"
+CHAIN_HOPS="${CHAIN_HOPS:-0}"
+
+if [ -z "$DATANAME" ]; then
+    echo "ERROR: STEM is not set (the slab run's DATANAME); nothing submitted."
+    exit 1
+fi
+FINAL="final_config_${DATANAME}_${INTERACTION}_${NSTEPS}.data"
+SIX="${FINAL%.data}_six_plates.data"
+
+echo "======================================================================"
+echo "chain_cube_six_plates  $(date)   job ${SLURM_JOB_ID:-?}   waited on slab job ${SLAB_JOB:-?} (hop ${CHAIN_HOPS})"
+echo "  STEM $DATANAME   NSTEPS $NSTEPS"
+echo "======================================================================"
+if [ -n "$SLAB_JOB" ]; then
+    echo ">>> slab job ${SLAB_JOB} accounting:"
+    sacct -j "$SLAB_JOB" --format=JobID,JobName%24,State,Elapsed,ExitCode -X 2>/dev/null || true
+fi
+
+# ---- 1. the slab's final configuration -----------------------------------------
+SRC=""
+for f in $(ls -t "$RUNS"/${SLAB_FOLDER}_${DATANAME}_${INTERACTION}_*/"$FINAL" \
+                 "$RUNS"/${SLAB_FOLDER}_${DATANAME}_${INTERACTION}_*/continuation_*/"$FINAL" 2>/dev/null); do
+    SRC="$f"; break
+done
+
+if [ -z "$SRC" ]; then
+    echo ">>> no $FINAL under $RUNS yet."
+    # ---- 2. did the slab job chain a continuation?  ------------------------------
+    NEXT=""
+    if [ -n "$SLAB_JOB" ]; then
+        OUT=$(ls -t "$LAMMPS_WORK_DIR/simulations/$SLAB_FOLDER"/*.o${SLAB_JOB}.* 2>/dev/null | head -1 || true)
+        if [ -n "$OUT" ]; then
+            echo ">>> slab job output: $OUT"
+            NEXT=$(grep -oE 'Submitted batch job [0-9]+' "$OUT" | tail -1 | awk '{print $4}' || true)
+        fi
+    fi
+    if [ -n "$NEXT" ] && [ "$CHAIN_HOPS" -lt 6 ]; then
+        echo ">>> the slab job chained continuation job ${NEXT}; waiting for it (hop $((CHAIN_HOPS + 1)))..."
+        squeue -j "$NEXT" 2>/dev/null || true
+        cd "$COMP_DIR" || exit 1
+        sbatch --dependency=afterany:"$NEXT" --export=ALL,SLAB_JOB="$NEXT",CHAIN_HOPS=$((CHAIN_HOPS + 1)),STEM="$DATANAME",SLAB_NSTEPS="$NSTEPS" "$COMP_DIR/chain_cube_six_plates.batch"
+        exit $?
+    fi
+    echo "ERROR: the slab run produced no $FINAL and no continuation job was found."
+    echo "       Check the slab job's output file in $LAMMPS_WORK_DIR/simulations/$SLAB_FOLDER and the newest run dir under $RUNS."
+    echo "       When the final config exists, run by hand:  cd $COMP_DIR && SLAB_JOB=$SLAB_JOB STEM=$DATANAME SLAB_NSTEPS=$NSTEPS bash chain_cube_six_plates.batch"
+    exit 1
+fi
+echo ">>> slab final configuration: $SRC"
+grep -m1 "Total wall time" "$(dirname "$SRC")/log.lammps" 2>/dev/null \
+    || echo "WARNING: no 'Total wall time' in $(dirname "$SRC")/log.lammps"
+
+# ---- 3. copy to input_data and plate it ------------------------------------------------
+mkdir -p "$INPUT_DATA"
+if [ -e "$INPUT_DATA/$FINAL" ]; then
+    echo ">>> $INPUT_DATA/$FINAL already exists; keeping it."
+else
+    cp "$SRC" "$INPUT_DATA/$FINAL" && echo ">>> copied to $INPUT_DATA/$FINAL" \
+        || { echo "ERROR: copy of $SRC to $INPUT_DATA/$FINAL failed; compress_slab was NOT submitted."; exit 1; }
+fi
+ls -la "$INPUT_DATA/$FINAL"
+
+if [ -e "$INPUT_DATA/$SIX" ]; then
+    echo ">>> $INPUT_DATA/$SIX already exists; keeping it."
+else
+    load_python_module
+    python -c "import numpy, scipy; print('numpy', numpy.__version__, 'scipy', scipy.__version__)"
+    echo ">>> plating (scripts/lib/add_more_plates_to_gel.py --layout six_plates)..."
+    cd "$LAMMPS_WORK_DIR/scripts/lib" || exit 1
+    CONV_LOG="$COMP_DIR/${SIX%.data}.convert.log"
+    python add_more_plates_to_gel.py --layout six_plates \
+        --input "$INPUT_DATA/$FINAL" --output "$INPUT_DATA/$SIX" 2>&1 | tee "$CONV_LOG"
+    CONV_RC=${PIPESTATUS[0]}
+    if [ "$CONV_RC" -ne 0 ] || ! grep -q "RESULT: OK" "$CONV_LOG" || ! grep -q "DATANAME for the batch file:" "$CONV_LOG"; then
+        echo "ERROR: the six-plate conversion of $INPUT_DATA/$FINAL failed (exit $CONV_RC; see $CONV_LOG); compress_slab was NOT submitted."
+        rm -f "$INPUT_DATA/$SIX"
+        exit 1
+    fi
+fi
+[ -s "$INPUT_DATA/$SIX" ] || { echo "ERROR: $INPUT_DATA/$SIX is missing or empty; compress_slab was NOT submitted."; exit 1; }
+ls -la "$INPUT_DATA/$SIX"
+
+# ---- 4. the compression ----------------------------------------------------------------
+export DATANAME="${SIX%.data}"
+cd "$COMP_DIR" || exit 1
+[ -f "$COMP_BATCH" ] || { echo "ERROR: missing $COMP_DIR/$COMP_BATCH"; exit 1; }
+echo ">>> submitting $COMP_BATCH (DATANAME $DATANAME)"
+grep -n '^NSTEPS=\|^export COMPRESSIONS=\|^export UNLOAD=' "$COMP_BATCH"
+sbatch --export=ALL,DATANAME="$DATANAME" "$COMP_BATCH"
+exit $?
+}
+exit
