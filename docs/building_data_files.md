@@ -35,7 +35,7 @@ python add_more_plates_to_gel.py --layout x_plates \
 ```
 
 `--layout six_plates` builds the `compress_slab` file, `--help` lists every option (bath margins, reservoirs,
-plate park gap and overhang, `--no-log`, `--no-png`). `python` must be the Anaconda Python that runs JupyterLab
+plate park gap and overhang, `--no-log`, `--png`). `python` must be the Anaconda Python that runs JupyterLab
 (`which python` shows which is active; `conda activate base` switches to it; on Dylan's Mac it is
 `/opt/anaconda3/bin/python`). The same line works in a notebook cell with a leading `!`, with the path relative to
 the notebook (`!python lib/add_more_plates_to_gel.py ...`). The script prints the geometry, the validation
@@ -43,8 +43,9 @@ the notebook (`!python lib/add_more_plates_to_gel.py ...`). The script prints th
 it appended, and last `DATANAME for the batch file: <stem>`. Next to the input it writes `<stem>.data`, the
 no sidecar since 2026-10-28; `--png` draws `<stem>_profiles.png` (density profiles along z and x: check that the gel sits
 between the plates and pistons). Copy the `.data` file to `~/Documents/lammps_data/input_data/` on the cluster and
-put the stem in the deck's batch (`shear_slab_two_pist_single.batch` for `x_plates`, `compress_slab_single.batch` for
-`six_plates`). The periodic-slab converters (`slab_two_pistons_periodic.py`, `slab_shear_plates_periodic.py`) run
+submit the deck's batch with the stem: `DATANAME=<stem> sbatch compress_slab_single.batch` for `six_plates` (both
+`compress_slab` batches read `DATANAME` from the environment since 2026-11-11, default the square rho-1.0 cube), and
+put the stem in `shear_slab_two_pist_single.batch` for `x_plates`. The periodic-slab converters (`slab_two_pistons_periodic.py`, `slab_shear_plates_periodic.py`) run
 the same way; `slab_two_pistons_periodic.ipynb` is kept as their notebook front-end.
 
 ### The two-piston converter (2026-09-16)

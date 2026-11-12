@@ -36,27 +36,28 @@ PYEOF
     if [ $? -eq 0 ]; then echo "  OK   $nb"; else echo "  FAIL $nb  (see $OUT/$nb.log)"; grep -m3 -E "Error|Exception" "$OUT/$nb.log"; fail=1; fi
 }
 echo "=== notebooks (fixtures under $ROOT)"
-run_nb triaxial_compression_single_two_pist.ipynb "s = __import__('re').sub(r'RUN_ID\\s*=\\s*\"[^\"]*\",', 'RUN_ID      = \"fixture_comp\", base_dir=\"' + root + '/flow_data_local\",', s); s = __import__('re').sub(r'DATANAME\\s*=\\s*\"[^\"]*\"', 'DATANAME    = \"fixture_slab\"', s); s = s.replace('VOR_ENABLE = True,', 'VOR_ENABLE = False,')"
+run_nb triaxial_compression_single_two_pist.ipynb "s = __import__('re').sub(r'RUN_ID\\s*=\\s*\"[^\"]*\",', 'RUN_ID      = \"fixture_comp\", base_dir=\"' + root + '/flow_data_local\",', s); s = __import__('re').sub(r'DATANAME\\s*=\\s*\"[^\"]*\"', 'DATANAME    = \"fixture_slab\"', s); s = __import__('re').sub(r'NSTEPS\\s*=\\s*[0-9]+,', 'NSTEPS      = None,', s); s = s.replace('VOR_ENABLE = True,', 'VOR_ENABLE = False,')"
 run_nb triaxial_compression_sweep_two_pist.ipynb "s = __import__('re').sub(r'RUN_ID\\s*=\\s*\"[^\"]*\",', 'RUN_ID      = \"fixture_comp\", base_dir=\"' + root + '/flow_data_local\",', s); s = __import__('re').sub(r'DATANAME\\s*=\\s*\"[^\"]*\"', 'DATANAME    = \"fixture_slab\"', s); s = __import__('re').sub(r'COMP_LEVELS\\s*=\\s*\\[[^\\]]*\\]', 'COMP_LEVELS = [\"0.05\", \"0.10\"]', s); s = s.replace('VOR_ENABLE = True,', 'VOR_ENABLE = False,')"
 run_nb triaxial_permeation_single_two_pist.ipynb "s = __import__('re').sub(r'RUN_ID\\s*=\\s*\"[^\"]*\",', 'RUN_ID      = \"fixture_perm\", base_dir=\"' + root + '/flow_data_local\",', s); s = __import__('re').sub(r'DATANAME\\s*=\\s*\"[^\"]*\"', 'DATANAME    = \"fixture_slab\"', s)"
 # bulk-modulus notebooks (2026-09-29) on the six-plate fixture (built from a known K; dt_lj = the fixture's)
-BULK_RW="s = s.replace('VOR_ENABLE = True,', 'VOR_ENABLE = False,'); s = __import__('re').sub(r'RUN_ID\\s*=\\s*\"[^\"]*\",', 'RUN_ID      = \"fixture_bulk\", base_dir=\"' + root + '/flow_data_local\", dt_lj=0.5,', s).replace('DATANAME    = \"final_config_slab_support_5beads_tall_rho04_new_03_1.0_1.0_10000000_six_plates\"', 'DATANAME    = \"fixture_cube\"')"
+BULK_RW="s = s.replace('VOR_ENABLE = True,', 'VOR_ENABLE = False,'); s = __import__('re').sub(r'RUN_ID\\s*=\\s*\"[^\"]*\",', 'RUN_ID      = \"fixture_bulk\", base_dir=\"' + root + '/flow_data_local\", dt_lj=0.5,', s); s = __import__('re').sub(r'DATANAME\\s*=\\s*\"[^\"]*\"', 'DATANAME    = \"fixture_cube\"', s)"
 run_nb bulk_modulus_analysis_single.ipynb "$BULK_RW"
-run_nb bulk_modulus_analysis_sweep.ipynb "$BULK_RW.replace('COMP_LEVELS = [\"0.05\", \"0.10\", \"0.15\", \"0.20\", \"0.30\"]', 'COMP_LEVELS = [\"0.05\", \"0.10\"]')"
+run_nb bulk_modulus_analysis_sweep.ipynb "$BULK_RW; s = __import__('re').sub(r'COMP_LEVELS\\s*=\\s*\\[[^\\]]*\\]', 'COMP_LEVELS = [\"0.05\", \"0.10\"]', s)"
 # the six-plate converter notebook on a small generated gel (no cluster file needed)
 $PY - "$SCRIPTS" "$ROOT" <<'PYEOF' || fail=1
 import sys, json
 scripts, root = sys.argv[1], sys.argv[2]
 ns = {}
-exec(''.join(json.load(open(scripts + '/slab_with_support.ipynb'))['cells'][0]['source']), ns)
+sys.path.insert(0, scripts + '/lib')
+from data_file_generator import generate_gel_slab
 import io, contextlib
 with contextlib.redirect_stdout(io.StringIO()):
-    ns['generate_gel_slab'](5, 3, 3, 3, 0.45, 9.0, 3.0, 9.0, 3.0, 0.5, 0.0, 0.1, 0.8, root + '/cube_input.data', pre_swell=1.0)
+    generate_gel_slab(5, 3, 3, 3, 0.45, 9.0, 3.0, 9.0, 3.0, 0.5, 0.0, 0.1, 0.8, root + '/cube_input.data', pre_swell=1.0, include_walls=False)
 print('  generated', root + '/cube_input.data')
 PYEOF
 echo "  add_more_plates_to_gel.py (CLI, six_plates + x_plates on the generated cube)"
 for LAY in six_plates x_plates; do
-    $PY "$SCRIPTS/lib/add_more_plates_to_gel.py" --input "$ROOT/cube_input.data" --layout $LAY --bath-margin-xy 5 --reservoir-z 5 --plate-overhang 3 --no-log --no-png > "$ROOT/amp_$LAY.log" 2>&1 \
+    $PY "$SCRIPTS/lib/add_more_plates_to_gel.py" --input "$ROOT/cube_input.data" --layout $LAY --bath-margin-xy 5 --reservoir-z 5 --plate-overhang 3 --no-log > "$ROOT/amp_$LAY.log" 2>&1 \
         && echo "  OK   add_more_plates_to_gel.py --layout $LAY" || { echo "  FAIL add_more_plates_to_gel.py --layout $LAY (see $ROOT/amp_$LAY.log)"; fail=1; }
 done
 # the converter notebook runs the real converter (needs a slab file); skipped when absent

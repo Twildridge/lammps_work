@@ -19,7 +19,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # Analysis: scripts/bulk_modulus_analysis_sweep.ipynb.
 
 FOLDER=compress_slab
-DATANAME=final_config_slab_support_5beads_square_rho10_nowalls_1.0_1.0_8000000_six_plates
+DATANAME="${DATANAME:-final_config_slab_support_5beads_square_rho10_nowalls_1.0_1.0_8000000_six_plates}"   # from the environment, as the single batch (2026-11-11)
 INTERACTION=1.0_1.0
 NSTEPS=3000000          # hold length with HOLD_AUTO=0, and the tag of the setup-phase files
 export PRESS_TARGET=1.5

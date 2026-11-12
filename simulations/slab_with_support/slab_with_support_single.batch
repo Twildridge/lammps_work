@@ -17,11 +17,13 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # zeroes the gel's linear and angular momentum so the free block neither drifts nor turns.
 # Then convert final_config_<DATANAME>_1.0_1.0_<NSTEPS>.data with lib/add_more_plates_to_gel.py
 # (--layout x_plates for shear_slab_two_pist, six_plates for compress_slab).
+# DATANAME and NSTEPS come from the environment when set (2026-11-11):
+#     DATANAME=<generator output stem in input_data/> NSTEPS=8000000 sbatch slab_with_support_single.batch
 
 FOLDER=slab_with_support
-DATANAME=slab_support_5beads_tall_rho04_nowalls_random
+DATANAME="${DATANAME:-slab_support_5beads_tall_rho04_nowalls_random}"
 INTERACTION=1.0_1.0
-NSTEPS=8000000
+NSTEPS="${NSTEPS:-8000000}"
 export PRESS_TARGET=1.5
 export BARO_MODE=iso PIN_GEL=1 PISTON_TRANSPARENT=1
 export CHAIN=1

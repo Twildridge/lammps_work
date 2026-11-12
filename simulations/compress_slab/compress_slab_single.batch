@@ -19,14 +19,18 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # re-swelling hold of UNLOAD_STEPS (0 = the hold length; files _u<strain>), which gives
 # D_m = (K/M) D_c and kappa = D_m / K. Input: lib/add_more_plates_to_gel.py --layout six_plates
 # on an equilibrated isolated gel. Analysis: scripts/bulk_modulus_analysis_single.ipynb.
+# DATANAME comes from the environment (2026-11-11), so one batch serves every six-plate gel:
+#     DATANAME=<stem of the six_plates file in input_data/> sbatch compress_slab_single.batch
+# The default is the square rho-1.0 cube of 2026-10-11.
 # Short trial first: HOLD_AUTO=0, a small NSTEPS, UNLOAD_STEPS=NSTEPS, NPT_PISTON_STEPS=100000.
 
 FOLDER=compress_slab
-DATANAME=final_config_slab_support_5beads_square_rho10_nowalls_1.0_1.0_8000000_six_plates
+DATANAME="${DATANAME:-final_config_slab_support_5beads_square_rho10_nowalls_1.0_1.0_8000000_six_plates}"
 INTERACTION=1.0_1.0
 NSTEPS=3000000          # hold length with HOLD_AUTO=0, and the tag of the setup-phase files
 export PRESS_TARGET=1.5
 export COMPRESSIONS="0.10"   # with bb seating the first ~1 sigma per face folds in the loose shell: 0.10 is the smallest well-resolved level
 export UNLOAD=1 UNLOAD_STEPS=0 UNLOAD_MARGIN=3.0   # the re-swollen gel's outermost beads fluctuate 3-5 sigma beyond its Rg face
 
+echo ">>> DATANAME=$DATANAME"
 bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"
