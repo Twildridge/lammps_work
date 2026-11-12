@@ -806,3 +806,11 @@ Converted two-piston (feed/permeate) data file  [2026-11-10 10:05, slab_two_pist
   Sheets: 78848 beads each (support pattern, spacing 0.2030); piston_clearance 1.0, load_piston_frac 0.5, seed 42
   Crosslinks: 4662   Chain beads: 119574   Solvent: 390929   Support: 78848   Feed piston: 78848   Permeate piston: 78848   Load piston: 78848
   Total atoms: 830557   Total bonds: 128772   Output: final_config_slab_support_periodic_15beads_tall_rho04_rot45_1.0_1.0_60000000_two_pist_pm40.data
+
+Converted six_plates + two-wet-piston data file  [2026-11-12 07:45, add_more_plates_to_gel.py]  (plates: zlo, zhi, xlo, xhi, ylo, yhi):
+  Input: final_config_slab_support_5beads_cube12_rho10_nowalls_rot45_1.0_1.0_8000000.data
+  Box: 99.5934 x 99.7972 x 129.124   (bath cropped: x,y margin 12.0, z reservoir 15.0 sigma; 452573 solvent cropped, 1522 removed at the seam)
+  Gel: L_bb 69.59 x 69.80 x 71.12, L_rg 64.60 x 64.00 x 64.51; bath rho = 0.4678
+  Plates: parked 3.0 sigma outside the BB faces, overhang 6.0, spacing 0.5 (164006 beads in 6 plate(s)); wet pistons 23084 beads each, z = 10.00 / 119.12, vacuum margins 10.0 / 10.0
+  Crosslinks: 15024   Chain beads: 85680   Solvent: 431366   Plates: 164006   Feed piston: 23084   Permeate piston: 23084
+  Total atoms: 742244   Total bonds: 114240   Output: final_config_slab_support_5beads_cube12_rho10_nowalls_rot45_1.0_1.0_8000000_six_plates.data

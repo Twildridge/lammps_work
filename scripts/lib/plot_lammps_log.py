@@ -309,12 +309,28 @@ def plot_convergence(data, folder, run_id, output):
             _annotate_last30(ax, nd, fmt='.4f')
 
     # ── Gel volume — bounding box (normalized)
+    # gel_volume_bb_*.dat has no step column. It is printed on the same cadence as
+    # gel_volume_rg_*.dat / box_dimensions_*.dat, so borrow their steps when the row
+    # counts match; otherwise fall back to the output index (and say so on the axis).
     if has_gel_bb:
         vols = read_volume_file(gel_bb_file)
         if vols.size:
             y = vols / vols[0]
+            x = None
+            if has_gel_rg:
+                ts_rg, _ = read_timestep_volume_file(gel_rg_file)
+                if len(ts_rg) == len(y):
+                    x = ts_rg
+            if x is None and has_box:
+                arr_box = read_fix_print(box_file)
+                if arr_box.size and len(arr_box) == len(y):
+                    x = arr_box[:, 0]
             ax = axes[idx]; idx += 1
-            ax.plot(np.arange(len(y)), y, color='orange', lw=1.5, marker='o', markersize=3)
+            if x is None:
+                ax.plot(np.arange(len(y)), y, color='orange', lw=1.5, marker='o', markersize=3)
+                ax.set_xlabel('output index (no step column in gel_volume_bb file)')
+            else:
+                ax.plot(x, y, color='orange', lw=1.5, marker='o', markersize=3)
             ax.set_ylabel('Gel Vol (BB) / Initial')
             ax.grid(alpha=0.3)
             _annotate_last30(ax, y)

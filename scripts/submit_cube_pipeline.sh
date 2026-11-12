@@ -7,11 +7,11 @@
 #   BUILD_ONLY=1 bash scripts/submit_cube_pipeline.sh rot45 12  # dry run: stage 1 only
 #
 #   NETWORK  rot45 | tetrahedral | random  (a preset in data_file_generator.NETWORKS)
-#   N        cubic cells per edge of the gel (12 = the 2026-10 cube, ~63 sigma, ~1.13 M atoms plated)
+#   N        cubic cells per edge of the gel (12 = the 2026-10 cube, ~63 sigma)
 #
-#   1. builds input_data/slab_support_5beads_cube<N>_rho10_nowalls_<NETWORK>.data on the login
+#   1. builds input_data/slab_support_5beads_cube<N>_rho042_nowalls_<NETWORK>.data on the login
 #      node (scripts/lib/data_file_generator.build: 5 beads per chain, no sheets, solvent density
-#      1.0, 15-sigma bath pads). rot45 / random count BCT cells of a/sqrt2 along x and z, so
+#      0.42, bath pads 21 sigma in x/y and 20 sigma below/above). rot45 / random count BCT cells of a/sqrt2 along x and z, so
 #      units_x = units_z = round(N sqrt2), units_y = N; tetrahedral uses N for all three.
 #      An existing file is never overwritten: the build is skipped;
 #   2. sbatch simulations/slab_with_support/slab_with_support_single.batch (DATANAME = that stem,
@@ -31,6 +31,19 @@ NETWORK="${1:-rot45}"
 N="${2:-12}"
 BUILD_ONLY="${BUILD_ONLY:-0}"
 SLAB_NSTEPS=8000000
+# Initial bath (2026-11-12). The cube12 rot45 run of 2026-11-12 was built at solvent density 1.0
+# with 15-sigma pads: at P* = 1.5 that bath is far too dense (P = 77 at step 0), so the iso
+# barostat dilated the box -- and the gel with it -- 2.3x in volume within 20 k steps, and the
+# gel then needed ~2 M steps to contract back to its built size (bath 0.47 next to the gel,
+# box-average solvent 0.44 at equilibrium). 0.42 in this larger box is the equilibrium solvent
+# count (0.47 in the bath + ~0.23 inside the gel), so the box and gel start where they end up
+# (~40 % fewer atoms too). The pads are sized for the six_plates crop of
+# add_more_plates_to_gel.py: it needs box >= L_bb + 2 (3 + 12) in x, y and L_bb + 2 (3 + 15) in z,
+# with L_bb ~70-71 sigma for the 12-cell cube (the lattice edge plus outer-bead excursions).
+RHO_SOLV=0.42
+RHO_TAG=rho042
+PAD_XY=21.0
+PAD_Z=20.0
 
 LAMMPS_WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$LAMMPS_WORK_DIR/scripts/lib/site.sh"
@@ -49,7 +62,7 @@ case "$NETWORK" in
     *) echo "ERROR: NETWORK must be rot45, tetrahedral or random (got '$NETWORK')"; exit 1 ;;
 esac
 
-STEM="slab_support_5beads_cube${N}_rho10_nowalls_${NETWORK}"
+STEM="slab_support_5beads_cube${N}_${RHO_TAG}_nowalls_${NETWORK}"
 DATA="$INPUT_DATA/$STEM.data"
 echo ">>> NETWORK=$NETWORK  N=$N  ->  units ${UX} x ${UY} x ${UZ}   STEM=$STEM"
 
@@ -67,13 +80,14 @@ else
     load_python_module || { echo "ERROR: could not load $PYTHON_MODULE"; exit 1; }
     LOG="$INPUT_DATA/$STEM.build.log"
     cd "$LAMMPS_WORK_DIR/scripts/lib" || exit 1
-    python - "$NETWORK" "$DATA" "$UX" "$UY" "$UZ" <<'EOF' 2>&1 | tee "$LOG"
+    python - "$NETWORK" "$DATA" "$UX" "$UY" "$UZ" "$RHO_SOLV" "$PAD_XY" "$PAD_Z" <<'EOF' 2>&1 | tee "$LOG"
 import sys
 import data_file_generator as gen
 network, out, ux, uy, uz = sys.argv[1], sys.argv[2], *map(int, sys.argv[3:6])
+rho, pad_xy, pad_z = map(float, sys.argv[6:9])
 gen.build(network=network, output_file=out, beads_per_chain=5,
-          units_x=ux, units_y=uy, units_z=uz, solvent_density=1.0,
-          side_thickness=15.0, below_thickness=15.0, top_thickness=15.0,
+          units_x=ux, units_y=uy, units_z=uz, solvent_density=rho,
+          side_thickness=pad_xy, below_thickness=pad_z, top_thickness=pad_z,
           pre_swell=1.10, include_walls=False)
 EOF
     if [ "${PIPESTATUS[0]}" -ne 0 ] || [ ! -s "$DATA" ]; then
