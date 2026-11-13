@@ -52,6 +52,8 @@ Physics conventions (see the Notes section at the end of either notebook):
 from __future__ import annotations
 
 import hashlib
+import io
+import itertools
 import re
 import sys
 import stat
@@ -74,6 +76,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 import volfrac  # noqa: E402  (scripts/lib/volfrac.py -- Voronoi + lambda calibration)
 import psd      # noqa: E402  (scripts/lib/psd.py -- geometric porosity + pore-size distribution, 2026-09-24)
+import xlink    # noqa: E402  (scripts/lib/xlink.py -- crosslinker fluctuations vs the phantom network, 2026-11-12)
 
 
 # ===========================================================================
@@ -1324,7 +1327,9 @@ def read_traj_id_z(traj, want_ts=None, types=psd.POLYMER_TYPES):
                     for _ in range(n):
                         f.readline()
                 else:
-                    df = pd.read_csv(f, sep=r'\s+', header=None, names=cols, nrows=n, engine='c')
+                    # the atom block goes through a buffer (2026-11-12): read_csv on the open handle reads ahead
+                    # past the block, so the NEXT frame's header was lost and every other consecutive frame dropped
+                    df = pd.read_csv(io.StringIO(''.join(itertools.islice(f, n))), sep=r'\s+', header=None, names=cols, engine='c')
                     df = df[df['type'].isin(types)].sort_values('id')
                     out[ts] = (df['id'].to_numpy(), df['z'].to_numpy(float))
             line = f.readline()
@@ -4812,36 +4817,195 @@ def fig_M(cfg, R, L):
     return _save(fig, cfg, 'M_comparison', L['lvl'])
 
 
+def is_rot45(cfg):
+    """The diamond lattice rotated 45 deg about y (box axes x = [101], y = [010], z = [-101]): x and y are
+    different crystal directions, so the xx and yy stress differences measure different elastic constants."""
+    return 'rot45' in str(cfg.DATANAME)
+
+
 def fig_G(cfg, R, L):
     """Shear modulus from the lateral network stress, G = (sigma'_zz - sigma'_ii)/(2 eps),
-    one estimate from xx and one from yy (should agree by symmetry)."""
+    one estimate from xx and one from yy (should agree by symmetry).
+    rot45 lattice (2026-11-12): uniaxial strain along [-101] gives (zz - xx)/2eps = C44 and
+    (zz - yy)/2eps = (C44 + C')/2, C' = (C11 - C12)/2 -- two different constants, so no mean line; the
+    legend carries C' = 2 G_y - G_x and the Zener ratio C44/C' instead."""
     if not L['G']:
         print('G figure skipped (no sigmaxx / sigmayy files)')
         return None
     fig, ax = plt.subplots(figsize=(7.5, 6), constrained_layout=True)
     ci = int(cfg.ci_level * 100)
+    rot = is_rot45(cfg)
+    name = {'xx': r"C_{44}", 'yy': r"(C_{44}+C')/2"} if rot else {'xx': 'G', 'yy': 'G'}
     xs, vals = [], []
     for k, (comp, col, mk) in enumerate((('xx', WONG['blue'], 'o'), ('yy', WONG['vermillion'], 's'))):
         G = L['G'].get(comp)
         if G is None:
             continue
         ax.errorbar([k], [G['G']], yerr=[[G['G'] - G['lo']], [G['hi'] - G['G']]], fmt=mk, ms=13, color=col,
-                    capsize=8, lw=2.5, label=f"from {comp}:  $G = {sig(G['G'])}$\n{ci}% CI [{sig(G['lo'])}, {sig(G['hi'])}]")
+                    capsize=8, lw=2.5, label=f"from {comp}:  ${name[comp]} = {sig(G['G'])}$\n{ci}% CI [{sig(G['lo'])}, {sig(G['hi'])}]")
         xs.append(k)
         vals.append(G['G'])
-    if vals:
+    if vals and not rot:
         ax.axhline(np.mean(vals), color='0.3', ls='--', lw=1.2, alpha=0.6,
                    label=f'mean of the two = {sig(np.mean(vals))}')
+    if rot and len(vals) == 2:
+        Cp = 2 * vals[1] - vals[0]
+        ax.plot([], [], ' ', label=f"$C' = 2G_y - G_x = {sig(Cp)}$\nZener ratio $C_{{44}}/C' = {sig(vals[0] / Cp) if Cp > 0 else 'n/a'}$")
     ax.set_xticks([0, 1])
-    ax.set_xticklabels([r"$G_x=(\sigma'_{zz}-\sigma'_{xx})/2\varepsilon$", r"$G_y=(\sigma'_{zz}-\sigma'_{yy})/2\varepsilon$"],
-                       fontsize=14)
-    ax.set_ylabel(r'$G$  (LJ units)')
-    ax.set_title(f'Shear modulus from network-stress anisotropy\n{cfg.RUN_ID}  |  $\\varepsilon = {L["lvl"]}$',
+    if rot:
+        ax.set_xticklabels([r"$C_{44}=(\sigma'_{zz}-\sigma'_{xx})/2\varepsilon$",
+                            r"$(C_{44}+C')/2=(\sigma'_{zz}-\sigma'_{yy})/2\varepsilon$"], fontsize=13)
+    else:
+        ax.set_xticklabels([r"$G_x=(\sigma'_{zz}-\sigma'_{xx})/2\varepsilon$", r"$G_y=(\sigma'_{zz}-\sigma'_{yy})/2\varepsilon$"],
+                           fontsize=14)
+    ax.set_ylabel(r'shear constant  (LJ units)' if rot else r'$G$  (LJ units)')
+    ax.set_title((f"Shear constants from network-stress anisotropy (rot45 lattice, $C'=(C_{{11}}-C_{{12}})/2$)" if rot else
+                  'Shear modulus from network-stress anisotropy') + f'\n{cfg.RUN_ID}  |  $\\varepsilon = {L["lvl"]}$',
                  fontsize=15)
     ax.set_xlim(-0.5, 1.5)
     ax.grid(axis='y', alpha=0.3)
     smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'G_estimate', L['lvl'])
+
+
+def crosslink_fluctuations(cfg, R):
+    """Crosslinker / strand fluctuation statistics of the eps = 0 reference trajectory (lib/xlink.py),
+    cached on R['xlink']; None without traj_ref."""
+    if 'xlink' not in R:
+        R['xlink'] = xlink.analyse(cfg.traj('traj_ref'))
+    return R['xlink']
+
+
+def fig_xlink(cfg, R):
+    """Crosslinker fluctuations of the reference state against the phantom network of Gaussian strands:
+    (a) per-strand Gamma = <dR^2>/|<R>|^2 (phantom reference 2/(f-2)), (b) per-strand extension
+    sqrt<R^2>/(n b).  The summary line is printed as well."""
+    S = crosslink_fluctuations(cfg, R)
+    xlink.report(S, cfg.RUN_ID)
+    if S is None:
+        return None
+    fig, (axa, axb) = plt.subplots(1, 2, figsize=(15, 6), constrained_layout=True)
+    g = S['strand_Gamma']
+    axa.hist(g, bins=np.logspace(-2.5, 1, 90), color=WONG['blue'], alpha=0.75)
+    axa.axvline(S['Gamma'], color=WONG['blue'], lw=2.2,
+                label=rf"network $\Gamma=\langle\Delta R^2\rangle/\langle\bar R^2\rangle={sig(S['Gamma'])}$")
+    axa.axvline(S['Gamma_ph'], color='k', ls='--', lw=1.8, label=rf"phantom Gaussian network, $2/(f-2)={S['Gamma_ph']:g}$")
+    axa.set_xscale('log')
+    axa.set_xlabel(r'$\Gamma$ per strand  (fluctuation / mean vector, squared)')
+    axa.set_ylabel('strands')
+    axa.set_title(rf"(a) strand-vector fluctuation;  crosslinker Lindemann ratio {sig(S['lindemann'])} (phantom {sig(S['lindemann_ph'])})", fontsize=13)
+    axa.grid(alpha=0.3)
+    smart_legend(axa, fontsize=11)
+    axb.hist(S['strand_x'], bins=np.linspace(0, 1, 81), color=WONG['vermillion'], alpha=0.75)
+    axb.axvline(S['x_ext'], color=WONG['vermillion'], lw=2.2,
+                label=rf"network $x=\sqrt{{\langle R^2\rangle}}/(nb)={sig(S['x_ext'])}$" + '\n'
+                      + rf"leading finite-extensibility term $\frac{{3}}{{5}}x^2={sig(S['fjc_corr'])}$")
+    axb.set_xlabel(r'strand extension  $\sqrt{\langle R^2\rangle}/(n b)$')
+    axb.set_ylabel('strands')
+    axb.set_title(rf"(b) chain extension  ({S['nb_mean']:.3g} bonds per strand, $b={S['bond_len']:.3f}$)", fontsize=13)
+    axb.grid(alpha=0.3)
+    smart_legend(axb, fontsize=11)
+    fig.suptitle(f"Crosslinker fluctuations of the $\\varepsilon=0$ reference  |  {cfg.RUN_ID}  |  "
+                 f"{S['n_frames']} frames, {S['n_strands']} interior strands, $f={S['f']}$", fontsize=13, fontweight='bold')
+    return _save(fig, cfg, 'xlink_fluctuations')
+
+
+def network_modes(cfg, R):
+    """Mode decomposition of the eps = 0 reference trajectory (xlink.network_modes), cached on R['modes']."""
+    if 'modes' not in R:
+        R['modes'] = xlink.network_modes(cfg.traj('traj_ref'))
+    return R['modes']
+
+
+def draw_network_modes(S, title=''):
+    """The five panels of fig_network for one xlink.network_modes() result -> fig."""
+    from matplotlib.collections import EllipseCollection, LineCollection
+    from matplotlib.colors import LogNorm
+    fig = plt.figure(figsize=(21, 10.5), constrained_layout=True)
+    gs = fig.add_gridspec(2, 4)
+    axm = fig.add_subplot(gs[:, :2])
+    axj, axb = fig.add_subplot(gs[0, 2]), fig.add_subplot(gs[0, 3])
+    axc, axf = fig.add_subplot(gs[1, 2]), fig.add_subplot(gs[1, 3])
+    nb_ = S['n'] * S['bond_len']
+
+    # (a) map: mean positions in a thin slab, every bead with its rms in-plane displacement as a disc
+    m = S['map']
+    M, cen = m['M'], m['cen']
+    segs = [np.c_[M[p, 0] - cen[0], M[p, 2] - cen[2]] for p in m['strands']]
+    axm.add_collection(LineCollection(segs, colors='0.35', lw=1.0, zorder=2))
+    for msk, col, al, lab in ((~m['isx'][m['atoms']], WONG['orange'], 0.22, 'chain beads'),
+                              (m['isx'][m['atoms']], WONG['blue'], 0.35, 'crosslinkers')):
+        at = m['atoms'][msk]
+        xy = np.c_[M[at, 0] - cen[0], M[at, 2] - cen[2]]
+        d = 2 * m['r'][at]
+        axm.add_collection(EllipseCollection(d, d, 0, units='xy', offsets=xy, transOffset=axm.transData,
+                                             facecolors=col, edgecolors='none', alpha=al, zorder=1))
+        axm.plot(xy[:, 0], xy[:, 1], '.', color=col, ms=7 if lab == 'crosslinkers' else 3, zorder=3, label=f'{lab} (mean position)')
+    axm.plot([], [], 'o', color='0.6', alpha=0.5, ms=14, label='disc radius = rms in-plane displacement')
+    axm.set_xlim(-m['half'], m['half']); axm.set_ylim(-m['half'], m['half'])
+    axm.set_aspect('equal')
+    axm.set_xlabel(r'$x$  ($\sigma$)'); axm.set_ylabel(r'$z$  ($\sigma$)')
+    axm.set_title(rf"(a) mean network in a slab {m['thick']:g}$\sigma$ thick along $y$, with each bead's thermal cloud", fontsize=14)
+    axm.legend(loc='upper right', fontsize=10, framealpha=0.9)
+
+    # (b) stretch vs slack, every strand in every frame
+    hb = axj.hist2d(S['x_inst'], S['h_inst'], bins=[np.linspace(0, 1.1, 90), np.linspace(0, 0.55, 90)], norm=LogNorm(), cmap='cividis')
+    xx = np.linspace(0, 1, 200)
+    axj.plot(xx, 0.5 * np.sqrt(1 - xx ** 2), 'r--', lw=1.8, label=r'inextensible rope: $h\leq\frac{nb}{2}\sqrt{1-x^2}$')
+    axj.set_xlabel(r'chord extension  $x=|R|/(nb)$'); axj.set_ylabel(r'middle-bead offset  $h/(nb)$')
+    axj.set_title(rf"(b) stretch vs slack (instantaneous), corr $={S['rope_stretch']:+.2f}$", fontsize=13)
+    axj.legend(loc='upper right', fontsize=10)
+
+    # (c) fluctuation budget
+    A = S['amp']
+    labs = ['crosslinker\nposition', 'chord\nstretch', 'chord\nswing', 'jump-rope\n(middle bead)']
+    vals = [A['xl'], A['stretch'], A['swing'], A['rope']]
+    axb.bar(range(4), vals, color=[WONG['blue'], WONG['vermillion'], WONG['green'], WONG['orange']], alpha=0.85)
+    for k, v in enumerate(vals):
+        axb.text(k, v, sig(v), ha='center', va='bottom', fontsize=11)
+    axb.set_xticks(range(4)); axb.set_xticklabels(labs, fontsize=11)
+    axb.set_ylabel(r'amplitude per axis  ($\sigma^2$)')
+    axb.set_title(rf"(c) fluctuation budget;  swing/stretch $={S['stiffening']:.2f}$ (Gaussian strand: 1)", fontsize=13)
+    axb.grid(axis='y', alpha=0.3)
+
+    # (d) correlation of the time-averaged amplitudes across strands
+    im = axc.imshow(S['corr'], vmin=-1, vmax=1, cmap='RdBu_r')
+    short = ['crosslinker', 'stretch', 'swing', 'jump-rope']
+    axc.set_xticks(range(4)); axc.set_xticklabels(short, fontsize=10, rotation=20)
+    axc.set_yticks(range(4)); axc.set_yticklabels(short, fontsize=10)
+    for i in range(4):
+        for j in range(4):
+            axc.text(j, i, f"{S['corr'][i, j]:.2f}", ha='center', va='center', fontsize=11)
+    fig.colorbar(im, ax=axc, shrink=0.85)
+    axc.set_title('(d) amplitude correlation across strands\n(0 = uniform network, 1 = soft and stiff regions)', fontsize=13)
+
+    # (e) frozen fraction
+    q = S['fq']['q']
+    for k, col, lab in (('xl', WONG['blue'], 'crosslinkers'), ('bead', WONG['orange'], 'chain beads')):
+        axf.plot(q, S['fq'][k], 'o-', color=col, ms=5, lw=1.8, label=f"{lab}:  $f_s(2\\pi/\\bar R)={xlink.mesh_frozen(S, k):.2f}$")
+        axf.plot(q, np.exp(-q ** 2 * S['u2_' + k] / 3.0), ':', color=col, lw=1.3)
+    axf.plot([], [], 'k:', lw=1.3, label=r'harmonic solid, $e^{-q^2\langle u^2\rangle/3}$')
+    axf.axvline(2 * np.pi / S['Rbar'], color='k', ls='--', lw=1.3, label=rf"mesh scale $2\pi/\bar R$  ($\bar R={S['Rbar']:.2f}$)")
+    axf.set_xscale('log'); axf.set_ylim(-0.03, 1.03)
+    axf.set_xlabel(r'$q$  ($1/\sigma$)'); axf.set_ylabel(r'frozen fraction  $f_s(q)$')
+    axf.set_title('(e) localisation: 1 = fixed frame at $2\\pi/q$, 0 = renewed', fontsize=13)
+    axf.grid(alpha=0.3)
+    axf.legend(loc='lower left', fontsize=9.5)
+    fig.suptitle(f"Network modes of the $\\varepsilon=0$ reference  |  {title}  |  {S['n_frames']} frames, "
+                 f"{S['n_strands']} strands of {S['n']} bonds, $f={S['f']}$", fontsize=14, fontweight='bold')
+    return fig
+
+
+def fig_network(cfg, R):
+    """Graphical test of how the network moves (2026-11-12): (a) map of the mean network with thermal
+    clouds, (b) chord extension vs middle-bead offset, (c) fluctuation budget (crosslinker position, chord
+    stretch, chord swing, jump-rope), (d) their correlation across strands, (e) single-bead frozen
+    fraction f_s(q) with the mesh scale marked."""
+    S = network_modes(cfg, R)
+    xlink.report_modes(S, cfg.RUN_ID)
+    if S is None:
+        return None
+    return _save(draw_network_modes(S, cfg.RUN_ID), cfg, 'network_modes')
 
 
 def _dc_time_panels(cfg, axc, axd, F, S, title_lvl=''):
@@ -5910,6 +6074,8 @@ def fig_G_sweep(cfg, R, levels):
         print('G figure skipped (no sigmaxx / sigmayy files)')
         return None
     fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
+    rot = is_rot45(cfg)          # rot45: xx and yy measure different constants (see fig_G)
+    rname = {'xx': r"C_{44}", 'yy': r"(C_{44}+C')/2"} if rot else {'xx': 'G', 'yy': 'G'}
     for comp, col, mk in (('xx', WONG['blue'], 'o'), ('yy', WONG['vermillion'], 's')):
         Ls = [L for L in hg if comp in L['G']]
         if not Ls:
@@ -5918,10 +6084,11 @@ def fig_G_sweep(cfg, R, levels):
         g = np.array([L['G'][comp]['G'] for L in Ls])
         ax.errorbar(e, g, yerr=[g - [L['G'][comp]['lo'] for L in Ls], [L['G'][comp]['hi'] for L in Ls] - g],
                     fmt=mk + '-', ms=10, lw=2, color=col, capsize=6,
-                    label=fr"$G$ from {comp}:  $(\sigma'_{{zz}}-\sigma'_{{{comp}}})/2\varepsilon$")
+                    label=fr"${rname[comp]}$ from {comp}:  $(\sigma'_{{zz}}-\sigma'_{{{comp}}})/2\varepsilon$")
     ax.set_xlabel(eps_axis_label(hg))
-    ax.set_ylabel(r'$G$  (LJ units)')
-    ax.set_title('Shear modulus from network-stress anisotropy vs strain', fontsize=15)
+    ax.set_ylabel(r'shear constant  (LJ units)' if rot else r'$G$  (LJ units)')
+    ax.set_title("Shear constants from network-stress anisotropy vs strain (rot45 lattice, $C'=(C_{11}-C_{12})/2$)" if rot else
+                 'Shear modulus from network-stress anisotropy vs strain', fontsize=15)
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=11)
     return _save(fig, cfg, 'sweep_G_estimate')

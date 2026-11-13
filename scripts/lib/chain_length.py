@@ -423,3 +423,137 @@ def fig_observables_vs_N(rows, out=None):
         fig.savefig(out, dpi=150, bbox_inches='tight'); print('saved', out)
     plt.show()
     return fig
+
+
+# ---------------------------------------------------------------------------
+# network modes across gels (2026-11-12): lib/xlink.py on whichever reference trajectories are local
+# ---------------------------------------------------------------------------
+NETWORK_GELS = {   # label: glob of the gel's eps = 0 reference trajectory (newest match wins)
+    'rot45, 5 beads':  'traj_ref_final_config_slab_support_periodic_5beads_tall_rho04_rot45_*.lammpstrj',
+    'rot45, 15 beads': 'traj_ref_final_config_slab_support_periodic_15beads_tall_rho04_rot45_*.lammpstrj',
+    'random, 5 beads': 'traj_ref_final_config_slab_support_periodic_5beads_tall_rho04_random_*.lammpstrj',
+}
+NETWORK_COLORS = ('#0072B2', '#D55E00', '#009E73', '#CC79A7', '#E69F00')
+
+
+def find_network_trajs(traj_dir, gels=None):
+    """{label: path} of the gels whose reference trajectory is in traj_dir; the others are named and skipped."""
+    found = {}
+    for label, pat in (gels or NETWORK_GELS).items():
+        hits = sorted(Path(traj_dir).glob(pat), key=lambda q: q.stat().st_mtime)
+        if hits:
+            found[label] = hits[-1]
+        else:
+            print(f'{label}: no local reference trajectory ({pat}) -- skipped')
+    return found
+
+
+def load_network_modes(traj_dir, gels=None, cache=None):
+    """xlink.network_modes of every gel found (map window = 3.5 mean chords).  `cache` (a dict the notebook
+    keeps) holds the results per file + modification time, so a rerun only computes what is new."""
+    import xlink
+    cache = {} if cache is None else cache
+    out = {}
+    for label, path in find_network_trajs(traj_dir, gels).items():
+        key = (str(path), path.stat().st_mtime)
+        if key not in cache:
+            cache[key] = xlink.network_modes(path, map_half=None)
+        if cache[key] is None:
+            print(f'{label}: {path.name} holds fewer than 3 usable frames -- skipped')
+            continue
+        out[label] = cache[key]
+    return out
+
+
+def print_network_table(MODES):
+    import xlink
+    if not MODES:
+        print('network modes: no gel has a local reference trajectory')
+        return
+    print(f"{'gel':<18}{'bonds':>6}{'chord':>8}{'x':>7}{'bead rms/chord':>16}{'swing/stretch':>15}{'stretch-slack':>15}{'f_s(mesh)':>11}")
+    for label, S in MODES.items():
+        print(f"{label:<18}{S['n']:>6d}{S['Rbar']:>8.2f}{np.sqrt(np.mean(S['x_inst'] ** 2)):>7.2f}"
+              f"{np.sqrt(S['u2_bead']) / S['Rbar']:>16.2f}{S['stiffening']:>15.2f}{S['rope_stretch']:>+15.2f}{xlink.mesh_frozen(S, 'bead'):>11.2f}")
+
+
+def fig_network_compare(MODES, out=None):
+    """One column of the top row per gel: the mean network in a thin slab (3.5 mean chords each way) with every
+    bead's rms in-plane displacement as a disc.  Bottom row, one colour per gel: (a) the fluctuation budget in
+    units of the squared mean chord, (b) the frozen fraction of the chain beads against the length scale in mean
+    chords, (c) the distribution of the chord extension.  The one legend sits under the figure."""
+    from matplotlib.collections import EllipseCollection, LineCollection
+    if not MODES:
+        print('network-mode figure skipped (no gel has a local reference trajectory)')
+        return None
+    labels = list(MODES)
+    ng = len(labels)
+    known = list(NETWORK_GELS)          # a listed gel keeps its colour whichever of the others are present
+    extra = [lab for lab in labels if lab not in known]
+    col = {lab: NETWORK_COLORS[(known.index(lab) if lab in known else len(known) + extra.index(lab)) % len(NETWORK_COLORS)]
+           for lab in labels}
+    fig = plt.figure(figsize=(21, 14.5), constrained_layout=True)
+    gs = fig.add_gridspec(3, 6, height_ratios=[1.0, 0.8, 0.07])     # last row: the legend, on its own axes
+    fs_lab, fs_tick = 19, 16
+
+    # ---- top row: the maps ----------------------------------------------------
+    span = 6 // max(ng, 2)
+    off = (6 - span * ng) // 2
+    for i, lab in enumerate(labels):
+        S, ax = MODES[lab], fig.add_subplot(gs[0, off + i * span: off + (i + 1) * span])
+        m = S['map']
+        M, cen = m['M'], m['cen']
+        ax.add_collection(LineCollection([np.c_[M[q, 0] - cen[0], M[q, 2] - cen[2]] for q in m['strands']],
+                                         colors='0.3', lw=0.8, zorder=2))
+        for msk, c, al in ((~m['isx'][m['atoms']], col[lab], 0.13), (m['isx'][m['atoms']], '0.15', 0.30)):
+            at = m['atoms'][msk]
+            ax.add_collection(EllipseCollection(2 * m['r'][at], 2 * m['r'][at], 0, units='xy',
+                                                offsets=np.c_[M[at, 0] - cen[0], M[at, 2] - cen[2]],
+                                                transOffset=ax.transData, facecolors=c, edgecolors='none', alpha=al, zorder=1))
+        ax.set_xlim(-m['half'], m['half']); ax.set_ylim(-m['half'], m['half'])
+        ax.set_aspect('equal')
+        ax.set_xlabel(r'$x$  ($\sigma$)', fontsize=fs_lab)
+        ax.set_ylabel(r'$z$  ($\sigma$)', fontsize=fs_lab)
+        ax.tick_params(labelsize=fs_tick)
+        ax.set_title(f"{lab}\n" + rf"mean chord $\bar R = {S['Rbar']:.2f}\,\sigma$,  {S['n']} bonds", fontsize=18, color=col[lab])
+
+    # ---- bottom row -----------------------------------------------------------
+    axb, axf, axx = (fig.add_subplot(gs[1, k:k + 2]) for k in (0, 2, 4))
+    modes = (('xl', 'crosslinker\nposition'), ('stretch', 'chord\nstretch'), ('swing', 'chord\nswing'), ('rope', 'jump-rope'))
+    w = 0.8 / ng
+    for i, lab in enumerate(labels):
+        S = MODES[lab]
+        axb.bar(np.arange(4) + (i - (ng - 1) / 2) * w, [S['amp'][k] / S['Rbar'] ** 2 for k, _ in modes], w * 0.92, color=col[lab])
+        q = S['fq']['q']
+        axf.plot(2 * np.pi / (q * S['Rbar']), S['fq']['bead'], '-', color=col[lab], lw=2.6)
+        hh, ee = np.histogram(S['x_inst'], bins=np.linspace(0, 1.1, 56), density=True)
+        axx.plot(0.5 * (ee[1:] + ee[:-1]), hh, '-', color=col[lab], lw=2.6)
+    axb.set_xticks(range(4)); axb.set_xticklabels([t for _, t in modes], fontsize=fs_tick)
+    axb.set_ylabel(r'amplitude per axis / $\bar R^{\,2}$', fontsize=fs_lab)
+    axb.set_title('(a) fluctuation budget', fontsize=18)
+    axb.grid(axis='y', alpha=0.3)
+    axf.axvline(1.0, color='k', ls='--', lw=1.3)
+    axf.set_xscale('log'); axf.set_xlim(0.1, 10); axf.set_ylim(-0.03, 1.03)
+    axf.set_xlabel(r'length scale  $2\pi/q$  (mean chords)', fontsize=fs_lab)
+    axf.set_ylabel(r'frozen fraction  $f_s$', fontsize=fs_lab)
+    axf.set_title('(b) chain-bead localisation (dashed: mesh scale)', fontsize=18)
+    axf.grid(alpha=0.3)
+    axx.set_xlim(0, 1.1); axx.set_ylim(bottom=0)
+    axx.set_xlabel(r'chord extension  $|R|/(nb)$', fontsize=fs_lab)
+    axx.set_ylabel('probability density', fontsize=fs_lab)
+    axx.set_title('(c) how taut the strands are', fontsize=18)
+    axx.grid(alpha=0.3)
+    for ax in (axb, axf, axx):
+        ax.tick_params(labelsize=fs_tick)
+    axl = fig.add_subplot(gs[2, :])
+    axl.axis('off')
+    axl.legend(handles=[Line2D([], [], color=col[lab], lw=6, label=lab) for lab in labels]
+               + [Line2D([], [], marker='o', ls='', color='0.15', alpha=0.4, ms=16, label='crosslinker cloud (maps)'),
+                  Line2D([], [], marker='o', ls='', color='0.55', alpha=0.4, ms=16, label='chain-bead cloud (maps, gel colour)')],
+               loc='center', ncol=ng + 2, fontsize=16, frameon=False)
+    fig.suptitle(r'Network modes of the $\varepsilon = 0$ reference state: disc radius = rms in-plane displacement of the bead',
+                 fontsize=19, fontweight='bold')
+    if out is not None:
+        fig.savefig(out, dpi=150, bbox_inches='tight')
+        print('saved', out)
+    plt.show()
+    return fig
