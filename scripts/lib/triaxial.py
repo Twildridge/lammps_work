@@ -2818,7 +2818,7 @@ def add_perm_volume_fractions(cfg, R, P):
         P['phi_mf'] = mean_ci(mf[pl] if pl.any() else mf[-1:], cfg.ci_level)
     else:
         print('NOTE: production density or reference rho_s,0 missing -> mass-fraction phi skipped')
-    P['phi_vor'] = P['phi_cal'] = P['vf'] = None
+    P['phi_vor'] = P['phi_cal'] = P['vf'] = P['dphi'] = None      # dphi: perm_dphi's cache
     P['P_cal_mode'] = cfg.P_CAL_MODE
     if not cfg.VOR_ENABLE:
         print('VOR_ENABLE=False -> Voronoi / calibrated phi skipped')
@@ -7407,12 +7407,97 @@ def fig_perm_volfrac(cfg, R, P):
     return _save(fig, cfg, 'perm_volfrac_profiles')
 
 
+def perm_dphi(cfg, R, P):
+    """Steady solvent-fraction drop ACROSS the membrane and the D_c it implies with the
+    measured flux (2026-11-12).  In the steady state the polymer is at rest and the solvent
+    flux q_s = Q_perm/A is uniform, with (Darcy + network force balance, uniaxial strain
+    d eps = -d phi_s/(1 - phi_s))
+        q_s = D_c/(1 - phi_s) d phi_s/dz        (the LOCAL 1 - phi_s),
+    i.e. q_s/D_c = dy/dz with y = -ln(1 - phi_s).  Integrated between the faces,
+        D_c = q_s L / ln[(1 - phi_P)/(1 - phi_F)]  ( = q_s L <1 - phi_s>/dphi, log-mean 1 - phi_s ),
+    the harmonic mean of D_c(z) over the thickness, whatever the profile's shape.
+    Per estimator (phi_cal, phi_mf, phi_vor: the steady means of add_perm_volume_fractions)
+    a QUADRATIC phi_s(z) is fitted by least squares over the interior bins (wall_margin off
+    both faces: the edge bins mix reservoir and gel; the profile is curved -- steeper on the
+    compressed permeate side -- so a straight line overshoots the faces) and read at the two
+    ends of the fitted bins, z^P (permeate) and z^F (feed):
+        phi_P, phi_F, dphi = phi_F - phi_P > 0,  L = z^F - z^P,  Dc as above,
+        Dc_perm / Dc_feed: the same expression on the permeate / feed half.
+    Every interior bin enters, so dphi does not hang on the two noisy end bins.  Intervals:
+    the fit covariance propagated to dphi and to the log ratio (t, bins taken as independent),
+    with the Q_perm window interval added in quadrature for D_c.  Returns {key: dict(...)}
+    ('primary' = the first of phi_cal / phi_mf / phi_vor available), cached in P['dphi'];
+    {} without profiles."""
+    if P.get('dphi') is not None:
+        return P['dphi']
+    z = R['z']
+    F = P.get('flux') or {}
+    QS = F.get('Q_N') or F.get('Q_z')
+    q = q_rel = np.nan
+    if QS and np.isfinite(QS.get('mean', np.nan)) and QS['mean'] > 0:
+        q = QS['mean'] / P['area']
+        q_rel = 0.5 * (QS['hi'] - QS['lo']) / QS['mean'] if 'lo' in QS else np.nan
+    out = {}
+    for key in ('phi_cal', 'phi_mf', 'phi_vor'):
+        if P.get(key) is None:
+            continue
+        m = np.asarray(P[key][0], float)
+        ok = P['interior'] & np.isfinite(m) & (m < 1.0)
+        n = int(ok.sum())
+        if n < 6:
+            continue
+        zP, zF = float(z[ok].min() - 0.5 * cfg.binWidth), float(z[ok].max() + 0.5 * cfg.binWidth)
+        zc = 0.5 * (zP + zF)
+        coef, cov = np.polyfit(z[ok] - zc, m[ok], 2, cov=True)
+        tq = stats.t.ppf(0.5 + cfg.ci_level / 2, df=n - 3)
+        phi = lambda zz, coef=coef, zc=zc: np.polyval(coef, np.asarray(zz, float) - zc)
+        basis = lambda zz: np.array([(zz - zc) ** 2, zz - zc, 1.0])
+
+        def drop(za, zb):
+            """(dphi, half-width, log ratio ln[(1-phi_a)/(1-phi_b)], half-width) between za < zb"""
+            pa, pb = float(phi(za)), float(phi(zb))
+            v = basis(zb) - basis(za)
+            w = basis(zb) / (1 - pb) - basis(za) / (1 - pa)
+            return pb - pa, tq * np.sqrt(v @ cov @ v), np.log((1 - pa) / (1 - pb)), tq * np.sqrt(w @ cov @ w)
+
+        def dc(za, zb):
+            _, _, ly, ly_half = drop(za, zb)
+            if not (np.isfinite(q) and ly > 0):
+                return np.nan, np.nan, np.nan
+            rel = np.sqrt(np.nansum([q_rel ** 2, (ly_half / ly) ** 2]))
+            v = q * (zb - za) / ly
+            return v, v * (1 - rel), v * (1 + rel)
+
+        dphi, dphi_half, ly, _ = drop(zP, zF)
+        d = dict(phi_fit=phi, zP=zP, zF=zF, L=zF - zP, phi_P=float(phi(zP)), phi_F=float(phi(zF)), dphi=dphi, dphi_half=dphi_half,
+                 one_m_phi=dphi / ly if ly else np.nan, n=n, mask=ok, q=q,
+                 dmean_ref=(float(np.nanmean(m[P['interior']]) - np.nanmean(R[key][0][R['interior']])) if R.get(key) is not None else np.nan))
+        d['Dc'], d['Dc_lo'], d['Dc_hi'] = dc(zP, zF)
+        d['Dc_perm'], d['Dc_feed'] = dc(zP, zc), dc(zc, zF)
+        out[key] = d
+    if out:
+        out['primary'] = next(k for k in ('phi_cal', 'phi_mf', 'phi_vor') if k in out)
+    P['dphi'] = out
+    return out
+
+
+def _dphi_box(D):
+    """two-line annotation: the feed - permeate drop from perm_dphi and the mean change from the reference"""
+    txt = (r'$\Delta\phi_s$ across the gel (feed $-$ permeate): ' + f"{D['dphi']:+.3f} $\\pm$ {D['dphi_half']:.2g}"
+           + f"\n($\\phi_s^F$ = {D['phi_F']:.3f}, $\\phi_s^P$ = {D['phi_P']:.3f}; quadratic fit over the interior bins)")
+    if np.isfinite(D['dmean_ref']):
+        txt += '\n' + r'in-gel mean, steady $-$ reference: ' + f"{D['dmean_ref']:+.2g}"
+    return txt
+
+
 def fig_perm_volfrac_evolution(cfg, R, P):
     """phi_s evolution over the drive (cividis, final bold; zero-flux reference dashed):
     (a) mass fraction from every density snapshot, (b) the lambda-calibrated Voronoi
     fraction on the tessellated frames, each with its own colour bar (2026-09-24; the
     raw Voronoi panel is kept only when no calibration artifact exists).  The box gives
-    the in-gel change from the reference.  Needs add_perm_volume_fractions."""
+    the steady drop across the gel, feed face - permeate face (perm_dphi: a fit over every
+    interior bin, drawn in red; 2026-11-12), and the in-gel mean change from the reference.
+    Needs add_perm_volume_fractions."""
     panels = []
     if P.get('mf_stack') is not None:
         panels.append(('phi_mf', P['mf_ts'], P['mf_stack'], r'mass fraction $\phi_s^{\rm mf}=\rho_s/\rho_{s,0}$'))
@@ -7436,12 +7521,14 @@ def fig_perm_volfrac_evolution(cfg, R, P):
         plot_evolution(ax, cfg, R, P, R['z'], ts, ev, r'$\phi_s$', f'({"abc"[i]}) ' + title, ref=R.get(key), annotate=False, legend=False)
         ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)
         ax.set_ylim(0, 1.15)
+        D = perm_dphi(cfg, R, P).get(key)
+        if D is not None:
+            zf = np.linspace(D['zP'], D['zF'], 50)
+            ax.plot(zn(R, zf), D['phi_fit'](zf), '-', color=WONG['vermillion'], lw=1.8, zorder=6, label=r'steady fit, face to face')
+            annotate_box(ax, _dphi_box(D), loc='lower left', fontsize=11)
         h, lab = ax.get_legend_handles_labels()
         if h:
             smart_legend(ax, handles=h, labels=lab, fontsize=11)
-        if P.get(key) is not None and R.get(key) is not None:
-            d = np.nanmean(P[key][0][P['interior']]) - np.nanmean(R[key][0][R['interior']])
-            annotate_box(ax, r'$\Delta\phi_s$ (steady $-$ reference), in gel: ' + f'{d:+.2g}', loc='lower right', fontsize=12)
     return _save(fig, cfg, 'perm_volfrac_evolution')
 
 
@@ -7491,12 +7578,17 @@ def fig_perm_flux(cfg, R, P):
     """(a) Q_perm(t) from the block-averaged permeate-piston velocity (context) with the
     steady window and the two estimates: N_perm slope (primary, +/- SE over independent
     windows) and the z_perm slope (the legacy block mean was dropped 2026-09-24);
-    (b) N_perm(t) with the per-window fits that give the primary value."""
+    (b) N_perm(t) with the per-window fits that give the primary value; (c) the steady
+    phi_s(z) drop across the gel and the D_c the flux implies (perm_dphi, 2026-11-12)."""
     F = P.get('flux')
     if F is None or (F.get('Q') is None and F.get('Q_N') is None):
         print('flux figure skipped (no permeation file)')
         return None
-    fig, (axQ, axN) = plt.subplots(1, 2, figsize=(18, 6), constrained_layout=True)
+    DP = perm_dphi(cfg, R, P)
+    if DP:
+        fig, (axQ, axN, axD) = plt.subplots(1, 3, figsize=(27, 6), constrained_layout=True)
+    else:
+        fig, (axQ, axN) = plt.subplots(1, 2, figsize=(18, 6), constrained_layout=True)
     st, Q = F['step'], F['Q']
     if Q is not None:
         axQ.plot(st, Q, '-', color=WONG['green'], lw=1.0, alpha=0.35, label=r'$Q=A\,dz_{\rm perm}/dt$ (block-avg piston velocity)')
@@ -7551,7 +7643,62 @@ def fig_perm_flux(cfg, R, P):
     axN.set_ylabel(r'$\Delta N_{\rm perm}$  (beads)')
     axN.grid(alpha=0.3)
     smart_legend(axN, fontsize=10)
+    if DP:
+        _perm_Dc_flux_panel(axD, cfg, R, P, DP)
     return _save(fig, cfg, 'perm_flux')
+
+
+def _perm_Dc_flux_panel(ax, cfg, R, P, DP):
+    """Figure 8 (c): the steady phi_s(z) profiles with the perm_dphi fits and the D_c the
+    measured flux implies, D_c = q_s L / ln[(1 - phi_P)/(1 - phi_F)]."""
+    z = R['z']
+    zx = zn(R, z)
+    names = {'phi_cal': r'$\phi_s^{\rm cal}$ ($\lambda$-calibrated Voronoi)', 'phi_mf': r'$\phi_s^{\rm mf}$ (mass fraction)',
+             'phi_vor': r'$\phi_s^{\rm vor}$ (Voronoi)'}
+    cols = {'phi_cal': WONG['green'], 'phi_mf': WONG['blue'], 'phi_vor': WONG['vermillion']}
+    prim = DP['primary']
+    vals, lines = [], []
+    for key in ('phi_cal', 'phi_mf'):
+        D = DP.get(key)
+        if D is None:
+            continue
+        m, lo, hi = P[key]
+        im = P['in_mem']
+        zf = np.linspace(D['zP'], D['zF'], 80)
+        ax.fill_between(zx[im], lo[im], hi[im], color=cols[key], alpha=0.18, lw=0, zorder=2)
+        ax.plot(zx[im], m[im], '-', color=cols[key], lw=1.4, alpha=0.6, zorder=3)
+        ax.plot(zx[D['mask']], m[D['mask']], 'o', color=cols[key], ms=4.5, zorder=4, label=names[key] + ', fitted bins')
+        ax.plot(zn(R, zf), D['phi_fit'](zf), '-' if key == prim else '--', color='k' if key == prim else cols[key], lw=2.2, zorder=5,
+                label=f"fit: $\\Delta\\phi_s$ = {D['dphi']:.3f} $\\pm$ {D['dphi_half']:.2g}")
+        vals += [m[D['mask']], D['phi_fit'](zf)]
+        if np.isfinite(D['Dc']):
+            lines.append(f"{key.split('_')[1]}{'*' if key == prim else ''}:  $\\langle 1-\\phi_s\\rangle$ {D['one_m_phi']:.3f}, $L$ {sig(D['L'], 3)}  $\\rightarrow$  "
+                         f"$\\mathcal{{D}}_c$ = {sig(D['Dc'], 3)} [{sig(D['Dc_lo'], 3)}, {sig(D['Dc_hi'], 3)}]"
+                         f"   (permeate half {sig(D['Dc_perm'][0], 2)}, feed half {sig(D['Dc_feed'][0], 2)})")
+    shade_gel(ax, R, P)
+    mark_walls(ax, R, P)
+    finish_axes(ax, r'$\phi_s$', '', R=R)
+    ax.set_title(r'(c) $\mathcal{D}_c$ from the flux, $q_s=\frac{\mathcal{D}_c}{1-\phi_s}\frac{d\phi_s}{dz}$:  '
+                 r'$\mathcal{D}_c = q_s L\,/\ln[(1-\phi_s^P)/(1-\phi_s^F)]$', fontsize=13)
+    v = np.concatenate([np.ravel(a) for a in vals])
+    v = v[np.isfinite(v)]
+    span = max(float(v.max() - v.min()), 0.05)
+    ax.set_ylim(v.min() - 0.6 * span, v.max() + 1.1 * span)
+    xm = zn(R, np.array([P['z_mem_lo'], P['z_mem_hi']]))
+    pad = 0.12 * abs(xm[1] - xm[0])
+    ax.set_xlim(xm.min() - pad, xm.max() + pad)
+    smart_legend(ax, fontsize=10)
+    D = DP[prim]
+    if lines:
+        head = f"$q_s = Q_{{\\rm perm}}/A$ = {sig(D['q'], 3)}  (* = primary; quadratic fits, faces = ends of the fitted bins)"
+        ref = []
+        if P.get('Dc') is not None:
+            ref.append(f"profile fit (fig 12) {sig(P['Dc']['Dc'], 3)}")
+        U = P.get('unload')
+        if U and U.get('Dc') is not None:
+            ref.append(f"unload (fig 12u) {sig(U['Dc']['Dc'], 3)}")
+        annotate_box(ax, '\n'.join([head] + lines + (['$\\mathcal{D}_c$ from the displacement: ' + ', '.join(ref)] if ref else [])),
+                     loc='lower left', fontsize=10)
 
 
 def fig_perm_permeability(cfg, R, P):
@@ -8781,6 +8928,55 @@ def fig_perm_flux_check(cfg, R, P):
     return _save(fig, cfg, 'perm_flux_check')
 
 
+def perm_Dc_summary(cfg, R, P, verbose=True):
+    """The D_c estimates of one permeation run side by side (2026-11-12):
+      transient   the consolidation fit of u_z(zeta, t) (figure 12) and the thickness trace: a relaxation
+                  TIME, tau_1 = L^2/(pi^2 D_c); no steady flux involved
+      steady 1    kappa_Darcy M = q_s L M/dP (figures 9 and 13): flux x stiffness, the permeate-face
+                  strain dP/M from the DISPLACEMENT
+      steady 2    q_s L/ln[(1 - phi_P)/(1 - phi_F)] (figure 8 c, perm_dphi): the same flux with the
+                  strain read from the COMPOSITION profile (local 1 - phi_s); per half of the gel too
+    The two steady values share q_s (they differ in how the strain is measured); the transient one is
+    independent of both.  Last column: (1 - phi_s^0) D_c, the diffusivity the same gel should show with
+    no net solvent flux (compression hold / re-swelling) -- phi_s^0 = the reference in-gel mean of the
+    estimator perm_dphi used.  Returns the rows [(label, Dc, lo, hi)] and prints them."""
+    rows = []
+    F2, Mp, DP = P.get('Dc'), P.get('M_perm'), perm_dphi(cfg, R, P)
+    if F2 is not None:
+        rows.append(('transient   profile fit of u_z(zeta, t)  (fig 12)', F2['Dc'], np.nan, np.nan))
+        T = F2.get('trace')
+        if T:
+            rows.append(('transient   thickness trace  (fig 12 c)', T['Dc'], T['Dc'] - _Z95 * T['Dc_se'], T['Dc'] + _Z95 * T['Dc_se']))
+    U = P.get('unload')
+    if U and U.get('Dc') is not None:
+        rows.append(('transient   re-swelling after the dP ramp-down  (fig 12u)', U['Dc']['Dc'], np.nan, np.nan))
+    kd = (P.get('flux') or {}).get('k', {}).get('N_measured')
+    Mref = Mp.get(Mp['primary']) if Mp and Mp.get('primary') else None
+    if kd and Mref:
+        v = kd['k'] * Mref['M']
+        rel = np.hypot(0.5 * (kd['hi'] - kd['lo']) / kd['k'], 0.5 * (Mref['hi'] - Mref['lo']) / Mref['M'])
+        rows.append((f"steady 1    kappa_Darcy M = q_s L M/dP  (figs 9, 13; M {Mp['primary']})", v, v * (1 - rel), v * (1 + rel)))
+    D = DP.get(DP['primary']) if DP else None
+    if D is not None and np.isfinite(D['Dc']):
+        tag = DP['primary'].split('_')[1]
+        rows.append((f'steady 2    q_s L/ln[(1-phi_P)/(1-phi_F)]  (fig 8 c; phi_s {tag})', D['Dc'], D['Dc_lo'], D['Dc_hi']))
+        rows.append(('              feed half (least deformed)', *D['Dc_feed']))
+        rows.append(('              permeate half (most compressed)', *D['Dc_perm']))
+    phi0 = np.nan
+    if DP and R.get(DP['primary']) is not None:
+        phi0 = float(np.nanmean(R[DP['primary']][0][R['interior']]))
+    if verbose and rows:
+        w = max(len(r[0]) for r in rows)
+        print(f"\nD_c ESTIMATES  (sigma^2/tau; {int(round(100 * cfg.ci_level))} % intervals)"
+              + (f"   [phi_s^0 = {phi0:.3f}, 1 - phi_s^0 = {1 - phi0:.3f}]" if np.isfinite(phi0) else ''))
+        print(f"  {'':{w}s}   D_c                       " + ('(1 - phi_s^0) D_c' if np.isfinite(phi0) else ''))
+        for lab, v, lo, hi in rows:
+            ci = f'[{lo:.3f}, {hi:.3f}]' if np.isfinite(lo) else ''
+            print(f"  {lab:{w}s}   {v:.3f} {ci:18s}" + (f"    {(1 - phi0) * v:.3f}" if np.isfinite(phi0) else ''))
+    P['Dc_rows'] = rows
+    return rows
+
+
 def print_perm_summary(cfg, R, P):
     F = P.get('flux') or {}
     print(f'\nPERMEATION SUMMARY  ({cfg.sim_name})')
@@ -8798,6 +8994,14 @@ def print_perm_summary(cfg, R, P):
     if F.get('k'):
         for kk, v in F['k'].items():
             print(f"  kappa ({kk:10s}) = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]")
+    DP = perm_dphi(cfg, R, P)
+    for key in ('phi_cal', 'phi_mf'):
+        D = DP.get(key)
+        if D is not None:
+            print(f"  steady phi_s drop across the gel ({key}{'*' if key == DP['primary'] else ''}): feed {D['phi_F']:.3f} - permeate {D['phi_P']:.3f} = "
+                  f"{D['dphi']:+.3f} +/- {D['dphi_half']:.2g} over L = {D['L']:.1f}"
+                  + (f";  D_c (flux, q_s L/ln[(1-phi_P)/(1-phi_F)]) = {D['Dc']:.4e} [{D['Dc_lo']:.4e}, {D['Dc_hi']:.4e}]"
+                     f" (permeate half {D['Dc_perm'][0]:.3e}, feed half {D['Dc_feed'][0]:.3e})" if np.isfinite(D['Dc']) else ''))
     F2, Mp = P.get('Dc'), P.get('M_perm')
     if F2 is not None:
         T = F2.get('trace')

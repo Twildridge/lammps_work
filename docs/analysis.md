@@ -153,7 +153,7 @@ Euclidean distance transform per radius level), reference vs steady state, with 
 mean pore diameter. Eleven figures (`fig_perm_pistons`, `fig_total_stress` — normalised by P_perm —, `fig_partial_stress`,
 `fig_network_stress` and `fig_osmotic_pressure` — drawn **blank** under permeation until the deck measures the solvent
 chemical potential, since p_pore(z) is not a reservoir baseline under flow —, `fig_perm_volfrac` — reference vs steady
-state, the P_local(z) used and the resulting λ(z) —, `fig_perm_volfrac_evolution` (mass fraction + calibrated Voronoi),
+state, the P_local(z) used and the resulting λ(z) —, `fig_perm_volfrac_evolution` (mass fraction + calibrated Voronoi; the box gives the steady φ_s drop across the gel, feed face − permeate face, from `perm_dphi` — a quadratic fit over the interior bins — next to the in-gel mean change from the reference; figure 8 (c) turns that drop into `D_c = q_s L / ln[(1 − φ_P)/(1 − φ_F)]`, the integral of `q_s = D_c/(1 − φ_s) dφ_s/dz` with `q_s = Q_perm/A`, for the whole gel and per half),
 `fig_perm_psd`, `fig_perm_flux`, `fig_perm_permeability`, `fig_thermo_pressure`; `fig_perm_density` still exists but left the
 notebook). The sync logs in when a trajectory is missing and an unresolved `<steps>` tag matches digits only, so a
 permeation pattern can no longer stage a compression level's `_c<lvl>` dump (2026-09-24).

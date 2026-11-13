@@ -478,10 +478,12 @@ def print_network_table(MODES):
 
 def fig_network_compare(MODES, out=None):
     """One column of the top row per gel: the mean network in a thin slab (3.5 mean chords each way) with every
-    bead's rms in-plane displacement as a disc.  Bottom row, one colour per gel: (a) the fluctuation budget in
+    bead's rms in-plane displacement as a disc (crosslinkers dark; a strand's partner crosslinker that lies
+    outside the slab is a dashed hollow circle, so every crosslinker shows its f strands).  Bottom row, one colour per gel: (a) the fluctuation budget in
     units of the squared mean chord, (b) the frozen fraction of the chain beads against the length scale in mean
     chords, (c) the distribution of the chord extension.  The one legend sits under the figure."""
     from matplotlib.collections import EllipseCollection, LineCollection
+    import matplotlib.patheffects as pe
     if not MODES:
         print('network-mode figure skipped (no gel has a local reference trajectory)')
         return None
@@ -503,7 +505,15 @@ def fig_network_compare(MODES, out=None):
         m = S['map']
         M, cen = m['M'], m['cen']
         ax.add_collection(LineCollection([np.c_[M[q, 0] - cen[0], M[q, 2] - cen[2]] for q in m['strands']],
-                                         colors='0.3', lw=0.8, zorder=2))
+                                         colors='0.1', lw=1.1, zorder=3,
+                                         path_effects=[pe.withStroke(linewidth=3.0, foreground='w', alpha=0.85)]))
+        # partner crosslinkers outside the slab (the far end of a drawn strand): hollow, same rms radius
+        ends = np.unique(np.r_[m['strands'][:, 0], m['strands'][:, -1]])
+        far = np.setdiff1d(ends, m['atoms'])
+        ax.add_collection(EllipseCollection(2 * m['r'][far], 2 * m['r'][far], 0, units='xy',
+                                            offsets=np.c_[M[far, 0] - cen[0], M[far, 2] - cen[2]],
+                                            transOffset=ax.transData, facecolors='none', edgecolors='0.15',
+                                            linewidths=1.0, linestyles='--', zorder=2))
         for msk, c, al in ((~m['isx'][m['atoms']], col[lab], 0.13), (m['isx'][m['atoms']], '0.15', 0.30)):
             at = m['atoms'][msk]
             ax.add_collection(EllipseCollection(2 * m['r'][at], 2 * m['r'][at], 0, units='xy',
