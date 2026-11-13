@@ -254,7 +254,10 @@ def plot_convergence(data, folder, run_id, output):
     has_box         = os.path.exists(box_file)
     has_gel_bb      = os.path.exists(gel_bb_file)
     has_gel_rg      = os.path.exists(gel_rg_file)
-    has_gel_dims_rg = os.path.exists(gel_dims_rg_file)
+    # gel_volume_rg and gel_dimensions_rg give the same Rg volume (the volume file is the
+    # product of the three edges), so draw the dims-based panel only when the volume file
+    # is missing (shear_slab writes only the dims file).
+    has_gel_dims_rg = os.path.exists(gel_dims_rg_file) and not has_gel_rg
     has_num_dens    = os.path.exists(num_dens_file)
 
     n = 2 + has_box + has_gel_bb + has_gel_rg + has_gel_dims_rg + has_num_dens
