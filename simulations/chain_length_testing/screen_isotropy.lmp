@@ -1,0 +1,287 @@
+# ========== screen_isotropy.lmp : in-plane elastic isotropy of an equilibrated periodic slab ==========
+# Gel screen, Part B (2026-11-13).  Starts from the equilibrated final configuration of
+# slab_with_support.lmp (a write_data file: gel slab periodic in x, y on its support, solvent
+# above, box periodic in z) and measures two in-plane shear moduli at FIXED box volume and
+# fixed lz:
+#   stage ref            fixed box at the file's dimensions (no barostat), polymer dumped
+#   simple shear (xy)    gamma: 0 -> +g (ramp) | hold | +g -> -g (ramp) | hold | -g -> 0 | hold at 0
+#   pure shear           lx -> lx0 (1+e), ly -> ly0/(1+e): 0 -> +e | hold | +e -> -e | hold | -e -> 0 | hold at 0
+# Every deformation is `fix deform ... remap x` on group ALL: mobile atoms, the frozen support
+# and the piston sheet are displaced affinely with the box, so the plates stay planes that
+# deform with the gel.  z is never touched.
+#
+# Same force field, groups, thermostat and plate handling as slab_with_support.lmp (cont = 1
+# path, piston_transparent = 1 as in every chain_length_testing equilibration):
+#   lj/cut 1.122 (WCA), all epsilons 1 except epsSS / epsSP from the command line; FENE 30 / 1.5
+#   support (type 4) frozen: setforce 0 0 0;  piston (type 5): setforce 0 0 NULL + aveforce + nve
+#   mobile (types 1 2 3): Langevin T = 1, damp 1.0  (+ plain nve in place of nph aniso)
+# Differences from that deck, on purpose: no barostat; `fix momentum` keeps its linear part
+# only (the angular part of the equilibration deck is not meaningful for a box-spanning network
+# and would fight a sheared cell).
+#
+# Variables from the command line: dataname (data_files/<dataname>.data), epsSS, epsSP, tag.
+# Knobs (index-style, -var to override): gamma, eps, ref_steps, ramp_steps, hold_steps,
+# zero_steps, out_every, s_every, p_every, dump_ref, thermo_freq, do_simple, do_pure.
+#
+# Output (all "raw": signs and volumes are applied in scripts/lib/screen_isotropy.py)
+#   output_files/stress_data/screen_stress_poly_<tag>.dat   step, sum over polymer beads of
+#       compute stress/atom [xx yy zz xy xz yz]  = -(pressure x volume) = +stress x volume
+#   output_files/stress_data/screen_stress_box_<tag>.dat    step, whole-box pressure tensor
+#       [pxx pyy pzz pxy pxz pyz] (compute pressure thermo_temp), vol, lx, ly, lz, xy
+#   output_files/volume_data/screen_dims_<tag>.dat          step, polymer min/max z, crosslinker min/max z
+#   output_files/screen_stages_<tag>.dat                    stage name, first step, last step, kind, target strain
+#   traj_files/screen_ref_polymer_<tag>.lammpstrj           polymer, every dump_ref steps of stage ref
+#   traj_files/screen_def_<tag>.lammpstrj                   polymer + plates, sparse, deformation stages
+# Sign convention: LAMMPS pressure P_ab = -stress_ab.  Tension-positive stress of the gel:
+#   polymer partial stress  sigma_ab = +sum(stress/atom)_ab / V_gel
+#   whole box               sigma_ab = -P_ab * V_box / V_gel
+
+variable gamma       index 0.05
+variable eps         index 0.025
+variable ref_steps   index 1000000
+variable ramp_steps  index 100000    # steps for one strain amplitude (0 -> +g); +g -> -g takes twice this
+variable hold_steps  index 400000
+variable zero_steps  index 200000    # hold after each return to zero strain
+variable out_every   index 1000      # time-series record length (steps)
+variable s_every     index 5         # sampling interval of the polymer stress/atom sum
+variable p_every     index 5         # sampling interval of the whole-box pressure tensor
+variable dump_ref    index 10000
+variable dump_def    index 100000
+variable thermo_freq index 10000
+variable do_simple   index 1
+variable do_pure     index 1
+variable comm_cutoff index 2.5
+variable piston_transparent index 1
+variable tag         index screen
+
+variable sigma         equal 1.0
+variable temp_target   equal 1.0
+variable tdamp         equal 1.0
+variable timestep_prod equal 0.005
+
+# ========== Initialization ==========
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+# a write_data file carries Pair Coeffs / Bond Coeffs sections: declare the styles first
+pair_style lj/cut 1.122
+bond_style fene
+read_data data_files/${dataname}.data
+reset_timestep 0
+comm_modify cutoff ${comm_cutoff}
+
+# ========== Groups (as slab_with_support.lmp) ==========
+group polymer type 1 2
+group xlink   type 1
+group solvent type 3
+group support type 4
+group piston  type 5
+group mobile  type 1 2 3
+group polymer_and_support type 1 2 4 5
+compute mobile_temp mobile temp
+
+# ========== Force field (as slab_with_support.lmp, Phase 1) ==========
+pair_style lj/cut 1.122
+pair_coeff * * 1.0 ${sigma} 1.122
+pair_coeff 1 3 ${epsSP} ${sigma} 1.122
+pair_coeff 2 3 ${epsSP} ${sigma} 1.122
+pair_coeff 3 3 ${epsSS} ${sigma} 1.122
+pair_coeff 1 4 1.0 ${sigma} 1.122
+pair_coeff 2 4 1.0 ${sigma} 1.122
+pair_coeff 3 4 0.0 ${sigma} 0.0
+pair_coeff 4 4 0.0 ${sigma} 0.0
+pair_coeff 1 5 1.0 ${sigma} 1.122
+pair_coeff 2 5 1.0 ${sigma} 1.122
+pair_coeff 3 5 1.0 ${sigma} 1.122
+pair_coeff 4 5 1.0 ${sigma} 1.122
+pair_coeff 5 5 0.0 ${sigma} 0.0
+if "${piston_transparent} == 1" then &
+    "pair_coeff 3 5 0.0 ${sigma} 0.0" &
+    "neigh_modify exclude type 3 5" &
+    "print '>>> PISTON TRANSPARENT TO SOLVENT (pair 3-5 off)'"
+
+bond_style fene
+bond_coeff * 30.0 1.5 1.0 1.0
+special_bonds fene
+
+neigh_modify exclude type 4 4
+neigh_modify exclude type 5 5
+
+# ========== Plates (as slab_with_support.lmp) ==========
+velocity support set 0.0 0.0 0.0
+fix freeze_support support setforce 0.0 0.0 0.0
+fix piston_xy  piston setforce 0.0 0.0 NULL
+fix piston_z   piston aveforce NULL NULL 0.0
+fix piston_nve piston nve
+
+# ========== Thermostat + integrator (fixed box) ==========
+fix lang_prod  mobile langevin ${temp_target} ${temp_target} ${tdamp} 480279
+fix nve_mobile mobile nve
+fix remove_drift mobile momentum 1000 linear 1 1 1
+timestep ${timestep_prod}
+
+# ========== Observables ==========
+compute stress_poly polymer stress/atom NULL
+compute sp polymer reduce sum c_stress_poly[1] c_stress_poly[2] c_stress_poly[3] c_stress_poly[4] c_stress_poly[5] c_stress_poly[6]
+compute press_tensor all pressure thermo_temp
+compute pminz polymer reduce min z
+compute pmaxz polymer reduce max z
+compute xminz xlink reduce min z
+compute xmaxz xlink reduce max z
+variable v_vol equal vol
+variable v_lx  equal lx
+variable v_ly  equal ly
+variable v_lz  equal lz
+variable v_xy  equal xy
+
+# reference box (the equilibrated dimensions of the data file)
+variable lx0 equal $(lx)
+variable ly0 equal $(ly)
+variable lz0 equal $(lz)
+variable xc0 equal $(0.5*(xlo+xhi))
+variable yc0 equal $(0.5*(ylo+yhi))
+print ">>> SCREEN reference box lx0 ${lx0} ly0 ${ly0} lz0 ${lz0}  gamma ${gamma} eps ${eps}"
+
+# ---- step-0 stress, full precision (the -sf omp vs plain-style comparison reads this line) ----
+thermo_style custom step temp c_mobile_temp pe press c_sp[1] c_sp[2] c_sp[3] c_sp[4] c_sp[5] c_sp[6] pxx pyy pzz pxy
+run 0
+print ">>> STEP0 sp_xx $(c_sp[1]:%.12g) sp_yy $(c_sp[2]:%.12g) sp_zz $(c_sp[3]:%.12g) sp_xy $(c_sp[4]:%.12g) sp_xz $(c_sp[5]:%.12g) sp_yz $(c_sp[6]:%.12g)"
+print ">>> STEP0 pxx $(pxx:%.12g) pyy $(pyy:%.12g) pzz $(pzz:%.12g) pxy $(pxy:%.12g) vol $(vol:%.12g) pe $(pe:%.12g)"
+
+thermo_style custom step temp c_mobile_temp pe ke press pxx pyy pzz pxy pxz pyz lx ly lz xy vol
+thermo ${thermo_freq}
+
+variable s_rep equal round(${out_every}/${s_every})
+variable p_rep equal round(${out_every}/${p_every})
+fix st_poly all ave/time ${s_every} ${s_rep} ${out_every} c_sp[1] c_sp[2] c_sp[3] c_sp[4] c_sp[5] c_sp[6] &
+    file output_files/stress_data/screen_stress_poly_${tag}.dat format %.10g &
+    title2 "# TimeStep S_xx S_yy S_zz S_xy S_xz S_yz   (sum of compute stress/atom over the polymer group = +stress x volume)"
+fix st_box all ave/time ${p_every} ${p_rep} ${out_every} c_press_tensor[1] c_press_tensor[2] c_press_tensor[3] c_press_tensor[4] c_press_tensor[5] c_press_tensor[6] v_v_vol v_v_lx v_v_ly v_v_lz v_v_xy &
+    file output_files/stress_data/screen_stress_box_${tag}.dat format %.10g &
+    title2 "# TimeStep P_xx P_yy P_zz P_xy P_xz P_yz vol lx ly lz xy   (whole-box pressure tensor, pressure sign)"
+fix st_dims all ave/time ${out_every} 1 ${out_every} c_pminz c_pmaxz c_xminz c_xmaxz &
+    file output_files/volume_data/screen_dims_${tag}.dat format %.10g &
+    title2 "# TimeStep polymer_zmin polymer_zmax xlink_zmin xlink_zmax"
+
+variable stagefile string output_files/screen_stages_${tag}.dat
+print "# stage first_step last_step kind target_strain" file ${stagefile} screen no
+
+# =====================================================================
+#   STAGE ref: fixed box, zero strain
+# =====================================================================
+variable s0 equal $(step)
+variable s1 equal ${s0}+${ref_steps}
+print "ref ${s0} ${s1} hold 0.0" append ${stagefile} screen no
+dump ref_traj polymer custom ${dump_ref} traj_files/screen_ref_polymer_${tag}.lammpstrj id type mol x y z
+run ${ref_steps}
+undump ref_traj
+print ">>> SCREEN stage ref done at step $(step)"
+
+# The cell becomes triclinic (zero tilt) here for both deformation cycles.  change_box refuses to
+# switch ortho <-> triclinic while a dump is defined, so the sparse deformation dump comes after it.
+change_box all triclinic
+dump def_traj polymer_and_support custom ${dump_def} traj_files/screen_def_${tag}.lammpstrj id type mol x y z
+variable ramp2 equal 2*${ramp_steps}
+
+# =====================================================================
+#   SIMPLE SHEAR: xy tilt = gamma * ly
+# =====================================================================
+if "${do_simple} == 0" then "jump SELF simple_done"
+variable tilt_p equal ${gamma}*${ly0}
+variable tilt_m equal -${gamma}*${ly0}
+
+variable s0 equal $(step)
+variable s1 equal ${s0}+${ramp_steps}
+print "ss_ramp_p ${s0} ${s1} ramp ${gamma}" append ${stagefile} screen no
+fix def all deform 1 xy final ${tilt_p} remap x
+run ${ramp_steps}
+unfix def
+variable s0 equal $(step)
+variable s1 equal ${s0}+${hold_steps}
+print "ss_hold_p ${s0} ${s1} hold ${gamma}" append ${stagefile} screen no
+run ${hold_steps}
+print ">>> SCREEN simple shear +gamma hold done at step $(step): xy/ly = $(xy/ly:%.6f)"
+
+variable s0 equal $(step)
+variable s1 equal ${s0}+${ramp2}
+print "ss_ramp_m ${s0} ${s1} ramp -${gamma}" append ${stagefile} screen no
+fix def all deform 1 xy final ${tilt_m} remap x
+run ${ramp2}
+unfix def
+variable s0 equal $(step)
+variable s1 equal ${s0}+${hold_steps}
+print "ss_hold_m ${s0} ${s1} hold -${gamma}" append ${stagefile} screen no
+run ${hold_steps}
+print ">>> SCREEN simple shear -gamma hold done at step $(step): xy/ly = $(xy/ly:%.6f)"
+
+variable s0 equal $(step)
+variable s1 equal ${s0}+${ramp_steps}
+print "ss_ramp_0 ${s0} ${s1} ramp 0.0" append ${stagefile} screen no
+fix def all deform 1 xy final 0.0 remap x
+run ${ramp_steps}
+unfix def
+variable s0 equal $(step)
+variable s1 equal ${s0}+${zero_steps}
+print "ss_hold_0 ${s0} ${s1} hold 0.0" append ${stagefile} screen no
+run ${zero_steps}
+print ">>> SCREEN simple shear cycle done at step $(step): xy/ly = $(xy/ly:%.6f)"
+label simple_done
+
+# =====================================================================
+#   PURE SHEAR at fixed area: lx = lx0 (1+e), ly = ly0 / (1+e)
+# =====================================================================
+if "${do_pure} == 0" then "jump SELF pure_done"
+variable hx_p equal 0.5*${lx0}*(1.0+${eps})
+variable hy_p equal 0.5*${ly0}/(1.0+${eps})
+variable hx_m equal 0.5*${lx0}*(1.0-${eps})
+variable hy_m equal 0.5*${ly0}/(1.0-${eps})
+variable hx_0 equal 0.5*${lx0}
+variable hy_0 equal 0.5*${ly0}
+
+variable s0 equal $(step)
+variable s1 equal ${s0}+${ramp_steps}
+print "ps_ramp_p ${s0} ${s1} ramp ${eps}" append ${stagefile} screen no
+fix def all deform 1 x final $(v_xc0-v_hx_p) $(v_xc0+v_hx_p) y final $(v_yc0-v_hy_p) $(v_yc0+v_hy_p) remap x
+run ${ramp_steps}
+unfix def
+variable s0 equal $(step)
+variable s1 equal ${s0}+${hold_steps}
+print "ps_hold_p ${s0} ${s1} hold ${eps}" append ${stagefile} screen no
+run ${hold_steps}
+print ">>> SCREEN pure shear +eps hold done at step $(step): lx/lx0 = $(lx/v_lx0:%.6f) ly/ly0 = $(ly/v_ly0:%.6f)"
+
+variable s0 equal $(step)
+variable s1 equal ${s0}+${ramp2}
+print "ps_ramp_m ${s0} ${s1} ramp -${eps}" append ${stagefile} screen no
+fix def all deform 1 x final $(v_xc0-v_hx_m) $(v_xc0+v_hx_m) y final $(v_yc0-v_hy_m) $(v_yc0+v_hy_m) remap x
+run ${ramp2}
+unfix def
+variable s0 equal $(step)
+variable s1 equal ${s0}+${hold_steps}
+print "ps_hold_m ${s0} ${s1} hold -${eps}" append ${stagefile} screen no
+run ${hold_steps}
+print ">>> SCREEN pure shear -eps hold done at step $(step): lx/lx0 = $(lx/v_lx0:%.6f) ly/ly0 = $(ly/v_ly0:%.6f)"
+
+variable s0 equal $(step)
+variable s1 equal ${s0}+${ramp_steps}
+print "ps_ramp_0 ${s0} ${s1} ramp 0.0" append ${stagefile} screen no
+fix def all deform 1 x final $(v_xc0-v_hx_0) $(v_xc0+v_hx_0) y final $(v_yc0-v_hy_0) $(v_yc0+v_hy_0) remap x
+run ${ramp_steps}
+unfix def
+variable s0 equal $(step)
+variable s1 equal ${s0}+${zero_steps}
+print "ps_hold_0 ${s0} ${s1} hold 0.0" append ${stagefile} screen no
+run ${zero_steps}
+print ">>> SCREEN pure shear cycle done at step $(step): lx/lx0 = $(lx/v_lx0:%.6f) ly/ly0 = $(ly/v_ly0:%.6f)"
+label pure_done
+
+# ========== Cleanup + final state (zero strain) ==========
+undump def_traj
+unfix st_poly
+unfix st_box
+unfix st_dims
+write_restart screen_final_${tag}.restart
+print ">>> SCREEN_COMPLETE at step $(step)"

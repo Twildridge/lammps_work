@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=screen_voids
+#SBATCH --partition=shared
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=32G
+#SBATCH --time=01:30:00
+#SBATCH --output=/home/dpollard/Documents/lammps_runs/chain_length_testing/screen_20261113/voids/%x.o%j
+# Gel screen, Part A (2026-11-13): void persistence Phi + network statics of the equilibrated
+# slabs, from the existing trajectories (no MD).  scripts/lib/screen_voids.py does the work; one
+# JSON per gel in $OUT.  Deliberately does NOT source batch_prologue.sh (that would git-pull the
+# repo); it only takes the Python module from lib/site.sh.
+#   sbatch screen_voids.batch                 # every gel + the two implementation checks
+#   ONLY="r30 chk_r5" sbatch screen_voids.batch
+#   MODE=ref sbatch screen_voids.batch        # the fixed-box reference trajectories of Part B
+#                                             # (screen_isotropy runs listed in $OUT/../runs.txt)
+set -u
+WORK=$HOME/Documents/lammps_work
+RUNS=$HOME/Documents/lammps_runs
+OUT=${OUT:-$RUNS/chain_length_testing/screen_20261113/voids}
+source "$WORK/scripts/lib/site.sh"
+load_python_module
+python -c "import numpy, scipy, pandas; print('numpy', numpy.__version__, 'scipy', scipy.__version__, 'pandas', pandas.__version__)" || exit 1
+mkdir -p "$OUT"
+CL=$RUNS/chain_length_testing
+EQ10=$CL/chain_length_testing_slab_support_periodic_10beads_tall_rho04_random_1.0_1.0_20261103_172723
+EQ15=$CL/chain_length_testing_slab_support_periodic_15beads_tall_rho04_random_1.0_1.0_20261103_173135
+EQ20=$CL/chain_length_testing_slab_support_periodic_20beads_tall_rho04_random_1.0_1.0_20261103_173658
+EQ30=$CL/chain_length_testing_slab_support_periodic_30beads_tall_rho04_random_1.0_1.0_20261103_174846
+EQR5=$CL/chain_length_testing_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20261108_121924/continuation_20261108_204155
+EQ5=$RUNS/slab_with_support/slab_with_support_slab_support_periodic_5beads_tall_rho04_random_1.0_1.0_20261102_160732
+TC=$RUNS/triaxial_compression_two_pist
+CK5=$TC/triaxial_compression_two_pist_final_config_slab_support_periodic_5beads_tall_rho04_random_1.0_1.0_14000000_two_pist_1.0_1.0_20261103_042805
+CKR5=$TC/triaxial_compression_two_pist_final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40_1.0_1.0_20261110_210526
+P=slab_support_periodic
+# label | trajectory | final configuration | frames
+TABLE="
+chk_r5|$(ls $CK5/traj_files/traj_ref_*.lammpstrj)|$EQ5/final_config_${P}_5beads_tall_rho04_random_1.0_1.0_14000000.data|1000
+chk_rot45_5|$(ls $CKR5/traj_files/traj_ref_*.lammpstrj)|$EQR5/final_config_${P}_5beads_tall_rho04_rot45_1.0_1.0_20000000.data|1000
+r10|$EQ10/traj_files/polymer_${P}_10beads_tall_rho04_random_1.0_1.0_24000000.lammpstrj|$EQ10/final_config_${P}_10beads_tall_rho04_random_1.0_1.0_24000000.data|100
+r15|$EQ15/traj_files/polymer_${P}_15beads_tall_rho04_random_1.0_1.0_30000000.lammpstrj|$EQ15/final_config_${P}_15beads_tall_rho04_random_1.0_1.0_30000000.data|100
+r20|$EQ20/traj_files/polymer_${P}_20beads_tall_rho04_random_1.0_1.0_35000000.lammpstrj|$EQ20/final_config_${P}_20beads_tall_rho04_random_1.0_1.0_35000000.data|100
+r30|$EQ30/traj_files/polymer_${P}_30beads_tall_rho04_random_1.0_1.0_45000000.lammpstrj|$EQ30/final_config_${P}_30beads_tall_rho04_random_1.0_1.0_45000000_snap9.data|100
+r5|$EQ5/traj_files/polymer_${P}_5beads_tall_rho04_random_1.0_1.0_14000000.lammpstrj|$EQ5/final_config_${P}_5beads_tall_rho04_random_1.0_1.0_14000000.data|100
+rot45_5|$EQR5/traj_files/polymer_${P}_5beads_tall_rho04_rot45_1.0_1.0_20000000.lammpstrj|$EQR5/final_config_${P}_5beads_tall_rho04_rot45_1.0_1.0_20000000.data|100
+"
+SUFFIX=eq
+if [ "${MODE:-eq}" = ref ]; then
+    # Part B reference stage: runs.txt holds "label|run_dir|data_file" lines written by screen_isotropy.batch
+    SUFFIX=ref
+    TABLE=$(while IFS='|' read -r lab dir dat; do
+        [ -n "$lab" ] || continue
+        t=$(ls "$dir"/traj_files/screen_ref_polymer_*.lammpstrj 2>/dev/null | head -1)
+        [ -n "$t" ] && echo "$lab|$t|$dat|1000"
+    done < "$OUT/../runs.txt")
+fi
+RC=0
+while IFS='|' read -r lab traj dat nlast; do
+    [ -n "$lab" ] || continue
+    if [ -n "${ONLY:-}" ] && ! [[ " $ONLY " == *" $lab "* ]]; then continue; fi
+    [ -f "$traj" ] || { echo "MISSING trajectory for $lab: $traj"; RC=1; continue; }
+    [ -f "$dat" ]  || { echo "MISSING data file for $lab: $dat"; RC=1; continue; }
+    python "$WORK/scripts/lib/screen_voids.py" --label "$lab" --traj "$traj" --data "$dat" --last "$nlast" \
+        --workers "${SLURM_CPUS_PER_TASK:-4}" --out "$OUT/voids_${SUFFIX}_${lab}.json" || RC=1
+done <<< "$TABLE"
+exit $RC

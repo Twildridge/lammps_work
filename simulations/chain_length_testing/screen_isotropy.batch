@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=screen_iso
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=05:00:00
+#SBATCH --output=/home/dpollard/Documents/lammps_runs/chain_length_testing/screen_20261113/slurm/%x.o%j
+# Gel screen, Part B (2026-11-13): in-plane isotropy test screen_isotropy.lmp on one equilibrated
+# slab.  One job per gel:
+#     sbatch --job-name=screen_iso_r30 --export=ALL,GEL=r30 screen_isotropy.batch
+#     GEL = r5 | r10 | r15 | r20 | r30 (random f = 4 network) | rot45_5 (lattice control)
+# Self-contained on purpose: it does NOT source batch_prologue.sh or call run_lammps.sh (both
+# git-pull the repo); it takes the binary, the MPI settings and the modules from lib/site.sh and
+# reads the gel's final configuration in place (symlink, nothing is copied or modified).
+# Run dir: lammps_runs/chain_length_testing/screen_20261113/screen_isotropy_<GEL>[_<TAGX>]_<stamp>/
+# Knobs (environment): GAMMA, EPS, REF_STEPS, RAMP_STEPS, HOLD_STEPS, ZERO_STEPS, OUT_EVERY,
+#   S_EVERY, P_EVERY, DUMP_REF, DUMP_DEF, THERMO_FREQ, DO_SIMPLE, DO_PURE  -> -var <lowercase>
+#   SUFFIX_MODES="omp"      "omp off" runs the deck twice, with -sf omp and with plain styles
+#   TAGX=<text>             extra tag in the run-dir name (smoke, x2, ...)
+#   BLOCK_STEPS, AVG_FRAC   analysis block length / fraction of each hold that is averaged
+#   REGISTER=1              write screen_20261113/runs/<GEL>.run (label|run dir|data file); the
+#                           MODE=ref pass of screen_voids.batch and screen_report.py read it
+set -u
+WORK=$HOME/Documents/lammps_work
+source "$WORK/scripts/lib/site.sh"
+SCREEN=$RUNS_DIR/chain_length_testing/screen_20261113
+CL=$RUNS_DIR/chain_length_testing
+P=slab_support_periodic
+GEL="${GEL:?set GEL (r5 | r10 | r15 | r20 | r30 | rot45_5)}"
+case "$GEL" in
+    r5)      DATA=$RUNS_DIR/slab_with_support/slab_with_support_${P}_5beads_tall_rho04_random_1.0_1.0_20261102_160732/final_config_${P}_5beads_tall_rho04_random_1.0_1.0_14000000.data ;;
+    r10)     DATA=$CL/chain_length_testing_${P}_10beads_tall_rho04_random_1.0_1.0_20261103_172723/final_config_${P}_10beads_tall_rho04_random_1.0_1.0_24000000.data ;;
+    r15)     DATA=$CL/chain_length_testing_${P}_15beads_tall_rho04_random_1.0_1.0_20261103_173135/final_config_${P}_15beads_tall_rho04_random_1.0_1.0_30000000.data ;;
+    r20)     DATA=$CL/chain_length_testing_${P}_20beads_tall_rho04_random_1.0_1.0_20261103_173658/final_config_${P}_20beads_tall_rho04_random_1.0_1.0_35000000.data ;;
+    r30)     DATA=$CL/chain_length_testing_${P}_30beads_tall_rho04_random_1.0_1.0_20261103_174846/final_config_${P}_30beads_tall_rho04_random_1.0_1.0_45000000_snap9.data ;;
+    rot45_5) DATA=$CL/chain_length_testing_${P}_5beads_tall_rho04_rot45_1.0_1.0_20261108_121924/continuation_20261108_204155/final_config_${P}_5beads_tall_rho04_rot45_1.0_1.0_20000000.data ;;
+    *) echo "unknown GEL=$GEL"; exit 1 ;;
+esac
+[ -f "$DATA" ] || { echo "data file not found: $DATA"; exit 1; }
+# GATE=<file>: refuse to run until that file exists.  Lets the production jobs queue (and age)
+# while the smoke test is still being checked: a job that starts before the check has passed
+# exits here without running any MD.
+if [ -n "${GATE:-}" ] && [ ! -f "$GATE" ]; then
+    echo ">>> gate file $GATE is missing (smoke test not validated yet): exiting without running LAMMPS"
+    exit 3
+fi
+DECK=$WORK/simulations/chain_length_testing/screen_isotropy.lmp
+INTERACTION=1.0_1.0; EPSSS=1.0; EPSSP=1.0
+
+mpi_env
+load_lammps_modules
+NT=${SLURM_NTASKS:-1}
+PER_NODE=${SLURM_NTASKS_PER_NODE:-$NT}
+RC=0
+for MODE in ${SUFFIX_MODES:-omp}; do
+    STAMP=$(date +%Y%m%d_%H%M%S)
+    TAG="${GEL}${TAGX:+_$TAGX}"; [ "$MODE" = omp ] || TAG="${TAG}_sf${MODE}"
+    RUN_NAME="screen_isotropy_${TAG}_${STAMP}"
+    RUN_DIR=$SCREEN/$RUN_NAME
+    TRAJ_DIR=$SCRATCH_DIR/lammps_trajectories/$RUN_NAME
+    mkdir -p "$RUN_DIR"/{data_files,output_files/{stress_data,volume_data}} "$TRAJ_DIR"
+    ln -s "$TRAJ_DIR" "$RUN_DIR/traj_files"
+    cp "$DECK" "$RUN_DIR/"
+    DATANAME=$(basename "$DATA" .data)
+    ln -s "$DATA" "$RUN_DIR/data_files/$DATANAME.data"
+    cd "$RUN_DIR" || exit 1
+    VARS=(-var dataname "$DATANAME" -var epsSS "$EPSSS" -var epsSP "$EPSSP" -var tag "$TAG")
+    for k in gamma eps ref_steps ramp_steps hold_steps zero_steps out_every s_every p_every dump_ref dump_def thermo_freq do_simple do_pure; do
+        env="${k^^}"; [ -n "${!env:-}" ] && VARS+=(-var "$k" "${!env}")
+    done
+    SF=(); [ "$MODE" = omp ] && SF=(-sf omp -pk omp 1)
+    CMD=(mpirun -n "$NT" --bind-to "$MPI_BIND_TO" --map-by "ppr:${PER_NODE}:node:pe=1" "$LMP_BIN" ${SF[@]+"${SF[@]}"} "${VARS[@]}" -in screen_isotropy.lmp)
+    echo "======================================"
+    echo "GEL $GEL  mode $MODE  job ${SLURM_JOB_ID:-none}  ${SLURM_NNODES:-?} node(s) x $PER_NODE tasks"
+    echo "Working directory: $RUN_DIR"
+    echo "Data: $DATA"
+    echo "${CMD[*]}"
+    echo "======================================"
+    T0=$(date +%s)
+    "${CMD[@]}" > lammps.out 2>&1
+    LRC=$?
+    echo ">>> mpirun rc $LRC after $(( $(date +%s) - T0 )) s; $(grep -c 'FENE bond too long' log.lammps) FENE warnings; $(grep -E '^>>> SCREEN_COMPLETE' log.lammps || echo 'NOT COMPLETE')"
+    grep -E '^>>> (STEP0|SCREEN)|^Loop time|^Performance|ERROR|Total wall time' log.lammps | cut -c1-240
+    grep -q '^>>> SCREEN_COMPLETE' log.lammps || RC=1
+    if [ "${REGISTER:-0}" = 1 ] && [ "$MODE" = omp ]; then
+        mkdir -p "$SCREEN/runs"
+        echo "$GEL|$RUN_DIR|$DATA" > "$SCREEN/runs/${GEL}${TAGX:+_$TAGX}.run"
+    fi
+    # analysis of the stress series (cheap; also runs on an incomplete run for whatever stages exist)
+    ( load_python_module
+      python "$WORK/scripts/lib/screen_isotropy.py" "$RUN_DIR" --label "$TAG" \
+          ${BLOCK_STEPS:+--block-steps "$BLOCK_STEPS"} ${AVG_FRAC:+--avg-frac "$AVG_FRAC"} ) || echo "WARNING: screen_isotropy.py failed for $RUN_DIR"
+done
+exit $RC
