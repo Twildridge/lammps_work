@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=r10_bridge
+#SBATCH --partition=shared
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --time=00:30:00
+#SBATCH --output=/home/dpollard/Documents/lammps_runs/chain_length_testing/r10_measurements_20261114/%x.o%j
+# r10_measure_bridge.batch (2026-11-14) -- phases 6-7 for the random 10-bead periodic slab:
+# convert ONE equilibration snapshot to the two-piston geometry and submit the measurements on it.
+# Modelled on triaxial_compression_two_pist/chain_random_periodic.batch, which always takes the
+# run's last configuration; this one takes a named snapshot instead.
+#   SNAP     snapshot number of the 24 M-step equilibration (default 12, step 18.01 M: its box,
+#            47.261 x 47.494, is the one closest to the 16-24 M mean 47.210 x 47.567; the last
+#            configuration, 47.077 x 47.303, is 0.8 % low in area, and the two-piston decks keep
+#            the file's lateral box for the whole run)
+#   SUBMIT   which measurements to submit (default "compression shear permeation_fref"):
+#            compression      triaxial_compression_two_pist_single.batch (eps 0.10 hold + unload)
+#            shear            shear_slab_two_pist_single.batch (periodic gel, gamma 0.10)
+#            permeation_fref  triaxial_permeation_two_pist_single.batch with FROZEN_AT=ref:
+#                             Darcy kappa of the undeformed network, needs neither M nor D_c
+#            permeation       the live drive; set DP_PISTON (about 0.24 M from the compression
+#                             run) and NSTEPS_OVERRIDE (about 4 tau_1) once those are known
+# Files: input_data/final_config_<slab>_1.0_1.0_24000000_snap<SNAP>.data (copy of the snapshot)
+#        input_data/..._snap<SNAP>_two_pist_pm40.data (converter, --margin-perm 40 --margin-feed 30,
+#        --no-log: slab_data_file_info.md is NOT touched; the entry is in this job's output)
+set -u
+source "$HOME/Documents/lammps_work/scripts/lib/site.sh"
+SNAP="${SNAP:-12}"
+SUBMIT="${SUBMIT:-compression shear permeation_fref}"
+OUTDIR=$RUNS_DIR/chain_length_testing/r10_measurements_20261114
+SLAB=slab_support_periodic_10beads_tall_rho04_random
+EQ=$RUNS_DIR/chain_length_testing/chain_length_testing_${SLAB}_1.0_1.0_20261103_172723
+SRC=$EQ/final_config_${SLAB}_1.0_1.0_24000000_snap${SNAP}.data
+STEM=final_config_${SLAB}_1.0_1.0_24000000_snap${SNAP}
+TWO=${STEM}_two_pist_pm40
+[ -f "$SRC" ] || { echo "snapshot not found: $SRC"; exit 1; }
+echo "r10_measure_bridge $(date)  job ${SLURM_JOB_ID:-none}  SNAP=$SNAP  SUBMIT=$SUBMIT"
+head -1 "$SRC"; sed -n '8,10p' "$SRC"
+
+if [ -e "$INPUT_DATA_DIR/$STEM.data" ]; then echo ">>> $INPUT_DATA_DIR/$STEM.data exists; keeping it"
+else cp "$SRC" "$INPUT_DATA_DIR/$STEM.data" && echo ">>> copied the snapshot to $INPUT_DATA_DIR/$STEM.data"; fi
+if [ -e "$INPUT_DATA_DIR/$TWO.data" ]; then echo ">>> $INPUT_DATA_DIR/$TWO.data exists; keeping it"
+else
+    load_python_module
+    python -c "import numpy; print('numpy', numpy.__version__)"
+    cd "$LAMMPS_WORK_DIR/scripts/lib" || exit 1
+    if ! python slab_two_pistons_periodic.py --input "$INPUT_DATA_DIR/$STEM.data" --output "$INPUT_DATA_DIR/$TWO.data" \
+            --margin-perm 40 --margin-feed 30 --no-log; then
+        echo "ERROR: conversion failed; nothing submitted"; rm -f "$INPUT_DATA_DIR/$TWO.data"; exit 1
+    fi
+    python slab_two_pistons_periodic.py --self-check-only "$INPUT_DATA_DIR/$TWO.data" || { echo "ERROR: self-check failed; nothing submitted"; exit 1; }
+fi
+ls -la "$INPUT_DATA_DIR/$TWO.data"; sed -n '3p' "$INPUT_DATA_DIR/$TWO.data"
+
+SIM=$LAMMPS_WORK_DIR/simulations
+sub() {   # sub <what> <folder> <sbatch args...>
+    local what=$1 folder=$2 jid; shift 2
+    cd "$SIM/$folder" || return 1
+    jid=$(sbatch --parsable "$@") || { echo "ERROR: sbatch failed for $what"; return 1; }
+    echo ">>> $what: job $jid  (sbatch $*)"
+    echo "$jid|$what|$TWO|$(date +%Y-%m-%dT%H:%M)" >> "$OUTDIR/jobs.txt"
+}
+RC=0
+for what in $SUBMIT; do
+    case "$what" in
+        compression)     sub compression triaxial_compression_two_pist --job-name=triax_comp2p_r10 --export=ALL,DATANAME="$TWO" triaxial_compression_two_pist_single.batch || RC=1 ;;
+        shear)           sub shear shear_slab_two_pist --job-name=shear_2p_r10 --export=ALL,DATANAME="$TWO" shear_slab_two_pist_single.batch || RC=1 ;;
+        permeation_fref) sub permeation_fref triaxial_permeation_two_pist --job-name=triax_perm2p_r10_fref --time=14:00:00 \
+                             --export=ALL,DATANAME="$TWO",FROZEN_AT=ref,NSTEPS_OVERRIDE=4000000 triaxial_permeation_two_pist_single.batch || RC=1 ;;
+        permeation)      [ -n "${DP_PISTON:-}" ] || { echo "permeation: set DP_PISTON (about 0.24 M)"; RC=1; continue; }
+                         sub permeation triaxial_permeation_two_pist --job-name=triax_perm2p_r10 \
+                             --export=ALL,DATANAME="$TWO",DP_PISTON="$DP_PISTON"${NSTEPS_OVERRIDE:+,NSTEPS_OVERRIDE="$NSTEPS_OVERRIDE"} triaxial_permeation_two_pist_single.batch || RC=1 ;;
+        *) echo "unknown SUBMIT item: $what"; RC=1 ;;
+    esac
+done
+exit $RC

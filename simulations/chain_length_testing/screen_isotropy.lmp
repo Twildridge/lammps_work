@@ -157,13 +157,13 @@ thermo ${thermo_freq}
 variable s_rep equal round(${out_every}/${s_every})
 variable p_rep equal round(${out_every}/${p_every})
 fix st_poly all ave/time ${s_every} ${s_rep} ${out_every} c_sp[1] c_sp[2] c_sp[3] c_sp[4] c_sp[5] c_sp[6] &
-    file output_files/stress_data/screen_stress_poly_${tag}.dat format %.10g &
+    file output_files/stress_data/screen_stress_poly_${tag}.dat format " %.10g" &
     title2 "# TimeStep S_xx S_yy S_zz S_xy S_xz S_yz   (sum of compute stress/atom over the polymer group = +stress x volume)"
 fix st_box all ave/time ${p_every} ${p_rep} ${out_every} c_press_tensor[1] c_press_tensor[2] c_press_tensor[3] c_press_tensor[4] c_press_tensor[5] c_press_tensor[6] v_v_vol v_v_lx v_v_ly v_v_lz v_v_xy &
-    file output_files/stress_data/screen_stress_box_${tag}.dat format %.10g &
+    file output_files/stress_data/screen_stress_box_${tag}.dat format " %.10g" &
     title2 "# TimeStep P_xx P_yy P_zz P_xy P_xz P_yz vol lx ly lz xy   (whole-box pressure tensor, pressure sign)"
 fix st_dims all ave/time ${out_every} 1 ${out_every} c_pminz c_pmaxz c_xminz c_xmaxz &
-    file output_files/volume_data/screen_dims_${tag}.dat format %.10g &
+    file output_files/volume_data/screen_dims_${tag}.dat format " %.10g" &
     title2 "# TimeStep polymer_zmin polymer_zmax xlink_zmin xlink_zmax"
 
 variable stagefile string output_files/screen_stages_${tag}.dat

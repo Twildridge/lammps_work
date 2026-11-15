@@ -15,7 +15,7 @@
 #   sbatch screen_voids.batch                 # every gel + the two implementation checks
 #   ONLY="r30 chk_r5" sbatch screen_voids.batch
 #   MODE=ref sbatch screen_voids.batch        # the fixed-box reference trajectories of Part B
-#                                             # (screen_isotropy runs listed in $OUT/../runs.txt)
+#                                             # (screen_isotropy runs registered in $OUT/../runs/*.run)
 set -u
 WORK=$HOME/Documents/lammps_work
 RUNS=$HOME/Documents/lammps_runs
@@ -48,13 +48,14 @@ rot45_5|$EQR5/traj_files/polymer_${P}_5beads_tall_rho04_rot45_1.0_1.0_20000000.l
 "
 SUFFIX=eq
 if [ "${MODE:-eq}" = ref ]; then
-    # Part B reference stage: runs.txt holds "label|run_dir|data_file" lines written by screen_isotropy.batch
+    # Part B reference stage: runs/<label>.run holds "gel|run_dir|data_file" (written by screen_isotropy.batch)
     SUFFIX=ref
-    TABLE=$(while IFS='|' read -r lab dir dat; do
-        [ -n "$lab" ] || continue
+    TABLE=$(for f in "$OUT"/../runs/*.run; do
+        [ -f "$f" ] || continue
+        IFS='|' read -r _gel dir dat < "$f"
         t=$(ls "$dir"/traj_files/screen_ref_polymer_*.lammpstrj 2>/dev/null | head -1)
-        [ -n "$t" ] && echo "$lab|$t|$dat|1000"
-    done < "$OUT/../runs.txt")
+        [ -n "$t" ] && echo "$(basename "$f" .run)|$t|$dat|1000"
+    done)
 fi
 RC=0
 while IFS='|' read -r lab traj dat nlast; do

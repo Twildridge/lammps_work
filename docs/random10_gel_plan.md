@@ -1,0 +1,101 @@
+# Random 10-bead gel: plan, criteria and sizing (2026-11-14)
+
+> AI-generated working note (Claude), like the rest of `docs/`. Numbers marked *proposed* are
+> suggestions for the author to accept or change; numbers marked *measured* come from the screen
+> of 2026-11-13/14 (`lammps_runs/chain_length_testing/screen_report.md`).
+
+## Goal
+
+An osmotically active gel with no permanent pores, sized so that stress profiles in uniaxial
+compression, uniaxial permeation and simple shear are quiet, at a cost per measurement no higher
+than the original tetrahedral slab on the old settings (4 nodes, comm cutoff 5.0).
+
+## Phase 0: acceptance criteria (*proposed*)
+
+| property | measure | proposed threshold | random 10 today (*measured*) |
+|---|---|---|---|
+| no permanent pores | Phi plateau at r_p = 1.0, 1.5 (`screen_voids.py`), flat out to 10 M steps | <= 0.05, the rot45 lattice's value at r_p = 1.0 | 0.08 / 0.09 |
+| in-plane isotropy | r = G1/G2 (`screen_isotropy.lmp`) | within 10 % of 1 | 1.04 ± 0.05 (whole box) |
+| out-of-plane isotropy | G from xx and from yy in the compression run agree with each other and with G1 | within 10 % | not measured yet |
+| osmotically active | chord extension <R/(n b)>; G/M from the compression run | extension <= 0.55; G/M to be set once M is known | extension 0.53; M pending |
+| equilibrated | 2 M-step Rg means and the box flat | within 0.15 % over 8 M steps | yes |
+| cost | steps/s of the two-piston file on 6 nodes | not below the old tetrahedral two-piston rate (0.55-0.75 M steps/h) | to benchmark |
+
+## Phase 1: sizing (first pass, from existing runs; no new MD)
+
+*Measured* noise of the zero-strain stage of the Part B runs, whole-box stress per gel volume:
+the standard deviation of a stress difference averaged over a volume V (sigma^3) and a time t
+(tau) is S / sqrt(V t), nearly white from 1k to 100k steps.
+
+| gel | S for sigma_xy | S for sigma_xx - sigma_yy and sigma_zz - sigma_xx |
+|---|---|---|
+| random 10 | 1.3 - 2.1 | 2.5 - 3.1 |
+| random 5 | 1.9 - 2.4 | 2.9 - 6.2 |
+| rot45 5 | 1.4 - 1.5 | 1.8 - 4.8 |
+
+Consequences for random 10 (G about 0.04, so the anisotropy signal at 10 % compression is
+2 G eps = 0.009):
+
+- Gel-average quantities are not noise-limited: the present slab reaches 3 % of that signal in
+  100k steps.
+- A z-profile bin (2 sigma thick) on the present 47 x 47 cross-section has 6e-4 of noise per
+  1 M steps, 7 % of the signal. Per-bin noise falls as 1 / sqrt(area x time).
+- Hold lengths are set by the relaxation time tau_1 = L^2 / (pi^2 D_c), not by noise, and scale
+  with thickness squared.
+
+So the gel should be wider and thinner. With N_atoms about A (0.58 L + 82) for the two-piston
+file (checked against the rot45 5-bead file to 9 %):
+
+| candidate (x by y by thickness) | two-piston atoms | hold time vs today | per-bin noise at equal time | cost per measurement vs today | thickness in mesh sizes |
+|---|---|---|---|---|---|
+| today, 47 x 47 x 122 | 0.34 M | 1 | 1 | 1 | 27 |
+| 70 x 70 x 80 | 0.63 M | 0.43 | 0.68 | 0.79 | 17 |
+| 85 x 85 x 65 | 0.87 M | 0.28 | 0.56 | 0.72 | 14 |
+| 95 x 95 x 55 | 1.03 M | 0.20 | 0.50 | 0.61 | 12 |
+
+Cost ceiling: the two-piston decks run at about 1.9e8 atom-steps/s on 6 nodes now, against about
+5e7 for the tetrahedral two-piston file on the old layout, so about 1.0 M atoms steps as fast as
+the original did. All of these are estimates; phase 3 (one benchmark point) confirms the rate and
+the first compression run on the present slab gives D_c and M, which fix the hold lengths.
+
+Open choice: the thickness floor. The surface layers (the trimmed 3 sigma plus one to two mesh
+sizes per side) leave about 23 interior bins at 65 sigma and 18 at 55 sigma.
+
+## Phases 2-9
+
+See the table in the conversation of 2026-11-14 (build with `build_beads_sweep.py --beads 10
+--box-xy ... --thickness ...`, benchmark, equilibrate in `chain_length_testing`, qualify with the
+`screen_*` tools, convert, then compression, permeation and shear on the same `_two_pist_pm40`
+file, closure in `cross_deck_comparison.ipynb`).
+
+## Running now on the existing random 10 slab
+
+`simulations/chain_length_testing/r10_measure_bridge.batch` converts equilibration snapshot 12
+(step 18.01 M; its box is the closest to the 16-24 M mean) and submits compression, periodic shear
+and the frozen-at-reference permeation. Job IDs: `lammps_runs/chain_length_testing/r10_measurements_20261114/jobs.txt`.
+The live permeation drive waits for M and D_c from the compression run (dP about 0.24 M, drive
+about 4 tau_1).
+
+## Ways to lower the frozen-pore fraction without giving up modulus
+
+*Measured* trend with strand length: G falls fast (0.38, 0.043, 0.018, 0.010, 0.004 for 5, 10,
+15, 20, 30 beads) while the Phi plateau drops from 0.32 to about 0.08 between 5 and 10 beads and
+then barely moves. Longer strands past 10 beads cost modulus and buy almost nothing in pores.
+
+1. **Intermediate strand length (7 or 8 beads).** The whole drop in Phi happens between 5 and 10
+   beads; a strand of 7-8 beads may keep G near 0.1 with Phi near the 10-bead value. Cheapest to
+   try: the builder already takes `--beads`.
+2. **Interpenetrating networks.** Two or three independent random f = 4 networks of 10- to
+   15-bead strands in the same volume. Strand density, and with it G, scales with the number of
+   networks, and each network's mesh voids are filled by the others, so the pore scale is set by
+   the concentration rather than by one network's mesh. This is how gels made above the overlap
+   concentration avoid mesh-sized pores. Needs a builder change (overlay shifted networks).
+3. **A more uniform junction placement.** The plateau is the quenched non-uniformity of the
+   bond-switched network. Screen builder seeds and switch counts with a static measure before
+   any MD (the variance of the crosslinker count in cells of about two mesh sizes) and equilibrate
+   only the most uniform one; or place junctions from a relaxed repulsive-particle configuration
+   before wiring them.
+4. **Less swelling.** A higher bath pressure or a slightly poorer solvent gives a denser gel with
+   smaller voids and a higher modulus, at the price of a weaker osmotic response.
+
+Nothing in this list has been tested.

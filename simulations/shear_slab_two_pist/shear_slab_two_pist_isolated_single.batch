@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=shear_2p_iso
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=6
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=16:00:00
+#SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
+
+# (2026-11-14) This is the former shear_slab_two_pist_single.batch, unchanged apart from its name and
+# job name: the folder's default batches are now the laterally PERIODIC gel. The isolated-gel deck
+# is still shear_slab_two_pist.lmp (the deck run_lammps.sh picks when DECK_FILE is not set).
+
+# ISOLATED-gel shear, one strain level (the sweep is shear_slab_two_pist_isolated_sweep.batch). A free
+# block in a bath held at PRESS_TARGET by two wet NPT pistons; two grip plates seat on the
+# gel's x faces (SEAT_MODE=rg, the Rg-based face, is the deck default) and are driven -z / +z
+# until gamma reaches the target, then held NSTEPS steps; G = sigma_xz(core) / gamma. Input:
+# lib/add_more_plates_to_gel.py --layout x_plates on an equilibrated slab_with_support_single
+# run (here the random f = 4 network). Load-only run: no unload, no fine displacement file;
+# docs/running_simulations.md 5b ("D_c in shear (parked)") lists the knobs that switch them on.
+# Analyse with DECK = "shear_slab_two_pist_iso" in the shear notebooks.
+
+FOLDER=shear_slab_two_pist
+DATANAME=final_config_slab_support_5beads_tall_rho04_nowalls_random_1.0_1.0_8000000_x_plates
+INTERACTION=1.0_1.0
+NSTEPS=9000000          # hold per strain level, and the output-file tag
+export PRESS_TARGET=1.5
+export STRAINS="0.1"
+export REF_AVG_STEPS=1000000   # gamma = 0 reference window (deck default 150000); every G subtracts it
+export UNLOAD=0
+
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

@@ -30,7 +30,7 @@ NAMES = {"r5": "random 5 (control)", "r10": "random 10", "r15": "random 15", "r2
 # equilibration state, read from the logs of the existing runs on 2026-11-13
 EQ_STATE = {
     "r5": "14.0 M steps, fixed length (run of 2026-11-02, no Rg halt in that deck version)",
-    "r10": "24.0 M of 24 M: whole budget, Rg halt never fired (last block-to-block Rg changes 0.05-0.27 %, Rg still falling)",
+    "r10": "24.0 M of 24 M: whole budget, Rg halt never fired (block-to-block Rg changes 0.05-0.27 %); 2 M-step Rg means flat within 0.15 % over the last 8 M (37.32, 37.35, 37.40, 37.29) and the box unchanged between 16-20 M and 20-24 M",
     "r15": "30.0 M of 30 M: whole budget, Rg halt never fired (Rg block changes up to 0.67 % in the last 10 M)",
     "r20": "halted by the Rg plateau at 20.0 M of 35 M (plateau detected at 17.5 M; the tail block then moved 0.28 %)",
     "r30": "INCOMPLETE: wall limit at 26.703 M of 45 M, no continuation; latest state = snap9 (Rg rose 1.2 % at 18 M and 0.46 % at 24 M)",
@@ -220,7 +220,12 @@ def build(no_sacct=False):
     # ---------------- isotropy detail ----------------
     A("## 4. Part B details: stresses and moduli, both stress measures")
     A("")
-    have = [g for g in GELS if iso[g]]
+    for f in sorted(glob.glob(os.path.join(SCREEN, "runs", "*.run"))):
+        g = os.path.basename(f)[:-4]
+        if g not in iso:
+            iso[g], rundirs[g] = load_iso(g)
+            NAMES[g] = g.replace("r30_x2", "random 30, doubled strains (hedge)")
+    have = [g for g in list(GELS) + [k for k in iso if k not in GELS] if iso.get(g)]
     if not have:
         A("No Part B results on disk yet.")
         A("")

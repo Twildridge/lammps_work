@@ -228,7 +228,19 @@ def main(argv=None):
     ap.add_argument("--block-steps", type=float, default=50000)
     ap.add_argument("--avg-frac", type=float, default=0.75)
     a = ap.parse_args(argv)
-    analyse(os.path.abspath(a.run_dir), a.label, a.block_steps, a.avg_frac)
+    run_dir = os.path.abspath(a.run_dir)
+    res = analyse(run_dir, a.label, a.block_steps, a.avg_frac)
+    # Unattended gate (2026-11-13): when <screen dir>/gate_armed exists and this run is the
+    # plain-style twin (..._sfoff) of a smoke pair, run the mechanical checks of screen_gate.py;
+    # on success that creates <screen dir>/smoke_passed, which the queued production jobs wait for.
+    screen = os.path.dirname(run_dir)
+    if os.path.isfile(os.path.join(screen, "gate_armed")) and res["label"].endswith("_sfoff"):
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import screen_gate
+            screen_gate.run(screen_gate.find_twin(run_dir), run_dir)
+        except Exception as exc:                                # noqa: BLE001
+            print("screen_gate failed: %r" % (exc,))
     return 0
 
 

@@ -78,7 +78,6 @@ def frame_offsets(path):
 def read_frame(fh, a, b, keep_types=POLYMER_TYPES):
     """One frame from bytes [a, b): dict(step, lo, L, tilt, id, type, x) with the beads of
     keep_types sorted by id.  Returns None for a truncated frame."""
-    import pandas as pd
     fh.seek(a)
     buf = fh.read(b - a)
     head = []
@@ -102,15 +101,17 @@ def read_frame(fh, a, b, keep_types=POLYMER_TYPES):
         lo, hi = bnd[:, 0].copy(), bnd[:, 1].copy()
         tilt = (0.0, 0.0, 0.0)
     cols = head[8].split()[2:]
-    df = pd.read_csv(io.BytesIO(buf[pos:]), delim_whitespace=True, header=None, names=cols)
-    if len(df) < natoms or df[cols[-1]].isna().any():
+    # whitespace-separated numbers; a short or ragged block means a truncated frame
+    arr = np.fromstring(buf[pos:].decode("ascii", "replace"), sep=" ")
+    nc = len(cols)
+    if arr.size < natoms * nc:
         return None
-    df = df.iloc[:natoms]
-    typ = df["type"].to_numpy().astype(np.int32)
+    arr = arr[:natoms * nc].reshape(natoms, nc)
+    typ = arr[:, cols.index("type")].astype(np.int32)
     m = np.isin(typ, keep_types)
-    ids = df["id"].to_numpy().astype(np.int64)[m]
-    order = np.argsort(ids, kind="stable")
-    x = df[["x", "y", "z"]].to_numpy(dtype=np.float64)[m][order]
+    ids = arr[:, cols.index("id")].astype(np.int64)[m]
+    order = np.argsort(ids, kind="mergesort")
+    x = arr[:, [cols.index("x"), cols.index("y"), cols.index("z")]][m][order]
     return dict(step=step, lo=lo, L=hi - lo, tilt=tilt, id=ids[order], type=typ[m][order], x=x)
 
 
@@ -442,7 +443,17 @@ def main(argv=None):
     ap.add_argument("--rel-probe", type=float, default=0.4, help="extra probe = this x <R_ee> (needs --data)")
     ap.add_argument("--h", type=float, default=0.5)
     ap.add_argument("--workers", type=int, default=-1)
+    ap.add_argument("--force", action="store_true", help="recompute even if --out already holds a complete result")
     a = ap.parse_args(argv)
+    if not a.force and os.path.isfile(a.out):
+        try:
+            with open(a.out) as fh:
+                old = json.load(fh)
+            if (not a.traj or "voids" in old) and (not a.data or "statics" in old):
+                print("[%s] %s is already complete: skipped (--force to redo)" % (a.label, a.out), flush=True)
+                return 0
+        except ValueError:
+            pass
 
     def log(msg):
         print(msg, flush=True)
@@ -469,8 +480,9 @@ def main(argv=None):
         for k in ("lx", "ly", "thick_xl", "thick_rg"):
             dk = res["drift"][k]
             log("  %-9s first %.3f last %.3f change %+.3f (%+.2f %%)" % (k, dk["first"], dk["last"], dk["change"], dk["change_pct"]))
-    with open(a.out, "w") as fh:
+    with open(a.out + ".tmp", "w") as fh:
         json.dump(res, fh, indent=1)
+    os.replace(a.out + ".tmp", a.out)
     log("[%s] wrote %s (%.0f s)" % (a.label, a.out, time.time() - t0))
     return 0
 

@@ -10,18 +10,26 @@
 #SBATCH --output=/home/dpollard/Documents/lammps_runs/chain_length_testing/screen_20261113/slurm/%x.o%j
 # Gel screen, Part B (2026-11-13): in-plane isotropy test screen_isotropy.lmp on one equilibrated
 # slab.  One job per gel:
-#     sbatch --job-name=screen_iso_r30 --export=ALL,GEL=r30 screen_isotropy.batch
+#     sbatch --job-name=screen_iso_r30 --export=ALL,GEL=r30,PREFLIGHT=1,POST=1,REGISTER=1 screen_isotropy.batch
 #     GEL = r5 | r10 | r15 | r20 | r30 (random f = 4 network) | rot45_5 (lattice control)
 # Self-contained on purpose: it does NOT source batch_prologue.sh or call run_lammps.sh (both
 # git-pull the repo); it takes the binary, the MPI settings and the modules from lib/site.sh and
 # reads the gel's final configuration in place (symlink, nothing is copied or modified).
 # Run dir: lammps_runs/chain_length_testing/screen_20261113/screen_isotropy_<GEL>[_<TAGX>]_<stamp>/
-# Knobs (environment): GAMMA, EPS, REF_STEPS, RAMP_STEPS, HOLD_STEPS, ZERO_STEPS, OUT_EVERY,
-#   S_EVERY, P_EVERY, DUMP_REF, DUMP_DEF, THERMO_FREQ, DO_SIMPLE, DO_PURE  -> -var <lowercase>
-#   SUFFIX_MODES="omp"      "omp off" runs the deck twice, with -sf omp and with plain styles
+# Knobs (environment):
+#   GAMMA, EPS, REF_STEPS, RAMP_STEPS, HOLD_STEPS, ZERO_STEPS, OUT_EVERY, S_EVERY, P_EVERY,
+#   DUMP_REF, DUMP_DEF, THERMO_FREQ, DO_SIMPLE, DO_PURE      -> -var <lowercase> of the main run
+#   SUFFIX_MODES="omp"      "omp off" runs the main deck twice, with -sf omp and with plain styles
 #   TAGX=<text>             extra tag in the run-dir name (smoke, x2, ...)
 #   BLOCK_STEPS, AVG_FRAC   analysis block length / fraction of each hold that is averaged
-#   REGISTER=1              write screen_20261113/runs/<GEL>.run (label|run dir|data file); the
+#   PREFLIGHT=1             before the main run: a ~35k-step smoke test of the deck on THIS gel,
+#                           with -sf omp and with plain styles, judged by scripts/lib/screen_gate.py
+#                           (complete, strains on target, T / P, stress files, plates affine in the
+#                           dumps, step-0 stress identical in both modes, speed fits the time limit).
+#                           The main run starts only if it passes; otherwise the job exits (rc 3).
+#   GATE=<file>             alternative gate: do not run unless this file exists
+#   POST=1                  after LAMMPS: this gel's Part A passes + regenerate the report
+#   REGISTER=1              write screen_20261113/runs/<GEL>[_<TAGX>].run (gel|run dir|data file); the
 #                           MODE=ref pass of screen_voids.batch and screen_report.py read it
 set -u
 WORK=$HOME/Documents/lammps_work
@@ -40,24 +48,25 @@ case "$GEL" in
     *) echo "unknown GEL=$GEL"; exit 1 ;;
 esac
 [ -f "$DATA" ] || { echo "data file not found: $DATA"; exit 1; }
-# GATE=<file>: refuse to run until that file exists.  Lets the production jobs queue (and age)
-# while the smoke test is still being checked: a job that starts before the check has passed
-# exits here without running any MD.
 if [ -n "${GATE:-}" ] && [ ! -f "$GATE" ]; then
-    echo ">>> gate file $GATE is missing (smoke test not validated yet): exiting without running LAMMPS"
+    echo ">>> gate file $GATE is missing: exiting without running LAMMPS"
     exit 3
 fi
 DECK=$WORK/simulations/chain_length_testing/screen_isotropy.lmp
-INTERACTION=1.0_1.0; EPSSS=1.0; EPSSP=1.0
+EPSSS=1.0; EPSSP=1.0
+LAB="${GEL}${TAGX:+_$TAGX}"
 
 mpi_env
 load_lammps_modules
 NT=${SLURM_NTASKS:-1}
 PER_NODE=${SLURM_NTASKS_PER_NODE:-$NT}
-RC=0
-for MODE in ${SUFFIX_MODES:-omp}; do
+
+# run_once <omp|off> <tag> [extra -var pairs ...]: one LAMMPS run in a fresh run dir.
+# Sets RUN_DIR; returns 0 when the log reached SCREEN_COMPLETE.
+run_once() {
+    local MODE=$1 TAG=$2; shift 2
+    local STAMP RUN_NAME TRAJ_DIR DATANAME LRC T0
     STAMP=$(date +%Y%m%d_%H%M%S)
-    TAG="${GEL}${TAGX:+_$TAGX}"; [ "$MODE" = omp ] || TAG="${TAG}_sf${MODE}"
     RUN_NAME="screen_isotropy_${TAG}_${STAMP}"
     RUN_DIR=$SCREEN/$RUN_NAME
     TRAJ_DIR=$SCRATCH_DIR/lammps_trajectories/$RUN_NAME
@@ -66,15 +75,12 @@ for MODE in ${SUFFIX_MODES:-omp}; do
     cp "$DECK" "$RUN_DIR/"
     DATANAME=$(basename "$DATA" .data)
     ln -s "$DATA" "$RUN_DIR/data_files/$DATANAME.data"
-    cd "$RUN_DIR" || exit 1
-    VARS=(-var dataname "$DATANAME" -var epsSS "$EPSSS" -var epsSP "$EPSSP" -var tag "$TAG")
-    for k in gamma eps ref_steps ramp_steps hold_steps zero_steps out_every s_every p_every dump_ref dump_def thermo_freq do_simple do_pure; do
-        env="${k^^}"; [ -n "${!env:-}" ] && VARS+=(-var "$k" "${!env}")
-    done
-    SF=(); [ "$MODE" = omp ] && SF=(-sf omp -pk omp 1)
-    CMD=(mpirun -n "$NT" --bind-to "$MPI_BIND_TO" --map-by "ppr:${PER_NODE}:node:pe=1" "$LMP_BIN" ${SF[@]+"${SF[@]}"} "${VARS[@]}" -in screen_isotropy.lmp)
+    cd "$RUN_DIR" || return 1
+    local SF=(); [ "$MODE" = omp ] && SF=(-sf omp -pk omp 1)
+    local CMD=(mpirun -n "$NT" --bind-to "$MPI_BIND_TO" --map-by "ppr:${PER_NODE}:node:pe=1" "$LMP_BIN" ${SF[@]+"${SF[@]}"}
+               -var dataname "$DATANAME" -var epsSS "$EPSSS" -var epsSP "$EPSSP" -var tag "$TAG" "$@" -in screen_isotropy.lmp)
     echo "======================================"
-    echo "GEL $GEL  mode $MODE  job ${SLURM_JOB_ID:-none}  ${SLURM_NNODES:-?} node(s) x $PER_NODE tasks"
+    echo "GEL $GEL  tag $TAG  mode $MODE  job ${SLURM_JOB_ID:-none}  ${SLURM_NNODES:-?} node(s) x $PER_NODE tasks"
     echo "Working directory: $RUN_DIR"
     echo "Data: $DATA"
     echo "${CMD[*]}"
@@ -83,15 +89,62 @@ for MODE in ${SUFFIX_MODES:-omp}; do
     "${CMD[@]}" > lammps.out 2>&1
     LRC=$?
     echo ">>> mpirun rc $LRC after $(( $(date +%s) - T0 )) s; $(grep -c 'FENE bond too long' log.lammps) FENE warnings; $(grep -E '^>>> SCREEN_COMPLETE' log.lammps || echo 'NOT COMPLETE')"
-    grep -E '^>>> (STEP0|SCREEN)|^Loop time|^Performance|ERROR|Total wall time' log.lammps | cut -c1-240
-    grep -q '^>>> SCREEN_COMPLETE' log.lammps || RC=1
+    grep -E '^>>> (STEP0|SCREEN)|^Performance|ERROR|Total wall time' log.lammps | cut -c1-240
+    grep -q '^>>> SCREEN_COMPLETE' log.lammps
+}
+
+# knobs of the main run, from the environment
+KV=()
+for k in gamma eps ref_steps ramp_steps hold_steps zero_steps out_every s_every p_every dump_ref dump_def thermo_freq do_simple do_pure; do
+    env="${k^^}"; [ -n "${!env:-}" ] && KV+=(-var "$k" "${!env}")
+done
+
+# ---------------- preflight: smoke test of the deck on this gel, then the mechanical gate ----------------
+if [ "${PREFLIGHT:-0}" = 1 ]; then
+    PRE=(-var ref_steps 3000 -var ramp_steps 2000 -var hold_steps 3000 -var zero_steps 2000 -var out_every 100
+         -var dump_ref 500 -var dump_def 1000 -var thermo_freq 500)
+    [ -n "${GAMMA:-}" ] && PRE+=(-var gamma "$GAMMA")
+    [ -n "${EPS:-}" ]   && PRE+=(-var eps "$EPS")
+    run_once omp "${LAB}_pre" "${PRE[@]}"; PRE_OMP=$RUN_DIR
+    run_once off "${LAB}_pre_sfoff" "${PRE[@]}"; PRE_OFF=$RUN_DIR
+    PROD_STEPS=$(( ${REF_STEPS:-1000000} + 2 * (4 * ${RAMP_STEPS:-100000} + 2 * ${HOLD_STEPS:-400000} + ${ZERO_STEPS:-200000}) ))
+    MAXH=$(awk -v e="${SLURM_JOB_END_TIME:-0}" -v n="$(date +%s)" 'BEGIN{h=(e-n)/3600*0.80; if (h<=0) h=4.0; printf "%.2f", h}')
+    ( load_python_module
+      python "$WORK/scripts/lib/screen_gate.py" "$PRE_OMP" "$PRE_OFF" --target-atoms 0 --max-hours "$MAXH" --prod-steps "$PROD_STEPS" )
+    GRC=$?
+    if [ "$GRC" -ne 0 ]; then
+        echo ">>> PREFLIGHT FAILED (screen_gate rc $GRC): the production run of $LAB was NOT started. See $SCREEN/gate_check.log"
+        exit 3
+    fi
+    echo ">>> PREFLIGHT PASSED for $LAB: starting the production run"
+fi
+
+# ---------------- main run(s) ----------------
+RC=0
+for MODE in ${SUFFIX_MODES:-omp}; do
+    TAG="$LAB"; [ "$MODE" = omp ] || TAG="${TAG}_sf${MODE}"
+    run_once "$MODE" "$TAG" ${KV[@]+"${KV[@]}"} || RC=1
     if [ "${REGISTER:-0}" = 1 ] && [ "$MODE" = omp ]; then
         mkdir -p "$SCREEN/runs"
-        echo "$GEL|$RUN_DIR|$DATA" > "$SCREEN/runs/${GEL}${TAGX:+_$TAGX}.run"
+        echo "$GEL|$RUN_DIR|$DATA" > "$SCREEN/runs/${LAB}.run"
     fi
     # analysis of the stress series (cheap; also runs on an incomplete run for whatever stages exist)
     ( load_python_module
       python "$WORK/scripts/lib/screen_isotropy.py" "$RUN_DIR" --label "$TAG" \
           ${BLOCK_STEPS:+--block-steps "$BLOCK_STEPS"} ${AVG_FRAC:+--avg-frac "$AVG_FRAC"} ) || echo "WARNING: screen_isotropy.py failed for $RUN_DIR"
 done
+
+# POST=1 (production): finish this gel's share of the screen on the node we already hold, so
+# nothing has to wait in the shared queue or for an interactive session:
+#   - Part A on the equilibration tail of this gel (and its implementation check, r5 / rot45_5),
+#     skipped when the JSON already exists
+#   - the Part A metric on this run's fixed-box reference trajectory
+#   - regenerate screen_report.md (every job does; the last one to finish leaves it complete)
+if [ "${POST:-0}" = 1 ]; then
+    VB=$WORK/simulations/chain_length_testing/screen_voids.batch
+    export SLURM_CPUS_PER_TASK=32
+    [ -n "${TAGX:-}" ] || ONLY="$GEL chk_$GEL" MODE=eq bash "$VB" || echo "WARNING: Part A (equilibration tail) failed for $GEL"
+    ONLY="$LAB" MODE=ref bash "$VB" || echo "WARNING: Part A on the reference stage failed for $LAB"
+    ( load_python_module; python "$WORK/scripts/lib/screen_report.py" ) || echo "WARNING: screen_report.py failed"
+fi
 exit $RC
