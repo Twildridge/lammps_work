@@ -1526,7 +1526,7 @@ def fig_geometry(cfg, R, L=None, stem='geometry'):
     Gd = tri.load2c(cfg.path('gel_dimensions_bb', lvl), 4)
     gel_d = float(np.nanmean(Gd[-20:, 3])) if Gd is not None else 0.7 * Ld      # deck lz_bb = extent along the drive
     gel_y = float(np.nanmean(Gd[-20:, 2])) if Gd is not None else 0.7 * Ly
-    # deck defaults (shear_slab_two_pist.lmp): grip layer, plate stand-off, core margins, plate thickness
+    # deck defaults (shear_slab_two_pist_isolated.lmp): grip layer, plate stand-off, core margins, plate thickness
     layer, cgap, cm_y, cm_d, tpl = 3.0, 1.12, 6.0, 20.0, 1.0
     xl, xr = zb * Lg, zt * Lg                        # seated faces (absolute, gap axis)
     d0, d1 = 0.5 * (Ld - gel_d), 0.5 * (Ld + gel_d)

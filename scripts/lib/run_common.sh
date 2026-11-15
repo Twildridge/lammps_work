@@ -9,6 +9,7 @@ KNOBS=(
     press_target vel_seed comm_cutoff prerelaxed skip_widom calib_frames calib_dump_every
     baro_mode pin_gel piston_transparent                                     # slab_with_support
     rg_halt rg_block rg_every rg_tol rg_nconsec rg_extra                    # Rg-plateau halt
+    mean_box mean_box_window mean_box_ramp mean_box_hold mean_lx mean_ly    # mean-box ending (slab_with_support, 2026-11-14)
     piston_mass c_pist_frac npt_piston_steps settle_halt                    # NPT pistons
     dp_piston n_ramp ramp_steps perm_stress_curves disp_nfreq               # permeation
     frozen frozen_steps frozen_at                                           # permeation, frozen network

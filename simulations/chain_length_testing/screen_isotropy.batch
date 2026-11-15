@@ -45,7 +45,9 @@ case "$GEL" in
     r20)     DATA=$CL/chain_length_testing_${P}_20beads_tall_rho04_random_1.0_1.0_20261103_173658/final_config_${P}_20beads_tall_rho04_random_1.0_1.0_35000000.data ;;
     r30)     DATA=$CL/chain_length_testing_${P}_30beads_tall_rho04_random_1.0_1.0_20261103_174846/final_config_${P}_30beads_tall_rho04_random_1.0_1.0_45000000_snap9.data ;;
     rot45_5) DATA=$CL/chain_length_testing_${P}_5beads_tall_rho04_rot45_1.0_1.0_20261108_121924/continuation_20261108_204155/final_config_${P}_5beads_tall_rho04_rot45_1.0_1.0_20000000.data ;;
-    *) echo "unknown GEL=$GEL"; exit 1 ;;
+    *)       # any other gel: GEL is its label, DATA_FILE its equilibrated final configuration (2026-11-14)
+             [ -n "${DATA_FILE:-}" ] || { echo "unknown GEL=$GEL (give DATA_FILE=<final config .data> for a gel outside the table)"; exit 1; }
+             DATA=$DATA_FILE ;;
 esac
 [ -f "$DATA" ] || { echo "data file not found: $DATA"; exit 1; }
 if [ -n "${GATE:-}" ] && [ ! -f "$GATE" ]; then

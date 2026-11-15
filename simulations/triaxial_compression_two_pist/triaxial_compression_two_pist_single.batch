@@ -32,12 +32,12 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 FOLDER=triaxial_compression_two_pist
 DATANAME="${DATANAME:-final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40}"
 INTERACTION=1.0_1.0
-NSTEPS=8000000          # flat hold (HOLD_AUTO=0), and the tag of every level file; 50 k tau > 3 tau_1 of the hold's slow mode
+NSTEPS="${NSTEPS_OVERRIDE:-8000000}"          # flat hold (HOLD_AUTO=0), and the tag of every level file; 50 k tau > 3 tau_1 of the hold's slow mode
 export PRESS_TARGET=1.5
 export COMPRESSIONS="0.10"
 export HOLD_AUTO=0
 export DISP_FINE_NFREQ=5000
-export UNLOAD=1 UNLOAD_STEPS=14000000   # 70 k tau = 4.1 tau_1 = L^2/(pi^2 D_c) at D_c 0.12, L 142
+export UNLOAD=1 UNLOAD_STEPS="${UNLOAD_STEPS:-14000000}"   # 70 k tau = 4.1 tau_1 = L^2/(pi^2 D_c) at D_c 0.12, L 142
 echo ">>> DATANAME=$DATANAME"
 
 bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=wide10_build
+#SBATCH --partition=debug
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=24G
+#SBATCH --time=00:30:00
+#SBATCH --output=/home/dpollard/Documents/lammps_runs/chain_length_testing/wide10_pipeline_20261114/%x.o%j
+# wide10_build.batch (2026-11-14) -- build the WIDE random 10-bead periodic slab: 10 x 10 x 10 cells
+# (about 78 x 78 sigma in plane, 78 sigma thick as built), the same recipe as the qualified
+# slab_support_periodic_10beads_tall_rho04_random (preset 'random': bond_switch 3, seed 7,
+# RANDOM_RELAX; the density-uniformity term stays OFF -- its first test showed no gain).
+# Writes input_data/slab_support_periodic_10beads_wide_rho04_random.data; exits 0 at once if the
+# file is already there (the pipeline submits this to debug and, as a fallback, to shared).
+set -u
+source "$HOME/Documents/lammps_work/scripts/lib/site.sh"
+NAME=slab_support_periodic_10beads_wide_rho04_random
+F=$INPUT_DATA_DIR/$NAME.data
+if [ -s "$F" ] && grep -q "^Bonds" "$F"; then echo ">>> $F already exists: nothing to do"; exit 0; fi
+load_python_module
+python -c "import numpy, scipy; print('numpy', numpy.__version__, 'scipy', scipy.__version__)" || exit 1
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+TMP=$SCRATCH_DIR/wide10_build_${SLURM_JOB_ID:-$$}; mkdir -p "$TMP"
+cd "$LAMMPS_WORK_DIR/scripts/lib" || exit 1
+python -u build_beads_sweep.py --beads 10 --network random --shape wide --box-xy 78 --thickness 78 --outdir "$TMP" || { echo "ERROR: build failed"; exit 1; }
+[ -s "$TMP/$NAME.data" ] || { echo "ERROR: no output file"; exit 1; }
+if [ -s "$F" ]; then echo ">>> another job wrote $F meanwhile: keeping it"; else mv "$TMP/$NAME.data" "$F"; fi
+ls -la "$F"; head -1 "$F"; sed -n '3,4p' "$F"

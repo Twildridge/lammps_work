@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=chain_len_10b_wide
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=6
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=24:00:00
+#SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
+
+# Equilibration of the WIDE random 10-bead periodic slab (2026-11-14; wide10_build.batch makes the
+# input, wide10_pipeline.sh submits the chain). The protocol of chain_length_testing_sweep.batch:
+# aniso NPH at P* = 1.5 with the Rg-plateau halt; NSTEPS is the budget and the <totsteps> tag. The
+# slab is thinner than the tall ones (78 against 111 sigma as built), so the blocks are 1 M steps
+# and the budget 16 M (the tall 10-bead slab's Rg and box were flat from about 16 M of 24 M; the
+# swelling time goes with thickness squared). The deck ends at the MEAN lateral box
+# (mean_box = 1, the deck default: last 4 M steps averaged, 100k ramp + 500k hold under nph z).
+# About 0.58 M atoms: ~9 h on 6 nodes if it runs the whole budget; CHAIN=1 covers a wall-limit stop.
+FOLDER=chain_length_testing
+DATANAME="${DATANAME:-slab_support_periodic_10beads_wide_rho04_random}"
+INTERACTION=1.0_1.0
+NSTEPS=16000000
+export PRESS_TARGET=1.5
+export PISTON_TRANSPARENT=1 BARO_MODE=aniso PIN_GEL=0
+export CHAIN=1
+export RG_HALT=1 RG_BLOCK=1000000 RG_EVERY=10000 RG_TOL=0.0015 RG_NCONSEC=3 RG_EXTRA=0.10
+export MEAN_BOX=1
+echo ">>> chain_length_testing (wide 10-bead): DATANAME=$DATANAME NSTEPS=$NSTEPS RG_BLOCK=$RG_BLOCK"
+
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

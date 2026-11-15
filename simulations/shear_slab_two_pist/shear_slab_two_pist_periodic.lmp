@@ -1,4 +1,6 @@
 # ===== Shear Modulus, TWO-PISTON system, displacement-driven xz shear  (2026-10-03; rigid layers 2026-10-05) =====
+# (2026-11-14: this laterally PERIODIC deck is the default of the folder; shear_slab_two_pist.lmp is a symlink to it.
+#  Batches: shear_slab_two_pist_periodic_single.batch / _periodic_sweep.batch.  The isolated-gel deck is shear_slab_two_pist_isolated.lmp.)
 # SHEAR MODE ONLY.  The shear_slab.lmp protocol (same phases, strain sweep, drive-
 # until-target + hold logic, observables, binning, file names and columns) on the
 # system of ../triaxial_compression_two_pist/triaxial_compression_two_pist.lmp:

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=shear_2p_per
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=6
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=12:00:00
+#SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
+
+# PERIODIC-gel shear, one strain level (the sweep is shear_slab_two_pist_periodic_sweep.batch).
+# The folder default since 2026-11-14: shear_slab_two_pist_single.batch is a symlink to this file.
+# Deck shear_slab_two_pist_periodic.lmp, named by DECK_FILE below. The gel is periodic in x and y and sits between the two external NPT pistons
+# that hold both reservoirs at PRESS_TARGET; the polymer beads of its top and bottom face layers
+# are driven +x / -x until gamma reaches the target, then held NSTEPS steps (files _g<strain>);
+# G = sigma_xz / gamma. Input: the converter output <stem>_two_pist_pm40
+# (lib/slab_two_pistons_periodic.py --margin-perm 40 --margin-feed 30), the SAME file the
+# compression and permeation decks read, so all three measurements are on one gel state.
+# DATANAME comes from the environment (default: the 5-bead rot45 standard gel):
+#     DATANAME=<stem> sbatch shear_slab_two_pist_periodic_single.batch
+# (Until 2026-11-14 this file was shear_slab_two_pist_periodic.batch.)
+# Timing: 10.8 M steps, one level: 5-bead rot45 on 6 nodes 6.8 h (job 55663498), 15-bead on 10
+# nodes 7.2 h (55663503). The deck has no wall_timeout, so more levels or a longer NSTEPS need
+# `sbatch --time=...` (~6.5 h per extra 9 M-step level; compute allows 48 h).
+# The ISOLATED-gel workflow (free block, grip plates on its x faces) is
+# shear_slab_two_pist_isolated.lmp with shear_slab_two_pist_isolated_single.batch / _isolated_sweep.batch.
+# Analyse with DECK = "shear_slab_two_pist" in the shear notebooks.
+
+FOLDER=shear_slab_two_pist
+export DECK_FILE=shear_slab_two_pist_periodic
+DATANAME="${DATANAME:-final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40}"
+INTERACTION=1.0_1.0
+NSTEPS="${NSTEPS_OVERRIDE:-9000000}"          # hold per strain level, and the output-file tag
+export PRESS_TARGET=1.5
+export STRAINS="${STRAINS:-0.1}"    # cumulative shear strains, space-separated
+echo ">>> DATANAME=$DATANAME DECK_FILE=$DECK_FILE STRAINS=$STRAINS"
+
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

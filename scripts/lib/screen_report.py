@@ -107,6 +107,12 @@ def sacct_su(jobids):
 def build(no_sacct=False):
     L = []
     A = L.append
+    for f in sorted(glob.glob(os.path.join(SCREEN, "voids", "voids_eq_*.json"))):
+        g = os.path.basename(f)[len("voids_eq_"):-len(".json")]
+        if not g.startswith("chk_") and g not in GELS:
+            GELS.append(g)
+            NAMES.setdefault(g, {"w10": "random 10 WIDE (new build)", "rot45_15": "rot45 15 (lattice, not in the screen)"}.get(g, g))
+            EQ_STATE.setdefault(g, "see its equilibration log (not part of the 2026-11-13 screen)")
     eq = {g: jload(os.path.join(SCREEN, "voids", "voids_eq_%s.json" % g)) for g in GELS}
     rf = {g: jload(os.path.join(SCREEN, "voids", "voids_ref_%s.json" % g)) for g in GELS}
     iso = {}

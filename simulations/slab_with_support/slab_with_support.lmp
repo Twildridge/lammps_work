@@ -126,6 +126,33 @@ variable rg_tol     index 0.0015
 variable rg_nconsec index 3
 variable rg_extra   index 0.10
 
+# ----- Mean-box ending (2026-11-14) -----
+# Under `nph aniso` the box breathes: on the 10-bead random slab lx and ly have a standard
+# deviation of 0.5 % each (0.53 % in area) over the plateau, so the configuration that happens
+# to be written last is a random draw -- that run's final file was 0.8 % low in area, and the
+# two-piston decks keep the file's lateral box for the whole run.  mean_box = 1 (default, aniso
+# only) ends a COMPLETED production with:
+#   1. the trailing mean of lx, ly over the last mean_box_window production steps (one sample
+#      every mean_box_every steps, fix box_avg; a shorter production averages what there is);
+#   2. the barostat switched to z only (`nph z`: lz keeps relaxing to press_target) and
+#      `fix deform` taking lx, ly to those means in mean_box_ramp steps, every atom remapped
+#      (plates included, as the barostat's dilate does);
+#   3. a hold of mean_box_hold steps at the mean lateral box, then the final files as before.
+# The snapshots written after each block are untouched (instantaneous boxes).  mean_lx / mean_ly
+# > 0 give the targets explicitly instead (e.g. to bring an OLD final configuration to the mean
+# box of its own run: cont = 1, a short nsteps, mean_lx / mean_ly from its box_dimensions file).
+# The stage is skipped, with a log line, when production ended on the wall-clock budget or when
+# fewer than mean_box_min_remain seconds of that budget are left; the wall-clock timer is
+# switched off while it runs.  Log lines: >>> MEAN_BOX ...
+variable mean_box            index 1
+variable mean_box_window     index 4000000
+variable mean_box_every      index 1000
+variable mean_box_ramp       index 100000
+variable mean_box_hold       index 500000
+variable mean_box_min_remain index 3600
+variable mean_lx             index 0
+variable mean_ly             index 0
+
 # Equilibration parameters
 variable temp_target equal 1.0
 variable press_target index 1.5 # APPROPRIATE VALUE IMPORTANT — overridden by -var on command line
@@ -478,6 +505,10 @@ if "${pin_gel} == 1" then &
     "fix pin_gel polymer momentum ${pin_gel_every} linear 1 1 1 angular" &
     "print '>>> gel pinned: polymer linear + angular momentum zeroed every ${pin_gel_every} steps'"
 
+# trailing mean of the box over the last mean_box_window steps (mean-box ending, see the knob block)
+variable mb_nwin equal ceil(${mean_box_window}/${mean_box_every})
+fix box_avg all ave/time ${mean_box_every} 1 ${mean_box_every} v_box_lx v_box_ly v_box_lz ave window ${mb_nwin}
+
 variable prod_start  equal $(step)             # absolute step at which production starts
 variable prod_done   equal step-v_prod_start    # production steps completed so far
 variable prod_target equal ${nsteps}-${n_blocks}   # "all of nsteps" up to the steps_per_snap rounding
@@ -550,6 +581,38 @@ label snap_loop
 label snap_done
 if "${rg_halt} == 1" then "unfix rg_block_avg"
 
+# ========== Mean-box ending (2026-11-14; see the knob block) ==========
+variable prod_done_frozen equal $(v_prod_done)     # production steps, before the stage below adds its own
+variable mb_do equal 0
+if "${mean_box} == 1 && ${baro_mode} == aniso && (${prod_done_frozen} >= ${prod_target} || ${rg_conv} == 1)" then &
+    "variable mb_do delete" &
+    "variable mb_do equal 1"
+if "${mb_do} == 1 && ${wall_timeout} > 0 && $(timeremain) < ${mean_box_min_remain}" then &
+    "print '>>> MEAN_BOX skipped: $(timeremain:%.0f) s of the wall-clock budget left (< ${mean_box_min_remain}); the final configuration keeps its instantaneous box'" &
+    "variable mb_do delete" &
+    "variable mb_do equal 0"
+variable mb_lx equal $(f_box_avg[1])
+variable mb_ly equal $(f_box_avg[2])
+if "${mean_lx} > 0" then "variable mb_lx delete" "variable mb_lx equal ${mean_lx}"
+if "${mean_ly} > 0" then "variable mb_ly delete" "variable mb_ly equal ${mean_ly}"
+if "${mb_do} == 1 && (${mb_lx} <= 0 || ${mb_ly} <= 0)" then &
+    "print '>>> MEAN_BOX skipped: no box average available (production shorter than mean_box_every)'" &
+    "variable mb_do delete" &
+    "variable mb_do equal 0"
+if "${mb_do} == 0" then "jump SELF mean_box_done"
+print ">>> MEAN_BOX target lx ${mb_lx} ly ${mb_ly} (trailing mean over at most ${mean_box_window} steps, explicit mean_lx / mean_ly if given); instantaneous lx $(lx) ly $(ly) lz $(lz) at step $(step)"
+if "${wall_timeout} > 0" then "timer timeout off"
+unfix 1
+fix 1 mobile nph z ${press_target} ${press_target} ${pdamp}
+variable mb_xc equal $(0.5*(xlo+xhi))
+variable mb_yc equal $(0.5*(ylo+yhi))
+fix mean_box_def all deform 1 x final $(v_mb_xc-0.5*v_mb_lx) $(v_mb_xc+0.5*v_mb_lx) y final $(v_mb_yc-0.5*v_mb_ly) $(v_mb_yc+0.5*v_mb_ly) remap x
+run ${mean_box_ramp}
+unfix mean_box_def
+run ${mean_box_hold}
+print ">>> MEAN_BOX done at step $(step): lx $(lx) ly $(ly) lz $(lz) (ramp ${mean_box_ramp} + hold ${mean_box_hold} steps under nph z)"
+label mean_box_done
+
 
 
 # ========== Cleanup ==========
@@ -558,6 +621,7 @@ unfix lang_prod
 unfix remove_drift
 if "${pin_gel} == 1" then "unfix pin_gel"
 unfix stress_aniso_output
+unfix box_avg
 undump poly_traj
 
 
@@ -570,11 +634,11 @@ undump poly_traj
 # its presence remains the completion marker; continue_sim.sh resumes from the
 # newest final_config_*_snap<N>.data when it is missing.
 variable outfile string "final_config_${dataname}_${interaction}_${totsteps}"
-if "${prod_done} >= ${prod_target} || ${rg_conv} == 1" then &
-    "print '>>> PRODUCTION_STEPS_DONE ${prod_done} OF ${nsteps} OLDSTEPS ${oldsteps} TOTSTEPS ${totsteps} STATUS COMPLETE'" &
+if "${prod_done_frozen} >= ${prod_target} || ${rg_conv} == 1" then &
+    "print '>>> PRODUCTION_STEPS_DONE ${prod_done_frozen} OF ${nsteps} OLDSTEPS ${oldsteps} TOTSTEPS ${totsteps} STATUS COMPLETE'" &
     "write_restart ${outfile}.restart" &
     "write_data ${outfile}.data" &
 else &
-    "print '>>> PRODUCTION_STEPS_DONE ${prod_done} OF ${nsteps} OLDSTEPS ${oldsteps} TOTSTEPS ${totsteps} STATUS INCOMPLETE'" &
+    "print '>>> PRODUCTION_STEPS_DONE ${prod_done_frozen} OF ${nsteps} OLDSTEPS ${oldsteps} TOTSTEPS ${totsteps} STATUS INCOMPLETE'" &
     "print '>>> Wall-clock budget reached: no final_config written; resume from the newest final_config_*_snap<N>.data'"
 # (the final file is identical to snap${n_snaps}; retained for backward compatibility)

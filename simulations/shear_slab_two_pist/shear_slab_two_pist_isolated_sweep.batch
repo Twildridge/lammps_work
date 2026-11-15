@@ -10,9 +10,9 @@
 #SBATCH --output=%x.o%j.%N
 source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 
-# (2026-11-14) This is the former shear_slab_two_pist_sweep.batch, unchanged apart from its name and
-# job name: the folder's default batches are now the laterally PERIODIC gel. The isolated-gel deck
-# is still shear_slab_two_pist.lmp (the deck run_lammps.sh picks when DECK_FILE is not set).
+# (2026-11-14) Formerly shear_slab_two_pist_sweep.batch. The isolated-gel deck is now
+# shear_slab_two_pist_isolated.lmp (was shear_slab_two_pist.lmp), named by DECK_FILE below; the
+# folder's default deck and batches are the laterally PERIODIC gel.
 
 # ISOLATED-gel shear strain SWEEP: the protocol of shear_slab_two_pist_isolated_single.batch through
 # cumulative strain levels in one job. Each level: drive to the target, hold NSTEPS (files
@@ -23,6 +23,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # DECK = "shear_slab_two_pist_iso", STRAINS as written here ("0.1", not "0.10").
 
 FOLDER=shear_slab_two_pist
+export DECK_FILE=shear_slab_two_pist_isolated
 DATANAME=final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000_x_plates
 INTERACTION=1.0_1.0
 NSTEPS=3000000          # hold per strain level, and the output-file tag

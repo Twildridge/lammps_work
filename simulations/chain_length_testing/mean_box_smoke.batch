@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=mean_box_smoke
+#SBATCH --partition=debug
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=00:15:00
+#SBATCH --output=/home/dpollard/Documents/lammps_runs/chain_length_testing/mean_box_smoke/%x.o%j
+# mean_box_smoke.batch (2026-11-14) -- smoke test of the mean-box ending of slab_with_support.lmp:
+# continues the equilibrated 15-bead random slab (cont = 1, 180k atoms) for 3 x 2000 aniso steps
+# and lets the deck end at the mean box; a second run gives the targets explicitly (mean_lx /
+# mean_ly).  Self-contained (no batch_prologue, no git pull).  Pass = both logs carry
+# ">>> MEAN_BOX done", the final .data boxes equal the targets, T and P stay on target, no FENE warnings.
+set -u
+source "$HOME/Documents/lammps_work/scripts/lib/site.sh"
+mpi_env; load_lammps_modules
+P=slab_support_periodic_15beads_tall_rho04_random
+DATA=$RUNS_DIR/chain_length_testing/chain_length_testing_${P}_1.0_1.0_20261103_173135/final_config_${P}_1.0_1.0_30000000.data
+DN=$(basename "$DATA" .data)
+BASE=$RUNS_DIR/chain_length_testing/mean_box_smoke
+for case in auto explicit; do
+    RUN=$BASE/${case}_$(date +%Y%m%d_%H%M%S)
+    mkdir -p "$RUN"/{data_files,traj_files,output_files/volume_data}
+    cp "$LAMMPS_WORK_DIR/simulations/slab_with_support/slab_with_support.lmp" "$RUN/"
+    ln -s "$DATA" "$RUN/data_files/$DN.data"
+    cd "$RUN" || exit 1
+    EXTRA=(); [ "$case" = explicit ] && EXTRA=(-var mean_lx 39.90 -var mean_ly 42.00)
+    mpirun -n "$SLURM_NTASKS" --bind-to core --map-by "ppr:${SLURM_NTASKS_PER_NODE}:node:pe=1" "$LMP_BIN" -sf omp -pk omp 1 \
+        -var dataname "$DN" -var interaction 1.0_1.0 -var epsSS 1.0 -var epsSP 1.0 -var nsteps 6000 -var oldsteps 0 -var totsteps 6000 \
+        -var cont 1 -var piston_transparent 1 -var baro_mode aniso -var rg_halt 0 -var n_snaps 3 \
+        -var mean_box_every 100 -var mean_box_window 3000 -var mean_box_ramp 1000 -var mean_box_hold 2000 ${EXTRA[@]+"${EXTRA[@]}"} \
+        -in slab_with_support.lmp > lammps.out 2>&1
+    echo "===== $case: rc $?  $(grep -c 'FENE bond too long' log.lammps) FENE warnings"
+    grep -E "^>>> (MEAN_BOX|PRODUCTION|barostat)|ERROR|Total wall" log.lammps | cut -c1-260
+    echo "final data box:"; sed -n '1p;/xlo xhi/p;/ylo yhi/p;/zlo zhi/p' final_config_${DN}_1.0_1.0_6000.data | cut -c1-120
+    echo "box_dimensions (every 10000 steps):"; tail -3 output_files/volume_data/box_dimensions_*.dat
+    awk '$1 ~ /^[0-9]+$/ && NF>=11 {print "thermo:", $1, "T_mobile", $3, "P", $7, "lx", $9, "ly", $10, "lz", $11}' log.lammps | tail -4
+done

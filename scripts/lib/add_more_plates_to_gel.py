@@ -10,7 +10,7 @@ LAYOUTS 2026-10-14).  Which load plates are added is the `layout`:
     layout        plates (types)                        deck / use                       suffix
     six_plates    z-lo 4, z-hi 7, x-lo 8, x-hi 9,       compress_slab.lmp (bulk modulus)  _six_plates
                   y-lo 10, y-hi 11
-    x_plates      x-lo 8, x-hi 9                        shear_slab_two_pist.lmp: the two   _x_plates
+    x_plates      x-lo 8, x-hi 9                        shear_slab_two_pist_isolated.lmp: the two   _x_plates
                                                         grip plates it seats on the gel's
                                                         x-faces and drives -/+z
     z_plates      z-lo 4 (support), z-hi 7 (load)       the isolated-gel input of a        _z_plates
@@ -138,11 +138,11 @@ TYPE_NAMES = {1: 'crosslink', 2: 'chain bead', 3: 'solvent', 4: 'plate z-lo', 5:
 # layout -> the plates it adds (the output stem is <input stem>_<layout>)
 LAYOUTS = {
     'six_plates': ('zlo', 'zhi', 'xlo', 'xhi', 'ylo', 'yhi'),   # compress_slab.lmp
-    'x_plates':   ('xlo', 'xhi'),                               # shear_slab_two_pist.lmp (grip plates)
+    'x_plates':   ('xlo', 'xhi'),                               # shear_slab_two_pist_isolated.lmp (grip plates)
     'z_plates':   ('zlo', 'zhi'),                               # triaxial-style support + load plate
     'no_plates':  (),                                           # wet pistons only
 }
-LAYOUT_DECK = {'six_plates': 'compress_slab.lmp', 'x_plates': 'shear_slab_two_pist.lmp',
+LAYOUT_DECK = {'six_plates': 'compress_slab.lmp', 'x_plates': 'shear_slab_two_pist_isolated.lmp',
                'z_plates': 'a triaxial-style isolated-gel deck (none written yet)', 'no_plates': 'any two-piston deck without load plates'}
 
 

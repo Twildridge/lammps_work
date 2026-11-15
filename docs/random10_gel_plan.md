@@ -99,3 +99,26 @@ then barely moves. Longer strands past 10 beads cost modulus and buy almost noth
    smaller voids and a higher modulus, at the price of a weaker osmotic response.
 
 Nothing in this list has been tested.
+
+## Status, 2026-11-14 evening: the wide gel pipeline
+
+Submitted with `bash simulations/chain_length_testing/wide10_pipeline.sh`; status with
+`bash simulations/chain_length_testing/wide10_status.sh`; log and job IDs in
+`lammps_runs/chain_length_testing/wide10_pipeline_20261114/`.
+
+1. `wide10_build.batch`: 10 x 10 x 10 cells (about 78 x 78 sigma, 78 thick as built), the same
+   builder recipe as the qualified tall 10-bead slab -> `slab_support_periodic_10beads_wide_rho04_random.data`.
+2. `chain_length_testing_wide10.batch`: aniso NPH, Rg halt (1 M-step blocks, 16 M budget), and the
+   new mean-box ending of `slab_with_support.lmp` (final configuration at the time-averaged lx, ly).
+3. `wide10_bridge.batch`: void persistence on the equilibration tail (label `w10`), a gate
+   (Phi <= 0.15 at r_p 1.0 and 1.5, box within 5 % of square), two-piston conversion, then
+   in-plane isotropy, compression (hold 4 M + unload 7 M), periodic shear (hold 3 M) and the
+   frozen-reference permeation. The live permeation drive waits for M and D_c.
+
+Density-uniformity term in the builder (`www_bond_switch` `w_uniform`, preset `random_u`): first
+test negative. On a 6 x 6 x 8 block the polymer-density CoV on 8.7 sigma voxels was 0.088 /
+0.084 / 0.079 / 0.078 for weights 0 / 0.3 / 1 / 3 (lattice 0.035) and the largest empty sphere
+2.9-3.0 sigma in all four; the greedy clean-up pass after the anneal rewires the long strands
+without the term. It is therefore OFF in the wide build. A second comparison with a three times
+longer anneal is queued (`builder_uniformity_test.batch`, logs in
+`lammps_runs/chain_length_testing/builder_uniformity_20261114/`).

@@ -428,6 +428,10 @@ NETWORKS = {
     # to 1.3 r0 at weight 3) keeps the junction density uniform; the old relaxation
     # (switch_options={}) clumped the junctions and left 3-5 sigma voids in the gel.
     'random':      dict(bond_switch=3.0, bond_switch_seed=7, switch_options=RANDOM_RELAX),
+    # 2026-11-14: 'random' plus the density-uniformity term in the Metropolis acceptance of the
+    # bond switches (www_bond_switch w_uniform), aimed at the frozen void pattern of the
+    # equilibrated random gels.  The weight is a knob: build(..., switch_options=dict(RANDOM_RELAX, w_uniform=W)).
+    'random_u':    dict(bond_switch=3.0, bond_switch_seed=7, switch_options=dict(RANDOM_RELAX, w_uniform=0.3)),
 }
 
 
@@ -454,7 +458,7 @@ def build(network='tetrahedral', output_file=None, beads_per_chain=5, units_x=9,
                                          piston_exclusion, piston_height, output_file,
                                          pre_swell=pre_swell, log=log, **kw)
     if check_isotropy is None:
-        check_isotropy = (network == 'random')
+        check_isotropy = network.startswith('random')
     if check_isotropy:
         log("")
         bx, by, _ = info['box']

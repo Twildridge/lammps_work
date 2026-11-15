@@ -56,6 +56,7 @@ from periodic_data_file_generator import build  # noqa: E402
 
 A_REF, N_REF, NU = 4.82, 5, 0.59          # the 5-bead random slab's equilibrated lattice constant
 A_REF_NET = {'random': 4.82,              # per network: the 5-bead slab's equilibrated lattice constant
+             'random_u': 4.82,            # random + density-uniformity switching (2026-11-14): same estimate
              'rot45': 5.28}               # the lattice at P* = 1.5 (14000002 slab; isolated rot45 gel)
 # bond_switch_seed per N where the default (7) left a detectable texture: the 20-bead file with
 # seed 7 failed only the interior 4th-rank anisotropy (0.068 vs random 0.039 +/- 0.007); seed 11
@@ -102,12 +103,17 @@ def knobs(n_beads, box_xy=BOX_XY_REF, thick=THICK_REF, network='random'):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--beads', type=int, nargs='+', default=[10, 15, 20, 30])
-    ap.add_argument('--network', choices=('random', 'rot45'), default='random',
+    ap.add_argument('--network', choices=('random', 'random_u', 'rot45'), default='random',
                     help="random (2026-11-03 sweep) or rot45 (the lattice, 2026-11-07; defaults: --beads 5 15, box 48, thickness 139.7)")
     ap.add_argument('--outdir', default=str(Path.home() / 'Documents/lammps_data/input_data'))
     ap.add_argument('--box-xy', type=float, default=None, help='target in-plane box (sigma); default 43 (random) / 48 (rot45)')
     ap.add_argument('--thickness', type=float, default=None, help='target gel thickness (sigma); default 111 (random) / 139.7 (rot45)')
     ap.add_argument('--dry-run', action='store_true', help='print the knobs only')
+    ap.add_argument('--shape', default='tall', help="shape word of the file name, slab_support_periodic_<N>beads_<shape>_rho04_<network> (default 'tall'; e.g. 'wide' for a --box-xy / --thickness variant)")
+    ap.add_argument('--w-uniform', type=float, default=None, help='random / random_u: weight of the density-uniformity term of the bond-switch acceptance (www_bond_switch w_uniform; random_u preset 0.3, random 0)')
+    ap.add_argument('--switch-seed', type=int, default=None, help='random networks: bond_switch_seed (default 7, or the per-N entry of SWITCH_SEEDS)')
+    ap.add_argument('--switch-opt', nargs='*', default=[], metavar='KEY=VALUE', help='random networks: extra www_bond_switch options on top of RANDOM_RELAX, e.g. n_sweeps=48 u_voxel=1.0')
+    ap.add_argument('--tag', default='', help='suffix appended to the file stem (e.g. _w03_s11) for side-by-side variants')
     ap.add_argument('--no-check', action='store_true', help='skip the isotropy report (rot45: the density report)')
     args = ap.parse_args()
     rot = args.network == 'rot45'
@@ -119,7 +125,7 @@ def main():
     for n in beads:
         bxy = BOX_XY_ROT45_N.get(n, box_xy) if (rot and args.box_xy is None) else box_xy
         k = knobs(n, bxy, thick, args.network)
-        stem = f"slab_support_periodic_{n}beads_tall_rho04_{args.network}"
+        stem = f"slab_support_periodic_{n}beads_{args.shape}_rho04_{args.network}{args.tag}"
         gx, gy, gz = k['gel']
         print(f"\n##### N = {n} ({args.network}): a_eq {k['a_eq']:.3f}  pre_swell {k['pre_swell']:.4f}  "
               f"cells {k['units_x']} x {k['units_y']} x {k['units_z']}{' (BCT along x, z)' if rot else ''}  "
@@ -127,7 +133,17 @@ def main():
         if args.dry_run:
             continue
         t0 = time.time()
-        extra = {} if rot else dict(bond_switch_seed=SWITCH_SEEDS.get(n, 7))
+        extra = {} if rot else dict(bond_switch_seed=args.switch_seed if args.switch_seed is not None else SWITCH_SEEDS.get(n, 7))
+        if not rot and args.w_uniform is not None:
+            from data_file_generator import RANDOM_RELAX
+            extra['switch_options'] = dict(RANDOM_RELAX, w_uniform=args.w_uniform) if args.w_uniform > 0 else dict(RANDOM_RELAX)
+        if not rot and args.switch_opt:
+            from data_file_generator import RANDOM_RELAX
+            so = dict(extra.get('switch_options') or RANDOM_RELAX)
+            for kv in args.switch_opt:
+                key, val = kv.split('=', 1)
+                so[key] = int(val) if val.lstrip('-').isdigit() else float(val)
+            extra['switch_options'] = so
         build(args.network, str(out / f'{stem}.data'), beads_per_chain=n,
               units_x=k['units_x'], units_y=k['units_y'], units_z=k['units_z'],
               pre_swell=k['pre_swell'], chain_placement=k['placement'],

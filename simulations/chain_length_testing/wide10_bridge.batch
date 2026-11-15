@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=wide10_bridge
+#SBATCH --partition=shared
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=32G
+#SBATCH --time=01:00:00
+#SBATCH --output=/home/dpollard/Documents/lammps_runs/chain_length_testing/wide10_pipeline_20261114/%x.o%j
+# wide10_bridge.batch (2026-11-14) -- runs when the equilibration of the wide random 10-bead slab
+# ends (wide10_pipeline.sh submits it with --dependency=afterany). In order:
+#   1. find the final configuration (if the equilibration chained a continuation, wait for that)
+#   2. sanity: STATUS COMPLETE, the mean-box ending ran, no FENE warnings
+#   3. void persistence on the last 50 equilibration frames (screen_voids.py, label w10)
+#   4. GATE: Phi at r_p 1.0 and 1.5 <= PHI_MAX (0.15) and |lx/ly - 1| <= 0.05; otherwise stop here
+#   5. copy the final configuration to input_data and convert it (two pistons, pm40, feed 30)
+#   6. submit: in-plane isotropy (screen_isotropy.batch, 2 nodes), compression (eps 0.10, hold
+#      4 M + unload 7 M), periodic shear (gamma 0.10, hold 3 M), permeation with the network
+#      frozen at the reference. The live permeation drive is NOT submitted: it needs M and D_c.
+#   7. rebuild screen_report.md
+# Hold lengths are half the tall-gel values: tau_1 goes with thickness squared (84 against 142
+# sigma is 0.35x) and D_c of this gel is not known yet, hence 0.5x rather than 0.35x.
+# Env: SLAB_JOB (the equilibration job), CHAIN_HOPS, PHI_MAX, SUBMIT (default "isotropy compression shear permeation_fref")
+{
+set -u
+source "$HOME/Documents/lammps_work/scripts/lib/site.sh"
+PIPE=$RUNS_DIR/chain_length_testing/wide10_pipeline_20261114
+SCREEN=$RUNS_DIR/chain_length_testing/screen_20261113
+SIM=$LAMMPS_WORK_DIR/simulations
+DATANAME="${DATANAME:-slab_support_periodic_10beads_wide_rho04_random}"
+NSTEPS=16000000
+FINAL=final_config_${DATANAME}_1.0_1.0_${NSTEPS}
+TWO=${FINAL}_two_pist_pm40
+SLAB_JOB="${SLAB_JOB:-}"; CHAIN_HOPS="${CHAIN_HOPS:-0}"
+SUBMIT="${SUBMIT:-isotropy compression shear permeation_fref}"
+say() { echo ">>> $*"; echo "$(date +%Y-%m-%dT%H:%M) $*" >> "$PIPE/status.log"; }
+say "bridge job ${SLURM_JOB_ID:-none} started (waited on ${SLAB_JOB:-?}, hop $CHAIN_HOPS)"
+
+# ---- 1. final configuration
+SRC=$(ls -t "$RUNS_DIR"/chain_length_testing/chain_length_testing_${DATANAME}_1.0_1.0_*/"$FINAL.data" \
+            "$RUNS_DIR"/chain_length_testing/chain_length_testing_${DATANAME}_1.0_1.0_*/continuation_*/"$FINAL.data" 2>/dev/null | head -1)
+if [ -z "$SRC" ]; then
+    NEXT=""
+    if [ -n "$SLAB_JOB" ]; then
+        OUT=$(ls -t "$SIM"/chain_length_testing/*.o${SLAB_JOB}.* 2>/dev/null | head -1)
+        [ -n "$OUT" ] && NEXT=$(grep -oE 'Submitted batch job [0-9]+' "$OUT" | tail -1 | awk '{print $4}')
+    fi
+    if [ -n "$NEXT" ] && [ "$CHAIN_HOPS" -lt 6 ]; then
+        cd "$SIM/chain_length_testing" || exit 1
+        J=$(sbatch --parsable --dependency=afterany:"$NEXT" --export=ALL,SLAB_JOB="$NEXT",CHAIN_HOPS=$((CHAIN_HOPS + 1)) wide10_bridge.batch)
+        say "no final configuration yet; the equilibration chained job $NEXT; bridge resubmitted as $J"
+        echo "$J|bridge (hop $((CHAIN_HOPS + 1)), after continuation $NEXT)" >> "$PIPE/jobs.txt"
+        exit 0
+    fi
+    say "STOP: the equilibration left no $FINAL.data and no continuation job was found. Look at the newest chain_len_10b_wide.o* in $SIM/chain_length_testing."
+    exit 1
+fi
+RUN=$(dirname "$SRC")
+say "final configuration: $SRC"
+
+# ---- 2. sanity
+LOG=$RUN/log.lammps
+grep -E '^>>> (PRODUCTION_STEPS_DONE|RG_PLATEAU|MEAN_BOX)' "$LOG" | cut -c1-240
+NF=$(grep -c 'FENE bond too long' "$LOG")
+grep -q 'STATUS COMPLETE' "$LOG" || { say "STOP: equilibration log has no STATUS COMPLETE"; exit 1; }
+grep -q '^>>> MEAN_BOX done' "$LOG" || say "WARNING: the mean-box ending did not run (final configuration has an instantaneous box)"
+[ "$NF" -eq 0 ] || say "WARNING: $NF FENE warnings in the equilibration log"
+
+# ---- 3. void persistence on the equilibration tail
+load_python_module
+TRAJ=$(ls "$RUN"/traj_files/polymer_${DATANAME}_*.lammpstrj 2>/dev/null | head -1)
+VJ=$SCREEN/voids/voids_eq_w10.json
+python "$LAMMPS_WORK_DIR/scripts/lib/screen_voids.py" --label w10 --traj "$TRAJ" --data "$SRC" --last 50 \
+    --workers "${SLURM_CPUS_PER_TASK:-4}" --out "$VJ" --force || { say "STOP: screen_voids.py failed"; exit 1; }
+
+# ---- 4. gate
+GATE=$(python - "$VJ" "${PHI_MAX:-0.15}" <<'PY'
+import json, sys
+v = json.load(open(sys.argv[1])); pmax = float(sys.argv[2])
+phis = {round(p["r_p"], 2): p["phi"] for p in v["voids"]["probes"]}
+dr = v["drift"]; lx, ly = dr["lx"]["last"], dr["ly"]["last"]
+bad = [f"Phi({r}) = {phis[r]:.3f} > {pmax}" for r in (1.0, 1.5) if phis.get(r) == phis.get(r) and phis.get(r, 0) > pmax]
+if abs(lx / ly - 1.0) > 0.05:
+    bad.append(f"box {lx:.2f} x {ly:.2f} is more than 5 % off square")
+s = v["statics"]
+print(("FAIL: " + "; ".join(bad)) if bad else
+      f"PASS: Phi(1.0) {phis.get(1.0, float('nan')):.3f}, Phi(1.5) {phis.get(1.5, float('nan')):.3f}, box {lx:.2f} x {ly:.2f}, "
+      f"thickness {dr['thick_xl']['last']:.1f}, rho {s['rho_polymer_interior']:.3f}, <R> {s['interior']['R_mean']:.2f}")
+PY
+)
+say "gate: $GATE"
+python "$LAMMPS_WORK_DIR/scripts/lib/screen_report.py" > /dev/null 2>&1 || true
+case "$GATE" in PASS*) ;; *) say "STOP at the gate: nothing converted or submitted"; exit 2 ;; esac
+
+# ---- 5. copy + convert
+[ -e "$INPUT_DATA_DIR/$FINAL.data" ] || cp "$SRC" "$INPUT_DATA_DIR/$FINAL.data"
+if [ ! -e "$INPUT_DATA_DIR/$TWO.data" ]; then
+    cd "$LAMMPS_WORK_DIR/scripts/lib" || exit 1
+    python slab_two_pistons_periodic.py --input "$INPUT_DATA_DIR/$FINAL.data" --output "$INPUT_DATA_DIR/$TWO.data" \
+        --margin-perm 40 --margin-feed 30 --no-log || { rm -f "${INPUT_DATA_DIR:?}/${TWO:?}.data"; say "STOP: two-piston conversion failed"; exit 1; }
+    python slab_two_pistons_periodic.py --self-check-only "$INPUT_DATA_DIR/$TWO.data" || { say "STOP: converted file failed its self-check"; exit 1; }
+fi
+say "converted: $TWO.data ($(sed -n '3p' "$INPUT_DATA_DIR/$TWO.data"))"
+
+# ---- 6. submit
+sub() {   # sub <what> <folder> <sbatch args...>
+    local what=$1 folder=$2 jid; shift 2
+    cd "$SIM/$folder" || return 1
+    jid=$(sbatch --parsable "$@") || { say "ERROR: sbatch failed for $what"; return 1; }
+    say "submitted $what: job $jid"
+    echo "$jid|$what" >> "$PIPE/jobs.txt"
+}
+RC=0
+for what in $SUBMIT; do
+    case "$what" in
+        isotropy)        sub isotropy chain_length_testing --job-name=screen_iso_w10 --nodes=2 --time=10:00:00 \
+                             --export=ALL,GEL=w10,DATA_FILE="$INPUT_DATA_DIR/$FINAL.data",PREFLIGHT=1,POST=1,REGISTER=1 screen_isotropy.batch || RC=1 ;;
+        compression)     sub compression triaxial_compression_two_pist --job-name=triax_comp2p_w10 --time=30:00:00 \
+                             --export=ALL,DATANAME="$TWO",NSTEPS_OVERRIDE=4000000,UNLOAD_STEPS=7000000 triaxial_compression_two_pist_single.batch || RC=1 ;;
+        shear)           sub shear shear_slab_two_pist --job-name=shear_2p_per_w10 --time=14:00:00 \
+                             --export=ALL,DATANAME="$TWO",NSTEPS_OVERRIDE=3000000 shear_slab_two_pist_periodic_single.batch || RC=1 ;;
+        permeation_fref) sub permeation_fref triaxial_permeation_two_pist --job-name=triax_perm2p_w10_fref --time=16:00:00 \
+                             --export=ALL,DATANAME="$TWO",FROZEN_AT=ref,NSTEPS_OVERRIDE=4000000 triaxial_permeation_two_pist_single.batch || RC=1 ;;
+        *) say "unknown SUBMIT item $what"; RC=1 ;;
+    esac
+done
+say "bridge done (rc $RC)"
+exit $RC
+}

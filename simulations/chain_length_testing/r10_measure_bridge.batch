@@ -18,7 +18,7 @@
 #            the file's lateral box for the whole run)
 #   SUBMIT   which measurements to submit (default "compression shear permeation_fref"):
 #            compression      triaxial_compression_two_pist_single.batch (eps 0.10 hold + unload)
-#            shear            shear_slab_two_pist_single.batch (periodic gel, gamma 0.10)
+#            shear            shear_slab_two_pist_periodic_single.batch (periodic gel, gamma 0.10)
 #            permeation_fref  triaxial_permeation_two_pist_single.batch with FROZEN_AT=ref:
 #                             Darcy kappa of the undeformed network, needs neither M nor D_c
 #            permeation       the live drive; set DP_PISTON (about 0.24 M from the compression
@@ -67,7 +67,7 @@ RC=0
 for what in $SUBMIT; do
     case "$what" in
         compression)     sub compression triaxial_compression_two_pist --job-name=triax_comp2p_r10 --export=ALL,DATANAME="$TWO" triaxial_compression_two_pist_single.batch || RC=1 ;;
-        shear)           sub shear shear_slab_two_pist --job-name=shear_2p_r10 --export=ALL,DATANAME="$TWO" shear_slab_two_pist_single.batch || RC=1 ;;
+        shear)           sub shear shear_slab_two_pist --job-name=shear_2p_r10 --export=ALL,DATANAME="$TWO" shear_slab_two_pist_periodic_single.batch || RC=1 ;;
         permeation_fref) sub permeation_fref triaxial_permeation_two_pist --job-name=triax_perm2p_r10_fref --time=14:00:00 \
                              --export=ALL,DATANAME="$TWO",FROZEN_AT=ref,NSTEPS_OVERRIDE=4000000 triaxial_permeation_two_pist_single.batch || RC=1 ;;
         permeation)      [ -n "${DP_PISTON:-}" ] || { echo "permeation: set DP_PISTON (about 0.24 M)"; RC=1; continue; }

@@ -161,7 +161,8 @@ def _relax_junctions(P, edges, r0, teth_idx, teth_rel, teth_mask, centre, rep_cu
 def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0, seed=7,
                     T_hi=4.0, T_lo=0.01, n_sweeps=16, n_random=6, rep_cut=0.9, w_rep=1.0, w_teth=4.0, w_all=0.1,
                     max_len=1.9, max_len_hard=2.45, face_tol=0.3, keep_size=True, reset_anchors=False,
-                    face_full=True, anchor_jitter=0.25, forbid_lattice=True, periodic=None, rest_len=1.0, log=print):
+                    face_full=True, anchor_jitter=0.25, forbid_lattice=True, periodic=None, rest_len=1.0, log=print,
+                    w_uniform=0.0, u_voxel=1.5, u_points=4):
     """Return (P, edges, report).  P0 (n, 3) junction positions, edges0 (m, 2) int junction
     indices (any order), r0 the lattice strand length.  block_lo / block_hi: the block
     faces (junctions within face_tol * r0 of a face are tethered).
@@ -204,7 +205,21 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
     3): the junctions are spaced like a soft-sphere liquid (CoV 0.09, largest empty sphere
     2.1 sigma, the junction count within 2 r0 as uniform as the lattice's), strands 1.43 +/-
     0.21 r0, isotropy unchanged, the face junctions recessed a uniform 1.2 sigma.  The
-    defaults here stay the old ones so that switch_options={} reproduces the old files."""
+    defaults here stay the old ones so that switch_options={} reproduces the old files.
+    w_uniform (2026-11-14): > 0 adds a DENSITY-UNIFORMITY term to the Metropolis acceptance of
+    every switch.  Until now a switch was judged on strand lengths alone, and RANDOM_RELAX only
+    spaces the JUNCTIONS evenly; where the strands run is not controlled, and the equilibrated
+    random gels keep a frozen void pattern (void persistence Phi ~ 0.08 for 10-bead strands,
+    2026-11-13 screen).  Each strand is represented by u_points points along its minimum-image
+    chord, counted on a voxel grid of edge ~u_voxel * r0 (whole voxels across every periodic
+    axis and across the block along an open one), and
+        E_u = sum_voxels (count - mean)^2 / mean        (the Fano factor times the voxel number)
+    so a switch that moves strand out of a crowded voxel into a sparse one is favoured:
+        dE = dE_strand + w_uniform * dE_u.
+    The grid origin is re-drawn at random along the periodic axes at the start of every sweep
+    (the junctions have moved in the relaxation anyway), so no fixed grid is imprinted on the
+    network.  The clean-up passes after the anneal do not use the term.  0 (default) leaves
+    the routine, and its random-number stream, exactly as before."""
     rng = np.random.default_rng(seed)
     P = P0.copy()
     n = len(P)
@@ -243,8 +258,56 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
     def slen(E):
         return np.linalg.norm(_min_image(P[E[:, 1]] - P[E[:, 0]], periodic), axis=1)
 
+    # ---- density-uniformity term of the switch acceptance (w_uniform > 0) ----
+    use_u = w_uniform > 0
+    # (the counting helpers exist either way: with the term off they only serve the final report,
+    # on a random stream of their own so that the switching itself is unchanged)
+    u_rng = rng if use_u else np.random.default_rng(seed + 1000003)
+    if True:
+        per = [bool(periodic is not None and periodic[ax] and periodic[ax] > 0) for ax in range(3)]
+        u_len = np.array([periodic[ax] if per[ax] else (block_hi[ax] - block_lo[ax]) for ax in range(3)], float)
+        u_n = np.maximum(1, np.round(u_len / (u_voxel * r0))).astype(int)
+        u_vs = u_len / u_n
+        u_t = (np.arange(u_points) + 0.5) / u_points
+        u_org = np.array([0.0 if per[ax] else block_lo[ax] for ax in range(3)], float)
+        u_C = np.zeros(tuple(u_n), dtype=np.int64)
+        u_state = dict(shift=np.zeros(3), mean=1.0)
+
+        def u_cells(a, b):
+            """Flat voxel indices of the sample points of strand(s) a-b (scalars or arrays)."""
+            a = np.atleast_1d(a); b = np.atleast_1d(b)
+            pts = P[a][:, None, :] + u_t[None, :, None] * _min_image(P[b] - P[a], periodic)[:, None, :]
+            idx = np.floor((pts.reshape(-1, 3) - u_org - u_state['shift']) / u_vs).astype(np.int64)
+            for ax in range(3):
+                idx[:, ax] = idx[:, ax] % u_n[ax] if per[ax] else np.clip(idx[:, ax], 0, u_n[ax] - 1)
+            return (idx[:, 0] * u_n[1] + idx[:, 1]) * u_n[2] + idx[:, 2]
+
+        def u_rebuild():
+            u_state['shift'] = np.array([u_rng.random() * u_vs[ax] if per[ax] else 0.0 for ax in range(3)])
+            E_ = edge_array()
+            flat = np.bincount(u_cells(E_[:, 0], E_[:, 1]), minlength=int(u_n.prod()))
+            u_C[...] = flat.reshape(tuple(u_n))
+            u_state['mean'] = flat.mean()
+            return float(flat.var() / flat.mean())
+
+        def u_delta(A, B, C, D):
+            """(change of E_u, {voxel: count change}) for the switch (A-C, B-D) -> (A-D, B-C)."""
+            d = {}
+            for v in u_cells([A, B], [C, D]).tolist():
+                d[v] = d.get(v, 0) - 1
+            for v in u_cells([A, B], [D, C]).tolist():
+                d[v] = d.get(v, 0) + 1
+            flatC = u_C.reshape(-1)
+            dS = 0
+            for v, dv in d.items():
+                if dv:
+                    dS += 2 * int(flatC[v]) * dv + dv * dv
+            return dS / u_state['mean'], d
+
     def sweep(T, n_trials, greedy=False):
         acc = 0
+        if use_u:
+            u_rebuild()
         A_list = rng.integers(0, n, n_trials)
         for A in A_list:
             if len(adj[A]) < 2:
@@ -261,10 +324,17 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
                 continue
             dE = ((elen(A, D) - r0s) ** 2 + (elen(B, C) - r0s) ** 2
                   - (elen(A, C) - r0s) ** 2 - (elen(B, D) - r0s) ** 2) / r0 ** 2
+            if use_u:
+                dEu, dcount = u_delta(A, B, C, D)
+                dE += w_uniform * dEu
             if dE < 0 or (not greedy and T > 0 and rng.random() < np.exp(-dE / T)):
                 adj[A].remove(C); adj[C].remove(A); adj[B].remove(D); adj[D].remove(B)
                 adj[A].add(D); adj[D].add(A); adj[B].add(C); adj[C].add(B)
                 acc += 1
+                if use_u:
+                    flatC = u_C.reshape(-1)
+                    for v, dv in dcount.items():
+                        flatC[v] += dv
         return acc
 
     def edge_array():
@@ -274,6 +344,9 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
     target = int(switches_per_strand * m)
     accepted = 0
     Ts = np.concatenate([np.full(n_random, T_hi), np.geomspace(T_hi, T_lo, n_sweeps)])
+    if use_u:
+        log(f"  density-uniformity term ON: w_uniform {w_uniform}, {u_points} points per strand on {u_n[0]} x {u_n[1]} x {u_n[2]} voxels "
+            f"of {u_vs[0]:.2f} x {u_vs[1]:.2f} x {u_vs[2]:.2f} sigma ({u_voxel} r0 asked), lattice strand-point Fano {u_rebuild():.3f}")
     log(f"  bond switching: {n} junctions, {m} strands, r0 = {r0:.3f}, target {target} accepted switches "
         f"({switches_per_strand} per strand), {n_random} sweeps at T {T_hi} then {n_sweeps} sweeps T {T_hi} -> {T_lo}, "
         f"{len(teth_idx)} face junctions tethered")
@@ -284,7 +357,8 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
         P, Ef, lam = _relax_junctions(P, E, r0, teth_idx, teth_rel, teth_mask, centre, rep_cut, w_rep, w_teth, all_rel, w_all, all_w, lam, free_scale, periodic=periodic, r0_strand=r0s)
         L = slen(E) / r0
         log(f"    sweep {k + 1:2d}  T {T:.3f}  accepted {acc:6d} (total {accepted:7d})  E/strand {Ef / m:.4f}  "
-            f"strand length / r0: mean {L.mean():.3f}  max {L.max():.3f}  block scale {lam:.3f}")
+            f"strand length / r0: mean {L.mean():.3f}  max {L.max():.3f}  block scale {lam:.3f}"
+            + (f"  strand-point Fano {u_rebuild():.3f}" if use_u else ""))
         if reset_anchors and k + 1 == n_random:
             # The lattice sites must not survive as tether targets: from here on the weak
             # tether of every junction, and the in-face part of the face tether, anchor to
@@ -433,6 +507,9 @@ def www_bond_switch(P0, edges0, r0, block_lo, block_hi, switches_per_strand=3.0,
     log(f"  bond switching done: {accepted} switches ({accepted / m:.2f} per strand), strands {L.mean():.3f} +/- {L.std():.3f} r0 "
         f"(max {L.max():.3f}), {100 * kept / m:.1f} % lattice strands left, {n_comp_rest} junctions unreached, "
         f"largest face-junction shift off its tether {report['face_shift']:.2f} sigma, block scale {lam:.3f}")
+    report['uniform_fano'] = float(np.mean([u_rebuild() for _ in range(8)]))      # 8 grid origins
+    log(f"  strand-point Fano factor after clean-up: {report['uniform_fano']:.3f} (variance / mean of the strand-point count on "
+        f"{u_vs[0]:.2f}-sigma voxels, mean of 8 grid origins; w_uniform {w_uniform})")
     n_over = int((L > max_len).sum())
     report['strands_over_max_len'] = n_over
     if L.max() > max_len_hard:
