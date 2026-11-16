@@ -122,3 +122,30 @@ test negative. On a 6 x 6 x 8 block the polymer-density CoV on 8.7 sigma voxels 
 without the term. It is therefore OFF in the wide build. A second comparison with a three times
 longer anneal is queued (`builder_uniformity_test.batch`, logs in
 `lammps_runs/chain_length_testing/builder_uniformity_20261114/`).
+
+## Status, 2026-11-16: wide gel measurements
+
+All four jobs of the bridge finished on 2026-11-16. Three are valid; the compression is not.
+
+| Measurement | Job | Status | Needs M / D_c from the compression? |
+|---|---|---|---|
+| In-plane isotropy screen | 55745205 | valid (G_x 0.0346, G_y 0.0338) | no |
+| Periodic shear | 55745207 | valid (flat hold, G about 0.040 polymer) | no |
+| Frozen-reference permeation (`FROZEN_AT=ref`) | 55745208 | valid | not to run: fixed dP 0.1 through the network frozen undeformed. Only the later comparison of its kappa with D_c/M needs them |
+| Compression + unload | 55745206 | NOT usable, rerun | it is the source of M and D_c |
+| Live permeation drive | not submitted | waits | yes: dP about 0.24 M, drive about 4 tau_1 |
+
+- **Why the compression failed.** The gel is equilibrated, but its surface is diffuse: `L_bb - L_rg` is 13-16 sigma (attached
+  loops, no dangling ends; rot45 lattices 4-8 sigma). The plates seat on the outermost bead, so the 9 sigma closure at strain
+  0.10 went into that fringe: Rg strain 2.5 %, stress 0.0045 +/- 0.0007, no plateau.
+- **Rerun.** `SEAT_MODE=rg UNLOAD_MARGIN=8` with the bridge's `NSTEPS_OVERRIDE=4000000 UNLOAD_STEPS=7000000` on
+  `triaxial_compression_two_pist_single.batch` (plates seated on the Rg face; strain still measured on the bounding box; see
+  "SEAT_MODE and the credit guards" in `running_simulations.md`). About 7,600 SU; the guards stop it early if the seating
+  pre-strains the network by more than 0.10 or the Rg strain stays below half the applied strain.
+- **One permeation deck, two frozen modes.** `FROZEN_AT=end` (the default): the live drive, then the same flow-compacted network
+  frozen under the same dP, both in one job; kappa_frozen / kappa_live separates what a rigid network of that shape gives from what
+  the network's own motion adds. `FROZEN_AT=ref`: frozen undeformed for the whole production, no live drive (the zero-strain kappa,
+  to compare with D_c/M). Only the `ref` run has been done for this gel; the live drive will use the default.
+- **Code status.** `seat_mode` and the three guards (compression deck and `compress_slab`, commit e9f0e86) have run only on a toy
+  system: smoke-test both decks locally before the rerun. The permeation deck is unchanged since its last production run.
+

@@ -14,7 +14,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # DP_PISTON, P_perm = PRESS_TARGET) for NSTEPS after the settle, reference window and dP ramp.
 # Then FROZEN=1 (Phase 2d): the polymer is stopped in its steady state and the same dP drives
 # solvent through the rigid network for FROZEN_STEPS (files _<NSTEPS>_f; kappa_f against the
-# live kappa). UNLOAD=1 (Phase 2c, off by default) adds a ramp back to zero dP and a free
+# live kappa: same compacted geometry, so the ratio shows what the network's own motion adds). UNLOAD=1 (Phase 2c, off by default) adds a ramp back to zero dP and a free
 # re-swelling hold (files _<NSTEPS>_u; costs ~10 M steps). The deck has no wall_timeout.
 #
 # DATANAME comes from the environment (default: the 5-bead rot45 standard gel, the same
