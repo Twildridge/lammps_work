@@ -186,6 +186,30 @@ variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) 
 #       eps_vol = 0 reference is a pre-compressed state (phi_s 0.40 vs 0.45 for the
 #       free-swollen slab of the triaxial runs) and every K is a secant from there.
 variable seat_mode    index bb
+if "${seat_mode} == bb" then &
+    "variable seat_rg equal 0" &
+elif "${seat_mode} == rg" &
+    "variable seat_rg equal 1" &
+else &
+    "print 'ERROR: seat_mode must be rg or bb (got ${seat_mode})'" &
+    "quit 1"
+
+# ----- credit guards (2026-11-16; FRINGE_MAX / PRESTRAIN_MAX / RG_STRAIN_MIN in the batch; 0 = that guard off;
+#       as triaxial_compression_two_pist.lmp) -----
+# Plates seated on the outermost bead (seat_mode bb) spend their closure on the fringe between the outermost
+# beads and the dense gel.  The 12-cell cube has ~5 sigma of fringe per axis (L_bb - L_rg) against closures of
+# 0.6 / 1.2 / 1.8 sigma at eps_vol 0.025 / 0.05 / 0.075: in the bb sweep of 2026-10-19 the Rg volume strain was
+# 0.003 / 0.002 / 0.010 (4-14 % of the applied strain).  Seated on the Rg faces (2026-10-11) the same cube gave
+# 0.077 at eps_vol 0.10, from a reference pre-strained by 0.079 in Rg volume.  Three checks stop a run that is
+# not what was specified, each with a `>>> GUARD` line and exit status 1 (job FAILED, files so far kept):
+#   fringe_max    after Phase 0 (~2 min in), seat_mode bb only: quit when on any axis the fringe L_bb - L_rg
+#                 exceeds fringe_max x the planned closure of the FIRST strain level.
+#   prestrain_max after the seated settle: quit when the seating alone has reduced the Rg volume by more than this.
+#   rg_strain_min at the end of every hold: quit, before the unload and the later levels, when the Rg volume
+#                 strain is below rg_strain_min x the applied strain.
+variable fringe_max    index 1.0
+variable prestrain_max index 0.10
+variable rg_strain_min index 0.5
 variable t_seat       index 143000        # common approach time (steps)
 variable nsteps_settle index 1000000      # plates fixed before the eps_vol = 0 reference
 
@@ -505,6 +529,17 @@ print "BB:  Lx=$(v_gel_lx_bb) Ly=$(v_gel_ly_bb) Lz=$(v_gel_lz_bb)"
 print "Rg:  Lx=$(v_gel_lx_rg) Ly=$(v_gel_ly_rg) Lz=$(v_gel_lz_rg)"
 print ">>> plates (parked): x $(v_p_xlo:%.2f) / $(v_p_xhi:%.2f)   y $(v_p_ylo:%.2f) / $(v_p_yhi:%.2f)   z $(v_p_zlo:%.2f) / $(v_p_zhi:%.2f)"
 print ">>> gel BB:          x $(c_minx:%.2f) / $(c_maxx:%.2f)   y $(c_miny:%.2f) / $(c_maxy:%.2f)   z $(c_minz:%.2f) / $(c_maxz:%.2f)"
+
+# ----- GUARD 1: surface fringe against the planned plate closure, per axis (see fringe_max) -----
+variable e_plan     equal $(1.0-(1.0-v_compressions)^(1.0/3.0))
+variable fr_x       equal $((v_gel_lx_bb-v_gel_lx_rg)/(v_e_plan*v_gel_lx_bb))
+variable fr_y       equal $((v_gel_ly_bb-v_gel_ly_rg)/(v_e_plan*v_gel_ly_bb))
+variable fr_z       equal $((v_gel_lz_bb-v_gel_lz_rg)/(v_e_plan*v_gel_lz_bb))
+variable fringe_bad equal $((v_fringe_max>0.0)*(1-v_seat_rg)*((v_fr_x>v_fringe_max)||(v_fr_y>v_fringe_max)||(v_fr_z>v_fringe_max)))
+print ">>> fringe check: fringe L_bb - L_rg = $(v_gel_lx_bb-v_gel_lx_rg:%.2f) / $(v_gel_ly_bb-v_gel_ly_rg:%.2f) / $(v_gel_lz_bb-v_gel_lz_rg:%.2f) sigma (x / y / z);  closure planned at eps_vol ${compressions} = $(v_e_plan*v_gel_lx_bb:%.2f) / $(v_e_plan*v_gel_ly_bb:%.2f) / $(v_e_plan*v_gel_lz_bb:%.2f);  fringe / closure = $(v_fr_x:%.2f) / $(v_fr_y:%.2f) / $(v_fr_z:%.2f)  (seat_mode ${seat_mode}; limit fringe_max = ${fringe_max} applies to seat_mode bb, 0 = off)"
+if "${fringe_bad} == 1" then &
+    "print '>>> GUARD FRINGE: on at least one axis the surface fringe is larger than fringe_max x the planned plate closure, so plates seated on the outermost bead would stop outside the dense gel and the network would see only a fraction of the nominal strain. Stopping before the settle. Resubmit with SEAT_MODE=rg (plates seated on the dense faces), or FRINGE_MAX=0 if this state is intended.'" &
+    "quit 1"
 print ">>> wet pistons: feed z = $(v_z_feed:%.2f)  permeate z = $(v_z_perm:%.2f)"
 
 variable L_feed equal v_feed_z_bot-c_maxz
@@ -841,6 +876,15 @@ print ">>> Reference edges (strain denominators):  L0 = ${L0_x} x ${L0_y} x ${L0
 print ">>>   (V_bb, V_rg below = means over the last ${l0_avg_steps} steps of the settle; the edges are those of this step)"
 print ">>>   network at the reference:  BB $(v_gel_lx_bb:%.2f) x $(v_gel_ly_bb:%.2f) x $(v_gel_lz_bb:%.2f) (V_bb = ${V0_bb})   Rg $(v_gel_lx_rg:%.2f) x $(v_gel_ly_rg:%.2f) x $(v_gel_lz_rg:%.2f) (V_rg = ${V0_rg})"
 print ">>> seated preload (compressive, per plate): x $(v_N_xlo/v_A_x:%.4f) / $(v_N_xhi/v_A_x:%.4f)   y $(v_N_ylo/v_A_y:%.4f) / $(v_N_yhi/v_A_y:%.4f)   z $(v_N_zlo/v_A_z:%.4f) / $(v_N_zhi/v_A_z:%.4f)   mean $(v_P_plates:%.4f)"
+
+# ----- GUARD 3: what the seating did to the network (see prestrain_max) -----
+variable V_rg_free     equal $(v_lx_rg_avg*v_ly_rg_avg*v_lz_rg_avg)
+variable prestrain     equal $(1.0-v_V0_rg/v_V_rg_free)
+variable prestrain_bad equal $((v_prestrain_max>0.0)*(v_prestrain>v_prestrain_max))
+print ">>> reference check (seat_mode ${seat_mode}): Rg volume free $(v_V_rg_free:%.1f) -> seated $(v_V0_rg:%.1f) = volumetric pre-strain $(v_prestrain:%.4f);  mean plate preload now $(v_P_plates:%.4f)  (limit prestrain_max = ${prestrain_max}, 0 = off)"
+if "${prestrain_bad} == 1" then &
+    "print '>>> GUARD PRESTRAIN: seating the plates has already compressed the network by more than prestrain_max, so the reference is not a lightly loaded gel. Stopping before the reference window and the drive. Raise PRESTRAIN_MAX (or set it to 0) only if that reference is intended.'" &
+    "quit 1"
 if "$(v_core_xhi-v_core_xlo) < ${binWidth} || $(v_core_yhi-v_core_ylo) < ${binWidth} || $(v_core_zhi-v_core_zlo) < ${binWidth}" then &
     "print 'ERROR: the core column is thinner than one bin -- core_margin (${core_margin}) is too large for this gel'" &
     "quit 1"
@@ -1246,6 +1290,16 @@ unfix out_piston_pos
 
 run 0
 print ">>> Completed eps_vol=${compressions}:  plate strain $(v_strain_vol_plate:%.5f)  network BB $(v_strain_vol_bb:%.4f)  Rg $(v_strain_vol_rg:%.4f)  step=$(step)  plate pressure $(v_P_plates:%.4f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
+
+# ----- GUARD 2: did the network take the strain? (see rg_strain_min) -----
+variable rg_resp     equal $(v_strain_vol_rg/v_compressions)
+variable rg_resp_bad equal $((v_rg_strain_min>0.0)*(v_rg_resp<v_rg_strain_min))
+print ">>> strain check: Rg volume strain / applied strain = $(v_rg_resp:%.2f)  (limit rg_strain_min = ${rg_strain_min}, 0 = off)"
+if "${rg_resp_bad} == 1" then &
+    "print '>>> GUARD RG_STRAIN: at the end of the hold the Rg volume has taken less than rg_strain_min x the applied strain, so the plates did not compress the network as specified. Stopping before the unload and the remaining levels; the hold files are complete. Override with RG_STRAIN_MIN=0 only if that is intended.'" &
+    "quit 1"
+variable rg_resp     delete
+variable rg_resp_bad delete
 
 variable e_lin_prev delete
 variable e_lin_prev equal $(v_e_lin)

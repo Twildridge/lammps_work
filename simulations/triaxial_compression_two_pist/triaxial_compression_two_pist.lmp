@@ -148,6 +148,28 @@ variable unload_margin index 0.0          # sigma: extra retraction of EACH plat
 # ----- Phase 1.25: seating -----
 variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) short of the outermost gel bead
 variable t_seat       index 143000        # common approach time (steps)
+# seat_mode = which gel face the plates seat on (2026-11-16; SEAT_MODE in the batch; as compress_slab.lmp).
+# The strain bookkeeping is the bounding box in BOTH modes: L0_bb is the BB thickness of the SEATED gel,
+# the drive closes the plate gap by strain x L0_bb, and the plates are the bounding box from then on.
+#   bb (default): the outermost polymer bead (window mean, see l0_avg_steps).  Zero-load reference; right
+#       for a sharp surface (rot45 lattices: outermost bead ~2 sigma beyond the half-density face).  On a
+#       diffuse surface the closure goes into the fringe instead of the network (see fringe_max).
+#   rg: the Rg face, COM +/- L_rg/2, which is the half-density face within ~1 sigma on both the rot45 and
+#       the wide random gels.  The plates fold the fringe onto the dense gel during the seating, so the
+#       reference is the gel in contact with the plates: it carries a small preload and pre-strain, both
+#       printed after the settle (`>>> reference check`) and subtracted by the analysis (the reference
+#       window records the preload; moduli are increments from it).  prestrain_max stops the run there
+#       when the seating alone has compressed the network by more than that (Rg thickness, seated vs free).
+#       With unload = 1 give the plates room to let the gel re-swell freely: UNLOAD_MARGIN ~ half the fringe.
+variable seat_mode     index bb
+variable prestrain_max index 0.10
+if "${seat_mode} == bb" then &
+    "variable seat_rg equal 0" &
+elif "${seat_mode} == rg" &
+    "variable seat_rg equal 1" &
+else &
+    "print 'ERROR: seat_mode must be bb or rg (got ${seat_mode})'" &
+    "quit 1"
 variable nsteps_settle index 1000000      # both plates fixed before the epsilon=0 reference (2026-09-05 value)
 
 # ----- reference averaging (2026-11-11; L0_AVG_STEPS in the batch) -----
@@ -164,6 +186,23 @@ variable nsteps_settle index 1000000      # both plates fixed before the epsilon
 # seating position is still one sample of it unless npt_piston_steps and l0_avg_steps are both several
 # tau_1.  A window longer than its phase covers the whole phase; 0 = the last sample (the old readings).
 variable l0_avg_steps index 500000
+
+# ----- credit guards (2026-11-16; FRINGE_MAX / RG_STRAIN_MIN in the batch; 0 = that guard off) -----
+# The plates seat on the OUTERMOST polymer bead, so a gel with a diffuse surface spends its plate
+# closure on the fringe between the outermost beads and the dense gel instead of on the network.
+# The wide random 10-bead gel (job 55745206, 2026-11-15) has 13-16 sigma of fringe (L_bb - L_rg; the
+# rot45 lattices 4 and 8) against a closure of 9 sigma at strain 0.10: the plates stopped ~4 sigma
+# outside the dense faces, the Rg thickness fell 2.5 % for a nominal 10 %, and 7600 SU went into a
+# hold and an unload of that state.  Two checks stop such a run:
+#   fringe_max    after Phase 0 (~2 min in), seat_mode bb only: quit when the fringe L_bb - L_rg exceeds
+#                 fringe_max x the planned closure of the FIRST strain level (1.0 = the plates would not
+#                 reach the Rg faces).  Such a gel needs SEAT_MODE=rg, whose own check is prestrain_max.
+#   rg_strain_min at the end of every hold: quit, before the unload and the later levels, when the Rg
+#                 strain is below rg_strain_min x the applied strain (the rot45 gels reach 0.83-0.86).
+# Both print a `>>> GUARD` line and exit with status 1, so the job shows FAILED and nothing chained
+# on it starts; the files written so far stay (plots by hand: scripts/postprocess.sh).
+variable fringe_max    index 1.0
+variable rg_strain_min index 0.5
 variable l0_avg_every equal 100
 variable l0_avg_nwin  equal (v_l0_avg_steps>=v_l0_avg_every)*floor(v_l0_avg_steps/v_l0_avg_every)+(v_l0_avg_steps<v_l0_avg_every)
 
@@ -488,6 +527,15 @@ variable hw_z equal v_region_frac*v_rg_scale*sqrt(v_Rg_zz + v_eps)
 print ">>> support z = $(c_support_com[3])  load piston z = $(v_z_load)  feed piston z = $(v_z_feed)  permeate piston z = $(v_z_perm)"
 print ">>> gel top (Rg) = $(v_gel_top_rg)  gel bottom (Rg) = $(v_gel_bot_rg)  c_maxz = $(c_maxz)  c_minz = $(c_minz)"
 
+# ----- GUARD 1: surface fringe against the planned plate closure (see fringe_max) -----
+variable fringe_now   equal $(v_gel_lz_bb-v_gel_lz_rg)
+variable closure_plan equal $(v_compressions*v_gel_lz_bb)
+variable fringe_bad   equal $((v_fringe_max>0.0)*(1-v_seat_rg)*(v_fringe_now>v_fringe_max*v_closure_plan))
+print ">>> fringe check: L_bb $(v_gel_lz_bb:%.2f) - L_rg $(v_gel_lz_rg:%.2f) = $(v_fringe_now:%.2f) sigma of surface fringe;  plate closure planned at strain ${compressions} = $(v_closure_plan:%.2f) sigma;  fringe / closure = $(v_fringe_now/v_closure_plan:%.2f)  (seat_mode ${seat_mode}; limit fringe_max = ${fringe_max} applies to seat_mode bb, 0 = off)"
+if "${fringe_bad} == 1" then &
+    "print '>>> GUARD FRINGE: the surface fringe is larger than fringe_max x the planned plate closure, so plates seated on the outermost bead would stop outside the dense gel and the network would see only a fraction of the nominal strain. Stopping before the settle. Resubmit with SEAT_MODE=rg (plates seated on the dense face), or FRINGE_MAX=0 if this state is intended.'" &
+    "quit 1"
+
 variable L_feed equal v_feed_z_bot-v_gel_top_rg
 variable L_perm equal v_support_z_live-v_perm_z_top
 print ">>> Reservoirs: feed L=$(v_L_feed:%.2f) sigma   permeate L=$(v_L_perm:%.2f) sigma   A=$(v_area:%.2f)"
@@ -586,6 +634,7 @@ variable l0_free_ok       equal $(f_l0_free[3]>0.0)
 variable face_top_off_avg equal $(v_l0_free_ok*f_l0_free[1]+(1-v_l0_free_ok)*v_face_top_off)
 variable face_bot_off_avg equal $(v_l0_free_ok*f_l0_free[2]+(1-v_l0_free_ok)*v_face_bot_off)
 variable gel_lz_initial   equal $(v_l0_free_ok*f_l0_free[3]+(1-v_l0_free_ok)*v_gel_lz_rg)
+variable L_rg_free        equal ${gel_lz_initial}
 unfix l0_free
 print ">>> Initial gel thickness (Rg, post-settle): L0 = ${gel_lz_initial}   (BB: $(v_face_top_off_avg+v_face_bot_off_avg))   [means over the last ${l0_avg_steps} steps of the settle; this step: Rg $(v_gel_lz_rg)  BB $(v_gel_lz_bb)]"
 variable gel_strain equal (v_gel_lz_initial - v_gel_lz_rg) / v_gel_lz_initial
@@ -775,9 +824,9 @@ print 'Phase 1.25: symmetric seating (load piston down + support up, common time
 print '========================================'
 print ">>> approach start: piston_gel_gap=$(v_piston_gel_gap:%.2f)  gel_bot_gap=$(v_gel_bot_gap:%.2f)  piston_support_gap=$(v_piston_support_gap:%.2f)"
 
-variable gel_top_bb0 equal $(c_polymer_com[3]+v_face_top_off_avg)
-variable gel_bot_bb0 equal $(c_polymer_com[3]-v_face_bot_off_avg)
-print ">>> seating faces (window means): top ${gel_top_bb0}  bottom ${gel_bot_bb0}   [this step: top $(c_maxz)  bottom $(c_minz)]"
+variable gel_top_bb0 equal $(c_polymer_com[3]+(1-v_seat_rg)*v_face_top_off_avg+v_seat_rg*0.5*v_L_rg_free)
+variable gel_bot_bb0 equal $(c_polymer_com[3]-(1-v_seat_rg)*v_face_bot_off_avg-v_seat_rg*0.5*v_L_rg_free)
+print ">>> seating faces (seat_mode ${seat_mode}, window means): top ${gel_top_bb0}  bottom ${gel_bot_bb0}   [outermost beads, window means: top $(c_polymer_com[3]+v_face_top_off_avg)  bottom $(c_polymer_com[3]-v_face_bot_off_avg);  this step: top $(c_maxz)  bottom $(c_minz)]"
 variable piston_z0   equal $(c_load_com[3])
 variable support_z0  equal $(c_support_com[3])
 variable d_piston    equal $(v_piston_z0 - v_gel_top_bb0 - v_contact_gap)
@@ -814,6 +863,14 @@ variable gel_lz_initial equal $(v_l0_seat_ok*f_l0_seat[2]+(1-v_l0_seat_ok)*v_gel
 unfix l0_seat
 print ">>> Reference thicknesses:  L0_bb=${L0_bb} (authoritative)  L0_rg=${gel_lz_initial}  L0_gap=${L0_gap}  piston_seat_z=${piston_seat_z}  support_seat_z=${support_seat_z}"
 print ">>>   (L0_bb, L0_rg = means over the last ${l0_avg_steps} steps of the settle; this step: BB $(v_gel_lz_bb)  Rg $(v_gel_lz_rg))"
+
+# ----- GUARD 3: what the seating did to the network (see seat_mode / prestrain_max) -----
+variable prestrain     equal $((v_L_rg_free-v_gel_lz_initial)/v_L_rg_free)
+variable prestrain_bad equal $((v_prestrain_max>0.0)*(v_prestrain>v_prestrain_max))
+print ">>> reference check (seat_mode ${seat_mode}): Rg thickness free $(v_L_rg_free:%.3f) -> seated $(v_gel_lz_initial:%.3f) = pre-strain $(v_prestrain:%.4f);  load-piston preload now $(v_P_load_meas:%.4f);  plates $(v_L0_gap-v_L0_bb:%.2f) sigma wider than L0_bb  (limit prestrain_max = ${prestrain_max}, 0 = off)"
+if "${prestrain_bad} == 1" then &
+    "print '>>> GUARD PRESTRAIN: seating the plates has already compressed the network by more than prestrain_max, so the reference is not a lightly loaded gel. Stopping before the reference window and the drive. Raise PRESTRAIN_MAX (or set it to 0) only if that reference is intended.'" &
+    "quit 1"
 # solvent-expelled reference: wet-piston positions at the seated state
 variable z_feed0 equal $(v_z_feed)
 variable z_perm0 equal $(v_z_perm)
@@ -1234,6 +1291,16 @@ unfix out_support_pos
 unfix out_piston_pos
 
 print ">>> Completed strain=${compressions}:  gel_strain_bb = $(v_gel_strain_bb:%.4f)  gel_strain_rg = $(v_gel_strain:%.4f)  step=$(step)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
+
+# ----- GUARD 2: did the network take the strain? (see rg_strain_min) -----
+variable rg_resp     equal $(v_gel_strain/v_compressions)
+variable rg_resp_bad equal $((v_rg_strain_min>0.0)*(v_rg_resp<v_rg_strain_min))
+print ">>> strain check: Rg strain / applied strain = $(v_rg_resp:%.2f)  (limit rg_strain_min = ${rg_strain_min}, 0 = off)"
+if "${rg_resp_bad} == 1" then &
+    "print '>>> GUARD RG_STRAIN: at the end of the hold the Rg thickness has taken less than rg_strain_min x the applied strain, so the plates did not compress the network as specified. Stopping before the unload and the remaining levels; the hold files are complete. Override with RG_STRAIN_MIN=0 only if that is intended.'" &
+    "quit 1"
+variable rg_resp     delete
+variable rg_resp_bad delete
 
 variable hold_steps delete
 variable piston_target_z  delete

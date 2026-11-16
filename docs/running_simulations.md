@@ -88,6 +88,27 @@ spans τ₁, so to beat that down as well raise `NPT_PISTON_STEPS` (the free-gel
 `L0_AVG_STEPS` — about 40 min of wall time per extra 1 M steps. `L0_AVG_STEPS=0` restores the single-step readings. On the analysis
 side the permeation `PERM_L0_STEPS` (bounding-box `L_0` before the ramp, `L_ss` before the unload ramp-down) went from 100 k to 500 k steps.
 
+`SEAT_MODE` and the credit guards of `triaxial_compression_two_pist` (2026-11-16; all forwarded as `-var`). The strain bookkeeping is
+the bounding box in both seat modes: `L0_bb` is the bounding-box thickness of the seated gel, the drive closes the gap by strain × `L0_bb`,
+and the plates are the bounding box from then on, so the convergence plot shows the applied compression (BB) and the network's response (Rg).
+`SEAT_MODE=bb` (default) seats the plates on the outermost polymer bead: a zero-load reference, right for a sharp surface (rot45 lattices:
+`L_bb − L_rg` = 4 and 8 σ). The wide random 10-bead gel has 13–16 σ of that fringe (attached loops, no dangling ends) against a 9 σ
+closure at strain 0.10: in job 55745206 the plates stopped 3–5 σ outside the dense faces, the Rg thickness fell 2.5 % for a nominal 10 %,
+and the stress (0.0045 ± 0.0007) never levelled (7,600 SU). `SEAT_MODE=rg` seats on the Rg face (COM ± `L_rg`/2, the half-density face
+within ~1 σ on both gel types), so the plates fold the fringe onto the dense gel and the reference is the gel in contact with the
+plates; its preload and pre-strain are printed (`>>> reference check`) and the moduli are increments from that reference. With the
+unload, add `UNLOAD_MARGIN` ≈ half the fringe so the plates clear the re-swelling gel. Three checks stop a run that is not what was
+specified, each with a `>>> GUARD …` line and exit status 1 (job FAILED, files so far kept; 0 turns a check off):
+`FRINGE_MAX` (default 1.0; `bb` only; ~2 min in) quits when the fringe exceeds that multiple of the first level's closure (wide random
+gel 1.7; rot45 5-bead 0.28, 15-bead 0.54); `PRESTRAIN_MAX` (default 0.10; after the seated settle, ~1.5 h in) quits when the seating
+alone has compressed the Rg thickness by more than that; `RG_STRAIN_MIN` (default 0.5; end of every hold) quits before the unload and
+the later levels when the Rg strain is below that fraction of the applied strain (rot45: 0.83–0.86; job 55745206: 0.27).
+`compress_slab` has the same three guards (per-axis fringe, volumetric Rg pre-strain, Rg volume strain over the applied strain). With the
+defaults they stop the 12-cell cube in `bb` mode (fringe ≈ 5 σ per axis against 2.4 σ of closure at ε_vol 0.10; the `bb` sweep of
+2026-10-19 reached 4–14 % of the applied strain in Rg volume), so that cube needs `SEAT_MODE=rg` (2026-10-11: 77 %, pre-strain 0.079).
+The shear and permeation decks have no plates seated on the outermost bead and were not changed. Laptop smoke-test prompt and the
+wide-gel resubmission commands: `scripts/laptop_smoke_test_prompt.txt`.
+
 `DRIVE_SPLIT` (env, default 0.5; forwarded as `-var drive_split`) sets the piston's share of each compression level's
 gap closure in both compression decks: 0.5 = symmetric drive (piston down + support up), 1.0 = the old top-only drive.
 The archived one-piston `archive/simulations/triaxial_compression/triaxial_compression.lmp` exposes the same kind of knobs since 2026-09-18 (`drive_split`,
