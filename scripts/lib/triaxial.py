@@ -256,6 +256,11 @@ class Config:
                                           # state, same dP on the solvent) read the frozen-network flux -> P['frozen'] (Darcy kappa of the
                                           # rigid network beside the live one, add_perm_frozen / fig_perm_frozen); False = ignore them
     PERM_FROZEN_SKIP: int = 0             # steps after the freeze left out of the frozen flux windows (0 = plateau_frac_auto drift test only)
+    PERM_VCTRL: bool = True               # 2026-11-16: when the run has _v files (deck Phase 2v: after the drive the feed piston is moved at the
+                                          # constant mean velocity of the drive's tail, the permeate piston still at P_target) read them ->
+                                          # P['vctrl']: kappa_v = q L/dP_measured on the live network (add_perm_vctrl).  False = ignore them
+    PERM_VCTRL_SKIP: int = 0              # steps after the switch to velocity control left out of the stage's windows (the drift test on the
+                                          # measured dP picks the window; raise this when the gel visibly re-consolidates after the switch)
     PERM_UNLOAD: bool = True              # 2026-11-07: when the run has _u files (deck Phase 2c, UNLOAD=1: dP ramped back to 0, free
                                           # re-swelling at zero dP) load them, fit the re-swelling D_c with the drive's consolidation
                                           # model (same modes: the network stress drops to zero at both faces at once) and M from the
@@ -468,6 +473,11 @@ class Config:
         """the permeation FROZEN-network file (deck Phase 2d, 2026-11-07): <name>_<DATANAME>_<INTERACTION>_<tag>_f.<ext>."""
         t = self.tag_for(None)
         return self.DATA_DIR / f'{name}_{self.DATANAME}_{self.INTERACTION}_{t if t is not None else "*"}_f.{ext}'
+
+    def vpath(self, name, ext='dat'):
+        """the permeation VELOCITY-CONTROLLED stage's file (deck Phase 2v, 2026-11-16): <name>_<DATANAME>_<INTERACTION>_<tag>_v.<ext>."""
+        t = self.tag_for(None)
+        return self.DATA_DIR / f'{name}_{self.DATANAME}_{self.INTERACTION}_{t if t is not None else "*"}_v.{ext}'
 
     def traj(self, name, lvl=None):
         return self.TRAJ_DIR / f'{name}_{self.stem(lvl)}.lammpstrj'
@@ -3125,6 +3135,11 @@ _PERM_REQUIRED = ('sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z', 'pi
 _PERM_FROZEN_DAT = ('permeation', 'permeate_count', 'piston_position', 'piston_velocity', 'piston_force', 'piston_force_avg',
                     'piston_pressure', 'pressure_feed', 'pressure_permeate', 'support_force', 'gel_dimensions_bb',
                     'gel_dimensions_rg', 'sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z')
+# permeation VELOCITY-CONTROLLED stage files (deck Phase 2v, 2026-11-16): optional (older runs have none), tagged _<tag>_v
+_PERM_VCTRL_DAT = ('vctrl_info', 'permeation', 'permeate_count', 'piston_position', 'piston_velocity', 'piston_force',
+                   'piston_force_avg', 'piston_pressure', 'pressure_feed', 'pressure_permeate', 'support_force',
+                   'gel_dimensions_bb', 'gel_dimensions_rg', 'sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z',
+                   'disp_z_polymer')
 # permeation UNLOAD files (deck Phase 2c, -var unload 1, 2026-11-07): optional, tagged _<tag>_u
 _PERM_UNLOAD_DAT = ('disp_z_polymer', 'gel_dimensions_bb', 'gel_dimensions_rg', 'piston_position', 'piston_velocity',
                     'piston_force', 'piston_force_avg', 'piston_pressure', 'permeation', 'permeate_count', 'pressure_feed',
@@ -3154,6 +3169,7 @@ def sync_files(cfg, levels=None):
         data += [cfg.path(n) for n in _PERM_DAT]
         data += [cfg.upath(n, '') for n in _PERM_UNLOAD_DAT]     # the unload's _u files (optional: older runs have none)
         data += [cfg.fpath(n) for n in _PERM_FROZEN_DAT]          # the frozen network's _f files (optional)
+        data += [cfg.vpath(n) for n in _PERM_VCTRL_DAT]           # the velocity-controlled stage's _v files (optional)
         traj += [cfg.traj('traj_stress')]
         req += [cfg.path(n) for n in _PERM_REQUIRED]
         return data, traj, req
@@ -3180,6 +3196,7 @@ def sync_from_expanse(cfg, levels=None, force=False):
     if cfg.mode == 'permeation':
         optional |= {cfg.upath(n, '').name for n in _PERM_UNLOAD_DAT}
         optional |= {cfg.fpath(n).name for n in _PERM_FROZEN_DAT}
+        optional |= {cfg.vpath(n).name for n in _PERM_VCTRL_DAT}
     sync_pull(cfg, data_files, traj_files, required, optional, force,
               refresh=lambda: sync_files(cfg, levels))
 
@@ -7574,42 +7591,91 @@ def fig_perm_pistons(cfg, R, P):
     return _save(fig, cfg, 'perm_pistons')
 
 
+# fig_perm_flux / fig_perm_stages / fig_perm_reconcile text sizes (2026-11-16): titles, legends
+_F8_TITLE, _F8_LEG = 23, 19
+
+
+def _legend_below(ax, fontsize=_F8_LEG, ncol=1, notes=()):
+    """Legend under the axes (constrained layout makes the room), so text of this size never
+    covers the data; `notes` are appended as entries without a handle (the annotation lines)."""
+    h, lab = ax.get_legend_handles_labels()
+    for line in notes:
+        h.append(plt.Line2D([], [], ls='none'))
+        lab.append(line)
+    if not h:
+        return None
+    return ax.legend(h, lab, loc='upper center', bbox_to_anchor=(0.5, -0.17), ncol=ncol, fontsize=fontsize,
+                     frameon=True, handlelength=1.8, borderaxespad=0.0)
+
+
+def _slope_ci(t, y, ci=0.95):
+    """Least-squares slope of y(t) and the half-width of its ci interval.  The residuals of a
+    count series are not independent sample to sample, so the white-noise standard error is
+    widened by the lag-1 autocorrelation r of the residuals, sqrt((1 + r)/(1 - r)) (AR(1)
+    effective sample size; r clipped to [0, 0.95]).  (nan, nan) below 4 points."""
+    t, y = np.asarray(t, float), np.asarray(y, float)
+    n = len(t)
+    if n < 4:
+        return np.nan, np.nan
+    tc = t - t.mean()
+    sxx = float(tc @ tc)
+    b = float(tc @ (y - y.mean())) / sxx
+    res = y - y.mean() - b * tc
+    s2 = float(res @ res) / (n - 2)
+    r = float(np.clip((res[1:] @ res[:-1]) / max(float(res @ res), 1e-300), 0.0, 0.95))
+    se = np.sqrt(s2 / sxx * (1 + r) / (1 - r))
+    return b, float(stats.t.ppf(0.5 + ci / 2, n - 2)) * se
+
+
 def fig_perm_flux(cfg, R, P):
     """(a) Q_perm(t) from the block-averaged permeate-piston velocity (context) with the
     steady window and the two estimates: N_perm slope (primary, +/- SE over independent
     windows) and the z_perm slope (the legacy block mean was dropped 2026-09-24);
     (b) N_perm(t) with the per-window fits that give the primary value; (c) the steady
-    phi_s(z) drop across the gel and the D_c the flux implies (perm_dphi, 2026-11-12)."""
+    phi_s(z) drop across the gel and the D_c the flux implies (perm_dphi, 2026-11-12);
+    bottom row, full width: the solvent volumetric flux q_s(t) = (dN_s/dt)/(rho_s0 A_pist)
+    over the whole drive (_perm_qs_panel, 2026-11-16)."""
     F = P.get('flux')
     if F is None or (F.get('Q') is None and F.get('Q_N') is None):
         print('flux figure skipped (no permeation file)')
         return None
     DP = perm_dphi(cfg, R, P)
-    if DP:
-        fig, (axQ, axN, axD) = plt.subplots(1, 3, figsize=(27, 6), constrained_layout=True)
-    else:
-        fig, (axQ, axN) = plt.subplots(1, 2, figsize=(18, 6), constrained_layout=True)
+    ncol = 3 if DP else 2
+    fig = plt.figure(figsize=(9.5 * ncol, 21), constrained_layout=True)
+    gs = fig.add_gridspec(2, ncol, height_ratios=[1.0, 0.8])
+    axQ, axN = fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1])
+    axD = fig.add_subplot(gs[0, 2]) if DP else None
+    axS = fig.add_subplot(gs[1, :])
     st, Q = F['step'], F['Q']
     if Q is not None:
         axQ.plot(st, Q, '-', color=WONG['green'], lw=1.0, alpha=0.35, label=r'$Q=A\,dz_{\rm perm}/dt$ (block-avg piston velocity)')
-        axQ.plot(st, rolling_mean(Q, cfg.roll_win), '-', color=WONG['green'], lw=2.4, label=f'rolling mean ({cfg.roll_win})')
+        rm = rolling_mean(Q, cfg.roll_win)
+        # interval of the rolling mean: t * (std of the samples in the window)/sqrt(n); the same shrinking edge window
+        kk, hw = np.arange(len(Q)), cfg.roll_win // 2
+        n_eff = np.maximum(np.minimum(len(Q), kk + hw + 1) - np.maximum(0, kk - hw), 2).astype(float)
+        half = (stats.t.ppf(0.5 + cfg.ci_level / 2, n_eff - 1)
+                * np.sqrt(np.maximum(rolling_mean(Q ** 2, cfg.roll_win) - rm ** 2, 0.0) * n_eff / (n_eff - 1) / n_eff))
+        axQ.fill_between(st, rm - half, rm + half, color=WONG['green'], alpha=0.22, lw=0)
+        axQ.plot(st, rm, '-', color=WONG['green'], lw=2.4, label=f'rolling mean ({cfg.roll_win}) with its {cfg.ci_level:.0%} CI')
     if 'win_step0' in F:
         axQ.axvspan(F['win_step0'], float(st[-1]), color=WONG['green'], alpha=0.10, label='steady window (auto, slope drift test)')
     if 'Q_N' in F:
         NS = F['Q_N']
         axQ.axhline(NS['mean'], color='k', ls='--', lw=1.8,
-                    label=f"$N_{{\\rm perm}}$ slope: $Q$ = {fmt_val_unc(NS['mean'], NS['se'])}  (SE, {NS['n_win']} windows)")
+                    label=f"$N_{{\\rm perm}}$ slope: $Q$ = {fmt_val_unc(NS['mean'], NS['se'])}  (SE, {NS['n_win']} windows; bands {cfg.ci_level:.0%} CI)")
         axQ.axhspan(NS['lo'], NS['hi'], color='k', alpha=0.08)
     if 'Q_z' in F:
         ZS = F['Q_z']
         axQ.axhline(ZS['mean'], color=WONG['reddishpurple'], ls=':', lw=1.6,
                     label=f"$z_{{\\rm perm}}$ slope: {fmt_val_unc(ZS['mean'], ZS['se'])}")
+        if np.isfinite(ZS.get('lo', np.nan)):
+            axQ.axhspan(ZS['lo'], ZS['hi'], color=WONG['reddishpurple'], alpha=0.10, lw=0)
     axQ.axvline(P['evol_from'], color='k', ls=':', lw=1, alpha=0.5)
     axQ.set_xlabel('time step')
     axQ.set_ylabel(r'$Q_{\rm perm}$  ($\sigma^3/\tau$)')
-    axQ.set_title('(a) permeate flux: piston-velocity trace (context) and the slope estimates', fontsize=13)
+    axQ.set_title('(a) permeate flux: piston-velocity trace (context)\nand the slope estimates', fontsize=_F8_TITLE)
     axQ.grid(alpha=0.3)
-    smart_legend(axQ, fontsize=10)
+    _legend_below(axQ)
     cnt = F.get('count')
     if cnt is not None:
         n_st, n_val = cnt[:, 0], cnt[:, 1]
@@ -7626,6 +7692,14 @@ def fig_perm_flux(cfg, R, P):
                 sl, ic = np.polyfit(n_st[cw], n_val[cw] - n_val[0], 1)
                 axN.plot(n_st[cw], sl * n_st[cw] + ic, '--', color=WONG['vermillion'], lw=2,
                          label=f"single fit $\\rightarrow$ $Q$ = {sig(NS['slope_all'])}")
+                if np.isfinite(NS.get('lo', np.nan)):
+                    # the primary Q interval drawn as the cone of lines through the centre of the steady window
+                    sc = float(np.mean(n_st[cw]))
+                    nc = float(np.mean(n_val[cw] - n_val[0]))
+                    k = NS['rho0'] * cfg.dt_lj                     # Q (sigma^3/tau) -> beads per step
+                    axN.fill_between(n_st[cw], nc + NS['lo'] * k * (n_st[cw] - sc), nc + NS['hi'] * k * (n_st[cw] - sc),
+                                     color=WONG['blue'], alpha=0.22, lw=0, zorder=1,
+                                     label=f"{cfg.ci_level:.0%} CI of the primary $Q$: [{sig(NS['lo'])}, {sig(NS['hi'])}]")
             # the independent windows: short segments at the fitted slopes
             w = NS['win_steps']
             for j, (c, q) in enumerate(zip(NS['centers'], NS['slopes'])):
@@ -7636,20 +7710,69 @@ def fig_perm_flux(cfg, R, P):
                 axN.plot(n_st[sel], np.polyval(m, n_st[sel]), '-', color=WONG['blue'], lw=2.6, alpha=0.85,
                          label=(f'{NS["n_win"]} independent windows of {w} steps $\\rightarrow$ $Q$ = {fmt_val_unc(NS["mean"], NS["se"])}' if j == 0 else None))
             axN.axvspan(NS['step0'], float(n_st[-1]), color=WONG['green'], alpha=0.10)
-            axN.set_title(f"(b) permeate bead count: window slopes / $\\rho_{{s,0}}$ = {sig(NS['rho0'])}   (primary $Q$)", fontsize=13)
+            axN.set_title(f"(b) permeate bead count: window slopes / $\\rho_{{s,0}}$\n($\\rho_{{s,0}}$ = {sig(NS['rho0'])}; primary $Q$)", fontsize=_F8_TITLE)
         else:
-            axN.set_title('(b) permeate bead count', fontsize=13)
+            axN.set_title('(b) permeate bead count', fontsize=_F8_TITLE)
     axN.set_xlabel('time step')
     axN.set_ylabel(r'$\Delta N_{\rm perm}$  (beads)')
     axN.grid(alpha=0.3)
-    smart_legend(axN, fontsize=10)
+    _legend_below(axN)
     if DP:
         _perm_Dc_flux_panel(axD, cfg, R, P, DP)
+    _perm_qs_panel(axS, cfg, P, n_st, n_val, 'd' if DP else 'c')
     return _save(fig, cfg, 'perm_flux')
 
 
+def _perm_qs_panel(ax, cfg, P, n_st, n_val, tag='d'):
+    """fig_perm_flux, bottom row: the solvent volumetric flux through the gel against the time step,
+        q_s = Q/A_pist = (dN_s/dt) / (rho_s0 A_pist),
+    N_s the permeate bead count (n_st, n_val: the whole series, ramp included), rho_s0 the
+    reservoir solvent density, A_pist the piston area.  The count carries a thermal jitter
+    of tens of beads per sample against a drift of about one bead per sample, so dN_s/dt is
+    a least-squares slope over a window of cfg.q_win_steps, never a point difference: the
+    line is that window slid along the series (neighbouring points share data), the markers
+    are the non-overlapping windows (independent).  Dashed: the steady value Q_N/A that
+    panel (b) gives, with its interval.  Band / error bars: the interval of each window's
+    fit (_slope_ci) -- how well that window's slope is measured, i.e. the counting jitter
+    only.  The window-to-window scatter is several times wider: it is the thermal
+    fluctuation of the flux itself, which the dashed band (SE over the windows) carries."""
+    F = P['flux']
+    NS = F.get('Q_N')
+    area = P['area']
+    rho0 = NS['rho0'] if NS else np.nan
+    if n_st is None or not (np.isfinite(rho0) and rho0 > 0):
+        ax.text(0.5, 0.5, r'$q_s(t)$ needs the permeate bead count and $\rho_{s,0}$', ha='center', va='center', transform=ax.transAxes, fontsize=_F8_TITLE)
+        ax.set_axis_off()
+        return
+    n_st, n_val = np.asarray(n_st, float), np.asarray(n_val, float)
+    w = float(cfg.q_win_steps)
+    norm = 1.0 / (rho0 * area)
+    cen, qs, qh, ce, sl, sh = _sliding_flux(n_st, n_val, w, cfg.dt_lj, norm, cfg.ci_level)
+    if cen.size:
+        ax.fill_between(cen, qs - qh, qs + qh, color=WONG['blue'], alpha=0.22, lw=0)
+        ax.plot(cen, qs, '-', color=WONG['blue'], lw=2.2,
+                label=f'sliding least-squares slope, window {int(w)} steps, with the {cfg.ci_level:.0%} CI of each fit')
+    if ce.size:
+        ax.errorbar(ce, sl, yerr=sh, fmt='o', color=WONG['vermillion'], ms=8, mec='k', mew=0.6, ecolor='k', elinewidth=1.4,
+                    capsize=4, zorder=5, label=f'independent windows of {int(w)} steps $\\pm$ fit CI')
+    if NS:
+        ax.axhline(NS['mean'] / area, color='k', ls='--', lw=1.8,
+                   label=f"steady $q_s = Q/A_{{\\rm pist}}$ = {fmt_val_unc(NS['mean'] / area, NS['se'] / area)}  (SE, {NS['n_win']} windows; band {cfg.ci_level:.0%} CI)")
+        if np.isfinite(NS.get('lo', np.nan)):
+            ax.axhspan(NS['lo'] / area, NS['hi'] / area, color='k', alpha=0.08)
+        ax.axvspan(NS['step0'], float(n_st[-1]), color=WONG['green'], alpha=0.10, label='steady window')
+    ax.axhline(0, color='k', ls=':', lw=1, alpha=0.5)
+    ax.axvline(P['evol_from'], color='k', ls=':', lw=1, alpha=0.5)
+    ax.set_xlabel('time step')
+    ax.set_ylabel(r'$q_s$  ($\sigma/\tau$)')
+    ax.set_title(f'({tag}) solvent volumetric flux:  ' + r'$q_s = Q/A_{\rm pist} = \frac{1}{A_{\rm pist}}\,\frac{dN_s/dt}{\rho_{s,0}}$'
+                 + f"   ($A_{{\\rm pist}}$ = {sig(area)}, $\\rho_{{s,0}}$ = {sig(rho0)})", fontsize=_F8_TITLE)
+    ax.grid(alpha=0.3)
+    _legend_below(ax, ncol=2)
+
+
 def _perm_Dc_flux_panel(ax, cfg, R, P, DP):
-    """Figure 8 (c): the steady phi_s(z) profiles with the perm_dphi fits and the D_c the
+    """fig_perm_flux (c): the steady phi_s(z) profiles with the perm_dphi fits and the D_c the
     measured flux implies, D_c = q_s L / ln[(1 - phi_P)/(1 - phi_F)]."""
     z = R['z']
     zx = zn(R, z)
@@ -7674,12 +7797,12 @@ def _perm_Dc_flux_panel(ax, cfg, R, P, DP):
         if np.isfinite(D['Dc']):
             lines.append(f"{key.split('_')[1]}{'*' if key == prim else ''}:  $\\langle 1-\\phi_s\\rangle$ {D['one_m_phi']:.3f}, $L$ {sig(D['L'], 3)}  $\\rightarrow$  "
                          f"$\\mathcal{{D}}_c$ = {sig(D['Dc'], 3)} [{sig(D['Dc_lo'], 3)}, {sig(D['Dc_hi'], 3)}]"
-                         f"   (permeate half {sig(D['Dc_perm'][0], 2)}, feed half {sig(D['Dc_feed'][0], 2)})")
+                         f"\n(permeate half {sig(D['Dc_perm'][0], 2)}, feed half {sig(D['Dc_feed'][0], 2)})")
     shade_gel(ax, R, P)
     mark_walls(ax, R, P)
     finish_axes(ax, r'$\phi_s$', '', R=R)
-    ax.set_title(r'(c) $\mathcal{D}_c$ from the flux, $q_s=\frac{\mathcal{D}_c}{1-\phi_s}\frac{d\phi_s}{dz}$:  '
-                 r'$\mathcal{D}_c = q_s L\,/\ln[(1-\phi_s^P)/(1-\phi_s^F)]$', fontsize=13)
+    ax.set_title(r'(c) $\mathcal{D}_c$ from the flux, $q_s=\frac{\mathcal{D}_c}{1-\phi_s}\frac{d\phi_s}{dz}$:' + '\n'
+                 + r'$\mathcal{D}_c = q_s L\,/\ln[(1-\phi_s^P)/(1-\phi_s^F)]$', fontsize=_F8_TITLE)
     v = np.concatenate([np.ravel(a) for a in vals])
     v = v[np.isfinite(v)]
     span = max(float(v.max() - v.min()), 0.05)
@@ -7687,18 +7810,20 @@ def _perm_Dc_flux_panel(ax, cfg, R, P, DP):
     xm = zn(R, np.array([P['z_mem_lo'], P['z_mem_hi']]))
     pad = 0.12 * abs(xm[1] - xm[0])
     ax.set_xlim(xm.min() - pad, xm.max() + pad)
-    smart_legend(ax, fontsize=10)
     D = DP[prim]
+    notes = []
     if lines:
-        head = f"$q_s = Q_{{\\rm perm}}/A$ = {sig(D['q'], 3)}  (* = primary; quadratic fits, faces = ends of the fitted bins)"
+        notes.append(f"$q_s = Q_{{\\rm perm}}/A$ = {sig(D['q'], 3)}  (* = primary; quadratic fits,\nfaces = ends of the fitted bins; [ ] = {cfg.ci_level:.0%} CI)")
+        notes += lines
         ref = []
         if P.get('Dc') is not None:
-            ref.append(f"profile fit (fig 12) {sig(P['Dc']['Dc'], 3)}")
+            ref.append(f"drive transient {sig(P['Dc']['Dc'], 3)}")
         U = P.get('unload')
         if U and U.get('Dc') is not None:
-            ref.append(f"unload (fig 12u) {sig(U['Dc']['Dc'], 3)}")
-        annotate_box(ax, '\n'.join([head] + lines + (['$\\mathcal{D}_c$ from the displacement: ' + ', '.join(ref)] if ref else [])),
-                     loc='lower left', fontsize=10)
+            ref.append(f"unload {sig(U['Dc']['Dc'], 3)}")
+        if ref:
+            notes.append('$\\mathcal{D}_c$ from the displacement: ' + ', '.join(ref))
+    _legend_below(ax, notes=notes)
 
 
 def fig_perm_permeability(cfg, R, P):
@@ -7774,13 +7899,13 @@ def fig_perm_permeability(cfg, R, P):
 #  material coordinate zeta = (z - u_z - Z^P)/L_0, Z^P = z^P - u_0 (the emptying top bins then
 #  reach zeta -> 1 instead of stopping at the last bin populated in EVERY snapshot).
 #  Three readings of the displacement data:
-#    * profile fit  (fig 12 a-b): (u_z - u_0)(zeta, t)/L of the disp_z_polymer snapshots with FREE
+#    * profile fit  (fig_perm_Dc a-b): (u_z - u_0)(zeta, t)/L of the disp_z_polymer snapshots with FREE
 #      amplitudes (the compression fit's idiom, DC_FREE_AMPS) -> D_c; u = 0 at t_reset whatever
 #      the amplitudes.
-#    * thickness trace (fig 12 c): u_F(t) = L_bb(t) - L_0 (5 k-step cadence) against the
+#    * thickness trace (fig_perm_Dc c): u_F(t) = L_bb(t) - L_0 (5 k-step cadence) against the
 #      zero-IC series -> (u_F(inf), D_c); this resolves the early transient that the
 #      stress-cadence snapshots (first window >= 1 nfreq after the reset) missed in perm_2.
-#    * M (fig 13): M = dP L_ss/(2|u_F|) (L_ss the steady thickness; 2026-10-02, was L_0) from the
+#    * M (fig_perm_M): M = dP L_ss/(2|u_F|) (L_ss the steady thickness; 2026-10-02, was L_0) from the
 #      steady thickness change L_0 - L_ss (the definition), from the
 #      steady-profile parabola c, and from the trace asymptote u_F(inf).
 # ---------------------------------------------------------------------------
@@ -8216,8 +8341,8 @@ def perm_M_estimates(cfg, P, F):
 
 def add_perm_displacement(cfg, R, P, verbose=True):
     """P['disp'], P['Dc'] (fit_perm_Dc), P['M_perm'] (perm_M_estimates) and P['kappa_Dc']
-    (D_c/M against the Darcy kappa of figure 9).  Missing files -> the keys are None and
-    figures 12-13 are skipped."""
+    (D_c/M against the Darcy kappa).  Missing files -> the keys are None and
+    fig_perm_Dc / fig_perm_M are skipped."""
     say = print if verbose else (lambda *a, **k: None)
     P['disp'] = load_perm_disp(cfg, R, P)
     P['Dc'] = P['M_perm'] = P['kappa_Dc'] = None
@@ -8275,7 +8400,7 @@ def add_perm_displacement(cfg, R, P, verbose=True):
             kd = (P.get('flux') or {}).get('k', {}).get('N_measured')
             say(f"  kappa = D_c/M (M = {Mp['primary']}, {Mref['M']:.4f}):  "
                 + '   '.join(f"{k}: {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" for k, v in K.items())
-                + (f"   |  Darcy kappa = Q L/(A dP) (fig 9): {kd['k']:.4e}  ->  D_c(Darcy) = kappa M = {kd['k'] * Mref['M']:.4e}" if kd else ''))
+                + (f"   |  Darcy kappa = Q L/(A dP) (constant-dP drive): {kd['k']:.4e}  ->  D_c(Darcy) = kappa M = {kd['k'] * Mref['M']:.4e}" if kd else ''))
     return P
 
 
@@ -8420,36 +8545,80 @@ def add_perm_unload(cfg, R, P, verbose=True):
     return P
 
 
-def add_perm_frozen(cfg, R, P, verbose=True):
-    """P['frozen'] (2026-11-07): the flux through the FROZEN steady-state network (deck Phase 2d, FROZEN=1: every polymer
-    bead stopped at the end of the drive, the same dP kept on the solvent).  Same estimators as the live drive (load_permeation):
-    Q from the slope of N_permeate over independent q_win_steps windows of the frozen interval (drift-tested plateau), the
-    z_perm slope beside it, dP = the measured piston difference over the same window, L = the live steady gel thickness
-    (the network does not move), kappa_f = Q L/(A dP) with the CI -- and the ratio kappa_frozen / kappa_live.  Flow through a
-    rigid network and weak flow through the swollen one should agree to leading order; the difference is the network's
-    response to the drag (its own motion and compaction) during the live drive.  None without _f files or when
-    cfg.PERM_FROZEN is False."""
-    say = print if verbose else (lambda *a, **k: None)
-    P['frozen'] = None
-    if not cfg.PERM_FROZEN:
-        return P
-    fp = cfg.fpath('permeation')
-    if not fp.exists():
-        return P
-    en, et = read_piston_table(fp)
+# ---------------------------------------------------------------------------
+#  permeation mode: the post-drive stages (2026-11-16)
+#
+#  drive     both pistons pressure-controlled, dP applied: D_c (transient), M (steady profile),
+#            and a Darcy kappa whose noise sits in the FLUX (sigma_q^2 = 2 kT kappa/(A L T)).
+#  Phase 2v  feed piston at a constant velocity (the drive's mean), permeate piston at P_target:
+#            the flux is prescribed and the pressure drop is measured, kappa_v = q L/dP_meas on
+#            the LIVE network (files _v).  The same thermal noise now sits in dP.
+#  Phase 2d  polymer frozen, same piston velocity: kappa_f = q L/dP_meas on the RIGID network
+#            (files _f).  Runs without Phase 2v (before 2026-11-16) kept the applied dP instead.
+#  The three parameters the run has to reconcile: D_c, M and kappa, with kappa = D_c/M.
+# ---------------------------------------------------------------------------
+def perm_vctrl_info(cfg):
+    """vctrl_info_<...>_v.dat (written once by the deck at the start of Phase 2v) -> {key: float}:
+    step_start, steps, vfeed_set (signed, sigma/tau; negative = toward the gel), vfeed_meas,
+    vfeed_user (1 = -var vfeed given), avg_step_a/b and z_feed_a/b (the drive window the mean
+    velocity was taken over), area, dP_drive, P_target, frozen_follows.  None without the file."""
+    f = cfg.vpath('vctrl_info')
+    if '*' in f.name or not f.exists():
+        return None
+    out = {}
+    with open(f) as fh:
+        for line in fh:
+            t = line.split()
+            if len(t) == 2 and not t[0].startswith('#'):
+                try:
+                    out[t[0]] = float(t[1])
+                except ValueError:
+                    pass
+    return out or None
+
+
+def _perm_k(Q, Qlo, Qhi, dP, dPlo, dPhi, L, area):
+    """kappa = Q L/(A dP) with the relative half-widths of Q and dP in quadrature; None when undefined"""
+    if not (np.isfinite(Q) and np.isfinite(dP)) or dP == 0:
+        return None
+    k = Q * L / (area * dP)
+    rq = 0.5 * (Qhi - Qlo) / abs(Q) if (Qlo is not None and np.isfinite(Qlo) and Q != 0) else 0.0
+    rp = 0.5 * (dPhi - dPlo) / abs(dP) if (dPlo is not None and np.isfinite(dPlo)) else 0.0
+    h = abs(k) * np.sqrt(rq ** 2 + rp ** 2)
+    return dict(k=float(k), lo=float(k - h), hi=float(k + h))
+
+
+def _perm_stage(cfg, R, P, pathfn, skip=0, q_set=None):
+    """Flux and pressure drop of one post-drive stage (pathfn = cfg.vpath or cfg.fpath).
+
+    q_set None (pressure control, the frozen stage of runs before 2026-11-16): the drive's estimators --
+    Q from the N_permeate slope over independent q_win_steps windows of the drift-tested trailing window
+    (at most plateau_frac_auto of the stage), the z_perm slope, dP measured over the same window.
+    q_set > 0 (velocity control): the flux is prescribed, so the stage is steady from its start unless the
+    prescribed velocity differs from the one the gel was at, in which case dP relaxes over tau_1.  The
+    window is therefore the longest trailing fraction (up to the WHOLE stage) over which neither the
+    measured dP nor the N_permeate slopes drift; dP = its block-bootstrap mean over that window (the
+    thermal noise of the membrane sits here: expected SE sqrt(2 kT L/(kappa A T))).
+    kappa: 'v_measured' = q_set L/dP_meas (primary under velocity control: no flux error),
+    'N_measured' = the N-slope Q with the measured dP (primary under pressure control; under velocity
+    control it is the check that the gel passes what the piston pushes -- Q_ratio = Q_N/(q_set A), ~1 up
+    to the feed/permeate density ratio), 'N_applied' / 'z_applied' under pressure control only.
+    L = the stage's own Rg thickness over the window when it wrote gel_dimensions_rg, else P['L_gel'].
+    None when the files are missing or too short."""
+    en, et = read_piston_table(pathfn('permeation'))
     if not et.size or en is None:
-        return P
+        return None
     area = P['area']
-    F = dict(step=et[:, 0])
+    F = dict(step=et[:, 0], mode='velocity' if q_set else 'pressure', q_set=(float(q_set) if q_set else np.nan))
     for key, pre in (('z_feed', 'z_feed'), ('z_perm', 'z_perm'), ('P_feed_meas', 'P_feed_meas'),
                      ('P_perm_meas', 'P_perm_meas'), ('Q', 'Q_perm'), ('N', 'N_permeate')):
         F[key] = table_col(en, et, pre)
     st = F['step']
     d_st = np.diff(st)
-    F['t_freeze'] = float(st[0] - 0.5 * np.median(d_st[d_st > 0])) if (d_st > 0).any() else float(st[0])   # the freeze step lies within one block of the first sample
-    t_from = F['t_freeze'] + cfg.PERM_FROZEN_SKIP
+    F['t_start'] = float(st[0] - 0.5 * np.median(d_st[d_st > 0])) if (d_st > 0).any() else float(st[0])   # the switch lies within one block of the first sample
+    t_from = F['t_start'] + skip
     rho0 = R.get('rho_s0', np.nan)
-    cnt = load2c(cfg.fpath('permeate_count'), 2)
+    cnt = load2c(pathfn('permeate_count'), 2)
     if cnt is not None and (cnt[:, 0] >= t_from).sum() >= 8:
         cw = cnt[:, 0] >= t_from
         n_st, n_val, F['count'] = cnt[cw, 0], cnt[cw, 1], cnt
@@ -8457,11 +8626,25 @@ def add_perm_frozen(cfg, R, P, verbose=True):
         w0 = st >= t_from
         n_st, n_val = st[w0], F['N'][w0]
     else:
-        say('  NOTE: frozen-network files present but too short for a flux window')
-        return P
+        return None
     if not (np.isfinite(rho0) and rho0 > 0):
-        return P
-    NS = plateau_window_slopes(n_st, n_val, cfg.q_win_steps, cfg.dt_lj, cfg.plateau_frac_auto, cfg.ci_level)
+        return None
+    fracs = (np.arange(9, 1, -1) / 9.0) if q_set else None
+    NS = plateau_window_slopes(n_st, n_val, cfg.q_win_steps, cfg.dt_lj, cfg.plateau_frac_auto, cfg.ci_level, fracs=fracs)
+    have_dp = F['P_feed_meas'] is not None and F['P_perm_meas'] is not None
+    if have_dp:
+        F['dP_series'] = F['P_feed_meas'] - F['P_perm_meas']
+    if q_set and have_dp and (st >= t_from).sum() >= 8:
+        PW = plateau_window(st[st >= t_from], F['dP_series'][st >= t_from], cfg.plateau_frac_auto, cfg.ci_level, fracs=fracs)
+        F['dP_drift'] = bool(PW.get('warn'))
+        if PW['step0'] > NS['step0']:                    # the pressure took longer to settle than the count's slope
+            sel = n_st >= PW['step0']
+            if sel.sum() >= 8:
+                E = slope_estimate(n_st[sel], n_val[sel], cfg.q_win_steps, cfg.dt_lj, cfg.ci_level)
+                E.update(step0=float(PW['step0']), frac=float(PW['frac']))
+                if NS.get('warn'):
+                    E['warn'] = True
+                NS = E
     for k in ('mean', 'se', 'lo', 'hi', 'slope_all'):
         NS[k] = NS[k] / rho0
     NS['slopes'] = NS['slopes'] / rho0
@@ -8477,54 +8660,382 @@ def add_perm_frozen(cfg, R, P, verbose=True):
         ZS['lo'], ZS['hi'] = min(ZS['lo'], ZS['hi']), max(ZS['lo'], ZS['hi'])
         ZS['slopes'] = -area * ZS['slopes']
         F['Q_z'] = ZS
-    if F['P_feed_meas'] is not None and F['P_perm_meas'] is not None and win.sum() >= 4:
-        dpm = F['P_feed_meas'][win] - F['P_perm_meas'][win]
-        m, lo, hi, *_ = block_bootstrap_ci(dpm, cfg.ci_level)
-        F['dP_meas'], F['dP_meas_lo'], F['dP_meas_hi'] = float(m), float(lo), float(hi)
+    if F['z_feed'] is not None and win.sum() >= 3:       # the feed piston's own speed over the window (= q_set under velocity control)
+        F['v_feed'] = float(-np.polyfit(st[win] * cfg.dt_lj, F['z_feed'][win], 1)[0])
+    if have_dp and win.sum() >= 4:
+        m, lo, hi, blk, tau = block_bootstrap_ci(F['dP_series'][win], cfg.ci_level)
+        F['dP_meas'], F['dP_meas_lo'], F['dP_meas_hi'], F['dP_tau'] = float(m), float(lo), float(hi), float(tau)
     live = P.get('flux') or {}
     F['dP_app'] = float(live.get('dP_app', np.nan))
     Lg = P['L_gel']
+    G = load2c(pathfn('gel_dimensions_rg'), 4)
+    if G is not None and (G[:, 0] >= NS['step0']).sum() >= 2:
+        Lg = float(np.mean(G[G[:, 0] >= NS['step0'], 3]))
+        F['L_src'] = "the stage's Rg thickness over its window"
+    else:
+        F['L_src'] = "the drive's steady Rg thickness"
     F['L'] = Lg
+    K = {}
+    dpm = (F.get('dP_meas', np.nan), F.get('dP_meas_lo'), F.get('dP_meas_hi'))
+    if q_set:
+        K['v_measured'] = _perm_k(q_set * area, None, None, *dpm, Lg, area)
+        K['N_measured'] = _perm_k(NS['mean'], NS['lo'], NS['hi'], *dpm, Lg, area)
+        F['Q_ratio'] = float(NS['mean'] / (q_set * area))
+    else:
+        K['N_applied'] = _perm_k(NS['mean'], NS['lo'], NS['hi'], F['dP_app'], None, None, Lg, area)
+        if 'dP_meas' in F:
+            K['N_measured'] = _perm_k(NS['mean'], NS['lo'], NS['hi'], *dpm, Lg, area)
+        if 'Q_z' in F:
+            K['z_applied'] = _perm_k(F['Q_z']['mean'], F['Q_z']['lo'], F['Q_z']['hi'], F['dP_app'], None, None, Lg, area)
+    F['k'] = {kk: v for kk, v in K.items() if v is not None}
+    F['primary'] = next((kk for kk in (('v_measured', 'N_measured') if q_set else ('N_measured', 'N_applied', 'z_applied')) if kk in F['k']), None)
+    return F
 
-    def _k(Q, Qlo, Qhi, dP, dPlo=None, dPhi=None):
-        if not (np.isfinite(Q) and np.isfinite(dP)) or dP == 0:
-            return None
-        k = Q * Lg / (area * dP)
-        rq = 0.5 * (Qhi - Qlo) / abs(Q) if np.isfinite(Qlo) and Q != 0 else 0.0
-        rp = 0.5 * (dPhi - dPlo) / abs(dP) if (dPlo is not None and np.isfinite(dPlo)) else 0.0
-        h = abs(k) * np.sqrt(rq ** 2 + rp ** 2)
-        return dict(k=float(k), lo=float(k - h), hi=float(k + h))
 
-    F['k'] = {}
-    F['k']['N_applied'] = _k(NS['mean'], NS['lo'], NS['hi'], F['dP_app'])
-    if 'dP_meas' in F:
-        F['k']['N_measured'] = _k(NS['mean'], NS['lo'], NS['hi'], F['dP_meas'], F['dP_meas_lo'], F['dP_meas_hi'])
-    if 'Q_z' in F:
-        F['k']['z_applied'] = _k(F['Q_z']['mean'], F['Q_z']['lo'], F['Q_z']['hi'], F['dP_app'])
-    F['k'] = {kk: v for kk, v in F['k'].items() if v is not None}
-    # ratio to the live drive, estimator by estimator
-    F['ratio'] = {}
+def _stage_ratio(F, ref):
+    """kappa of stage F over the reference stage's, estimator by estimator -> {key: dict(r, lo, hi)}"""
+    out = {}
     for kk, v in F['k'].items():
-        lv = live.get('k', {}).get(kk)
+        lv = (ref or {}).get('k', {}).get(kk)
         if lv and lv['k'] != 0:
             r = v['k'] / lv['k']
-            rel = np.sqrt(((v['hi'] - v['lo']) / (2 * abs(v['k']))) ** 2 + ((lv['hi'] - lv['lo']) / (2 * abs(lv['k']))) ** 2)
-            F['ratio'][kk] = dict(r=float(r), lo=float(min(r * (1 - rel), r * (1 + rel))), hi=float(max(r * (1 - rel), r * (1 + rel))))
-    P['frozen'] = F
-    say(f"FROZEN NETWORK (deck Phase 2d): polymer stopped at step {int(F['t_freeze'])}, {len(st)} flux samples to step {int(st[-1])}; "
-        f"window last {NS['frac']:.0%} (step >= {int(NS['step0'])}), {NS['n_win']} windows of {NS['win_steps']} steps")
-    say(f"  Q (N_permeate slope) = {NS['mean']:.4e} +/- {NS['se']:.2e} sigma^3/tau  (live drive: "
-        + (f"{live['Q_N']['mean']:.4e} +/- {live['Q_N']['se']:.2e}" if 'Q_N' in live else 'n/a') + ')'
-        + (f";  measured dP {F['dP_meas']:.4f} [{F['dP_meas_lo']:.4f}, {F['dP_meas_hi']:.4f}]" if 'dP_meas' in F else ''))
+            rel = np.hypot((v['hi'] - v['lo']) / (2 * abs(v['k'])), (lv['hi'] - lv['lo']) / (2 * abs(lv['k'])))
+            out[kk] = dict(r=float(r), lo=float(min(r * (1 - rel), r * (1 + rel))), hi=float(max(r * (1 - rel), r * (1 + rel))))
+    return out
+
+
+def _say_stage(say, F, name):
+    NS = F['Q_N']
+    say(f"  window: last {NS['frac']:.0%} of the stage (step >= {int(NS['step0'])}), {NS['n_win']} windows of {NS['win_steps']} steps"
+        + ('  DRIFT WARNING' if NS.get('warn') or F.get('dP_drift') else '') + f";  L = {F['L']:.2f} ({F['L_src']})")
+    if F['mode'] == 'velocity':
+        say(f"  prescribed flux q = {F['q_set']:.4e} sigma/tau (feed piston speed over the window {F.get('v_feed', np.nan):.4e});  "
+            f"Q from the N_permeate slope / (q A) = {F['Q_ratio']:.3f}  (1 = the gel passes what the piston pushes)")
+    else:
+        say(f"  Q (N_permeate slope) = {NS['mean']:.4e} +/- {NS['se']:.2e} sigma^3/tau")
+    if 'dP_meas' in F:
+        say(f"  dP measured = {F['dP_meas']:.4f} [{F['dP_meas_lo']:.4f}, {F['dP_meas_hi']:.4f}]  (drive: applied {F['dP_app']:.4f}; "
+            f"correlation time {F['dP_tau']:.1f} samples)")
     for kk, v in F['k'].items():
-        rr = F['ratio'].get(kk)
-        say(f"  kappa_frozen ({kk:10s}) = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]"
-            + (f"   frozen / live = {rr['r']:.3f} [{rr['lo']:.3f}, {rr['hi']:.3f}]" if rr else ''))
+        say(f"  {name} ({kk:10s}{'*' if kk == F['primary'] else ' '}) = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]")
+
+
+def add_perm_vctrl(cfg, R, P, verbose=True):
+    """P['vctrl'] (2026-11-16): the VELOCITY-CONTROLLED stage on the live network (deck Phase 2v) -- the _perm_stage
+    dict with q_set = |vfeed_set| from vctrl_info, plus 'info' (the vctrl_info dict).  kappa_v = q L/dP_measured
+    (key 'v_measured', the primary).  None without the _v files or when cfg.PERM_VCTRL is False."""
+    say = print if verbose else (lambda *a, **k: None)
+    P['vctrl'] = None
+    if not cfg.PERM_VCTRL:
+        return P
+    info = perm_vctrl_info(cfg)
+    if info is None or not info.get('vfeed_set'):
+        return P
+    F = _perm_stage(cfg, R, P, cfg.vpath, cfg.PERM_VCTRL_SKIP, q_set=abs(info['vfeed_set']))
+    if F is None:
+        say('  NOTE: velocity-controlled stage files present but too short for a window')
+        return P
+    F['info'] = info
+    P['vctrl'] = F
+    say(f"VELOCITY-CONTROLLED STAGE (deck Phase 2v): feed piston at v_z = {info['vfeed_set']:+.4e} sigma/tau from step {int(F['t_start'])} "
+        f"to {int(F['step'][-1])}  ({'prescribed with -var vfeed' if info.get('vfeed_user') else 'the mean over drive steps'} "
+        + ('' if info.get('vfeed_user') else f"{int(info.get('avg_step_a', 0))} -> {int(info.get('avg_step_b', 0))}") + ')')
+    _say_stage(say, F, 'kappa_v')
     return P
 
 
+def add_perm_frozen(cfg, R, P, verbose=True):
+    """P['frozen'] (2026-11-07; velocity control 2026-11-16): the flux through the FROZEN steady-state network (deck
+    Phase 2d: every polymer bead stopped, the solvent still driven).  Runs with the velocity-controlled stage keep
+    the feed piston at the same prescribed velocity: kappa_f = q L/dP_measured ('v_measured'), at a flux identical to
+    the live stage's, so kappa_f/kappa_v = dP_v/dP_f.  Older runs kept the applied dP: Q from the N_permeate slope,
+    kappa_f = Q L/(A dP) per estimator.  'ratio' = frozen over the reference stage, estimator by estimator, the
+    reference ('ratio_ref') being the velocity-controlled live stage when there is one, else the constant-dP drive.
+    Flow through a rigid network and weak flow through the swollen one should agree to leading order; the difference
+    is the network's own motion under the drag.  Call after add_perm_vctrl.  None without _f files or when
+    cfg.PERM_FROZEN is False."""
+    say = print if verbose else (lambda *a, **k: None)
+    P['frozen'] = None
+    if not cfg.PERM_FROZEN:
+        return P
+    info = perm_vctrl_info(cfg) if cfg.PERM_VCTRL else None
+    q_set = abs(info['vfeed_set']) if (info and info.get('vfeed_set') and info.get('frozen_follows', 1)) else None
+    F = _perm_stage(cfg, R, P, cfg.fpath, cfg.PERM_FROZEN_SKIP, q_set=q_set)
+    if F is None:
+        if cfg.fpath('permeation').exists():
+            say('  NOTE: frozen-network files present but too short for a flux window')
+        return P
+    F['t_freeze'] = F['t_start']
+    ref = P.get('vctrl') if (q_set and P.get('vctrl')) else (P.get('flux') or {})
+    F['ratio_ref'] = 'velocity-controlled live stage' if (q_set and P.get('vctrl')) else 'constant-dP drive'
+    F['ratio'] = _stage_ratio(F, ref)
+    P['frozen'] = F
+    say(f"FROZEN NETWORK (deck Phase 2d): polymer stopped at step {int(F['t_freeze'])}, {len(F['step'])} samples to step {int(F['step'][-1])}; "
+        + ('feed piston at the prescribed velocity' if q_set else 'both pistons pressure-controlled at the applied dP'))
+    _say_stage(say, F, 'kappa_f')
+    for kk, rr in F['ratio'].items():
+        say(f"  kappa_f / kappa ({F['ratio_ref']}; {kk}) = {rr['r']:.3f} [{rr['lo']:.3f}, {rr['hi']:.3f}]")
+    return P
+
+
+def perm_reconcile(cfg, R, P, verbose=True):
+    """The three parameters of the run side by side (2026-11-16) -> P['recon']:
+      D_c     the consolidation fit of the displacement evolution during the drive (profile fit; the thickness trace
+              beside it)
+      M       the steady displacement profile, M = dP_ext L_ss/(2 |u_F|) (the primary of perm_M_estimates)
+      kappa   'v'  = q L/dP_measured, live network, velocity-controlled stage
+              'f'  = q L/dP_measured, frozen network
+              'dP' = Q L/(A dP), the constant-dP drive (N-slope Q, measured dP): the same quantity as 'v' with the
+                     thermal noise in the flux instead of the pressure
+              'Dc' = D_c/M (profile fit; 'Dc_trace' with the trace D_c)
+    and the closure: (D_c/M)/kappa_X for each measured kappa, and kappa_f/kappa_v.  A ratio of 1 means the transient
+    (D_c), the stiffness (M) and the steady flux (kappa) describe one poroelastic material.  Intervals are the
+    relative half-widths in quadrature; the profile-fit D_c carries no interval of its own, so ratios built on it
+    show the other factors' uncertainty only.  Entries that the run does not have are left out."""
+    def ent(v, lo=np.nan, hi=np.nan, how=''):
+        return dict(v=float(v), lo=float(lo), hi=float(hi), how=how)
+
+    def rel(e):
+        return 0.5 * (e['hi'] - e['lo']) / abs(e['v']) if (np.isfinite(e['lo']) and e['v'] != 0) else 0.0
+
+    out = dict(Dc={}, M=None, kappa={}, closure={})
+    F2, Mp = P.get('Dc'), P.get('M_perm')
+    if F2 is not None:
+        out['Dc']['profile'] = ent(F2['Dc'], how='profile fit of u_z(zeta, t), drive')
+        T = F2.get('trace')
+        if T:
+            out['Dc']['trace'] = ent(T['Dc'], T['Dc'] - _Z95 * T['Dc_se'], T['Dc'] + _Z95 * T['Dc_se'], 'thickness trace, drive')
+    Mref = Mp.get(Mp['primary']) if (Mp and Mp.get('primary')) else None
+    if Mref:
+        out['M'] = ent(Mref['M'], Mref['lo'], Mref['hi'], f"steady displacement profile ({Mp['primary']})")
+    for key, S, how in (('v', P.get('vctrl'), 'live network, prescribed flux'), ('f', P.get('frozen'), 'frozen network')):
+        if S and S.get('primary'):
+            v = S['k'][S['primary']]
+            out['kappa'][key] = ent(v['k'], v['lo'], v['hi'], how + (', prescribed flux' if (key == 'f' and S['mode'] == 'velocity') else
+                                                                      (', applied dP' if key == 'f' else '')))
+    kd = (P.get('flux') or {}).get('k', {}).get('N_measured')
+    if kd:
+        out['kappa']['dP'] = ent(kd['k'], kd['lo'], kd['hi'], 'live network, constant dP (drive)')
+    K = P.get('kappa_Dc') or {}
+    if K.get('profile'):
+        out['kappa']['Dc'] = ent(K['profile']['k'], K['profile']['lo'], K['profile']['hi'], 'D_c/M, profile-fit D_c')
+    if K.get('trace'):
+        out['kappa']['Dc_trace'] = ent(K['trace']['k'], K['trace']['lo'], K['trace']['hi'], 'D_c/M, trace D_c')
+    kD = out['kappa'].get('Dc')
+    for key in ('v', 'f', 'dP'):
+        km = out['kappa'].get(key)
+        if kD and km:
+            r = kD['v'] / km['v']
+            h = abs(r) * np.hypot(rel(kD), rel(km))
+            out['closure'][f'Dc/M over kappa_{key}'] = ent(r, r - h, r + h)
+    if 'v' in out['kappa'] and 'f' in out['kappa']:
+        a, b = out['kappa']['f'], out['kappa']['v']
+        r = a['v'] / b['v']
+        h = abs(r) * np.hypot(rel(a), rel(b))
+        out['closure']['kappa_f over kappa_v'] = ent(r, r - h, r + h)
+    P['recon'] = out
+    if verbose:
+        ci = lambda e: f"[{e['lo']:.4f}, {e['hi']:.4f}]" if np.isfinite(e['lo']) else ''
+        print(f"\nRECONCILIATION  D_c, M, kappa  ({int(round(100 * cfg.ci_level))} % intervals; kappa = D_c/M closes the set)")
+        for k, e in out['Dc'].items():
+            print(f"  D_c   {k:9s} {e['v']:.4f} {ci(e):20s} sigma^2/tau   {e['how']}")
+        if out['M']:
+            print(f"  M     {'':9s} {out['M']['v']:.4f} {ci(out['M']):20s}               {out['M']['how']}")
+        for k, e in out['kappa'].items():
+            print(f"  kappa {k:9s} {e['v']:.4f} {ci(e):20s}               {e['how']}"
+                  + (f"   ->  kappa M = {e['v'] * out['M']['v']:.4f}" if (out['M'] and not k.startswith('Dc')) else ''))
+        for k, e in out['closure'].items():
+            print(f"  ratio {k:22s} {e['v']:.3f} {ci(e)}")
+        if not out['kappa'].get('v'):
+            print('  (no velocity-controlled stage in this run: kappa_v missing; the constant-dP kappa stands in)')
+    return out
+
+
+def _sliding_flux(n_st, n_val, w, dt, norm, ci, ncen=400):
+    """q(t) from a bead count: least-squares slopes of n_val over windows of w steps, x norm.  Returns
+    (cen, q, half) for the window slid along the series (ncen centres, each a full window) and
+    (ce, sl, sh) for the non-overlapping windows; half-widths from _slope_ci."""
+    n_st, n_val = np.asarray(n_st, float), np.asarray(n_val, float)
+    cen = np.linspace(n_st[0] + 0.5 * w, n_st[-1] - 0.5 * w, ncen) if n_st[-1] - n_st[0] > w else np.array([])
+    qs, qh = np.full(cen.size, np.nan), np.full(cen.size, np.nan)
+    for i, c in enumerate(cen):
+        sel = (n_st >= c - 0.5 * w) & (n_st <= c + 0.5 * w)
+        qs[i], qh[i] = _slope_ci(n_st[sel] * dt, n_val[sel], ci)
+    ce, sl, sh = [], [], []
+    for a0 in np.arange(n_st[0], n_st[-1] + 1e-9, w):
+        sel = (n_st >= a0) & (n_st < a0 + w)
+        if sel.sum() < 3 or n_st[sel][-1] - n_st[sel][0] < 0.5 * w:
+            continue
+        v, h = _slope_ci(n_st[sel] * dt, n_val[sel], ci)
+        ce.append(0.5 * (n_st[sel][0] + n_st[sel][-1])); sl.append(v * norm); sh.append(h * norm)
+    return cen, qs * norm, qh * norm, np.array(ce), np.array(sl), np.array(sh)
+
+
+def fig_perm_stages(cfg, R, P):
+    """The run as a timeline (2026-11-16): the constant-dP drive, the velocity-controlled stage and the frozen-network
+    stage on one step axis.  (a) piston displacement, feed and permeate; (b) the pressure drop measured on the
+    pistons (block means faint, rolling mean bold), the applied value dashed over the drive, each stage's window mean
+    with its interval as a bar; (c) the solvent flux q_s = (dN_s/dt)/(rho_s0 A) (sliding and independent windows of
+    cfg.q_win_steps, each with its fit interval), the prescribed q = |v_feed| as a bar over the stages that have it
+    and the drive's steady mean with its interval.  What to read: over the drive dP is flat and q_s carries the
+    thermal noise; over the velocity-controlled stages q_s is flat and dP carries it."""
+    F = P.get('flux')
+    if F is None:
+        print('stage timeline skipped (no permeation file)')
+        return None
+    Sv, Sf = P.get('vctrl'), P.get('frozen')
+    area = P['area']
+    rho0 = (F.get('Q_N') or {}).get('rho0', R.get('rho_s0', np.nan))
+    stages = [('drive', F, 'drive: constant $\\Delta P$', '0.35')]
+    if Sv:
+        stages.append(('vctrl', Sv, 'live network, prescribed flux', WONG['blue']))
+    if Sf:
+        stages.append(('frozen', Sf, 'frozen network' + (', prescribed flux' if Sf['mode'] == 'velocity' else ', applied $\\Delta P$'), WONG['vermillion']))
+    fig, (axZ, axP, axQ) = plt.subplots(3, 1, figsize=(20, 19), sharex=True, constrained_layout=True)
+    t_end = max(float(S['step'][-1]) for _, S, _, _ in stages)
+    # ---- stage bands ----
+    edges = [float(F['step'][0])] + [float(S.get('t_start', S['step'][0])) for _, S, _, _ in stages[1:]] + [t_end]
+    for ax in (axZ, axP, axQ):
+        for i, (_, S, lab, col) in enumerate(stages):
+            ax.axvspan(edges[i], edges[i + 1], color=col, alpha=0.06, lw=0)
+        ax.axvline(P['evol_from'], color='k', ls=':', lw=1, alpha=0.5)
+        ax.grid(alpha=0.3)
+    for i, (_, S, lab, col) in enumerate(stages):
+        axZ.text(0.5 * (edges[i] + edges[i + 1]), 1.02, lab, transform=axZ.get_xaxis_transform(), ha='center', va='bottom',
+                 fontsize=_F8_LEG, color=col, fontweight='bold')
+    # ---- (a) pistons ----
+    z0f = F['z_feed'][0] if F.get('z_feed') is not None else np.nan
+    z0p = F['z_perm'][0] if F.get('z_perm') is not None else np.nan
+    for i, (_, S, lab, col) in enumerate(stages):
+        if S.get('z_feed') is not None:
+            axZ.plot(S['step'], S['z_feed'] - z0f, '-', color=WONG['vermillion'], lw=2.4, label='feed piston' if i == 0 else None)
+        if S.get('z_perm') is not None:
+            axZ.plot(S['step'], S['z_perm'] - z0p, '-', color=WONG['blue'], lw=2.4, label='permeate piston' if i == 0 else None)
+    axZ.set_ylabel(r'$z - z_0$  ($\sigma$)')
+    axZ.set_title('(a) piston displacement', fontsize=_F8_TITLE, pad=34)
+    axZ.legend(fontsize=_F8_LEG, loc='lower left')
+    # ---- (b) pressure drop ----
+    for i, (name, S, lab, col) in enumerate(stages):
+        if S.get('P_feed_meas') is None or S.get('P_perm_meas') is None:
+            continue
+        dp = S['P_feed_meas'] - S['P_perm_meas']
+        axP.plot(S['step'], dp, '-', color=col, lw=0.8, alpha=0.25)
+        axP.plot(S['step'], rolling_mean(dp, cfg.roll_win), '-', color=col, lw=2.0, label=f'measured, rolling mean ({cfg.roll_win})' if i == 0 else None)
+        if 'dP_meas' in S and 'win_step0' in S:
+            x0, x1 = S['win_step0'], float(S['step'][-1])
+            axP.fill_between([x0, x1], S['dP_meas_lo'], S['dP_meas_hi'], color=col, alpha=0.30, lw=0)
+            axP.plot([x0, x1], [S['dP_meas']] * 2, '-', color='k', lw=2.6,
+                     label=f"{lab.split(':')[0]}: $\\Delta P$ = {S['dP_meas']:.4f} [{S['dP_meas_lo']:.4f}, {S['dP_meas_hi']:.4f}]")
+    if np.isfinite(F.get('dP_app', np.nan)):
+        axP.plot([P['evol_from'], edges[1]], [F['dP_app']] * 2, '--', color='k', lw=1.6, label=f"applied over the drive, {sig(F['dP_app'])}")
+    axP.set_ylabel(r'$\Delta P = P_{\rm feed} - P_{\rm perm}$')
+    axP.set_title(r'(b) pressure drop measured on the pistons ($F_{\rm fluid}/A$)', fontsize=_F8_TITLE)
+    axP.legend(fontsize=_F8_LEG, loc='upper left', ncol=2)
+    # ---- (c) flux ----
+    w = float(cfg.q_win_steps)
+    if np.isfinite(rho0) and rho0 > 0:
+        norm = 1.0 / (rho0 * area)
+        for i, (name, S, lab, col) in enumerate(stages):
+            c = S.get('count')
+            n_st, n_val = (c[:, 0], c[:, 1]) if c is not None else ((S['step'], S['N']) if S.get('N') is not None else (None, None))
+            if n_st is None or len(n_st) < 4:
+                continue
+            cen, qs, qh, ce, sl, sh = _sliding_flux(n_st, n_val, w, cfg.dt_lj, norm, cfg.ci_level)
+            if cen.size:
+                axQ.fill_between(cen, qs - qh, qs + qh, color=col, alpha=0.22, lw=0)
+                axQ.plot(cen, qs, '-', color=col, lw=2.0, label=f'sliding slope of $N_s$, window {int(w)} steps' if i == 0 else None)
+            if ce.size:
+                axQ.errorbar(ce, sl, yerr=sh, fmt='o', color=col, ms=6, mec='k', mew=0.5, ecolor='k', elinewidth=1.0, capsize=3,
+                             label='independent windows $\\pm$ fit CI' if i == 0 else None)
+            if S.get('mode') == 'velocity':
+                axQ.plot([S['t_start'], float(S['step'][-1])], [S['q_set']] * 2, '-', color='k', lw=2.6,
+                         label=f"prescribed $q = |v_{{\\rm feed}}|$ = {sig(S['q_set'])}" if name == 'vctrl' or not Sv else None)
+        NS = F.get('Q_N')
+        if NS:
+            x0 = NS['step0']
+            if np.isfinite(NS.get('lo', np.nan)):
+                axQ.fill_between([x0, edges[1]], NS['lo'] / area, NS['hi'] / area, color='0.35', alpha=0.30, lw=0)
+            axQ.plot([x0, edges[1]], [NS['mean'] / area] * 2, '--', color='k', lw=2.0,
+                     label=f"drive, steady: $q_s$ = {fmt_val_unc(NS['mean'] / area, NS['se'] / area)}  (SE; band {cfg.ci_level:.0%} CI)")
+    axQ.axhline(0, color='k', ls=':', lw=1, alpha=0.5)
+    axQ.set_ylabel(r'$q_s$  ($\sigma/\tau$)')
+    axQ.set_xlabel('time step')
+    axQ.set_title(r'(c) solvent flux $q_s = \frac{1}{A_{\rm pist}}\,\frac{dN_s/dt}{\rho_{s,0}}$', fontsize=_F8_TITLE)
+    _legend_below(axQ, ncol=2)
+    return _save(fig, cfg, 'perm_stages')
+
+
+def fig_perm_reconcile(cfg, R, P):
+    """D_c, M and kappa on one figure (perm_reconcile): (a) the permeabilities -- live network at prescribed flux,
+    frozen network, the constant-dP drive, and D_c/M; (b) the same statement in D_c: the transient D_c against
+    kappa M for each measured kappa; (c) the closure ratios, 1 = consistent.  Entries the run lacks are left out."""
+    X = P.get('recon') or perm_reconcile(cfg, R, P, verbose=False)
+    if not X['kappa'] and not X['Dc']:
+        print('reconciliation figure skipped (no D_c, M or kappa)')
+        return None
+    M = X['M']
+    names = {'v': r'$\kappa_v$: live network,' + '\nprescribed flux', 'f': r'$\kappa_f$: frozen' + '\nnetwork',
+             'dP': r'$\kappa_{\Delta P}$: live network,' + '\nconstant $\\Delta P$', 'Dc': r'$\mathcal{D}_c/M$' + '\n(profile fit)',
+             'Dc_trace': r'$\mathcal{D}_c/M$' + '\n(thickness trace)'}
+    cols = {'v': WONG['blue'], 'f': WONG['vermillion'], 'dP': '0.4', 'Dc': WONG['green'], 'Dc_trace': WONG['green']}
+
+    def bar(ax, i, e, col, hollow=False):
+        yerr = [[e['v'] - e['lo']], [e['hi'] - e['v']]] if np.isfinite(e['lo']) else None
+        ax.errorbar([i], [e['v']], yerr=yerr, fmt='o', ms=14, color=col, mfc='white' if hollow else col, mew=2.5, capsize=9, lw=2.8)
+        ax.annotate(sig(e['v'], 3), (i, e['v']), textcoords='offset points', xytext=(16, 0), va='center', fontsize=_F8_LEG)
+
+    fig, (axK, axD, axR) = plt.subplots(1, 3, figsize=(28.5, 9.5), constrained_layout=True)
+    # ---- (a) kappa ----
+    keys = [k for k in ('v', 'f', 'dP', 'Dc', 'Dc_trace') if k in X['kappa']]
+    for i, k in enumerate(keys):
+        bar(axK, i, X['kappa'][k], cols[k], hollow=(k == 'Dc_trace'))
+    axK.set_xticks(range(len(keys)))
+    axK.set_xticklabels([names[k] for k in keys], fontsize=_F8_LEG)
+    axK.set_xlim(-0.6, len(keys) - 0.3)
+    axK.set_ylabel(r'$\kappa$  ($\sigma^5/\epsilon\tau$)')
+    axK.set_title(r'(a) permeability: $qL/\Delta P$ measured, and $\mathcal{D}_c/M$', fontsize=_F8_TITLE)
+    # ---- (b) D_c ----
+    rows = [(r'$\mathcal{D}_c$ transient' + '\n(profile fit)', X['Dc'].get('profile'), WONG['green'], False),
+            (r'$\mathcal{D}_c$ transient' + '\n(thickness trace)', X['Dc'].get('trace'), WONG['green'], True)]
+    if M:
+        for k in ('v', 'f', 'dP'):
+            e = X['kappa'].get(k)
+            if e:
+                relh = np.hypot(0.5 * (e['hi'] - e['lo']) / abs(e['v']) if np.isfinite(e['lo']) else 0.0,
+                                0.5 * (M['hi'] - M['lo']) / abs(M['v']) if np.isfinite(M['lo']) else 0.0)
+                v = e['v'] * M['v']
+                rows.append((names[k].split(':')[0] + r'$\,M$', dict(v=v, lo=v * (1 - relh), hi=v * (1 + relh)), cols[k], False))
+    rows = [r for r in rows if r[1]]
+    for i, (lab, e, col, hollow) in enumerate(rows):
+        bar(axD, i, e, col, hollow)
+    axD.set_xticks(range(len(rows)))
+    axD.set_xticklabels([r[0] for r in rows], fontsize=_F8_LEG)
+    axD.set_xlim(-0.6, len(rows) - 0.3)
+    axD.set_ylabel(r'$\mathcal{D}_c$  ($\sigma^2/\tau$)')
+    axD.set_title(r'(b) the same in $\mathcal{D}_c$: transient vs $\kappa M$' + (f"   ($M$ = {sig(M['v'])} [{sig(M['lo'])}, {sig(M['hi'])}])" if M else ''),
+                  fontsize=_F8_TITLE)
+    # ---- (c) closure ----
+    rk = list(X['closure'])
+    rlab = {'Dc/M over kappa_v': r'$\dfrac{\mathcal{D}_c/M}{\kappa_v}$', 'Dc/M over kappa_f': r'$\dfrac{\mathcal{D}_c/M}{\kappa_f}$',
+            'Dc/M over kappa_dP': r'$\dfrac{\mathcal{D}_c/M}{\kappa_{\Delta P}}$', 'kappa_f over kappa_v': r'$\dfrac{\kappa_f}{\kappa_v}$'}
+    rcol = {'Dc/M over kappa_v': WONG['blue'], 'Dc/M over kappa_f': WONG['vermillion'], 'Dc/M over kappa_dP': '0.4', 'kappa_f over kappa_v': 'k'}
+    for i, k in enumerate(rk):
+        bar(axR, i, X['closure'][k], rcol.get(k, 'k'))
+    axR.axhline(1.0, color='k', ls='--', lw=1.6)
+    axR.set_xticks(range(len(rk)))
+    axR.set_xticklabels([rlab.get(k, k) for k in rk], fontsize=_F8_LEG + 2)
+    axR.set_xlim(-0.6, max(len(rk), 1) - 0.3)
+    axR.set_ylabel('ratio')
+    axR.set_title('(c) closure: 1 = one poroelastic material', fontsize=_F8_TITLE)
+    for ax in (axK, axD, axR):
+        ax.grid(axis='y', alpha=0.3)
+        ax.margins(y=0.25)
+    fig.suptitle(f'{cfg.sim_name}', fontsize=_F8_LEG)
+    return _save(fig, cfg, 'perm_reconcile')
+
+
 def fig_perm_frozen(cfg, R, P):
-    """Figure 9f (2026-11-07): the frozen-network flux stage -- (a) N_permeate(t) through the drive (grey) and the frozen
+    """(2026-11-07; superseded in the notebook by fig_perm_stages / fig_perm_reconcile) the frozen-network flux stage -- (a) N_permeate(t) through the drive (grey) and the frozen
     interval (colour) with the window slopes, (b) kappa live vs frozen per estimator with CIs."""
     F = P.get('frozen')
     if F is None:
@@ -8550,7 +9061,8 @@ def fig_perm_frozen(cfg, R, P):
     ax.set_title(rf"(a) permeate bead count: live $Q$ = {sig(live['Q_N']['mean']) if 'Q_N' in live else 'n/a'}, frozen $Q$ = {sig(NS['mean'])} $\sigma^3/\tau$", fontsize=13)
     ax.grid(alpha=0.3)
     smart_legend(ax, fontsize=10)
-    keys = [k for k in ('N_measured', 'N_applied', 'z_applied') if k in F['k']]
+    keys = [k for k in ('v_measured', 'N_measured', 'N_applied', 'z_applied') if k in F['k']]
+    live = P.get('vctrl') if F.get('ratio_ref', '').startswith('velocity') else live
     x = np.arange(len(keys))
     for off, src, col, lab in ((-0.18, live.get('k', {}), '0.45', 'live drive'), (0.18, F['k'], WONG['blue'], 'frozen network')):
         ks = [src.get(k) for k in keys]
@@ -8571,7 +9083,7 @@ def fig_perm_frozen(cfg, R, P):
 
 
 def fig_perm_Dc_unload(cfg, R, P):
-    """Figure 12u (2026-11-07): the re-swelling after the dP ramp-down, drawn by fig_perm_Dc with the unload fit."""
+    """(2026-11-07) the re-swelling after the dP ramp-down, drawn by fig_perm_Dc with the unload fit."""
     U = P.get('unload')
     if not U or U.get('Dc') is None:
         print('unload D_c figure skipped (no _u files or no fit)')
@@ -8580,7 +9092,7 @@ def fig_perm_Dc_unload(cfg, R, P):
 
 
 def fig_perm_Dc(cfg, R, P, F=None):
-    """Figure 12: (a) the deformation (u_z - u_0)(zeta, t)/L_0 of the snapshots, (b) data + the
+    """D_c figure: (a) the deformation (u_z - u_0)(zeta, t)/L_0 of the snapshots, (b) data + the
     permeation consolidation model (D_c), (c) the feed-face displacement u_F(t) from the
     thickness trace with the exact zero-IC series and the profile fit's own u(1, t).
     F (2026-11-07): a fit other than the drive's -- the UNLOAD fit (fig_perm_Dc_unload), labelled as the re-swelling."""
@@ -8684,7 +9196,7 @@ def fig_perm_Dc(cfg, R, P, F=None):
 
 
 def fig_perm_M(cfg, R, P):
-    """Figure 13: M = dP_ext L_ss/(2 |u_F|) -- one point per reading of the feed-face
+    """M figure: M = dP_ext L_ss/(2 |u_F|) -- one point per reading of the feed-face
     displacement (steady-profile parabola, thickness change, trace asymptote), with CIs;
     the primary (PERM_M_PRIMARY) is marked, and the caption below the axes says why the
     bounding-box readings differ from the profile."""
@@ -8732,9 +9244,9 @@ def fig_perm_M(cfg, R, P):
                f"its bottom end is a tail bead that drops with the network onto the plate and its top end the extreme bead a few \u03c3 above the\n"
                f"face, so \u0394L_bb (u_F = {ub:+.1f} \u03c3) carries {abs(ub - up):.1f} \u03c3 of the drop / tail statistics into |u_F| and the bounding-box M "
                f"({'bb and trace' if 'trace' in Mp else 'bb'}) come out\n"
-               f"{dM:+.0f}% relative to the parabola.   Primary = {prim} (PERM_M_PRIMARY): it feeds \u03ba = D_c/M and the q(t) check of figure 14."
+               f"{dM:+.0f}% relative to the parabola.   Primary = {prim} (PERM_M_PRIMARY): it feeds \u03ba = D_c/M and the q(t) check (fig_perm_flux_check)."
                + (f"\nThe per-atom (Lagrangian) reading pairs the steady frames with the zero-flux reference atom by atom, so the rigid drop cancels and the\n"
-                  f"contact layer's own compaction counts: u_F = {Mp['lag']['uF']:+.1f} \u03c3.  It is the one the compression sweep reproduces (figure 15)." if 'lag' in Mp else ''))
+                  f"contact layer's own compaction counts: u_F = {Mp['lag']['uF']:+.1f} \u03c3.  It is the one the compression sweep reproduces (fig_perm_vs_compression)." if 'lag' in Mp else ''))
         fig.text(0.01, -0.02, cap, ha='left', va='top', fontsize=10, family='serif',
                  bbox=dict(boxstyle='round', fc='0.97', ec='0.75'))
     return _save(fig, cfg, 'perm_M')
@@ -8759,7 +9271,7 @@ def perm_flux_model(cfg, R, P):
     """The q(t) CHECK (2026-09-28): the permeate flux the displacement fits imply.  Integrating
     du/dt = q + D_c u'' over the membrane with u'(z^F) = 0 and u'(z^P) = -dP(t)/M gives
         q(t) L = d/dt int u dz - D_c dP(t)/M   ->   Q(t) = -A q = A [ (D_c/M) dP(t)/L_0 - d<u>/dt ],
-    <u> the membrane-mean displacement.  The steady level A (D_c/M) dP/L_0 is figure 9's Darcy
+    <u> the membrane-mean displacement.  The steady level A (D_c/M) dP/L_0 is the Darcy
     check in flux form (kappa = D_c/M); the transient is the solvent the compaction expels.
     Profile fit: <u> = L_0 sum_k a_k H_k(t) (int phi_k dzeta = 1); trace fit (zero-IC shape):
     <u> = u_F sum_k 4/(k pi)^2 H_k(t).  dP(t) is the applied staircase; M the primary M (PERM_M_PRIMARY).
@@ -8869,7 +9381,7 @@ def fig_perm_v0_check(cfg, R, P):
 
 
 def fig_perm_flux_check(cfg, R, P):
-    """Figure 14 (check): (a) the model-implied Q(t) of perm_flux_model against the measured
+    """Check: (a) the model-implied Q(t) of perm_flux_model against the measured
     piston-velocity trace and the N_perm-slope Q; (b) its time integral against the measured
     permeate bead count."""
     Q = perm_flux_model(cfg, R, P)
@@ -8930,11 +9442,11 @@ def fig_perm_flux_check(cfg, R, P):
 
 def perm_Dc_summary(cfg, R, P, verbose=True):
     """The D_c estimates of one permeation run side by side (2026-11-12):
-      transient   the consolidation fit of u_z(zeta, t) (figure 12) and the thickness trace: a relaxation
+      transient   the consolidation fit of u_z(zeta, t) (fig_perm_Dc) and the thickness trace: a relaxation
                   TIME, tau_1 = L^2/(pi^2 D_c); no steady flux involved
-      steady 1    kappa_Darcy M = q_s L M/dP (figures 9 and 13): flux x stiffness, the permeate-face
+      steady 1    kappa_Darcy M = q_s L M/dP: flux x stiffness, the permeate-face
                   strain dP/M from the DISPLACEMENT
-      steady 2    q_s L/ln[(1 - phi_P)/(1 - phi_F)] (figure 8 c, perm_dphi): the same flux with the
+      steady 2    q_s L/ln[(1 - phi_P)/(1 - phi_F)] (fig_perm_flux c, perm_dphi): the same flux with the
                   strain read from the COMPOSITION profile (local 1 - phi_s); per half of the gel too
     The two steady values share q_s (they differ in how the strain is measured); the transient one is
     independent of both.  Last column: (1 - phi_s^0) D_c, the diffusivity the same gel should show with
@@ -8943,23 +9455,23 @@ def perm_Dc_summary(cfg, R, P, verbose=True):
     rows = []
     F2, Mp, DP = P.get('Dc'), P.get('M_perm'), perm_dphi(cfg, R, P)
     if F2 is not None:
-        rows.append(('transient   profile fit of u_z(zeta, t)  (fig 12)', F2['Dc'], np.nan, np.nan))
+        rows.append(('transient   profile fit of u_z(zeta, t)', F2['Dc'], np.nan, np.nan))
         T = F2.get('trace')
         if T:
-            rows.append(('transient   thickness trace  (fig 12 c)', T['Dc'], T['Dc'] - _Z95 * T['Dc_se'], T['Dc'] + _Z95 * T['Dc_se']))
+            rows.append(('transient   thickness trace', T['Dc'], T['Dc'] - _Z95 * T['Dc_se'], T['Dc'] + _Z95 * T['Dc_se']))
     U = P.get('unload')
     if U and U.get('Dc') is not None:
-        rows.append(('transient   re-swelling after the dP ramp-down  (fig 12u)', U['Dc']['Dc'], np.nan, np.nan))
+        rows.append(('transient   re-swelling after the dP ramp-down', U['Dc']['Dc'], np.nan, np.nan))
     kd = (P.get('flux') or {}).get('k', {}).get('N_measured')
     Mref = Mp.get(Mp['primary']) if Mp and Mp.get('primary') else None
     if kd and Mref:
         v = kd['k'] * Mref['M']
         rel = np.hypot(0.5 * (kd['hi'] - kd['lo']) / kd['k'], 0.5 * (Mref['hi'] - Mref['lo']) / Mref['M'])
-        rows.append((f"steady 1    kappa_Darcy M = q_s L M/dP  (figs 9, 13; M {Mp['primary']})", v, v * (1 - rel), v * (1 + rel)))
+        rows.append((f"steady 1    kappa_Darcy M = q_s L M/dP  (constant-dP drive; M {Mp['primary']})", v, v * (1 - rel), v * (1 + rel)))
     D = DP.get(DP['primary']) if DP else None
     if D is not None and np.isfinite(D['Dc']):
         tag = DP['primary'].split('_')[1]
-        rows.append((f'steady 2    q_s L/ln[(1-phi_P)/(1-phi_F)]  (fig 8 c; phi_s {tag})', D['Dc'], D['Dc_lo'], D['Dc_hi']))
+        rows.append((f'steady 2    q_s L/ln[(1-phi_P)/(1-phi_F)]  (phi_s {tag})', D['Dc'], D['Dc_lo'], D['Dc_hi']))
         rows.append(('              feed half (least deformed)', *D['Dc_feed']))
         rows.append(('              permeate half (most compressed)', *D['Dc_perm']))
     phi0 = np.nan
@@ -9015,10 +9527,15 @@ def print_perm_summary(cfg, R, P):
         kd = F.get('k', {}).get('N_measured')
         print('  kappa = D_c/M: ' + '  '.join(f"{k}: {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" for k, v in K.items())
               + (f"   vs Darcy kappa (N slope, measured dP) {kd['k']:.4e} [{kd['lo']:.4e}, {kd['hi']:.4e}]" if kd else ''))
+    Sv = P.get('vctrl')
+    if Sv and Sv.get('primary'):
+        v = Sv['k'][Sv['primary']]
+        print(f"  VELOCITY-CONTROLLED (live network, q = {Sv['q_set']:.4e}): dP measured {Sv.get('dP_meas', np.nan):.4f}"
+              f" [{Sv.get('dP_meas_lo', np.nan):.4f}, {Sv.get('dP_meas_hi', np.nan):.4f}];  kappa_v = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]")
     Fz = P.get('frozen')
     if Fz:
-        print('  FROZEN NETWORK (same dP, polymer stopped): ' + '  '.join(
-            f"kappa_f ({kk}) = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" + (f" (frozen/live {Fz['ratio'][kk]['r']:.3f})" if kk in Fz['ratio'] else '')
+        print(f"  FROZEN NETWORK ({'same prescribed flux' if Fz['mode'] == 'velocity' else 'same applied dP'}, polymer stopped): " + '  '.join(
+            f"kappa_f ({kk}) = {v['k']:.4e} [{v['lo']:.4e}, {v['hi']:.4e}]" + (f" (frozen / {Fz.get('ratio_ref', 'live')} {Fz['ratio'][kk]['r']:.3f})" if kk in Fz['ratio'] else '')
             for kk, v in Fz['k'].items()))
     U = P.get('unload')
     if U and U.get('Dc') is not None:

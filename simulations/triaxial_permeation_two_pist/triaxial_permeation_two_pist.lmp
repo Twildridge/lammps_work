@@ -74,19 +74,38 @@
 #                pressure drive at ONE dP, exactly like triaxial_permeation.lmp; files
 #                are tagged <name>_${dataname}_${interaction}_${nsteps}).  Halts if the
 #                feed reservoir thins to feed_halt_thick or a piston nears a box face.
-#   - Phase 2d:  FROZEN NETWORK (optional, -var frozen 1 / FROZEN=1 in the batch; 2026-11-07):
-#                straight after the drive, in the steady state, every polymer bead is stopped
-#                (velocities zeroed, polymer taken out of the integrator: the thermostat is
-#                re-created on the solvent alone; forces on the polymer zeroed) and the SAME dP
-#                keeps driving the solvent through the now rigid network for frozen_steps.  The
-#                flux loggers (permeation, permeate_count, pistons, reservoir pressures, solvent
-#                density + sigma profiles) re-open on files tagged _${nsteps}_f -> kappa of the
-#                frozen steady-state network, to be compared with the live kappa of the drive
-#                (flow through a frozen network ~ weak flow through the swollen one to leading
-#                order).  The polymer is released again afterwards (Phase 2c may follow).
+#   - Phase 2v:  VELOCITY-CONTROLLED FLUX (vctrl = 1, the default; 2026-11-16): after the drive the
+#                feed piston stops being a pressure piston and is moved at a CONSTANT velocity, the
+#                mean velocity it had over the last vctrl_avg_steps of the drive (its displacement
+#                over that window / the time; -var vfeed overrides).  The permeate piston stays
+#                pressure-controlled at P_target (two velocity pistons would fix the volume and
+#                leave the absolute pressure undefined).  The flux through the gel is then fixed
+#                and the PRESSURE DROP is the measured quantity: kappa_v = q L/dP_meas with q the
+#                prescribed flux and dP_meas = P_feed_meas - P_perm_meas (fluid force on each
+#                sheet / area).  Why: at fixed dP the thermal noise of the membrane sits in the
+#                flux (sigma_q^2 = 2 kT kappa/(A L T)); at fixed flux it sits in dP, so q_s(t) is
+#                flat and the permeate count's slope has only bounded storage terms left.  kappa's
+#                own uncertainty is the same in both ensembles.  The velocity is NOT steered in
+#                real time: a loop on the pressure would only put the noise back into the piston.
+#                dP therefore settles near, not on, dp_piston (within the precision of the drive's
+#                flux, ~5-10 %); kappa uses the measured value.  Runs vctrl_steps (0 -> nsteps);
+#                every flux logger, the sigma_zz / density profiles and disp_z_polymer (reference
+#                unchanged: still the ramp start) re-open on files tagged _${nsteps}_v, and
+#                vctrl_info_..._v.dat records the velocity and how it was obtained.
+#   - Phase 2d:  FROZEN NETWORK (frozen = 1, the default since 2026-11-16; 2026-11-07): after the
+#                velocity-controlled stage every polymer bead is stopped (velocities zeroed, polymer
+#                taken out of the integrator: the thermostat is re-created on the solvent alone;
+#                forces on the polymer zeroed) and the solvent keeps flowing through the now rigid
+#                network for frozen_steps -- at the SAME prescribed feed-piston velocity when
+#                Phase 2v ran (kappa_f = q L/dP_meas at an identical flux, so kappa_v/kappa_f =
+#                dP_f/dP_v), at the same applied dP otherwise (vctrl = 0, the pre-2026-11-16
+#                behaviour).  The flux loggers (permeation, permeate_count, pistons, reservoir
+#                pressures, solvent density + sigma profiles) re-open on files tagged _${nsteps}_f.
+#                The polymer is released again afterwards and the feed piston goes back to
+#                pressure control (Phase 2c may follow).
 #                -var frozen_at ref freezes the network BEFORE the ramp instead (the reference,
 #                undeformed state; the production files are then the frozen-network flux and
-#                Phases 2d / 2c are skipped) -- see the FROZEN knobs.
+#                Phases 2v / 2d / 2c are skipped) -- see the FROZEN knobs.
 #   - Phase 2c:  UNLOAD (optional, -var unload 1 / UNLOAD=1 in the batch; 2026-11-07): after
 #                the production run every production fix is closed, P_feed is ramped BACK
 #                to P_target in the same n_ramp x ramp_steps staircase (a step would ring
@@ -170,6 +189,22 @@ variable feed_halt_thick equal 2.0         # halt when feed reservoir <= this (s
 variable flux_freq       index 1000        # permeate bead-count interval (steps)
 variable box_guard_gap   equal 2.0         # halt if a piston face comes this close to a box face
 
+# ----- VELOCITY-CONTROLLED FLUX (Phase 2v; 2026-11-16; VCTRL / VCTRL_STEPS / VCTRL_AVG_STEPS / VFEED in the batch) -----
+# vctrl: 1 (default) = after the drive the feed piston is moved at a constant velocity and kappa is read
+#   from the measured pressure drop (see the header); 0 = skip the stage (the frozen stage then keeps the
+#   applied dP, as before 2026-11-16).
+# vctrl_steps: length of the stage (0 -> nsteps).
+# vctrl_avg_steps: trailing window of the drive over which the feed piston's mean velocity is measured
+#   (displacement / time); 0 -> 40 % of nsteps.  The drive is split into two `run`s at the start of this
+#   window; nothing else changes in the production files.  Longer = a better velocity (the thermal error of
+#   a flux mean falls as 1/sqrt(T)) but it must lie inside the steady state.
+# vfeed: prescribed feed-piston SPEED toward the gel (sigma/tau, > 0); 0 (default) = the measured mean.
+#   Use it to repeat a run at a known flux, or to rescale by dp_piston/<dP_meas> of an earlier run.
+variable vctrl           index 1
+variable vctrl_steps     index 0
+variable vctrl_avg_steps index 0
+variable vfeed           index 0.0
+
 # ----- UNLOAD (Phase 2c, optional: -var unload 1 / UNLOAD=1 in the batch; 2026-11-07) -----
 # After the production run P_feed is ramped back to P_target (n_ramp x ramp_steps, the drive's
 # staircase reversed) and the gel re-swells at zero dP for unload_steps (0 -> nsteps), every
@@ -179,10 +214,11 @@ variable unload        index 0
 variable unload_steps  index 0             # re-swelling hold length (steps); 0 -> nsteps
 variable unload_margin index 0.0           # unused in this deck (the compression decks' plate margin)
 
-# ----- FROZEN NETWORK (Phase 2d, optional: -var frozen 1 / FROZEN=1 in the batch; 2026-11-07) -----
-# After the drive the polymer is frozen in its steady state and the same dP drives the solvent
-# through the rigid network for frozen_steps (0 -> nsteps); flux files tagged _${nsteps}_f.
-variable frozen        index 0
+# ----- FROZEN NETWORK (Phase 2d; 2026-11-07; on by default since 2026-11-16; -var frozen 0 / FROZEN=0 skips it) -----
+# After the velocity-controlled stage the polymer is frozen in its steady state and the solvent keeps
+# flowing through the rigid network for frozen_steps (0 -> nsteps) at the same prescribed feed-piston
+# velocity (at the same applied dP when vctrl = 0); flux files tagged _${nsteps}_f.
+variable frozen        index 1
 variable frozen_steps  index 0
 # frozen_at (2026-11-07, later): WHEN the network is frozen.  'end' = after the drive, in the compacted steady
 # state (Phase 2d above; kappa of the network the flow itself shaped).  'ref' = right after the zero-flux
@@ -191,7 +227,7 @@ variable frozen_steps  index 0
 # strain, the quantity the compression side's D_c/M at small strain should be compared with (the live
 # drive compacts the support side to phi_s ~0.33 and its Darcy kappa is the harmonic mean over that
 # profile; the quarter-gel runs read kappa 0.30-0.32 at dP 0.02-0.05 against 0.24 at 0.1).  With 'ref'
-# the Phase 2d and 2c blocks are skipped (the frozen network cannot compact or re-swell) and the
+# the Phase 2v, 2d and 2c blocks are skipped (the frozen network cannot compact or re-swell) and the
 # displacement files hold zeros: read the flux only.  Needs frozen = 1.
 variable frozen_at     index end
 
@@ -1150,7 +1186,20 @@ variable phase2_start equal $(step)
 # Runs to completion unless halt_perm (feed reservoir thin) or halt_box fires.
 # L_ss: moving-window mean of the thickness over the last l0_avg_steps of the drive (see l0_avg_steps).
 fix lss_win all ave/time ${l0_avg_every} 1 ${l0_avg_every} v_gel_lz_rg v_gel_lz_bb ave window ${l0_avg_nwin}
-run ${nsteps}
+# The drive is ONE continuous interval written as two `run`s (2026-11-16): the feed-piston position is noted
+# at the start of the last vavg_run steps so Phase 2v can use the piston's mean velocity over that window.
+# Every fix carries across the boundary (ave/time epochs are global step multiples); the only trace is one
+# extra frame in the gel_flow movie (dump_modify first yes).
+variable vavg_len equal (${vctrl_avg_steps}>0)*${vctrl_avg_steps}+(${vctrl_avg_steps}<=0)*floor(0.4*${nsteps})
+variable vavg_run equal (v_vavg_len<${nsteps})*v_vavg_len+(v_vavg_len>=${nsteps})*floor(0.5*${nsteps})
+variable prod_a   equal ${nsteps}-v_vavg_run
+run ${prod_a}
+variable z_feed_a equal $(v_z_feed)
+variable step_a   equal $(step)
+print ">>> drive: last ${vavg_run} steps start here (step ${step_a}, z_feed = ${z_feed_a}); the mean feed-piston velocity over them sets Phase 2v"
+run ${vavg_run}
+variable z_feed_b equal $(v_z_feed)
+variable step_b   equal $(step)
 variable lss_ok equal $(f_lss_win[1]>0.0)
 variable L_ss_rg equal $(v_lss_ok*f_lss_win[1]+(1-v_lss_ok)*v_gel_lz_rg)
 variable L_ss_bb equal $(v_lss_ok*f_lss_win[2]+(1-v_lss_ok)*v_gel_lz_bb)
@@ -1217,13 +1266,167 @@ print ">>> Steady thickness (means over the last ${l0_avg_steps} steps of the dr
 
 
 # ==========================================================================
-# PHASE 2d (optional, frozen = 1): FROZEN NETWORK -- the polymer stopped in its steady state, the
-# same dP driving the solvent through the rigid network; files tagged _${nsteps}_f  (2026-11-07)
+# PHASE 2v (vctrl = 1): VELOCITY-CONTROLLED FLUX -- the feed piston moved at the constant mean velocity
+# of the drive's last vavg_run steps, the permeate piston still at P_target; the pressure drop is the
+# measured quantity.  Files tagged _${nsteps}_v  (2026-11-16; see the header and the knobs)
+# ==========================================================================
+variable vctrl_active equal 0
+if "${vctrl} == 0 || ${frozen_ref} == 1" then "jump SELF label_after_vctrl"
+
+# ----- the velocity: displacement of the feed piston over the window / the time (negative: it descends) -----
+variable dstep_ab   equal $(v_step_b-v_step_a)
+if "${dstep_ab} <= 0" then &
+    "print '>>> [vctrl] SKIPPED: the drive ended before its velocity window (halted run) -- no velocity to prescribe'" &
+    "jump SELF label_after_vctrl"
+variable vfeed_meas equal $((v_z_feed_b-v_z_feed_a)/(v_dstep_ab*v_timestep_prod))
+variable vfeed_user equal $(v_vfeed>0.0)
+variable vfeed_set  equal $(v_vfeed_user*(-v_vfeed)+(1-v_vfeed_user)*v_vfeed_meas)
+if "${vfeed_set} >= 0.0" then &
+    "print '>>> [vctrl] SKIPPED: the feed piston did not descend over the window (mean velocity $(v_vfeed_meas:%.3e)) -- no forward flux to prescribe; pass -var vfeed'" &
+    "jump SELF label_after_vctrl"
+variable vctrl_active delete
+variable vctrl_active equal 1
+
+print "########################################################"
+print "  VELOCITY-CONTROLLED FLUX: feed piston at v_z = $(v_vfeed_set:%.6e) sigma/tau, permeate piston at P = ${P_target}"
+print "########################################################"
+variable vctrl_len   equal (${vctrl_steps}>0)*${vctrl_steps}+(${vctrl_steps}<=0)*${nsteps}
+variable vctrl_tag   string ${nsteps}_v
+print ">>> [vctrl] drive window: steps ${step_a} -> ${step_b}, z_feed ${z_feed_a} -> ${z_feed_b}: mean v_z = $(v_vfeed_meas:%.6e);  -var vfeed = ${vfeed} (0 = use the mean)"
+print ">>> [vctrl] prescribed flux q = |v_z| = $(-v_vfeed_set:%.6e) sigma/tau  (Q = q A = $(-v_vfeed_set*v_area:%.5f) sigma^3/tau);  pressures at the switch: P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
+
+# stress cadence over the stage (same construction as the production's)
+variable nfreq_raw_v      equal floor(v_vctrl_len/v_num_stress_curves)
+variable nrepeat_raw_v    equal floor(v_nfreq_raw_v/v_nevery_target)
+variable nr_lo_v          equal (v_nrepeat_raw_v>v_nrepeat_min)*v_nrepeat_raw_v+(v_nrepeat_raw_v<=v_nrepeat_min)*v_nrepeat_min
+variable nrepeat_stress_v equal (v_nr_lo_v<v_nrepeat_max)*v_nr_lo_v+(v_nr_lo_v>=v_nrepeat_max)*v_nrepeat_max
+variable nevery_stress_v  equal floor(v_nfreq_raw_v/v_nrepeat_stress_v)
+variable nfreq_stress_v   equal v_nevery_stress_v*v_nrepeat_stress_v
+print ">>> [vctrl] stress cadence: nevery=${nevery_stress_v} nrepeat=${nrepeat_stress_v} nfreq=${nfreq_stress_v}  (vctrl_len ${vctrl_len})"
+
+# ----- feed piston: pressure law off, constant velocity on -----
+# feed_xy (setforce 0 0 NULL) and feed_nve stay; the z force is zeroed instead of averaged, so nve carries
+# every bead at the velocity set here (units box: the default `lattice` would scale it).  compute fp_feed
+# is a group/group pair force and still reads the fluid force on the sheet.
+unfix feed_z
+velocity piston_feed set 0.0 0.0 ${vfeed_set} units box
+fix feed_vhold piston_feed setforce NULL NULL 0.0
+
+variable vctrl_run equal (floor(($(step)+${vctrl_len}-1)/${nfreq_stress_v})+1)*${nfreq_stress_v}-$(step)
+print """# velocity-controlled stage (deck Phase 2v): key value
+step_start $(step)
+steps ${vctrl_run}
+vfeed_set ${vfeed_set}
+vfeed_meas ${vfeed_meas}
+vfeed_user ${vfeed_user}
+avg_step_a ${step_a}
+avg_step_b ${step_b}
+z_feed_a ${z_feed_a}
+z_feed_b ${z_feed_b}
+area $(v_area)
+dP_drive ${dP_piston}
+P_target ${P_target}
+frozen_follows $(v_frozen)""" file output_files/permeation_data/vctrl_info_${dataname}_${interaction}_${vctrl_tag}.dat screen no
+
+# ----- loggers (the production files' columns; P_feed_app is the drive's nominal value, NOT applied here) -----
+fix vout_piston_pos all print ${volume_freq} "$(step) $(v_z_feed) $(v_z_perm)" &
+    title "# step z_feed z_perm" &
+    file output_files/piston_data/piston_position_${dataname}_${interaction}_${vctrl_tag}.dat screen no
+fix vout_piston_vel all print ${volume_freq} "$(step) $(v_vz_feed) $(v_vz_perm)" &
+    title "# step vz_feed vz_perm" &
+    file output_files/piston_data/piston_velocity_${dataname}_${interaction}_${vctrl_tag}.dat screen no
+fix vout_piston_force all print ${volume_freq} "$(step) $(c_fp_feed[3]) $(c_fp_perm[3])" &
+    title "# step F_fluid_feed F_fluid_perm   (pair force of mobile atoms on each sheet, z)" &
+    file output_files/piston_data/piston_force_${dataname}_${interaction}_${vctrl_tag}.dat screen no
+fix vout_piston_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_fp_feed[3] c_fp_perm[3] ave one &
+    title2 "# TimeStep F_fluid_feed F_fluid_perm   (block-averaged; velocity-controlled feed piston)" &
+    file output_files/piston_data/piston_force_avg_${dataname}_${interaction}_${vctrl_tag}.dat
+fix vout_support_force all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    c_fp_supp_poly[3] c_fp_supp_solv[3] ave one &
+    title2 "# TimeStep F_poly_supp F_solv_supp   (pair force of the polymer / solvent on the support sheet, z; block-averaged)" &
+    file output_files/piston_data/support_force_${dataname}_${interaction}_${vctrl_tag}.dat
+fix vout_piston_pressure all print ${volume_freq} &
+    "$(step) $(v_P_feed_meas) $(v_P_feed_app) $(v_P_perm_meas) $(v_P_perm_app)" &
+    title "# step P_feed_meas P_feed_app P_perm_meas P_perm_app" &
+    file output_files/piston_data/piston_pressure_${dataname}_${interaction}_${vctrl_tag}.dat screen no
+fix vout_gel_dims_bb all print ${volume_freq} "$(step) $(v_gel_lx_bb) $(v_gel_ly_bb) $(v_gel_lz_bb) $(c_minz) $(c_maxz)" &
+    title "# step Lx_bb Ly_bb Lz_bb zlo_poly zhi_poly" &
+    file output_files/volume_data/gel_dimensions_bb_${dataname}_${interaction}_${vctrl_tag}.dat screen no
+fix vout_gel_dims_rg all print ${volume_freq} "$(step) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &
+    file output_files/volume_data/gel_dimensions_rg_${dataname}_${interaction}_${vctrl_tag}.dat screen no
+fix vout_permeate_flux all print ${flux_freq} '$(step) $(v_N_permeate)' &
+    file output_files/permeation_data/permeate_count_${dataname}_${interaction}_${vctrl_tag}.dat screen no
+fix vout_permeation all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
+    v_z_feed v_z_perm c_fp_feed[3] c_fp_perm[3] v_P_feed_meas v_P_perm_meas v_q_perm_inst v_N_permeate ave one &
+    title2 "# TimeStep z_feed z_perm F_fluid_feed F_fluid_perm P_feed_meas P_perm_meas Q_perm(=A*dz_perm/dt) N_permeate" &
+    file output_files/permeation_data/permeation_${dataname}_${interaction}_${vctrl_tag}.dat
+fix vavg_P_feed all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} v_P_res_feed v_rho_feed &
+    title2 "# TimeStep P_res_feed rho_feed   (block-averaged, pf cadence)" &
+    file output_files/stress_data/pressure_feed_${dataname}_${interaction}_${vctrl_tag}.dat
+fix vavg_P_perm all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} v_P_res_perm v_rho_perm &
+    title2 "# TimeStep P_res_perm rho_perm   (block-averaged, pf cadence)" &
+    file output_files/stress_data/pressure_permeate_${dataname}_${interaction}_${vctrl_tag}.dat
+fix vavg_sigmazz_poly all ave/time ${nevery_stress_v} ${nrepeat_stress_v} ${nfreq_stress_v} &
+    c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${vctrl_tag}.dat
+fix vavg_sigmazz_solv all ave/time ${nevery_stress_v} ${nrepeat_stress_v} ${nfreq_stress_v} &
+    c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${vctrl_tag}.dat
+fix vavg_solv_density all ave/chunk ${nevery_stress_v} ${nrepeat_stress_v} ${nfreq_stress_v} &
+    chunk_z_solv_density density/number density/mass &
+    file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${vctrl_tag}.dat
+# polymer displacement: the SAME reference as the drive (the ramp start), so these snapshots continue the
+# drive's steady profile at the stage's own (measured) pressure drop.  Its OWN chunk/atom compute, deleted
+# after the stage: the stage length is aligned to the stress cadence, not to disp_nfreq, and a fix
+# ave/chunk (ave one) removed in mid-window leaves its lock on the compute -- on the shared
+# chunk_z_polymer that stopped the unload's displacement fix ("same compute chunk/atom ... incompatible ways").
+compute chunk_zv_polymer polymer chunk/atom bin/1d z lower ${binWidth}
+fix vavg_disp_z_poly all ave/chunk ${disp_nevery} ${disp_nrepeat} ${disp_nfreq_eff} &
+    chunk_zv_polymer v_uz_poly &
+    file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${vctrl_tag}.dat
+fix halt_perm_v all halt ${volume_freq} v_feed_thickness <= ${feed_halt_thick} error continue
+fix halt_box_v all halt 1000 v_box_guard > 0.5 error continue
+
+print ">>> [vctrl] running ${vctrl_run} steps (>= vctrl_len=${vctrl_len}, aligned to nfreq=${nfreq_stress_v}); files tagged _${vctrl_tag};  feed reservoir now $(v_feed_thickness:%.2f) sigma, the stage takes $(-v_vfeed_set*v_vctrl_run*v_timestep_prod:%.2f)"
+run ${vctrl_run}
+
+unfix halt_box_v
+unfix halt_perm_v
+unfix vavg_disp_z_poly
+uncompute chunk_zv_polymer
+unfix vavg_solv_density
+unfix vavg_sigmazz_solv
+unfix vavg_sigmazz_poly
+unfix vavg_P_perm
+unfix vavg_P_feed
+unfix vout_permeation
+unfix vout_permeate_flux
+unfix vout_gel_dims_rg
+unfix vout_gel_dims_bb
+unfix vout_piston_pressure
+unfix vout_support_force
+unfix vout_piston_force_avg
+unfix vout_piston_force
+unfix vout_piston_vel
+unfix vout_piston_pos
+variable vctrl_run delete
+print ">>> [vctrl] done (step $(step)): z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)  feed_thickness=$(v_feed_thickness:%.2f)  N_permeate=$(v_N_permeate)"
+# the feed piston STAYS velocity-controlled: the frozen stage below runs at the same flux
+
+label label_after_vctrl
+
+
+# ==========================================================================
+# PHASE 2d (frozen = 1): FROZEN NETWORK -- the polymer stopped in its steady state, the solvent still
+# driven through the rigid network: at the prescribed feed-piston velocity of Phase 2v when it ran
+# (vctrl_active = 1), at the applied dP otherwise; files tagged _${nsteps}_f  (2026-11-07 / 2026-11-16)
 # ==========================================================================
 if "${frozen} == 0 || ${frozen_ref} == 1" then "jump SELF label_after_frozen"
 
 print "########################################################"
-print "  FROZEN NETWORK: polymer stopped in the steady state, dP ${dP_piston} kept on the solvent"
+if "${vctrl_active} == 1" then &
+    "print '  FROZEN NETWORK: polymer stopped in the steady state, feed piston kept at v_z = $(v_vfeed_set:%.6e) (velocity control)'" &
+else &
+    "print '  FROZEN NETWORK: polymer stopped in the steady state, dP ${dP_piston} kept on the solvent (pressure control)'"
 print "########################################################"
 variable frozen_len   equal (${frozen_steps}>0)*${frozen_steps}+(${frozen_steps}<=0)*${nsteps}
 variable frozen_tag   string ${nsteps}_f
@@ -1328,6 +1531,12 @@ fix_modify nvt_prod temp myTemp
 print ">>> [frozen] polymer released (thermostat back on polymer + solvent)"
 
 label label_after_frozen
+
+# ----- feed piston back to the pressure law (after Phase 2v / 2d; the unload and the final state need it) -----
+if "${vctrl_active} == 1" then &
+    "unfix feed_vhold" &
+    "fix feed_z piston_feed aveforce NULL NULL v_fz_feed" &
+    "print '>>> feed piston back to pressure control (P_feed_app = $(v_P_feed_app))'"
 
 
 # ==========================================================================

@@ -13,6 +13,7 @@ KNOBS=(
     piston_mass c_pist_frac npt_piston_steps settle_halt                    # NPT pistons
     dp_piston n_ramp ramp_steps perm_stress_curves disp_nfreq               # permeation
     frozen frozen_steps frozen_at                                           # permeation, frozen network
+    vctrl vctrl_steps vctrl_avg_steps vfeed                                 # permeation, velocity-controlled flux (Phase 2v)
     drive_split hold_auto seat_mode disp_fine_nfreq disp_fine_bin           # compression decks
     unload unload_steps unload_margin                                       # compression / shear unload
     l0_avg_steps                                                            # window of the L0 / L_ss means (compression, compress_slab, permeation)

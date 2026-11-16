@@ -351,11 +351,47 @@ The bridge (`chain_random_periodic.batch`, generalised with the `SLAB_*` / `MARG
 
 **Submission of 2026-11-10 (rot45 equilibrations done).** The 5-bead slab ended at 20 M steps (the halt-off extension) and the 15-bead at 60 M, so the stems are `…_5beads_…_rot45_1.0_1.0_20000000` and `…_15beads_…_rot45_1.0_1.0_60000000`; both were converted on the login node (`slab_two_pistons_periodic.py --margin-perm 40 --margin-feed 30`, 21 s and 1 min; 425 k and 831 k atoms). **`--margin-feed 30` is required for the rot45 gels:** the converter's default 15 σ feed-side vacuum leaves 13 σ of headroom above the feed piston, and a 0.10 strain on these taller gels (L_bb 148 / 155 σ) expels ~15 σ of solvent into the feed reservoir, so the deck's `box_guard` (feed piston within 2 σ of zhi) would have halted the drive at ε ≈ 0.08–0.09 (the converter prints the cap: `absorbs the solvent expelled up to a compression strain of ~0.08`); 30 σ gives a cap of ~0.18. The bridge batch takes `MARGIN_FEED=30` for the same purpose and four jobs submitted by hand with `DATANAME` exported: the compression with unload (`triaxial_compression_two_pist_single.batch`, jobs 55663497 / 55663502) and the laterally periodic shear (`shear_slab_two_pist_periodic.batch`, now reading `DATANAME` from the environment like the two single batches, default the 5-bead pm40 stem; jobs 55663498 / 55663503). The shear deck reads the same `_two_pist_pm40` file as the compression and permeation decks (it only needs the 7-type two-piston layout; the larger vacuum below the permeate piston is free), so no separate shear data file is needed. The 15-bead jobs were submitted with `--nodes=10` (1.9× the atoms). Expected lengths at the measured 6-node rates (5-bead slab 2.1–3.1 M steps/h at 354 k atoms, 15-bead 1.75 M/h at 660 k): compression ~23.5 M steps, shear ~10.5 M steps, all inside the 48 h limits. **Measured wall times (2026-11-11):** compression with unload (25.2 M steps) 15.8 h for the 5-bead gel on 6 nodes and 18.4 h for the 15-bead gel on 10 nodes; periodic shear (10.8 M steps) 6.8 h and 7.2 h. The batch limits were cut to match, `--time=28:00:00` in `triaxial_compression_two_pist_single.batch` and `--time=12:00:00` in `shear_slab_two_pist_periodic.batch` (≥ 1.5× the slower run; neither deck has a `wall_timeout`, so longer holds or extra strain levels need `sbatch --time=…`).
 
-**Permeation default: `FROZEN_AT=end` (confirmed 2026-11-16).** One job gives both permeabilities: the live drive (network free to
-deform and fluctuate), then the same network frozen in its flow-compacted steady state with the same dP on the solvent (files
+**Permeation sequence since 2026-11-16: drive, velocity-controlled stage, frozen network.** The deck now runs three flux
+stages in one job (`triaxial_permeation_two_pist_single.batch`; knobs `VCTRL`, `VCTRL_STEPS`, `VCTRL_AVG_STEPS`, `VFEED`,
+`FROZEN`, `FROZEN_STEPS`):
+
+1. Drive at constant dP for `NSTEPS` (unchanged). D_c comes from the displacement transient and M from the steady
+   displacement profile.
+2. Phase 2v (`VCTRL=1`, the deck default): the feed piston is taken off its pressure law and moved at a constant
+   velocity, its mean velocity over the last `VCTRL_AVG_STEPS` of the drive (displacement over time; 0 = 40 % of
+   `NSTEPS`), for `VCTRL_STEPS` (batch default 4 M). The permeate piston stays at `PRESS_TARGET`. The flux is prescribed
+   and the pressure drop is measured: κ_v = q L/ΔP_meas on the live network. Files `_<NSTEPS>_v`, plus
+   `vctrl_info_…_v.dat` with the velocity and the window it came from. `VFEED=<speed>` (σ/τ, toward the gel) prescribes
+   the velocity instead.
+3. Phase 2d (`FROZEN=1`, now the deck default too): the polymer is stopped and the same feed velocity is kept for
+   `FROZEN_STEPS`: κ_f = q L/ΔP_meas on the rigid network, at a flux identical to stage 2. Files `_<NSTEPS>_f`.
+
+The reason for stage 2 is where the membrane's thermal noise sits. At fixed dP it is in the flux
+(σ_q² = 2 k_BT κ/(A L T)); at fixed flux it is in dP. κ is equally precise either way, but q_s(t) is flat under velocity
+control. The velocity is set once and not steered toward a target pressure (a loop on the pressure would put the noise
+back into the piston), so dP settles near `DP_PISTON` rather than on it, within the precision of the drive's flux, and κ
+uses the measured value. The drive is written as two `run`s so the deck can note the feed-piston position at the start
+of the velocity window; the production files are unaffected apart from one extra frame in the `gel_flow` movie.
+`VCTRL=0` restores the earlier sequence (frozen stage at the applied dP). The feed reservoir has to last through stages
+2 and 3: at q ≈ 2e-4 σ/τ each 4 M steps takes about 4 σ, and the deck halts a stage cleanly when 2 σ remain. After the
+frozen stage the feed piston returns to pressure control, so `UNLOAD=1` works as before.
+
+Local smoke test of the full sequence (2026-11-16, LAMMPS GUI `lmp -sf omp -pk omp 8` on the 156k-atom
+`_two_pist_quarter_perm` file, about 35 min): the usual permeation smoke line with `-var nsteps 6000 -var vctrl_steps 4000
+-var frozen_steps 4000 -var unload 1 -var unload_steps 4000 -var perm_stress_curves 3`. Pass: the log's `[vctrl] done`,
+`[frozen] done`, `feed piston back to pressure control`, `[unload] done` and `Simulation complete` lines, exit 0; 17 `_6000_v`,
+15 `_6000_f` and 23 `_6000_u` files; `z_feed` in the `_v` and `_f` files linear in time at `vfeed_set` to the files' print
+precision; the files load through `add_perm_vctrl` / `add_perm_frozen` / `add_perm_unload`. The pressures and κ of such a
+run mean nothing (the pistons are still ringing after a 3000-step settle). Two things the test caught: an apostrophe inside
+a double-quoted `print` line stops LAMMPS with "Unmatched single quote", and a `fix ave/chunk` (`ave one`) removed in
+mid-window leaves its lock on the chunk/atom compute, so the Phase 2v displacement logger has its own compute
+(`chunk_zv_polymer`), deleted after the stage. Not yet run on Expanse.
+
+**Frozen stage: `FROZEN_AT=end` (confirmed 2026-11-16).** One job gives both permeabilities: the live drive (network free to
+deform and fluctuate), then the same network frozen in its flow-compacted steady state with the same feed velocity (the same dP when `VCTRL=0`) on the solvent (files
 `_<NSTEPS>_f`). Both stages share the deformed geometry, so the frozen κ is what a rigid porous medium of that shape gives
 (solvent moving through a fixed network), and the gap between it and the live κ is what the network's own motion adds. The
-notebook reports it as the ratio κ_frozen / κ_live per estimator (cell 9f); for weak flow it should be close to 1.
+notebook reports it as the ratio κ_f/κ_v (the reconciliation table and figure 4); for weak flow it should be close to 1.
 `FROZEN_AT=ref` is a different quantity and a separate job: the network frozen undeformed for the whole production, no live drive;
 its κ is the zero-strain value to compare with the compression's D_c/M. A frozen-first variant in one job (freeze, flux, release,
 then the live drive) was drafted on 2026-11-16 and dropped before commit: it measures the undeformed network, which `ref` already does.

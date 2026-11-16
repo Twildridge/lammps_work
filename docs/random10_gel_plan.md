@@ -146,6 +146,9 @@ All four jobs of the bridge finished on 2026-11-16. Three are valid; the compres
   frozen under the same dP, both in one job; kappa_frozen / kappa_live separates what a rigid network of that shape gives from what
   the network's own motion adds. `FROZEN_AT=ref`: frozen undeformed for the whole production, no live drive (the zero-strain kappa,
   to compare with D_c/M). Only the `ref` run has been done for this gel; the live drive will use the default.
+  Since 2026-11-16 the default sequence has a velocity-controlled stage between the drive and the frozen stage (feed piston at
+  the drive's mean velocity, dP measured), and the frozen stage keeps that velocity instead of the applied dP; see "Permeation
+  sequence since 2026-11-16" in `running_simulations.md`. The converted file needs feed-reservoir room for both stages.
 - **Code status.** `seat_mode` and the three guards (compression deck and `compress_slab`, commit e9f0e86) have run only on a toy
-  system: smoke-test both decks locally before the rerun. The permeation deck is unchanged since its last production run.
+  system: smoke-test both decks locally before the rerun. The permeation deck gained the velocity-controlled stage on 2026-11-16 (smoke-tested locally, not yet run on Expanse).
 

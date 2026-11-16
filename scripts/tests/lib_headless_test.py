@@ -43,7 +43,34 @@ Rp = tri.load_reference(cfgp)
 P = tri.load_permeation(cfgp, Rp)
 tri.add_perm_volume_fractions(cfgp, Rp, P)
 tri.add_perm_psd(cfgp, Rp, P)                # geometric porosity + PSD on the same (tiny) frames
+tri.add_perm_displacement(cfgp, Rp, P)
+tri.add_perm_vctrl(cfgp, Rp, P)              # deck Phase 2v: feed piston at a prescribed velocity, live network
+tri.add_perm_frozen(cfgp, Rp, P)             # deck Phase 2d: the frozen network at the same velocity
 tri.print_perm_summary(cfgp, Rp, P)
+X = tri.perm_reconcile(cfgp, Rp, P)
+# the fixture's stages: one prescribed flux, dP 0.10 live and 0.12 frozen
+Sv, Sf = P['vctrl'], P['frozen']
+assert Sv is not None and Sv['mode'] == 'velocity' and Sv['primary'] == 'v_measured', 'velocity-controlled stage not read'
+assert Sf is not None and Sf['mode'] == 'velocity' and Sf['ratio_ref'].startswith('velocity')
+assert abs(Sv['dP_meas'] - 0.10) < 0.03 and abs(Sf['dP_meas'] - 0.12) < 0.03, (Sv['dP_meas'], Sf['dP_meas'])   # 12 samples of 0.019 noise each
+assert abs(Sv['Q_ratio'] - 1.0) < 0.05, f"N-slope flux / prescribed flux = {Sv['Q_ratio']}"
+assert abs(Sf['ratio']['v_measured']['r'] - Sv['dP_meas'] / Sf['dP_meas']) < 1e-3, Sf['ratio']   # same flux, so the kappa ratio is the inverse dP ratio (L differs by noise only)
+assert abs(Sv['k']['v_measured']['k'] - Sv['q_set'] * Sv['L'] / Sv['dP_meas']) < 1e-9
+assert {'v', 'f', 'dP'} <= set(X['kappa']) and 'kappa_f over kappa_v' in X['closure'], X
+for f in (tri.fig_perm_stages, tri.fig_perm_reconcile, tri.fig_perm_frozen):
+    assert f(cfgp, Rp, P) is not None, f.__name__
+    plt.close('all')
+# a run without the stage files (every run before 2026-11-16) still loads and reconciles on the constant-dP kappa
+cfg0 = tri.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', two_pist=True, base_dir=base,
+                  VOR_ENABLE=False, PSD_ENABLE=False, PERM_VCTRL=False, PERM_FROZEN=False)
+P0 = tri.load_permeation(cfg0, Rp, verbose=False)
+tri.add_perm_displacement(cfg0, Rp, P0, verbose=False)
+tri.add_perm_vctrl(cfg0, Rp, P0, verbose=False); tri.add_perm_frozen(cfg0, Rp, P0, verbose=False)
+assert P0['vctrl'] is None and P0['frozen'] is None
+X0 = tri.perm_reconcile(cfg0, Rp, P0, verbose=False)
+assert 'v' not in X0['kappa'] and 'dP' in X0['kappa']
+tri.fig_perm_stages(cfg0, Rp, P0); tri.fig_perm_reconcile(cfg0, Rp, P0)
+plt.close('all')
 for f in (tri.fig_perm_pistons, tri.fig_total_stress, tri.fig_partial_stress, tri.fig_network_stress, tri.fig_perm_density,
           tri.fig_perm_volfrac, tri.fig_perm_volfrac_evolution, tri.fig_perm_psd, tri.fig_perm_flux, tri.fig_perm_permeability,
           tri.fig_thermo_pressure, tri.fig_osmotic_pressure):

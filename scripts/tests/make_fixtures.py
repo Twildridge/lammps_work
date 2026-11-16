@@ -239,6 +239,27 @@ def two_piston_perm(root):
     write_ave_chunk(r / 'output_files' / 'displacement_data' / f'disp_z_polymer_{st}.dat', 'avg_disp_z_poly', steps, disp, ['v_uz_poly'])
     write_traj(r / 'traj_files' / f'traj_ref_{st}.lammpstrj', rsteps[:2], {4: Z_SUP, 5: Z_FEED, 6: Z_PERM})
     write_traj(r / 'traj_files' / f'traj_stress_{st}.lammpstrj', steps[:2], {4: Z_SUP, 5: Z_FEED, 6: Z_PERM})
+    # ---- post-drive stages (deck 2026-11-16): Phase 2v, the feed piston at a prescribed velocity on the live network
+    #      (_v files + vctrl_info), then Phase 2d, the frozen network at the same velocity (_f files).  The flux is the
+    #      drive's; the measured dP is 0.10 live and 0.12 frozen, so kappa_f/kappa_v = 0.10/0.12
+    vq = 0.0015 / 0.005                                   # the drive's piston speed, sigma/tau
+    for tag, t0, dp in (('v', ns, 0.10), ('f', ns + 6000, 0.12)):
+        sst = np.arange(t0 + 500, t0 + 6001, 500)
+        m = len(sst)
+        szf, szp = Z_FEED - 0.0015 * sst, Z_PERM - 0.0015 * sst
+        sFf = (1.5 + dp) * LX * LY + rng.normal(0, 30, m)
+        sFp = -1.5 * LX * LY + rng.normal(0, 30, m)
+        sN = 8000 + 0.43 * LX * LY * 0.0015 * sst
+        write_print(pm / f'permeation_{st}_{tag}.dat', '# Time-averaged data for fix out_permeation\n# TimeStep z_feed z_perm F_fluid_feed F_fluid_perm P_feed_meas P_perm_meas Q_perm(=A*dz_perm/dt) N_permeate',
+                    np.column_stack([sst, szf, szp, sFf, sFp, sFf / (LX * LY), -sFp / (LX * LY), LX * LY * vq + rng.normal(0, 5, m), sN]), fmt='%.8g')
+        write_print(pm / f'permeate_count_{st}_{tag}.dat', '# Fix print output for fix out_permeate_flux', np.column_stack([sst, sN]), fmt='%.8g')
+        write_print(pd_ / f'piston_pressure_{st}_{tag}.dat', '# step P_feed_meas P_feed_app P_perm_meas P_perm_app',
+                    np.column_stack([sst, sFf / (LX * LY), 1.6 + 0 * sst, -sFp / (LX * LY), 1.5 + 0 * sst]))
+        write_print(vd / f'gel_dimensions_rg_{st}_{tag}.dat', None, np.column_stack([sst, 40 + 0 * sst, 40 + 0 * sst, 120 + rng.normal(0, 0.05, m)]))
+    (pm / f'vctrl_info_{st}_v.dat').write_text(
+        '# velocity-controlled stage (deck Phase 2v): key value\n'
+        f'step_start {ns}\nsteps 6000\nvfeed_set {-vq}\nvfeed_meas {-vq}\nvfeed_user 0\navg_step_a {int(0.6 * ns)}\navg_step_b {ns}\n'
+        f'z_feed_a {Z_FEED - 0.0015 * 0.6 * ns}\nz_feed_b {Z_FEED - 0.0015 * ns}\narea {LX * LY}\ndP_drive 0.1\nP_target 1.5\nfrozen_follows 1\n')
     with open(r / f'final_triperm_{st}.data', 'w') as f:
         f.write(f'fixture\n\n10 atoms\n7 atom types\n\n0.0 {LX} xlo xhi\n0.0 {LY} ylo yhi\n0.0 {LZ} zlo zhi\n')
     (r / 'log.lammps').write_text(_log(steps))

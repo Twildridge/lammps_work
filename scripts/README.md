@@ -32,7 +32,7 @@ Rule (same as `lammps_data_files_local/`): a notebook or script lives here while
 | Notebook | Role |
 |---|---|
 | `triaxial_compression_single_two_pist.ipynb`, `triaxial_compression_sweep_two_pist.ipynb` | Two-piston compression: one level / whole sweep (M, G, D_c, κ; the trusted D_c is the unload's, `triaxial_compression_two_pist_single.batch`). |
-| `triaxial_permeation_single_two_pist.ipynb` | Two-piston permeation (Q, κ, D_c, M from the polymer displacement). |
+| `triaxial_permeation_single_two_pist.ipynb` | Two-piston permeation: D_c and M from the polymer displacement, κ from the velocity-controlled and frozen stages, and their reconciliation (κ = D_c/M). |
 | `shear_analysis_single.ipynb`, `shear_analysis_sweep.ipynb` | Shear G for the isolated-gel `shear_slab_two_pist_iso` (`DECK`; the archived `shear_slab` and periodic two-piston runs still load). D_c and κ come from each level's **unload** (deck Phase 2c, 2026-10-28), not from the hold. |
 | `bulk_modulus_analysis_single.ipynb`, `bulk_modulus_analysis_sweep.ipynb` | Bulk modulus K from the `compress_slab` hold and D_m = (K/M) D_c, κ = D_m/K from its free re-swelling unload (2026-10-28). |
 | `chain_length_comparison.ipynb` (2026-11-03) | The beads-per-strand sweep: the equilibration traces of `simulations/chain_length_testing` (Rg, thickness, box, where the Rg-plateau halt fired) and the compression observables (M, G, φ_s) of every N against N with fitted power laws; code in `lib/chain_length.py` (`sync_equilibration` pulls each N's volume_data traces + `log.lammps` from Expanse into `flow_data_local/chain_length/<run dir>/` in one login), the compression runs loaded through `lib/compare.py`. |

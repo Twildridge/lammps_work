@@ -9,7 +9,7 @@ lammps_work/                    ← This git repository
 │   ├── slab_with_support/      ← Gel equilibration and compression (main workhorse)
 │   ├── triaxial_compression_two_pist/  ← STANDARD compression workflow (two-piston, 2026-09-16; standard since 2026-09-22): NPT-pistons on both reservoirs + load piston; cumulative strain sweep
 │   ├── chain_length_testing/       ← beads-per-strand sweep of the periodic random slab (2026-11-03): slab_with_support.lmp (symlink) with the Rg-plateau halt, one job per N (submit_chain_length_sweep.sh)
-│   ├── triaxial_permeation_two_pist/   ← STANDARD permeation workflow (two-piston): feed/permeate NPT-pistons, one constant-dP drive (no sweep)
+│   ├── triaxial_permeation_two_pist/   ← STANDARD permeation workflow (two-piston): feed/permeate NPT-pistons, one constant-dP drive, then a velocity-controlled stage and a frozen-network stage (no sweep)
 │   │                              (the one-piston triaxial_compression/ and triaxial_permeation/ moved to archive/simulations/ on 2026-09-22)
 │   │                              (shear_slab/, the plate-driven periodic-slab shear, moved to archive/simulations/ on 2026-10-28)
 │   ├── shear_slab_two_pist/    ← Shear modulus on the two-piston system (the current G workflow). shear_slab_two_pist.lmp (2026-10-13) = ISOLATED gel from the x_plates converter file,
@@ -43,7 +43,7 @@ lammps_work/                    ← This git repository
 │   │   # ── analysis notebooks (code in lib/) ──
 │   ├── triaxial_compression_single_two_pist.ipynb ← STANDARD: two-piston compression, one level: the eleven figures + wet-piston bath check + solvent expelled
 │   ├── triaxial_compression_sweep_two_pist.ipynb  ← STANDARD: two-piston compression, all levels (M, G, D_c, κ vs strain) + per-level bath check
-│   ├── triaxial_permeation_single_two_pist.ipynb  ← STANDARD: two-piston permeation: profile evolutions, P_feed/P_perm measured vs applied, Q_perm(t), permeability k, D_c + M from the polymer displacement (no sweep)
+│   ├── triaxial_permeation_single_two_pist.ipynb  ← STANDARD: two-piston permeation: D_c + M from the polymer displacement, kappa from the velocity-controlled and frozen stages, the reconciliation kappa = D_c/M; then checks and the gel's state under flow (stresses, phi_s, pore sizes)
 │   ├── shear_analysis_single.ipynb          ← one shear level: G (network + series estimators, increments from γ = 0), N1/N2, P_th; D_c and κ from the level's UNLOAD (2026-10-28); DECK in Config
 │   ├── shear_analysis_sweep.ipynb           ← every level of a shear sweep: G vs γ, stress–strain slope, D_c (unloads), κ
 │   ├── bulk_modulus_analysis_{single,sweep}.ipynb ← Bulk modulus K (code in lib/bulk.py, on top of lib/triaxial.py)
