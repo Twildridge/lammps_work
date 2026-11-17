@@ -12,7 +12,7 @@ $PY "$HERE/make_fixtures.py" "$ROOT" || exit 1
 fail=0
 for case in one_piston two_piston_perm two_piston_comp six_plate_bulk; do
     dir="$ROOT/$case"
-    stem=$(ls "$dir"/final_*.data | head -1 | sed -E 's|.*/final_(triperm\|tricomp\|compress)_||; s|\.data$||')
+    stem=$(ls "$dir"/data_files/final_*.data | head -1 | sed -E 's|.*/final_(triperm\|tricomp\|compress)_||; s|\.data$||')
     echo "=== $case  (stem $stem)"
     if [ "$case" = six_plate_bulk ]; then
         # compress_slab (2026-09-29): what postprocess.sh runs for it -- the convergence plot and the

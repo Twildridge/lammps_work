@@ -16,7 +16,8 @@
 #
 # Folders with a cont=1 path: slab_with_support, chain_length_testing, polymer_pure, solvent_pure
 # (the two-piston decks have none). The continuation runs in <run dir>/continuation_<stamp>/;
-# a continuation of a continuation is a sibling there. Knobs (lib/run_common.sh, plus CHAIN,
+# a continuation of a continuation is a sibling there. The resume file is looked for in
+# <run dir>/data_files/ (where the decks write since 2026-11-17), then in <run dir>/ (older runs). Knobs (lib/run_common.sh, plus CHAIN,
 # WALL_MARGIN, DECK_FILE): the environment wins, then the `export NAME=` lines of the batch.
 #
 # The { } group makes bash parse the whole file first (see run_lammps.sh); keep the exit inside.
@@ -73,7 +74,22 @@ batch_value() {
     done < <(grep -E "^(export[[:space:]]+)?[A-Z_0-9]+=" "$BATCH_FILE" 2>/dev/null | sed 's/[[:space:]]#.*//')
     printf '%s' "$val"
 }
-newest_snapshot() { ls "$1"/${PREFIX}_*_snap[0-9]*.data 2>/dev/null | sort -V | tail -1 || true; }
+# run_files <run dir> <glob>: the files the RUN wrote that match, from data_files/ (decks since
+# 2026-11-17) or else from the run dir itself (older runs). The input in data_files/ is a symlink
+# and is skipped, so a dataname that itself starts with ${PREFIX}_ is never taken for an output.
+run_files() {
+    local d f found
+    for d in "$1/data_files" "$1"; do
+        found=0
+        for f in "$d"/$2; do
+            if [ -f "$f" ] && [ ! -L "$f" ]; then echo "$f"; found=1; fi
+        done
+        if [ "$found" = 1 ]; then return 0; fi
+    done
+    return 0
+}
+newest_snapshot() { run_files "$1" "${PREFIX}_*_snap[0-9]*.data" | sort -V | tail -1 || true; }
+final_data()      { run_files "$1" "${PREFIX}_*.data" | grep -v '_snap[0-9]*\.data$' | head -1 || true; }
 
 # ===== submit modes (extend / chain) =============================================================
 if [ "$MODE" != run ]; then
@@ -98,13 +114,13 @@ if [ "$MODE" != run ]; then
         OLDSTEPS=$(( PREV_OLD + DONE )); NSTEPS=$(( TOTSTEPS - OLDSTEPS ))
         [ "$NSTEPS" -gt 0 ] || { echo "Nothing left to run (oldsteps $OLDSTEPS >= totsteps $TOTSTEPS)."; exit 0; }
         RESUME_FILE=$(newest_snapshot "$WORK_DIR")
-        [ -n "$RESUME_FILE" ] || { echo "Error: incomplete run but no ${PREFIX}_*_snap<N>.data in $WORK_DIR"; exit 1; }
+        [ -n "$RESUME_FILE" ] || { echo "Error: incomplete run but no ${PREFIX}_*_snap<N>.data in $WORK_DIR/data_files (or $WORK_DIR)"; exit 1; }
     else
         OLDSTEPS=0; TOTSTEPS="$NSTEPS"
-        RESUME_FILE=$(ls "$WORK_DIR"/${PREFIX}_*.data 2>/dev/null | grep -v '_snap[0-9]*\.data$' | head -1 || true)
+        RESUME_FILE=$(final_data "$WORK_DIR")
         if [ -z "$RESUME_FILE" ]; then
             RESUME_FILE=$(newest_snapshot "$WORK_DIR")
-            [ -n "$RESUME_FILE" ] || { echo "Error: no ${PREFIX}_*.data in $WORK_DIR. Did the run finish?"; exit 1; }
+            [ -n "$RESUME_FILE" ] || { echo "Error: no ${PREFIX}_*.data in $WORK_DIR/data_files (or $WORK_DIR). Did the run finish?"; exit 1; }
             echo "NOTE: no final ${PREFIX}_*.data; resuming from the newest snapshot (for a run that hit its wall budget use --chain)."
         fi
     fi
@@ -164,6 +180,7 @@ RESUME_FILE="$(realpath "$1")"; NSTEPS="$2"; OLDSTEPS="$3"; TOTSTEPS="$4"
 parse_resume_name "$RESUME_FILE"
 
 ORIG_DIR="$(dirname "$RESUME_FILE")"
+case "$(basename "$ORIG_DIR")" in data_files) ORIG_DIR="$(dirname "$ORIG_DIR")" ;; esac       # <run dir>/data_files/<file>
 case "$(basename "$ORIG_DIR")" in continuation_*) ORIG_DIR="$(dirname "$ORIG_DIR")" ;; esac
 STAMP=$(date +%Y%m%d_%H%M%S)
 CONT_DIR="$ORIG_DIR/continuation_$STAMP"
@@ -179,6 +196,7 @@ LAMMPS_VARS=(-var dataname "$DATANAME" -var interaction "$INTERACTION" -var epsS
              -var nsteps "$NSTEPS" -var oldsteps "$OLDSTEPS" -var totsteps "$TOTSTEPS" -var cont 1
              -var wall_timeout "$WALL_TIMEOUT")
 knob_vars
+write_run_info "$CONT_DIR" "$DECK_SRC" "$RESUME_FILE"
 echo "======================================"
 echo "Working directory: $CONT_DIR"
 echo "Trajectory directory (scratch): $TRAJ_DIR"

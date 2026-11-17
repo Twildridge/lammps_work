@@ -109,12 +109,64 @@ lammps_work/                    ← This git repository
 │   └── input_data/     ← .data files (large; NOT in git — copy manually)
 │       └── calibration_sweep/  ← calibration_sweep.sh prep files + run symlinks (~370 entries, kept out of the top level)
 └── lammps_runs/        ← Timestamped output from each job (NOT in git)
-    └── slab_*_20250101_120000/
-        ├── data_files/     ← symlink to input .data file
-        ├── output_files/   ← stress, volume, piston .dat files
-        ├── output_plots/   ← auto-generated plots
-        ├── traj_files/     ← symlink to scratch (large trajectory files)
-        └── log.lammps
+    └── <folder>/                                   ← one folder per simulation type (same names as simulations/)
+        └── <folder>_<dataname>_<interaction>_<YYYYMMDD_HHMMSS>/     ← one run; see "Inside a run folder" below
 ```
+
+## Inside a run folder
+
+Layout since 2026-11-17. `run_lammps.sh` creates it (`make_run_dirs` in `scripts/lib/run_common.sh`) and writes the
+same guide into every run folder as `README.txt`.
+
+```
+<folder>_<dataname>_<interaction>_<YYYYMMDD_HHMMSS>/
+├── README.txt        ← this layout, so the folder explains itself
+├── run_info.txt      ← what was run: SLURM job + its output file, deck, input data file, every -var given to LAMMPS, git commit
+├── log.lammps        ← LAMMPS log: thermo output and the deck's own ">>>" progress lines
+├── <deck>.lmp        ← the copy of the deck this run executed
+├── data_files/       ← EVERY .data and .restart file of the run
+│   ├── <dataname>.data                          ← the INPUT configuration (symlink into lammps_data/input_data/)
+│   ├── final_<deck>_<stem>.data / .restart      ← the state at the END of the run
+│   ├── final_config_<stem>_snap<N>.data         ← snapshots during an equilibration (resume points of continue_sim.sh)
+│   └── strained_<deck>_<stem>_<stage>.restart   ← the strained state at the end of a level's hold, before any unload
+├── output_files/     ← EVERY measured series and profile (.dat text tables; .dump for per-pair data)
+│   ├── stress_data/         ← stress profiles and series, strain logs, reservoir pressures
+│   ├── volume_data/         ← gel and box dimensions and volumes, polymer centre of mass
+│   ├── piston_data/         ← piston / plate positions, velocities, forces, pressures
+│   ├── permeation_data/     ← solvent crossing the gel (flux, expelled volume)
+│   ├── displacement_data/   ← polymer displacement profiles
+│   ├── pair_data/           ← per-pair and per-bond dumps (pore and bond analysis)
+│   └── chemical_potential/  ← solvent density profiles
+├── output_plots/     ← EVERY figure made from this run (.png)
+│   ├── <stem>_<figure>.png  ← the results figures of postprocess.sh
+│   └── convergence_plots/   ← run-health figures: T, P and volume convergence, diagnostics
+├── traj_files/       ← symlink to scratch: trajectories (.lammpstrj). Scratch is purged; copy what must last.
+└── continuation_<stamp>/    ← a continuation of this run (continue_sim.sh), same layout inside
+```
+
+**File names.** Every output file is `<quantity>_<stem>[_<stage>].<ext>`:
+
+| Part | Meaning |
+|------|---------|
+| `<stem>` | `<dataname>_<epsSS>_<epsSP>_<steps>`; `<steps>` is the length of one hold (or of the production run) |
+| `<deck>` (in `data_files/`) | `config` = equilibration (`slab_with_support`, `chain_length_testing`), `tricomp` = triaxial compression, `triperm` = triaxial permeation, `shear`, `compress` = six-plate bulk compression; the pure-phase runs write `purepol_<stem>.data` / `puresolv_<stem>.data` |
+| `_ref` | zero-load reference window, before any loading |
+| `_c<strain>` / `_g<strain>` | the hold at that compression / shear level |
+| `_u<strain>` | the unload after that level (re-swelling or relaxation; permeation: `_u`) |
+| `_v`, `_f` | permeation: velocity-controlled stage, frozen-network stage |
+| no stage | the whole run |
+
+**The strained-state restart (2026-11-17).** The compression, shear and permeation decks write
+`data_files/strained_<deck>_<stem>_<stage>.restart` at the end of every level's hold, before the unload starts
+(permeation: at the end of the constant-dP drive, before the velocity-controlled, frozen and unload stages). It is the
+equilibrated strained state, kept so that an unload (the trusted D_c) can be repeated without redoing the drive and the
+hold. It is a binary LAMMPS restart, about 150 MB for the 770 k-atom wide gel, one per level; `SAVE_STRAINED=0` in the
+batch turns it off. `read_restart` brings back atoms, velocities, bonds, box and groups, but not fixes or computes, and
+no deck has a start-from-restart path yet: a repeat unload needs a deck that reads the restart and declares the unload
+stage's fixes. `lmp -restart2data <file>.restart <file>.data` converts one to a text data file.
+
+**Runs started before 2026-11-17** have their `final_*` and snapshot files at the top level of the run folder, and no
+`README.txt`, `run_info.txt` or `strained_*` restart. `continue_sim.sh`, the pipeline batches and the plotters look in
+`data_files/` first and then at the top level, so both layouts work.
 
 ---

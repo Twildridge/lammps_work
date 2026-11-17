@@ -283,5 +283,5 @@ undump def_traj
 unfix st_poly
 unfix st_box
 unfix st_dims
-write_restart screen_final_${tag}.restart
+write_restart data_files/screen_final_${tag}.restart
 print ">>> SCREEN_COMPLETE at step $(step)"

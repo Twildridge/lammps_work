@@ -38,7 +38,10 @@ say() { echo ">>> $*"; echo "$(date +%Y-%m-%dT%H:%M) $*" >> "$PIPE/status.log"; 
 say "bridge job ${SLURM_JOB_ID:-none} started (waited on ${SLAB_JOB:-?}, hop $CHAIN_HOPS)"
 
 # ---- 1. final configuration
-SRC=$(ls -t "$RUNS_DIR"/chain_length_testing/chain_length_testing_${DATANAME}_1.0_1.0_*/"$FINAL.data" \
+# (decks since 2026-11-17 write it to <run dir>/data_files/; older runs to <run dir>/ itself)
+SRC=$(ls -t "$RUNS_DIR"/chain_length_testing/chain_length_testing_${DATANAME}_1.0_1.0_*/data_files/"$FINAL.data" \
+            "$RUNS_DIR"/chain_length_testing/chain_length_testing_${DATANAME}_1.0_1.0_*/continuation_*/data_files/"$FINAL.data" \
+            "$RUNS_DIR"/chain_length_testing/chain_length_testing_${DATANAME}_1.0_1.0_*/"$FINAL.data" \
             "$RUNS_DIR"/chain_length_testing/chain_length_testing_${DATANAME}_1.0_1.0_*/continuation_*/"$FINAL.data" 2>/dev/null | head -1)
 if [ -z "$SRC" ]; then
     NEXT=""
@@ -57,6 +60,7 @@ if [ -z "$SRC" ]; then
     exit 1
 fi
 RUN=$(dirname "$SRC")
+if [ "$(basename "$RUN")" = data_files ]; then RUN=$(dirname "$RUN"); fi
 say "final configuration: $SRC"
 
 # ---- 2. sanity

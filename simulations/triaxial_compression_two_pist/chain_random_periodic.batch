@@ -71,11 +71,16 @@ if [ -n "$SLAB_JOB" ]; then
 fi
 
 # ---- 1. the slab's final configuration -----------------------------------------
+# (decks since 2026-11-17 write it to <run dir>/data_files/; older runs to <run dir>/ itself)
 SRC=""
-for f in $(ls -t "$RUNS"/${SLAB_FOLDER}_${DATANAME}_${INTERACTION}_*/"$FINAL" \
+for f in $(ls -t "$RUNS"/${SLAB_FOLDER}_${DATANAME}_${INTERACTION}_*/data_files/"$FINAL" \
+                 "$RUNS"/${SLAB_FOLDER}_${DATANAME}_${INTERACTION}_*/continuation_*/data_files/"$FINAL" \
+                 "$RUNS"/${SLAB_FOLDER}_${DATANAME}_${INTERACTION}_*/"$FINAL" \
                  "$RUNS"/${SLAB_FOLDER}_${DATANAME}_${INTERACTION}_*/continuation_*/"$FINAL" 2>/dev/null); do
     SRC="$f"; break
 done
+SRC_RUN="$(dirname "${SRC:-.}")"                                   # the run dir that holds log.lammps
+if [ "$(basename "$SRC_RUN")" = data_files ]; then SRC_RUN="$(dirname "$SRC_RUN")"; fi
 
 if [ -z "$SRC" ]; then
     echo ">>> no $FINAL under $RUNS yet."
@@ -101,7 +106,7 @@ if [ -z "$SRC" ]; then
     exit 1
 fi
 echo ">>> slab final configuration: $SRC"
-grep -m1 "Total wall time" "$(dirname "$SRC")/log.lammps" 2>/dev/null || true
+grep -m1 "Total wall time" "$SRC_RUN/log.lammps" 2>/dev/null || true
 
 # ---- 3. copy to input_data and convert ------------------------------------------------
 mkdir -p "$INPUT_DATA"

@@ -214,6 +214,15 @@ variable unload        index 0
 variable unload_steps  index 0             # re-swelling hold length (steps); 0 -> nsteps
 variable unload_margin index 0.0           # unused in this deck (the compression decks' plate margin)
 
+# ----- STRAINED-STATE RESTART (2026-11-17; -var save_strained 0 / SAVE_STRAINED=0 turns it off) -----
+# At the end of the constant-dP drive, BEFORE the velocity-controlled, frozen and unload stages, the
+# flow-compacted steady state (live network, dP still applied) is written to
+# data_files/strained_triperm_<stem>_<nsteps>.restart (binary, ~150 MB for 770 k atoms), so any of the
+# later stages can be repeated from the same steady state without redoing the drive.  Not written
+# with frozen_at = ref (the network never deforms there).  read_restart restores atoms, velocities,
+# bonds, box and groups; the fixes and computes of this deck have to be declared again.
+variable save_strained index 1
+
 # ----- FROZEN NETWORK (Phase 2d; 2026-11-07; on by default since 2026-11-16; -var frozen 0 / FROZEN=0 skips it) -----
 # After the velocity-controlled stage the polymer is frozen in its steady state and the solvent keeps
 # flowing through the rigid network for frozen_steps (0 -> nsteps) at the same prescribed feed-piston
@@ -1264,6 +1273,11 @@ unfix stress_aniso_output
 print ">>> Production done (step $(step)):  z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  feed_thickness=$(v_feed_thickness:%.2f)  P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f)"
 print ">>> Steady thickness (means over the last ${l0_avg_steps} steps of the drive): L_ss = ${L_ss_rg} (Rg; settled L0 ${gel_lz_initial})   ${L_ss_bb} (BB; settled ${L0_bb_avg})"
 
+# ----- strained-state restart: the flow-compacted steady state, before the later stages (see save_strained) -----
+if "${save_strained} == 1 && ${frozen_ref} == 0" then &
+    "write_restart data_files/strained_triperm_${dataname}_${interaction}_${nsteps}.restart" &
+    "print '>>> strained-state restart written at step $(step): data_files/strained_triperm_${dataname}_${interaction}_${nsteps}.restart'"
+
 
 # ==========================================================================
 # PHASE 2v (vctrl = 1): VELOCITY-CONTROLLED FLUX -- the feed piston moved at the constant mean velocity
@@ -1689,6 +1703,7 @@ print "Simulation complete (step $(step)):  z_feed=$(v_z_feed:%.3f) z_perm=$(v_z
 print "  P_feed_meas=$(v_P_feed_meas:%.4f) (applied $(v_P_feed_app))   P_perm_meas=$(v_P_perm_meas:%.4f) (applied $(v_P_perm_app))"
 print "========================================"
 
-variable outfile string "final_triperm_${dataname}_${interaction}_${nsteps}"
+# every .data / .restart of the run lives in data_files/ (2026-11-17; before: the run folder's top level)
+variable outfile string "data_files/final_triperm_${dataname}_${interaction}_${nsteps}"
 write_restart ${outfile}.restart
 write_data ${outfile}.data

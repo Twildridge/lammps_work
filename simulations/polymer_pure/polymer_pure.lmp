@@ -275,6 +275,6 @@ unfix 1
 
 
 
-variable outfile string "purepol_${dataname}_${interaction}_${totsteps}"
+variable outfile string "data_files/purepol_${dataname}_${interaction}_${totsteps}"   # all .data / .restart in data_files/ (2026-11-17)
 write_data ${outfile}.data
 print ">>> Done. Output: vol_pure_polymer_${dataname}_${interaction}.dat"

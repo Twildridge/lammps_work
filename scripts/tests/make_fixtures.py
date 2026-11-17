@@ -46,6 +46,7 @@ def mk(root):
         (root / 'output_files' / sub).mkdir(parents=True, exist_ok=True)
     (root / 'traj_files').mkdir(exist_ok=True)
     (root / 'output_plots').mkdir(exist_ok=True)
+    (root / 'data_files').mkdir(exist_ok=True)       # the run's .data / .restart files (decks since 2026-11-17)
     return root
 
 
@@ -168,7 +169,7 @@ def one_piston(root):
             prof = [np.abs(rng.normal(0.5, 0.05, nb)) for _ in steps]
             write_ave_time_vector(sd / f'stress_{dim}_{comp}_{st}.dat', 'avg', 'c_press', steps, prof)
     write_ave_chunk(r / 'output_files' / 'chemical_potential' / f'solvent_density_z_{st}.dat', 'avg_solv_density', steps, density_cols(steps), ['density/number'])
-    with open(r / f'final_triperm_{st}.data', 'w') as f:
+    with open(r / 'data_files' / f'final_triperm_{st}.data', 'w') as f:
         f.write(f'fixture\n\n10 atoms\n5 atom types\n\n0.0 {LX} xlo xhi\n0.0 {LY} ylo yhi\n0.0 {LZ} zlo zhi\n')
     (r / 'log.lammps').write_text(_log(steps))
     return st
@@ -260,7 +261,7 @@ def two_piston_perm(root):
         '# velocity-controlled stage (deck Phase 2v): key value\n'
         f'step_start {ns}\nsteps 6000\nvfeed_set {-vq}\nvfeed_meas {-vq}\nvfeed_user 0\navg_step_a {int(0.6 * ns)}\navg_step_b {ns}\n'
         f'z_feed_a {Z_FEED - 0.0015 * 0.6 * ns}\nz_feed_b {Z_FEED - 0.0015 * ns}\narea {LX * LY}\ndP_drive 0.1\nP_target 1.5\nfrozen_follows 1\n')
-    with open(r / f'final_triperm_{st}.data', 'w') as f:
+    with open(r / 'data_files' / f'final_triperm_{st}.data', 'w') as f:
         f.write(f'fixture\n\n10 atoms\n7 atom types\n\n0.0 {LX} xlo xhi\n0.0 {LY} ylo yhi\n0.0 {LZ} zlo zhi\n')
     (r / 'log.lammps').write_text(_log(steps))
     return st
@@ -338,7 +339,7 @@ def two_piston_comp(root, levels=('0.05', '0.10')):
                 prof = [np.abs(rng.normal(0.5, 0.05, nb)) for _ in steps]
                 write_ave_time_vector(sd / f'stress_{dim}_{comp}_{st}.dat', 'avg', 'c_press', steps, prof)
         t_start += hold + 1000
-    with open(r / f'final_tricomp_{rst}.data', 'w') as f:
+    with open(r / 'data_files' / f'final_tricomp_{rst}.data', 'w') as f:
         f.write(f'fixture\n\n10 atoms\n7 atom types\n\n0.0 {LX} xlo xhi\n0.0 {LY} ylo yhi\n0.0 {LZ} zlo zhi\n')
     (r / 'log.lammps').write_text(_log(np.arange(0, 20000, 1000)))
     return rst
@@ -640,7 +641,7 @@ def six_plate_bulk(root, levels=('0.05', '0.10')):
     asteps = np.arange(0, t_start, 500)
     write_print(sd / f'stress_aniso_{rst}.dat', '# Time-averaged data for fix stress_aniso_output\n# TimeStep sig_p_xx sig_p_yy sig_p_zz P_xx P_yy P_zz',
                 np.column_stack([asteps] + [0.42 + rng.normal(0, 0.004, len(asteps)) for _ in range(3)] + [1.5 + 0 * asteps] * 3))
-    with open(r / f'final_compress_{rst}.data', 'w') as f:
+    with open(r / 'data_files' / f'final_compress_{rst}.data', 'w') as f:
         f.write(f'fixture\n\n10 atoms\n11 atom types\n\n0.0 {B_BOX[0]} xlo xhi\n0.0 {B_BOX[1]} ylo yhi\n0.0 {B_BOX[2]} zlo zhi\n')
     (r / 'log.lammps').write_text(_log(np.arange(0, 20000, 1000)))
     return rst

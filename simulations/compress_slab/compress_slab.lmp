@@ -167,6 +167,14 @@ variable unload        index 0
 variable unload_steps  index 0            # re-swelling hold length (steps); 0 -> this level's hold_len
 variable unload_margin index 3.0          # sigma: extra retraction of EACH plate beyond its seated position
 
+# ---- STRAINED-STATE RESTART (2026-11-17; -var save_strained 0 / SAVE_STRAINED=0 turns it off) ----
+# At the end of every level's hold, BEFORE the unload retracts the plates, the equilibrated
+# compressed state is written to data_files/strained_compress_<stem>_<hold_tag>_c<strain>.restart
+# (binary), so an unload / re-swelling measurement can be repeated from the same compressed state
+# without redoing the drive and the hold.  read_restart restores atoms, velocities, bonds, box and
+# groups; the fixes and computes of this deck have to be declared again.
+variable save_strained index 1
+
 # ----- Phase 1.25: seating -----
 variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) short of the gel face they seat on
 # seat_mode = which gel face the plates seat on.
@@ -1301,6 +1309,11 @@ if "${rg_resp_bad} == 1" then &
 variable rg_resp     delete
 variable rg_resp_bad delete
 
+# ----- strained-state restart: the equilibrated compressed state, before any unload (see save_strained) -----
+if "${save_strained} == 1" then &
+    "write_restart data_files/strained_compress_${dataname}_${interaction}_${hold_tag}_c${compressions}.restart" &
+    "print '>>> [eps_vol=${compressions}] strained-state restart written at step $(step): data_files/strained_compress_${dataname}_${interaction}_${hold_tag}_c${compressions}.restart'"
+
 variable e_lin_prev delete
 variable e_lin_prev equal $(v_e_lin)
 variable hold_steps      delete
@@ -1572,6 +1585,7 @@ unfix trk_dims_bb
 unfix trk_dims_rg
 unfix trk_box
 
-variable outfile string "final_compress_${dataname}_${interaction}_${hold_tag}"
+# every .data / .restart of the run lives in data_files/ (2026-11-17; before: the run folder's top level)
+variable outfile string "data_files/final_compress_${dataname}_${interaction}_${hold_tag}"
 write_restart ${outfile}.restart
 write_data ${outfile}.data

@@ -21,6 +21,9 @@
 # (LAMMPS reads its input lazily, so the repo file must not be the one it runs), the data file
 # symlinked, trajectories on scratch; mpirun under the guards of lib/run_common.sh; then the
 # continuation (CHAIN=1) and postprocess.sh. Exit status: 0 when LAMMPS and the plots completed.
+# The run dir: README.txt (its layout) and run_info.txt (what was run), data_files/ (every .data
+# and .restart: the input symlink, the decks' final_* and strained_* files), output_files/ (.dat),
+# output_plots/ (.png), traj_files/ (scratch). See make_run_dirs in lib/run_common.sh.
 #
 # The { } group makes bash parse the whole file before running it: this script lives on NFS and
 # a git pull from another node can replace it while a job runs, which would otherwise end the
@@ -76,6 +79,7 @@ fi
 make_run_dirs "$WORK_DIR" "$TRAJ_DIR"
 cp "$DECK_SRC" "$WORK_DIR/"
 ln -s "$DATA_SRC" "$WORK_DIR/data_files/$DATANAME.data"
+write_run_info "$WORK_DIR" "$DECK_SRC" "$DATA_SRC"
 cd "$WORK_DIR" || exit 1
 
 launch_lammps "$WORK_DIR/$(basename "$DECK_SRC")" "${LAMMPS_VARS[@]}"

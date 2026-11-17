@@ -34,7 +34,7 @@ for case in auto explicit; do
         -in slab_with_support.lmp > lammps.out 2>&1
     echo "===== $case: rc $?  $(grep -c 'FENE bond too long' log.lammps) FENE warnings"
     grep -E "^>>> (MEAN_BOX|PRODUCTION|barostat)|ERROR|Total wall" log.lammps | cut -c1-260
-    echo "final data box:"; sed -n '1p;/xlo xhi/p;/ylo yhi/p;/zlo zhi/p' final_config_${DN}_1.0_1.0_6000.data | cut -c1-120
+    echo "final data box:"; sed -n '1p;/xlo xhi/p;/ylo yhi/p;/zlo zhi/p' data_files/final_config_${DN}_1.0_1.0_6000.data | cut -c1-120
     echo "box_dimensions (every 10000 steps):"; tail -3 output_files/volume_data/box_dimensions_*.dat
     awk '$1 ~ /^[0-9]+$/ && NF>=11 {print "thermo:", $1, "T_mobile", $3, "P", $7, "lx", $9, "ly", $10, "lz", $11}' log.lammps | tail -4
 done

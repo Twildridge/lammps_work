@@ -156,7 +156,7 @@ deck_git=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)
 EOF
 
 if [ "$ROLE" = "prep" ]; then
-    OUT="final_config_${DATANAME}_${INTERACTION}_${RUN_STEPS}.data"
+    OUT="data_files/final_config_${DATANAME}_${INTERACTION}_${RUN_STEPS}.data"   # the deck writes every .data into data_files/ (2026-11-17)
     if [ "$COMPLETE" = "1" ] && [ -s "$OUT" ]; then
         cp "$OUT" "$PREP_DIR/$PREP_NAME.data"
         echo "prepared: $PREP_DIR/$PREP_NAME.data"

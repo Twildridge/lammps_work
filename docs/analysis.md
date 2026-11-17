@@ -20,6 +20,8 @@ ls ~/Documents/lammps_runs/<run_dir>/output_files/stress_data/
 #                              └─────────────────────── run_id ───────────────────────────────────────────┘
 ```
 
+Each run directory made since 2026-11-17 carries a `README.txt` (what every subfolder and file-name tag means) and a `run_info.txt` (job, deck, input file, every LAMMPS variable); the layout is described in [repository_layout.md](repository_layout.md#inside-a-run-folder).
+
 `TOTSTEPS = NSTEPS` from the batch file (there's no more `OLDSTEPS`-based cumulative counting — see [§5c, editing the batch file](running_simulations.md#5c-editing-the-batch-file)).
 
 ---

@@ -18,7 +18,10 @@ in `scripts/lib/site.sh`; the knob table and the launch / completion logic share
 `scripts/lib/run_common.sh`.
 
 `run_lammps.sh` does the bookkeeping: the timestamped working directory, the deck copied into it, the symlink to the data file,
-the trajectory files routed to scratch, the wall-clock budget, and the post-processing after LAMMPS finishes.
+the trajectory files routed to scratch, the wall-clock budget, and the post-processing after LAMMPS finishes. Inside the working
+directory every `.data` / `.restart` file is in `data_files/`, every `.dat` series in `output_files/`, every figure in
+`output_plots/`; `README.txt` there explains the layout and the file names, `run_info.txt` records what was run
+([repository_layout.md](repository_layout.md#inside-a-run-folder)).
 `DRY_RUN=1 bash <file>.batch` (outside SLURM) prints the resolved run and the full `mpirun` line without creating anything.
 
 **Resources (allocation benchmark, 2026-11-07):** every production batch requests 6 nodes x 128 tasks x 1 thread, and
@@ -119,6 +122,12 @@ Local smoke test of `compress_slab` including the Phase 2c unload (verified 2026
 The isolated-cube pipeline on Expanse, in order (2026-11-11; every step reads `DATANAME` from the environment): (1) build the cube with `scripts/data_file_generator.ipynb` (`NETWORK = "rot45"` for the rotated lattice; `gen.build` writes an isolated gel, no sheets; for a cube give `units_x`, `units_y`, `units_z` of equal edge length: the rotated builds count BCT cells of a/√2 along x and z, so x and z take ~1.41× the y count) and put the file in `~/Documents/lammps_data/input_data/<gel>.data`; (2) `DATANAME=<gel> sbatch slab_with_support_single.batch` (free swelling at P* = 1.5, `BARO_MODE=iso PIN_GEL=1`; the run dir holds `final_config_<gel>_1.0_1.0_<NSTEPS>.data`); (3) `python scripts/lib/add_more_plates_to_gel.py --layout six_plates --input <that final_config>` and copy the `..._six_plates.data` it writes to `input_data/`; (4) `DATANAME=<final_config stem>_six_plates sbatch compress_slab_single.batch`. K comes from the hold and D_m only from the Phase 2c re-swelling (`UNLOAD=1`, set in both batches; `UNLOAD_STEPS=0` makes it as long as the hold), so a run submitted with `UNLOAD=0` has no D_m. Analyse with `bulk_modulus_analysis_single.ipynb`, `DATANAME` = the six-plate stem, `LEVEL "0.10"`.
 The two-piston decks have no continuation path (`continue_sim.sh` does not apply): every run is a fresh start
 from the converter's data file.
+
+**Strained-state restart (2026-11-17).** `triaxial_compression_two_pist`, `compress_slab`, both `shear_slab_two_pist` decks
+and `triaxial_permeation_two_pist` write `data_files/strained_<deck>_<stem>_<stage>.restart` at the end of every level's hold,
+before the unload (permeation: at the end of the constant-dP drive), so the unload can be repeated from the same
+equilibrated strained state. About 150 MB per level for the 770 k-atom gel; `SAVE_STRAINED=0` turns it off. No deck reads
+it back yet. Details and the layout of a run folder: [repository_layout.md](repository_layout.md#inside-a-run-folder).
 
 ### 5c. Editing the batch file
 
@@ -227,7 +236,7 @@ All the same output files are produced (stress profiles, chemical potential, pis
 
 1. Finds `*.o{job_id}.*` in the current directory (the SLURM output file).
 2. Reads the line `Working directory: /path/...` that `run_lammps.sh` printed when the job ran — this gives the original output folder.
-3. Looks up the current folder's output-file prefix (`final_config`, `puresolv` or `purepol`) and finds `<prefix>_*.data` inside that folder.
+3. Looks up the current folder's output-file prefix (`final_config`, `puresolv` or `purepol`) and finds `<prefix>_*.data` in that folder's `data_files/` (runs before 2026-11-17: in the folder itself).
 4. Parses `dataname`, `epsSS`, `epsSP` from the filename (last three `_`-delimited tokens).
 5. Borrows the `#SBATCH` lines of the `.batch` whose `--job-name` matches the output file (else the batch a chained job inherited, else `<folder>_single.batch`, else the folder's only batch; `--batch <file>` overrides) and every deck knob: the environment first, then the batch's assignment lines.
 6. Creates `continuation_{timestamp}/` inside the original folder, copies the deck and symlinks the data file in.
@@ -238,9 +247,9 @@ All the same output files are produced (stress profiles, chemical potential, pis
 Expanse's `compute` partition allows 48 h per job, and a 14 M-step `slab_with_support` run of the 1.13 M-atom `_nowalls` file needs 55–60 h on 4 nodes (the 238 k-atom periodic slab ran at 78 Matom-step/s there). Such a job chains itself instead of being split by hand:
 
 1. `run_lammps.sh` passes the deck a wall-clock budget, `-var wall_timeout` = seconds left in the SLURM job minus `WALL_MARGIN` (default 2400 s; both are env knobs set in the `.batch`). `slab_with_support.lmp` arms it with `timer timeout … every 1000` right at start-up, so setup time counts too.
-2. When the budget runs out, the production block in flight returns early (`WARNING: Wall time limit reached`), its snapshot `final_config_*_snap<N>.data` is written as usual, the loop exits, and the deck logs one bookkeeping line — `>>> PRODUCTION_STEPS_DONE <done> OF <nsteps> OLDSTEPS <o> TOTSTEPS <t> STATUS INCOMPLETE` — **without** writing the un-suffixed `final_config_*.data`, which stays the completion marker.
+2. When the budget runs out, the production block in flight returns early (`WARNING: Wall time limit reached`), its snapshot `data_files/final_config_*_snap<N>.data` is written as usual, the loop exits, and the deck logs one bookkeeping line — `>>> PRODUCTION_STEPS_DONE <done> OF <nsteps> OLDSTEPS <o> TOTSTEPS <t> STATUS INCOMPLETE` — **without** writing the un-suffixed `final_config_*.data`, which stays the completion marker.
 3. With `CHAIN=1` exported by the `.batch`, `run_lammps.sh` then runs `continue_sim.sh --chain <job_id>` *before* post-processing. That reads the bookkeeping line, resumes from the newest snapshot with `cont=1` (no push-off/minimize/warm-up), asks for exactly `totsteps − (oldsteps + done)` more steps and keeps the original `totsteps` tag on every output file. The new job (`cont_<job_id>`, borrowing the `#SBATCH` lines and `export`s of the `.batch` whose `--job-name` matches the output file) chains again if it, too, runs out of time.
-4. The final `final_config_<dataname>_<interaction>_<totsteps>.data` is in the **last** `continuation_<timestamp>/` directory under the original run directory (continuations of continuations are siblings there, never nested). Each job's own `continuation_*/log.lammps` and `output_files/` cover its share of the steps.
+4. The final `final_config_<dataname>_<interaction>_<totsteps>.data` is in `data_files/` of the **last** `continuation_<timestamp>/` directory under the original run directory (continuations of continuations are siblings there, never nested). Each job's own `continuation_*/log.lammps` and `output_files/` cover its share of the steps.
 
 The margin covers the final `write_data` of a ~1 M-atom system, the MPI teardown grace, the chain submission and the plots. If the chain breaks (node failure, `sbatch` refused), re-launch it from the simulation folder with `continue_sim.sh --chain <last job id>`; `--dry-run` prints the batch script it would submit, `--batch <file>` picks another `.batch` to borrow SLURM settings from. `--chain` on a job whose log says `STATUS COMPLETE` submits nothing. Decks without `wall_timeout` (every other folder) run exactly as before: they ignore the variable, and without the bookkeeping line nothing is chained.
 

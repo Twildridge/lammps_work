@@ -268,6 +268,14 @@ variable volume_freq index 5000     # piston logs
 variable unload        index 0
 variable unload_steps  index 0
 
+# ---- STRAINED-STATE RESTART (2026-11-17; -var save_strained 0 / SAVE_STRAINED=0 turns it off) ----
+# At the end of every level's hold, BEFORE the unload drives the grips back, the relaxed sheared
+# state is written to data_files/strained_shear_<stem>_<nsteps>_g<strain>.restart (binary), so an
+# unload / relaxation measurement can be repeated from the same sheared state without redoing the
+# drive and the hold.  Not written for a level the wall-clock budget cut short.  read_restart
+# restores atoms, velocities, bonds, box and groups; the fixes and computes have to be declared again.
+variable save_strained index 1
+
 # ----- Phase 1.5: gamma = 0 REFERENCE window -----
 variable ref_avg_steps index 150000
 variable ref_nevery    equal 100
@@ -1115,6 +1123,11 @@ print ">>> Completed strain=${strains}:  gamma = $(v_gamma:%.4f)  tracking-slab 
 if "${wall_timeout} > 0" then &
     "print '>>> wall-clock budget left after strain=${strains}: $(timeremain:%.0f) s of ${wall_timeout} s  (0 = budget spent: this level was cut short and the remaining levels are not started)'"
 
+# ----- strained-state restart: the relaxed sheared state, before any unload (see save_strained) -----
+if "${save_strained} == 1 && (${wall_timeout} <= 0 || $(timeremain) > 0.0)" then &
+    "write_restart data_files/strained_shear_${dataname}_${interaction}_${nsteps}_g${strains}.restart" &
+    "print '>>> [strain=${strains}] strained-state restart written at step $(step): data_files/strained_shear_${dataname}_${interaction}_${nsteps}_g${strains}.restart'"
+
 variable hold_steps      delete
 variable drive_dump_freq delete
 
@@ -1278,5 +1291,6 @@ unfix trk_rg
 unfix trk_box
 unfix trk_box_bounds
 
-variable outfile string "final_shear_${dataname}_${interaction}_${nsteps}"
+# every .data / .restart of the run lives in data_files/ (2026-11-17; before: the run folder's top level)
+variable outfile string "data_files/final_shear_${dataname}_${interaction}_${nsteps}"
 write_data ${outfile}.data

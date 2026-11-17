@@ -540,7 +540,7 @@ if "${rg_halt} == 1" then &
 variable snap_i loop ${n_blocks}
 label snap_loop
     run ${steps_per_snap}
-    variable snap_outfile string "final_config_${dataname}_${interaction}_${totsteps}_snap${snap_i}"
+    variable snap_outfile string "data_files/final_config_${dataname}_${interaction}_${totsteps}_snap${snap_i}"
     write_data ${snap_outfile}.data
     print ">>> Wrote snapshot ${snap_i}/${n_blocks} at step $(step)"
     # Wall-clock budget spent (timeremain = seconds left on `timer timeout`, 0 once it
@@ -633,12 +633,13 @@ undump poly_traj
 # The un-suffixed final_config file is written ONLY when production completed, so
 # its presence remains the completion marker; continue_sim.sh resumes from the
 # newest final_config_*_snap<N>.data when it is missing.
-variable outfile string "final_config_${dataname}_${interaction}_${totsteps}"
+# Every .data / .restart of the run lives in data_files/ (2026-11-17; before: the run folder's top level).
+variable outfile string "data_files/final_config_${dataname}_${interaction}_${totsteps}"
 if "${prod_done_frozen} >= ${prod_target} || ${rg_conv} == 1" then &
     "print '>>> PRODUCTION_STEPS_DONE ${prod_done_frozen} OF ${nsteps} OLDSTEPS ${oldsteps} TOTSTEPS ${totsteps} STATUS COMPLETE'" &
     "write_restart ${outfile}.restart" &
     "write_data ${outfile}.data" &
 else &
     "print '>>> PRODUCTION_STEPS_DONE ${prod_done_frozen} OF ${nsteps} OLDSTEPS ${oldsteps} TOTSTEPS ${totsteps} STATUS INCOMPLETE'" &
-    "print '>>> Wall-clock budget reached: no final_config written; resume from the newest final_config_*_snap<N>.data'"
+    "print '>>> Wall-clock budget reached: no final_config written; resume from the newest data_files/final_config_*_snap<N>.data'"
 # (the final file is identical to snap${n_snaps}; retained for backward compatibility)

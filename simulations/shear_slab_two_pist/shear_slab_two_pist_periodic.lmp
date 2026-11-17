@@ -168,6 +168,14 @@ variable thermo_freq index 250000
 variable stress_freq index 1000     # fix print cadence (strain, gel/box dims, COM)
 variable volume_freq index 5000     # piston logs
 
+# ---- STRAINED-STATE RESTART (2026-11-17; -var save_strained 0 / SAVE_STRAINED=0 turns it off) ----
+# At the end of every level's hold the relaxed sheared state is written to
+# data_files/strained_shear_<stem>_<nsteps>_g<strain>.restart (binary, ~150 MB for 770 k atoms), so
+# a later run (an unload, a longer hold) can start from the same sheared state without redoing the
+# drive and the hold.  read_restart restores atoms, velocities, bonds, box and groups; the fixes
+# and computes of this deck have to be declared again.
+variable save_strained index 1
+
 # ----- Phase 1.5: tau = 0 REFERENCE window -----
 variable ref_avg_steps index 150000
 variable ref_nevery    equal 100
@@ -860,6 +868,11 @@ unfix out_shear_strain
 
 print ">>> Completed strain=${strains}:  gamma = $(v_gamma:%.4f)  tracking-slab strain = $(v_gamma_trk:%.4f)  S_top = $(v_S_top:%.5f)  S_bot = $(v_S_bot:%.5f)  sigma_p,xz(bulk) = $(v_stress_p_xz:%.5f)  step=$(step)"
 
+# ----- strained-state restart: the relaxed sheared state at the end of the hold (see save_strained) -----
+if "${save_strained} == 1" then &
+    "write_restart data_files/strained_shear_${dataname}_${interaction}_${nsteps}_g${strains}.restart" &
+    "print '>>> [strain=${strains}] strained-state restart written at step $(step): data_files/strained_shear_${dataname}_${interaction}_${nsteps}_g${strains}.restart'"
+
 variable hold_steps      delete
 variable drive_dump_freq delete
 
@@ -890,5 +903,6 @@ unfix trk_rg
 unfix trk_box
 unfix trk_box_bounds
 
-variable outfile string "final_shear_${dataname}_${interaction}_${nsteps}"
+# every .data / .restart of the run lives in data_files/ (2026-11-17; before: the run folder's top level)
+variable outfile string "data_files/final_shear_${dataname}_${interaction}_${nsteps}"
 write_data ${outfile}.data

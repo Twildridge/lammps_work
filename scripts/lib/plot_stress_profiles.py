@@ -59,16 +59,16 @@ def get_box_dims(folder, dataname):
 
     base_name = '_'.join(base_parts)
 
-    possible_paths = [
-        os.path.join(folder, 'data_files', f'{base_name}.data'),
-        os.path.join(folder, f'final_config_{dataname}.data'),
-        os.path.join(folder, f'final_tricomp_{dataname}.data'),
-        os.path.join(folder, f'final_triperm_{dataname}.data'),
-        os.path.join(folder, f'final_shear_{dataname}.data'),
-        os.path.join(folder, f'puresolv_{dataname}.data'),
-        os.path.join(folder, f'purepol_{dataname}.data'),
-        os.path.join(folder, 'data_files', f'{dataname}.data'),
-    ]
+    # the run's own files are in data_files/ (decks since 2026-11-17) or, for older runs, at the
+    # top level of the run folder
+    finals = [f'{prefix}_{dataname}.data' for prefix in
+              ('final_config', 'final_tricomp', 'final_triperm', 'final_shear', 'puresolv', 'purepol')]
+    possible_paths = (
+        [os.path.join(folder, 'data_files', f'{base_name}.data')]
+        + [os.path.join(folder, 'data_files', name) for name in finals]
+        + [os.path.join(folder, name) for name in finals]
+        + [os.path.join(folder, 'data_files', f'{dataname}.data')]
+    )
 
     data_file = None
     for path in possible_paths:
