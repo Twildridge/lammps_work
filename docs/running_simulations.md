@@ -109,6 +109,12 @@ the later levels when the Rg strain is below that fraction of the applied strain
 `compress_slab` has the same three guards (per-axis fringe, volumetric Rg pre-strain, Rg volume strain over the applied strain). With the
 defaults they stop the 12-cell cube in `bb` mode (fringe ≈ 5 σ per axis against 2.4 σ of closure at ε_vol 0.10; the `bb` sweep of
 2026-10-19 reached 4–14 % of the applied strain in Rg volume), so that cube needs `SEAT_MODE=rg` (2026-10-11: 77 %, pre-strain 0.079).
+Since 2026-11-17 both `compress_slab` batch files set `SEAT_MODE=rg` (environment overrides it; the deck default is still `bb`), and
+in `rg` mode the unload opens each plate by `UNLOAD_MARGIN` plus half the largest free-gel fringe (`>>> unload opening` line), so the
+margin counts from the free gel's outermost-bead face in both modes and 3.0 serves any fringe. Laptop check on the rot45 12-cell cube
+(fringe 5.2 / 5.9 / 7.3 σ, shortened phases): seating pre-strain 0.018 in Rg volume, preload 0.060; plates 0.100 → bounding box 0.099,
+Rg volume 0.057 after a 20k-step hold and rising (the `bb` run of 2026-11-13 on the same file: 0.069 and 0.002–0.004 after 3 M steps).
+The new unload opening parsed and set its targets in a second short run, which was stopped during the retraction: not yet run to the end.
 The shear and permeation decks have no plates seated on the outermost bead and were not changed. Status of the wide-gel measurements
 and the compression rerun: `random10_gel_plan.md`.
 

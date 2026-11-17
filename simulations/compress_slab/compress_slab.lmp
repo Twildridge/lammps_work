@@ -68,7 +68,7 @@
 #                 volumetric strain reaches the target (fix halt), freezes the
 #                 plates, and holds for the auto-sized hold; files _<hold>_c<strain>.
 #   - Phase 2c:   UNLOAD (optional, -var unload 1; 2026-10-28): after each level's hold the six
-#                 plates are driven back to the seated gap + 2 x unload_margin per axis and
+#                 plates are driven back to the seated gap + 2 x unload_margin_eff per axis and
 #                 frozen; the gel RE-SWELLS FREELY for unload_steps (0 = this level's hold
 #                 length), files _<hold>_u<strain>.  The re-swelling is where the diffusivity
 #                 is measured (free cube, all six faces unloaded: lib/bulk.py fit_Dm_unload on
@@ -156,7 +156,7 @@ variable hold_auto   index 1
 
 # ---- UNLOAD (Phase 2c, optional: -var unload 1 / UNLOAD=1 in the batch; 2026-10-28) ----
 # After a level's hold the six plates are driven back at the drive speeds until every gap is
-# at its seated value + 2 x unload_margin (each plate unload_margin beyond its seat), frozen,
+# at its seated value + 2 x unload_margin_eff (each plate unload_margin beyond the bb seat), frozen,
 # and the gel is left to RE-SWELL FREELY for unload_steps (0 = this level's hold_len), files
 # _<hold>_u<strain>.  unload_margin keeps the re-swollen gel off the plates: its outermost
 # beads fluctuate 3-5 sigma beyond the Rg face on the 12-cell cube, and a bb-seated plate sits
@@ -165,7 +165,13 @@ variable hold_auto   index 1
 # notebooks read it with the hold's own loaders; no hold-onset displace/atom file (see 9.).
 variable unload        index 0
 variable unload_steps  index 0            # re-swelling hold length (steps); 0 -> this level's hold_len
-variable unload_margin index 3.0          # sigma: extra retraction of EACH plate beyond its seated position
+variable unload_margin index 3.0          # sigma: extra retraction of EACH plate beyond the free gel's outermost-bead seat
+# 2026-11-17: the margin counts from where a bb-seated plate would sit, in BOTH seat modes.  With seat_mode rg
+# the plates seat on the Rg faces, inside the surface fringe, so the unload opens every gap by a further
+# unload_extra per plate = half the largest free-gel fringe (free BB edge + 2 contact_gap - seated gap, the
+# largest of the three axes, one value for all so the opening stays isotropic); 0 with seat_mode bb.  The
+# re-swollen gel then has the room it had as a free gel whatever the fringe: 5-7 sigma per axis on the
+# rot45 12-cell cube, 13-16 on the random 10-bead gels.  unload_margin_eff = unload_margin + unload_extra.
 
 # ---- STRAINED-STATE RESTART (2026-11-17; -var save_strained 0 / SAVE_STRAINED=0 turns it off) ----
 # At the end of every level's hold, BEFORE the unload retracts the plates, the equilibrated
@@ -178,7 +184,11 @@ variable save_strained index 1
 # ----- Phase 1.25: seating -----
 variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) short of the gel face they seat on
 # seat_mode = which gel face the plates seat on.
-#   bb (default since 2026-10-19): the outermost bead of each face, exactly the
+#   (2026-11-17: both batch files set SEAT_MODE=rg.  With bb the closure of a 10 % level, ~2.4 sigma per
+#   axis, stays inside the fringe of every cube run so far: rot45 12-cell cube 5-7 sigma of fringe, Rg
+#   volume strain 0.002-0.004 for 0.10 applied (run of 2026-11-13).  The deck default stays bb, guarded
+#   by fringe_max.)
+#   bb (deck default since 2026-10-19): the outermost bead of each face, exactly the
 #       two-piston decks' seating (triaxial_compression_two_pist seats at contact_gap
 #       from the BB faces).  The seated gel carries NO load, so the eps_vol = 0
 #       reference is the free-swollen gel (sigma' = 0, Pi_ref = 0) as in the triaxial
@@ -856,6 +866,14 @@ variable L0_gap_x equal $(v_gap_x)
 variable L0_gap_y equal $(v_gap_y)
 variable L0_gap_z equal $(v_gap_z)
 variable L0_gap   equal ${L0_gap_z}
+# unload opening beyond the seated gaps (see unload_margin): free-gel BB edges are Phase-1 window means
+variable open_x   equal $(v_off_xlo_avg+v_off_xhi_avg+2.0*v_contact_gap-v_L0_gap_x)
+variable open_y   equal $(v_off_ylo_avg+v_off_yhi_avg+2.0*v_contact_gap-v_L0_gap_y)
+variable open_z   equal $(v_off_zlo_avg+v_off_zhi_avg+2.0*v_contact_gap-v_L0_gap_z)
+variable open_xy  equal $((v_open_x>v_open_y)*v_open_x+(v_open_x<=v_open_y)*v_open_y)
+variable open_max equal $((v_open_xy>v_open_z)*v_open_xy+(v_open_xy<=v_open_z)*v_open_z)
+variable unload_extra      equal $(v_seat_rg*(v_open_max>0.0)*0.5*v_open_max)
+variable unload_margin_eff equal $(v_unload_margin+v_unload_extra)
 variable L0_x equal $(v_gap_x-2.0*v_contact_gap)
 variable L0_y equal $(v_gap_y-2.0*v_contact_gap)
 variable L0_z equal $(v_gap_z-2.0*v_contact_gap)
@@ -880,6 +898,7 @@ variable gel_strain    equal (v_gel_lz_initial-v_gel_lz_rg)/v_gel_lz_initial
 variable gel_strain_bb equal (v_L0_bb-v_gel_lz_bb)/v_L0_bb
 variable piston_strain equal (v_L0_gap-v_gap_z)/v_L0_gap
 print ">>> Seated plate gaps: L0_gap = ${L0_gap_x} x ${L0_gap_y} x ${L0_gap_z}"
+print ">>> unload opening: free-gel BB gap - seated gap = $(v_open_x:%.2f) / $(v_open_y:%.2f) / $(v_open_z:%.2f) sigma (x / y / z);  each plate retracts unload_margin ${unload_margin} + unload_extra $(v_unload_extra:%.2f) = $(v_unload_margin_eff:%.2f) sigma beyond its seat (seat_mode ${seat_mode})"
 print ">>> Reference edges (strain denominators):  L0 = ${L0_x} x ${L0_y} x ${L0_z}   V0 = ${V0}"
 print ">>>   (V_bb, V_rg below = means over the last ${l0_avg_steps} steps of the settle; the edges are those of this step)"
 print ">>>   network at the reference:  BB $(v_gel_lx_bb:%.2f) x $(v_gel_ly_bb:%.2f) x $(v_gel_lz_bb:%.2f) (V_bb = ${V0_bb})   Rg $(v_gel_lx_rg:%.2f) x $(v_gel_ly_rg:%.2f) x $(v_gel_lz_rg:%.2f) (V_rg = ${V0_rg})"
@@ -1039,7 +1058,7 @@ print ">>>   first level=${compressions}   drive cap=${nsteps_comp}   halt check
 print ">>>   HOLD: auto=${hold_auto} (1=sized per level from tau_1=L^2/(pi^2 D_c) on the shortest gel edge)"
 print ">>>         Dc_est=${Dc_est}  n_tau_hold=${n_tau_hold}  hold_min=${hold_min}  flat fallback nsteps=${nsteps}"
 print ">>>   DRIVE: six plates, drive_split=${drive_split} (hi-plate share of each gap closure)"
-print ">>>   UNLOAD: ${unload} (1 = after every hold the plates open to the seated gaps + 2 x ${unload_margin} and the gel re-swells freely for unload_steps=${unload_steps} (0 = the hold length); files _u<strain>)"
+print ">>>   UNLOAD: ${unload} (1 = after every hold the plates open to the seated gaps + 2 x ${unload_margin_eff} and the gel re-swells freely for unload_steps=${unload_steps} (0 = the hold length); files _u<strain>)"
 print ">>>   wet-piston headroom: feed $(zhi-v_feed_z_top-v_box_guard_gap:%.2f) + permeate $(v_perm_z_bot-zlo-v_box_guard_gap:%.2f) sigma = eps_vol ~$((zhi-v_feed_z_top+v_perm_z_bot-zlo-2.0*v_box_guard_gap)*v_area/v_V0:%.3f) of expelled solvent"
 print ">>>   If the list above reads 'STALE-run_lammps.sh...', only ONE level will run."
 print "############################################################"
@@ -1333,7 +1352,7 @@ variable drive_dump_freq delete
 if "${unload} == 0" then "jump SELF label_after_unload"
 
 print "########################################################"
-print "  UNLOAD after eps_vol ${compressions}: plates back to the seated gaps + 2 x ${unload_margin}, free re-swelling"
+print "  UNLOAD after eps_vol ${compressions}: plates back to the seated gaps + 2 x ${unload_margin_eff}, free re-swelling"
 print "########################################################"
 variable unload_len   delete
 variable unload_tag   delete
@@ -1347,9 +1366,9 @@ variable urate_y      delete
 variable urate_z      delete
 variable unload_len   equal (${unload_steps}>0)*${unload_steps}+(${unload_steps}<=0)*${hold_len}
 variable unload_tag   string ${hold_tag}_u${compressions}
-variable ugap_x       equal ${L0_gap_x}+2.0*${unload_margin}
-variable ugap_y       equal ${L0_gap_y}+2.0*${unload_margin}
-variable ugap_z       equal ${L0_gap_z}+2.0*${unload_margin}
+variable ugap_x       equal ${L0_gap_x}+2.0*${unload_margin_eff}
+variable ugap_y       equal ${L0_gap_y}+2.0*${unload_margin_eff}
+variable ugap_z       equal ${L0_gap_z}+2.0*${unload_margin_eff}
 # every gap back at its target: the product of the three conditions (1 when all three hold)
 variable unload_open  equal (v_gap_x>=v_ugap_x)*(v_gap_y>=v_ugap_y)*(v_gap_z>=v_ugap_z)
 # reversed drive: the same linear-strain rate on every axis (the z gap at v_piston_prod)
@@ -1358,7 +1377,7 @@ variable urate_x      equal ${v_piston_prod}*${L0_x}/${L0_z}
 variable urate_y      equal ${v_piston_prod}*${L0_y}/${L0_z}
 # cap on the retraction run: 1.5 x the travel back (closure + margins) at v_piston_prod
 # (plain equal variable: ${...} is NOT expanded inside an immediate $(...))
-variable unload_cap   equal ceil(1.5*(v_e_lin*${L0_z}+2.0*${unload_margin})/(${v_piston_prod}*${timestep_prod}))+1000
+variable unload_cap   equal ceil(1.5*(v_e_lin*${L0_z}+2.0*${unload_margin_eff})/(${v_piston_prod}*${timestep_prod}))+1000
 
 # ----- unload loggers (span the retraction + the re-swelling hold; the level files' columns) -----
 fix uout_piston_pos all print ${strain_freq} "$(step) $(v_z_load) $(v_z_feed) $(v_z_perm)" &
@@ -1436,7 +1455,7 @@ velocity plate_xlo set $(-(1.0-v_drive_split)*v_urate_x) 0.0 0.0
 velocity plate_yhi set 0.0 $(v_drive_split*v_urate_y) 0.0
 velocity plate_ylo set 0.0 $(-(1.0-v_drive_split)*v_urate_y) 0.0
 fix halt_unload all halt ${halt_freq} v_unload_open >= 0.5 error continue
-print ">>> [unload ${compressions}] opening the six plates at the drive speeds until gaps >= x ${ugap_x}  y ${ugap_y}  z ${ugap_z} (seated L0_gap + 2 x ${unload_margin}; cap ${unload_cap} steps)..."
+print ">>> [unload ${compressions}] opening the six plates at the drive speeds until gaps >= x ${ugap_x}  y ${ugap_y}  z ${ugap_z} (seated L0_gap + 2 x ${unload_margin_eff}; cap ${unload_cap} steps)..."
 run ${unload_cap}
 unfix halt_unload
 velocity plates set 0.0 0.0 0.0
@@ -1556,7 +1575,7 @@ print ">>> [unload ${compressions}] done:  plate strain $(v_strain_vol_plate:%.5
 variable unload_run delete
 # the next level drives from the OPEN gaps: its travel estimate counts the margins (e_lin_prev < 0)
 variable e_lin_prev delete
-variable e_lin_prev equal -2.0*${unload_margin}/${L0_z}
+variable e_lin_prev equal -2.0*${unload_margin_eff}/${L0_z}
 
 label label_after_unload
 

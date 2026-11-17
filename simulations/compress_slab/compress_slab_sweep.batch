@@ -13,8 +13,9 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # Bulk modulus K(eps) and D_m(eps): the protocol of compress_slab_single.batch through a sweep of
 # cumulative VOLUMETRIC strains. Every level is followed by its unload (plates open, free
 # re-swelling for UNLOAD_STEPS; 0 = the hold length) and the next level compresses from the
-# reference again: matched compression / re-swelling pairs. The list starts at 0.05 because the
-# first ~0.025-0.05 only folds in the loose shell (K undefined there). The converter's
+# reference again: matched compression / re-swelling pairs. Seating as the single batch
+# (SEAT_MODE=rg: the plates fold the surface fringe in while seating, so every level strains the
+# network; UNLOAD_MARGIN counts from the free gel's outermost-bead face). The converter's
 # margin_feed + margin_perm must cover the deepest level or the box-face halt ends the run.
 # Analysis: scripts/bulk_modulus_analysis_sweep.ipynb.
 
@@ -23,7 +24,8 @@ DATANAME="${DATANAME:-final_config_slab_support_5beads_square_rho10_nowalls_1.0_
 INTERACTION=1.0_1.0
 NSTEPS=3000000          # hold length with HOLD_AUTO=0, and the tag of the setup-phase files
 export PRESS_TARGET=1.5
-export COMPRESSIONS="0.05 0.075 0.10 0.13 0.16"
-export UNLOAD=1 UNLOAD_STEPS=0 UNLOAD_MARGIN=3.0
+export COMPRESSIONS="${COMPRESSIONS:-0.05 0.075 0.10 0.13 0.16}"
+export SEAT_MODE="${SEAT_MODE:-rg}"
+export UNLOAD="${UNLOAD:-1}" UNLOAD_STEPS="${UNLOAD_STEPS:-0}" UNLOAD_MARGIN="${UNLOAD_MARGIN:-3.0}"
 
 bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"
