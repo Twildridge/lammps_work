@@ -68,7 +68,7 @@ Two decks (Config.DECK, 2026-10-03), same protocol, file names, _g<strain> tags 
                              tracking-slab strain (stress_series column 12) is one more
                              rung of the G_STRAIN fallback chain;
                              S_top / S_bot are the layer forces per area; the D_c fit
-                             maps the bulk bins onto the driven-layer COM planes; no
+                             maps the bulk bins onto the driven-layer planes (H_drv apart); no
                              unload phase.
 
 Geometry (shear_slab.lmp since 2026-09-22): z = gap (plate normal), x = shear
@@ -715,7 +715,8 @@ def _disp_bins(cfg, R, disp):
     scale = (L - 2.0 * cfg.plate_excl) / (n_gel * cfg.binWidth)
     zhat_all = (cfg.plate_excl + (np.arange(len(ok)) - i_lo + 0.5) * cfg.binWidth * scale) / L
     if cfg.two_pist and R.get('planes_exact') and len(R['in_bulk']) == len(ok):
-        # the held boundaries are the driven-layer COM planes, L = H_drv apart and centred between the Rg faces;
+        # the held boundaries are the driven-layer planes, L = H_drv apart and centred between the Rg faces
+        # (H_drv = inner-edge gap from 2026-11-16, layer COM-to-COM in earlier runs);
         # bin centres are exact (whole-box reduced z), and only the bulk bins (inside the layers) are fitted
         z_mid = 0.5 * (R['z_top_abs'] + R['z_bot_abs'])
         zhat_all = (disp['zf'] * R['LZ'] + R['zlo_abs'] - (z_mid - 0.5 * L)) / L

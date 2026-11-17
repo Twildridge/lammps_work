@@ -71,15 +71,20 @@
 #
 # STRAIN DEFINITIONS (both: relative x-displacement of two material planes over the
 #   FULL distance between them = each plane's displacement over the half-distance):
-#   gamma     = (x_drv_top - x_drv_bot - x_drv0) / H_drv   -- driven-layer COMs, the
-#               PRESCRIBED strain: the halt watches it (shear_strain_* column 4, with
-#               H_drv in column 3 -- the plate-based gamma / plate_sep of shear_slab.lmp)
+#   gamma     = (x_drv_top - x_drv_bot - x_drv0) / H_drv   -- driven-layer COM x-offset
+#               over H_drv = z_drv_t - z_drv_b, the INNER-EDGE gap of the two layers (the
+#               deformable gel between them; the layers are rigid in x, so the whole
+#               offset is taken up there).  The PRESCRIBED strain = the mean strain of
+#               the deformable gel: the halt watches it (shear_strain_* column 4, with
+#               H_drv in column 3).  Until 2026-11-16 H_drv was the layer COM-to-COM
+#               distance (the plate_sep of shear_slab.lmp), which counted ~2 sigma of
+#               rigid layer per side and made gamma read ~7 % below gamma_trk.
 #   gamma_trk = (x_trk_top - x_trk_bot - x_trk0) / H_trk   -- two static TRACKING slabs
 #               of polymer (track_thick thick) just inside the driven layers, where the
 #               stress is already uniform: the strain the INTERIOR actually carries, the
 #               G denominator of the notebooks (shear_strain_surface_* column 3,
-#               stress_series column 12).  It differs from gamma by the stress ramp
-#               across the driven layers (a few %).
+#               stress_series column 12).  With the inner-edge H_drv it equals gamma for
+#               a uniform strain; a difference is non-uniform strain next to the layers.
 #
 # Behaviour:
 #   - Phase 0:   read + brief minimize + short Langevin NVT, all pistons frozen.
@@ -580,7 +585,7 @@ compute trk_t_com poly_trk_t com
 compute trk_b_com poly_trk_b com
 run 0
 
-variable H_drv  equal $(c_drv_t_com[3] - c_drv_b_com[3])     # prescribed-strain denominator (the plate_sep of shear_slab.lmp)
+variable H_drv  equal $(v_z_drv_t - v_z_drv_b)               # prescribed-strain denominator: inner-edge gap of the driven layers (deformable gel)
 variable H_trk  equal $(c_trk_t_com[3] - c_trk_b_com[3])     # interior-strain denominator
 variable x_drv0 equal $(c_drv_t_com[1] - c_drv_b_com[1])
 variable x_trk0 equal $(c_trk_t_com[1] - c_trk_b_com[1])
@@ -589,7 +594,7 @@ variable gamma_trk equal (c_trk_t_com[1] - c_trk_b_com[1] - v_x_trk0) / v_H_trk
 
 print "Rg:  Lx=$(v_gel_lx_rg) Ly=$(v_gel_ly_rg) Lz=$(v_gel_lz_rg)   BB:  Lx=$(v_gel_lx_bb) Ly=$(v_gel_ly_bb) Lz=$(v_gel_lz_bb)"
 print ">>> Gel faces (Rg): z_bot = ${z_face_b}  z_top = ${z_face_t};  polymer BB z-extent ${gel_zlo} to ${gel_zhi}"
-print ">>> Driven layers (${layer_thick} sigma inside each face + everything beyond): top ${N_top} beads (z > ${z_drv_t}), bottom ${N_bot} beads (z < ${z_drv_b});  H_drv = ${H_drv} sigma (strain denominator)"
+print ">>> Driven layers (${layer_thick} sigma inside each face + everything beyond): top ${N_top} beads (z > ${z_drv_t}), bottom ${N_bot} beads (z < ${z_drv_b});  H_drv = ${H_drv} sigma (inner-edge gap, strain denominator; layer COMs $(c_drv_t_com[3] - c_drv_b_com[3]) apart)"
 print ">>> Tracking slabs (${track_thick} sigma): top $(count(poly_trk_t)) beads, bottom $(count(poly_trk_b)) beads;  H_trk = ${H_trk} sigma"
 print ">>> Thermostatted atoms (poly_free): $(count(poly_free));  rigid-in-plane layer beads (poly_drv, nve in z): $(count(poly_drv))"
 
