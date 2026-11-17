@@ -142,6 +142,7 @@ All four jobs of the bridge finished on 2026-11-16. Three are valid; the compres
   `triaxial_compression_two_pist_single.batch` (plates seated on the Rg face; strain still measured on the bounding box; see
   "SEAT_MODE and the credit guards" in `running_simulations.md`). About 7,600 SU; the guards stop it early if the seating
   pre-strains the network by more than 0.10 or the Rg strain stays below half the applied strain.
+  Submitted 2026-11-16 as job 55793779 (`triax_comp2p_w10_rg`, 16 h limit, unload/re-swell on); files `_4000000_c0.10` and `_u0.10`.
 - **One permeation deck, two frozen modes.** `FROZEN_AT=end` (the default): the live drive, then the same flow-compacted network
   frozen under the same dP, both in one job; kappa_frozen / kappa_live separates what a rigid network of that shape gives from what
   the network's own motion adds. `FROZEN_AT=ref`: frozen undeformed for the whole production, no live drive (the zero-strain kappa,
