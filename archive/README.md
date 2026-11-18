@@ -44,14 +44,21 @@ under `simulations/` and `scripts/`.
 * All notebooks here use paths relative to `scripts/` (`lib`, `../../lammps_data_files_local/`, `../flow_data_local/`): copy one back to `scripts/` or open it from there to run it.
 * The data files these builders produced are in `lammps_data_files_local/archive/` (catalog: `lammps_data_files_local/README.md`).
 
+## Archived (2026-11-18): `git_setup_instructions_2025.md`
+
+The first git setup note of the project (manual `git init`, a `~/docs` symlink, Pod/Bridges-2 clone steps). Superseded by `bash install.sh` and `docs/getting_started.md`.
+
 ## Archived (2026-10-11): Pod and Bridges-2 → `archive/pod_bridges/`
 
-Expanse is the only cluster in use. The Pod (CNSI, UCSB) and Bridges-2 (PSC) job runners,
+Pod is back as the backup cluster since 2026-11-18, through the current runner: `scripts/lib/site.sh`
+has a Pod block and `scripts/submit.sh` reads the `#POD` line of a batch file (`docs/cluster_reference.md`).
+The files here are not used for that and stay as the record of the 2026-10 setup; the Pod block was copied
+from `run_lammps_pod.sh`. Bridges-2 is still unused. The Pod (CNSI, UCSB) and Bridges-2 (PSC) job runners,
 every `*_pod.batch` / `*_bridges.batch` of the current decks (kept under
 `archive/pod_bridges/simulations/<folder>/`, so they do not collide with the one-piston
 decks' own Pod/Bridges batches in `archive/simulations/`), and the Pod benchmark notes
 `documenting_pod_runs.md` are here as they were. `docs/cluster_reference.md` still describes
-both machines. To run on one again: copy its runner back to `scripts/` and its batch back to
+both machines. To run on Bridges-2 again: copy its runner back to `scripts/` and its batch back to
 `simulations/<folder>/` — the batch `cd`s to `scripts/` and calls `./run_lammps_<cluster>.sh`,
 and both runners still source `scripts/node_git_sync.sh`.
 

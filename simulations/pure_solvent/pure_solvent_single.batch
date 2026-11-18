@@ -8,6 +8,7 @@
 #SBATCH --mem=0
 #SBATCH --time=1:00:00
 #SBATCH --output=%x.o%j.%N
+#POD --nodes=1 --ntasks-per-node=40 --cpus-per-task=1 --time=4:00:00   # Pod allocation (submit with lsbatch); provisional: 4x the Expanse time, not yet timed on Pod
 source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 
 # One NPT run of a solvent-only box (the isolated gel with its polymer removed): pure_solvent.lmp

@@ -7,7 +7,7 @@ of one slab family, plus a ranked table and the #SBATCH lines to copy (2026-11-0
 For each N (one row of the figure): steps/s and SU per 1 M steps of every timed layout, bars
 coloured by node count.  Only valid runs (collect_results.py) are used, repeats reduced to their
 median.  The text report ranks the layouts, gives the gain over the production baseline
-(4 nodes x 128 x 1, --map-by node, cutoff 5.0, or the 1-node 128 x 1 run when the baseline is
+(4 nodes x all cores x 1, --map-by node, cutoff 5.0, or the 1-node run when the baseline is
 absent) and the wall hours and SUs of the full production budget (PRODUCTION_STEPS).
 """
 import argparse
@@ -27,24 +27,29 @@ from plot_results import SERIES, SURFACE, INK, INK2, style  # noqa: E402
 NODE_ORDER = (1, 2, 3, 4, 6, 8, 16)    # fixed colour per node count, never cycled
 
 
-def load(path, network):
+def load(path, network, cluster=None):
     groups = defaultdict(list)
     with open(path) as f:
-        for r in csv.DictReader(f):
-            if r['role'] != 'bench' or r['valid'] != '1' or not r['steps_per_s']:
-                continue
-            if r.get('network', 'random') != network or float(r['scale']) != 1.0:
-                continue
-            key = (int(r['nbeads']), int(r['nodes']), int(r['tasks_per_node']), int(r['cpus_per_task']),
-                   r['map'], float(r['comm_cut']), r['partition'])
-            groups[key].append(r)
+        found = [r for r in csv.DictReader(f)
+                 if r['role'] == 'bench' and r['valid'] == '1' and r['steps_per_s']
+                 and r.get('network', 'random') == network and float(r['scale']) == 1.0]
+    clusters = sorted({r.get('cluster') or 'expanse' for r in found})
+    if cluster is None and len(clusters) > 1:
+        raise SystemExit(f'{path} holds runs of {clusters}: pick one with --cluster')
+    cluster = cluster or (clusters[0] if clusters else 'expanse')
+    for r in found:
+        if (r.get('cluster') or 'expanse') != cluster:
+            continue
+        key = (int(r['nbeads']), int(r['nodes']), int(r['tasks_per_node']), int(r['cpus_per_task']),
+               r['map'], float(r['comm_cut']), r['partition'])
+        groups[key].append(r)
     rows = []
     for key, g in groups.items():
         n, nodes, tasks, cpus, mapping, cut, part = key
         speed = statistics.median(float(x['steps_per_s']) for x in g)
         cores = int(g[0]['cores_charged'])
         rows.append(dict(nbeads=n, nodes=nodes, tasks=tasks, cpus=cpus, map=mapping, cut=cut, part=part, speed=speed,
-                         cores=cores, natoms=int(g[0]['natoms'] or 0), nrep=len(g),
+                         cores=cores, full=int(g[0].get('cores_per_node') or 128), cluster=cluster, natoms=int(g[0]['natoms'] or 0), nrep=len(g),
                          su_per_M=1e6 / speed / 3600 * cores, hours_per_M=1e6 / speed / 3600,
                          pct_comm=g[0].get('pct_comm'), pct_pair=g[0].get('pct_pair')))
     return rows
@@ -100,9 +105,10 @@ def report(rows, network):
     lines = []
     for n in sorted({r['nbeads'] for r in rows}):
         rs = sorted((r for r in rows if r['nbeads'] == n), key=lambda r: -r['speed'])
-        base = [r for r in rs if (r['nodes'], r['tasks'], r['cpus'], r['map'], r['cut']) == (4, 128, 1, 'node', 5.0)] \
-            or [r for r in rs if (r['nodes'], r['tasks'], r['cpus'], r['map'], r['cut'], r['part']) == (1, 128, 1, 'node', 5.0, 'debug')] \
-            or [r for r in rs if (r['nodes'], r['tasks'], r['cpus'], r['map'], r['cut']) == (1, 128, 1, 'node', 5.0)]
+        full = rs[0]['full']        # cores of one node: 128 on Expanse, 40 on Pod
+        base = [r for r in rs if (r['nodes'], r['tasks'], r['cpus'], r['map'], r['cut']) == (4, full, 1, 'node', 5.0)] \
+            or [r for r in rs if (r['nodes'], r['tasks'], r['cpus'], r['map'], r['cut'], r['part']) == (1, full, 1, 'node', 5.0, 'debug')] \
+            or [r for r in rs if (r['nodes'], r['tasks'], r['cpus'], r['map'], r['cut']) == (1, full, 1, 'node', 5.0)]
         base = base[0] if base else None
         budget = PRODUCTION_STEPS.get(n, 14e6)
         lines.append(f"\n=== N = {n} ({network}, {rs[0]['natoms']} atoms): {len(rs)} layouts, "
@@ -131,7 +137,7 @@ def report(rows, network):
         lines.append(f"cheapest per step: {cheapest['nodes']} node(s), {layout_label(cheapest)}  "
                      f"({cheapest['su_per_M']:.0f} SU/M-step, {cheapest['speed']:.1f} steps/s)")
         if base:
-            lines.append(f"baseline ({base['nodes']} x 128 x 1 node cc5.0): {base['speed']:.1f} steps/s, "
+            lines.append(f"baseline ({base['nodes']} x {full} x 1 node cc5.0): {base['speed']:.1f} steps/s, "
                          f"{base['su_per_M']:.0f} SU/M-step")
     return '\n'.join(lines)
 
@@ -141,8 +147,9 @@ def main():
     ap.add_argument('csv')
     ap.add_argument('--network', default='rot45')
     ap.add_argument('--out', default=None)
+    ap.add_argument('--cluster', default=None, help='expanse | pod, when the csv holds both')
     args = ap.parse_args()
-    rows = load(args.csv, args.network)
+    rows = load(args.csv, args.network, args.cluster)
     if not rows:
         raise SystemExit(f'no valid timed {args.network} runs in {args.csv}')
     ns = sorted({r['nbeads'] for r in rows})
@@ -154,7 +161,7 @@ def main():
         panel(axes[i, 0], rs, 'speed', 'steps per second',
               f'N = {n}: speed  ({rs[0]["natoms"] / 1e3:.0f}k atoms)')
         panel(axes[i, 1], rs, 'su_per_M', 'SU per 1 M steps', f'N = {n}: cost')
-    fig.suptitle(f'LAMMPS layout benchmark: {args.network} slab, tasks x cpus per node '
+    fig.suptitle(f'LAMMPS layout benchmark on {rows[0]["cluster"]}: {args.network} slab, tasks x cpus per node '
                  f'(map node unless marked; comm cutoff 5.0 unless marked)',
                  x=0.01, ha='left', fontsize=12, color=INK)
     fig.tight_layout(rect=(0, 0, 1, 0.96))

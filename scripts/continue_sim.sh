@@ -9,7 +9,7 @@
 #                                         run_lammps.sh calls this at the end of a CHAIN=1 job;
 #                                         by hand it re-launches a chain that broke. Nothing is
 #                                         submitted when the log says STATUS COMPLETE.
-#   --batch <file>   the .batch whose #SBATCH lines and knobs the new job borrows (default: the
+#   --batch <file>   the .batch whose allocation (#SBATCH lines; the #POD line on Pod) and knobs the new job borrows (default: the
 #                    one here whose --job-name matches the output file, else the batch a chained
 #                    job inherited, else <folder>_single.batch)
 #   --dry-run        print the batch script that would be submitted, submit nothing
@@ -177,14 +177,16 @@ if [ "$MODE" != run ]; then
     done
     echo "Knobs:"; echo "$KNOB_EXPORTS" | sed 's/^/  /'
 
-    SBATCH_LINES=$(grep '^#SBATCH' "$BATCH_FILE" | grep -v -e '--output' -e '--error' -e '--job-name' || true)
+    # the allocation of THIS cluster: the #SBATCH lines on Expanse, the #POD line on Pod (lib/site.sh)
+    SBATCH_LINES=$(batch_header "$BATCH_FILE" | grep -v -e '--output' -e '--error' -e '--job-name' || true)
+    [ -n "$SBATCH_LINES" ] || { echo "Error: $(basename "$BATCH_FILE") has no allocation for $CLUSTER (see scripts/submit.sh)."; exit 1; }
     TMPBATCH=$(mktemp /tmp/cont_XXXXXX.sh)
     cat > "$TMPBATCH" <<BATCHEOF
 #!/bin/bash
 ${SBATCH_LINES}
 #SBATCH --job-name=cont_${JOB_ID}
 #SBATCH --output=%x.o%j.%N
-export LAMMPS_BATCH_SYNCED=1
+export LAMMPS_BATCH_SYNCED=1 CLUSTER="${CLUSTER}"
 source "${LAMMPS_WORK_DIR}/scripts/batch_prologue.sh"
 ${KNOB_EXPORTS}export CONT_BATCH_FILE="${BATCH_FILE}"
 cd "${SIM_FOLDER}" || exit 1

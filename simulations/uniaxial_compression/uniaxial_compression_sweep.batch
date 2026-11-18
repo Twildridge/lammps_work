@@ -8,6 +8,7 @@
 #SBATCH --mem=0
 #SBATCH --time=48:00:00
 #SBATCH --output=%x.o%j.%N
+#POD --nodes=4 --ntasks-per-node=40 --cpus-per-task=1 --time=192:00:00   # Pod allocation (submit with lsbatch); provisional: 4x the Expanse time, not yet timed on Pod
 source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 
 # Two-piston compression STRAIN SWEEP: the stress-strain curve. Both reservoirs at PRESS_TARGET;

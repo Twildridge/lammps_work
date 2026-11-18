@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run_benchmark.sh -- one run of the allocation benchmark (2026-11-05).  Called by
-# allocation_benchmark.batch on Expanse, or directly with BENCH_LOCAL=1 on a Mac.
+# allocation_benchmark.batch on Expanse or Pod, or directly with BENCH_LOCAL=1 on a Mac.
 #
 #   ROLE=prep   fresh data file -> the deck's full start-up plus PREP_STEPS of production ->
 #               prepared/prep_<N>b_s<S>.data, the common starting state of every timed run.
@@ -48,12 +48,13 @@ if [ "${BENCH_LOCAL:-0}" = "1" ]; then
     NODES=1; TASKS_PER_NODE=1; CPUS="${CPUS:-1}"
     export OMP_NUM_THREADS="$CPUS"
 else
-    REPO="$HOME/Documents/lammps_work"
-    INPUT_DIR="$HOME/Documents/lammps_data/input_data"
-    RUN_ROOT="/expanse/lustre/scratch/$USER/temp_project/allocation_benchmark/runs"
-    LOG_DIR="$HOME/Documents/lammps_runs/allocation_benchmark/logs"
-    # the same binary as run_lammps.sh
-    LMP=/home/dpollard/software/lammps/22Jul2025_update3/mpi-omp/gcc/10.2.0/openmpi/4.1.3/lammps-22Jul2025/build/lmp
+    # paths and the binary of this cluster, the same ones run_lammps.sh uses (scripts/lib/site.sh)
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/site.sh" || exit 1
+    REPO="$LAMMPS_WORK_DIR"
+    INPUT_DIR="$INPUT_DATA_DIR"
+    RUN_ROOT="$SCRATCH_DIR/allocation_benchmark/runs"
+    LOG_DIR="$RUNS_DIR/allocation_benchmark/logs"
+    LMP="$LMP_BIN"
     NODES="$SLURM_NNODES"; TASKS_PER_NODE="${BENCH_TASKS:-$SLURM_NTASKS_PER_NODE}"; CPUS="${BENCH_CPUS:-${SLURM_CPUS_PER_TASK:-1}}"
     export OMP_NUM_THREADS="$CPUS"
 fi
@@ -145,6 +146,8 @@ nodes=$NODES
 tasks_per_node=$TASKS_PER_NODE
 cpus_per_task=$CPUS
 partition=$PARTITION
+cluster=${CLUSTER:-local}
+cores_per_node=${CORES_PER_NODE:-$((TASKS_PER_NODE * CPUS))}
 map=$MAP
 comm_cut=$COMM_CUT
 rep=$REP

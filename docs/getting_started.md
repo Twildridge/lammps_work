@@ -11,7 +11,7 @@ If something here does not work, ask Dylan rather than debugging alone. If the p
 ## Two things you need first
 
 1. A GitHub account, added as a collaborator on `Twildridge/lammps_work`. Dylan does this from the repo's Settings → Collaborators page.
-2. A cluster account on Expanse (Bridges-2 and Pod are no longer used). Dylan or your PI requests it on your behalf. It can take a few days.
+2. A cluster account on Expanse (Pod is the backup since 2026-11-18, see cluster_reference.md; Bridges-2 is no longer used). Dylan or your PI requests it on your behalf. It can take a few days.
 
 The rest of the page assumes both are in place.
 
@@ -32,27 +32,21 @@ Clone the repository, which downloads it to your computer:
 cd ~/Documents
 git clone https://github.com/Twildridge/lammps_work.git
 cd lammps_work
-chmod +x scripts/*.sh
 ```
 
 The first clone asks for a GitHub username and password. GitHub does not accept the account password here; it wants a Personal Access Token. Make one at [github.com/settings/tokens](https://github.com/settings/tokens) under "Tokens (classic)" with the `repo` scope checked, paste it at the prompt, and keep it in a password manager because it is needed again.
 
-Install the `lsync` command ([github_sync.md](github_sync.md) describes what it runs):
+Run the one-time setup, then open a new terminal window:
 ```bash
-bash scripts/install_lsync.sh
-source ~/.zshrc      # or: source ~/.bashrc, if that's what you use
+bash install.sh
 ```
+It needs no options. It adds two commands to your shell, `lsync` (sync with GitHub) and `lsbatch` (submit a job on a cluster), sets git up so notebook plots are not committed, and makes the folder for simulation input files, `~/Documents/lammps_data/input_data` (not tracked by git; [github_sync.md](github_sync.md) says why). Running it again does no harm.
 
-Test it:
+Test it in the new terminal:
 ```bash
 lsync
 ```
 It should print `Nothing to commit. Already up to date.`
-
-Make a folder for simulation input files. These are not tracked by git ([github_sync.md](github_sync.md) says why):
-```bash
-mkdir -p ~/Documents/lammps_data/input_data
-```
 
 ---
 
@@ -63,16 +57,14 @@ SSH into Expanse ([cluster_reference.md](cluster_reference.md) has the login add
 ssh <your-username>@login.expanse.sdsc.edu
 ```
 
-Repeat the clone and `lsync` setup there, with `--no-claude` because the cluster has no Claude Code:
+Repeat the clone and the setup there. The repo has to sit in `~/Documents` on a cluster, because the batch files look for it at `~/Documents/lammps_work`:
 ```bash
-cd ~/Documents
-mkdir -p lammps_data/input_data
+mkdir -p ~/Documents && cd ~/Documents
 git clone https://github.com/Twildridge/lammps_work.git
 cd lammps_work
-chmod +x scripts/*.sh
-bash scripts/install_lsync.sh --no-claude
-source ~/.bashrc
+bash install.sh
 ```
+Log out and back in (or `source ~/.bashrc`) for `lsync` and `lsbatch` to exist.
 
 The first push from a cluster needs an SSH key. [github_sync.md](github_sync.md#setting-up-pushing-from-a-cluster-expanse-bridges-2-pod-one-time-per-cluster) walks through it step by step and lists the error messages that mean you need it.
 
@@ -131,9 +123,9 @@ Leave the rest as it is. `INTERACTION="1.0_0.0"` is right for a solvent-only run
 
 Submit it:
 ```bash
-sbatch pure_solvent_single.batch
+lsbatch pure_solvent_single.batch
 ```
-This prints a job ID, e.g. `Submitted batch job 12345678`. The job is queued; the terminal can be closed.
+`lsbatch` works from any folder and on either cluster; on Expanse `sbatch pure_solvent_single.batch` from this folder does the same. It prints a job ID, e.g. `Submitted batch job 12345678`. The job is queued; the terminal can be closed.
 
 ### 3d. Check on it
 

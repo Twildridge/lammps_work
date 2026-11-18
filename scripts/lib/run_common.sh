@@ -131,7 +131,7 @@ READMEEOF
 # in the folder the job was submitted from; its name is recorded here.
 write_run_info() {
     {
-        echo "started:      $(date '+%Y-%m-%d %H:%M:%S') on $(hostname)"
+        echo "started:      $(date '+%Y-%m-%d %H:%M:%S') on $(hostname) (cluster: ${CLUSTER:-?})"
         echo "slurm job:    ${SLURM_JOB_ID:-none} (${SLURM_JOB_NAME:-not a batch job})"
         echo "slurm output: ${SLURM_SUBMIT_DIR:-$PWD}/${SLURM_JOB_NAME:-?}.o${SLURM_JOB_ID:-?}.<node>"
         echo "allocation:   ${SLURM_NNODES:-?} node(s) x ${SLURM_NTASKS_PER_NODE:-?} tasks x ${OMP_NUM_THREADS:-1} thread(s)"
@@ -174,8 +174,9 @@ launch_lammps() {
         [ "$remain" -gt 60 ] && guard=(timeout -k 60 "${remain}s")
     fi
     mpirun_cmd
-    echo "${guard[*]} ${MPIRUN_CMD[*]} ... -in $(basename "$deck")"
-    "${guard[@]}" "${MPIRUN_CMD[@]}" "$@" -in "$deck" &
+    # ${guard[@]+...}: an empty array is "unbound" under set -u before bash 4.4 (Pod may run an older one)
+    echo "${guard[*]-} ${MPIRUN_CMD[*]} ... -in $(basename "$deck")"
+    ${guard[@]+"${guard[@]}"} "${MPIRUN_CMD[@]}" "$@" -in "$deck" &
     pid=$!
     while kill -0 "$pid" 2>/dev/null; do
         if grep -q "Total wall time" "$log" 2>/dev/null; then

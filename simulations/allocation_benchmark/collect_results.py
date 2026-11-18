@@ -4,7 +4,7 @@
     python collect_results.py [--logs DIR] [--out results.csv]
     python collect_results.py --su-total          # only print the SUs spent so far
 
-Standard library only (Expanse python/3.8).  A timed run counts only if it passes:
+Standard library only (Expanse python/3.8; any python3 on Pod).  A timed run counts only if it passes:
   complete   LAMMPS reached "Total wall time"
   safe       Dangerous builds = 0 (a dangerous build can silently miss pair interactions)
   step 0     PE and pressure at step 0 match every other run of the same prepared state.  They
@@ -22,9 +22,9 @@ STEP0_TOL = 1e-6      # relative
 # Steps to a converged slab: the budgets of chain_length_testing_sweep.batch.  N = 25 is not in
 # that table; it uses the same rule (14 M x mesh ratio = 14 M x 2.88).
 PRODUCTION_STEPS = {5: 14e6, 10: 24e6, 15: 30e6, 20: 35e6, 25: 40e6, 30: 45e6}
-CORES_PER_NODE = 128
+CORES_PER_NODE = 128     # Expanse; runs since 2026-11-18 carry their own cores_per_node (Pod: 40)
 
-COLUMNS = ('tag role nbeads network scale nodes tasks_per_node cpus_per_task partition map comm_cut rep job '
+COLUMNS = ('tag role cluster nbeads network scale nodes cores_per_node tasks_per_node cpus_per_task partition map comm_cut rep job '
            'cores_charged ranks job_wall_s complete mpirun_rc natoms n_polymer n_solvent n_frozen steps '
            'loop_s steps_per_s katom_step_s su_per_Mstep hours_per_Mstep '
            'pct_pair pct_bond pct_neigh pct_comm pct_output pct_modify pct_other imbalance_pair imbalance_neigh '
@@ -111,13 +111,18 @@ def read_all(logs):
     for meta_file in sorted(logs.glob('*.meta')):
         row = dict(line.split('=', 1) for line in meta_file.read_text().splitlines() if '=' in line)
         row.setdefault('network', 'random')     # metas written before 2026-11-07
+        row.setdefault('cluster', 'expanse')    # metas written before 2026-11-18 (or 'local' on a Mac)
+        row.setdefault('cores_per_node', CORES_PER_NODE)
         log_file = meta_file.with_suffix('.log')
         if log_file.exists():
             row.update(parse_log(log_file))
         nodes, tasks, cpus = int(row['nodes']), int(row['tasks_per_node']), int(row['cpus_per_task'])
         row['ranks'] = nodes * tasks
-        # compute and debug charge whole nodes; shared (and a Mac) charges the cores asked for
-        row['cores_charged'] = nodes * CORES_PER_NODE if row['partition'] in ('compute', 'debug') else nodes * tasks * cpus
+        # whole nodes are charged (Expanse compute / debug) or held (Pod: every layout fills its
+        # nodes); Expanse's shared partition and a Mac count the cores asked for.  "SU" below is
+        # core-hours: the charge on Expanse, only a measure of the load on Pod.
+        whole = row['partition'] not in ('shared', 'local')
+        row['cores_charged'] = nodes * int(row['cores_per_node']) if whole else nodes * tasks * cpus
         rate = row.get('steps_per_s')
         if rate:
             row['hours_per_Mstep'] = 1e6 / rate / 3600
@@ -158,7 +163,7 @@ def su_total(rows):
 
 
 def label(r):
-    tail = '' if r['partition'] in ('compute', 'debug') else f" [{r['partition']}]"
+    tail = '' if r['partition'] in ('compute', 'debug', 'batch') else f" [{r['partition']}]"
     return f"{r['nodes']} node(s) x {r['tasks_per_node']} tasks x {r['cpus_per_task']} cpus{tail}"
 
 

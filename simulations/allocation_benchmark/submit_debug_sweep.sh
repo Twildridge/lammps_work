@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# submit_debug_sweep.sh -- the MPI x OpenMP layout scan of a slab family on the DEBUG partition
+# submit_debug_sweep.sh -- EXPANSE ONLY (Pod has no debug partition of this kind: use
+# `submit_benchmark.sh layouts` there).  The MPI x OpenMP layout scan of a slab family on the DEBUG partition
 # (2026-11-07), for the rot45 standard gel (5 and 15 beads per strand) by default.
 #
 #     bash submit_debug_sweep.sh --dry-run        # print the plan, submit nothing
@@ -69,7 +70,7 @@ EOF
             read -r nodes tasks cpus map cut <<<"$spec"
             tag="bench_N${n}_s1.0${NET_SUFFIX}_compute_n${nodes}_t${tasks}_c${cpus}_${map}_cc${cut}_r1"
             cat >> "$chain" <<EOF
-sbatch --job-name="$tag" --partition=compute --nodes=$nodes --ntasks-per-node=$tasks --cpus-per-task=$cpus --mem=0 --time=00:20:00 \\
+sbatch --job-name="$tag" --partition=compute --account=csb197 --nodes=$nodes --ntasks-per-node=$tasks --cpus-per-task=$cpus --mem=0 --time=00:20:00 \\
     --export=ALL,ROLE=bench,NETWORK="$NETWORK",NBEADS="$n",SCALE=1.0,MAP=$map,COMM_CUT=$cut,NSTEPS=$NSTEPS,PREP_STEPS=$NSTEPS,REP=1,TAG="$tag" \\
     allocation_benchmark.batch
 EOF

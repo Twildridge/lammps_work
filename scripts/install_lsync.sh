@@ -2,9 +2,10 @@
 # =============================================================================
 # install_lsync.sh — one-time repo setup for this machine (laptop, Expanse,
 # Bridges-2, Pod). Run ONCE per machine, from anywhere, right after cloning:
-#     bash /path/to/lammps_work/scripts/install_lsync.sh
+#     bash /path/to/lammps_work/install.sh          (the same as running this file)
 #
-# It is idempotent: re-running it just refreshes everything to this clone's path.
+# No options are needed on any machine. It is idempotent: re-running it just
+# refreshes everything to this clone's path.
 #
 # What it sets up:
 #   0. nbstripout, registered FOR THIS CLONE — strips notebook output images
@@ -14,9 +15,14 @@
 #      files to filter, but each clone still has to register the filter once,
 #      which is what this step does.  Skipped with a warning if `pip` isn't on
 #      PATH; notebooks will still commit, just with their outputs embedded.
-#   1. a shell alias  `lsync`  in ~/.zshrc or ~/.bashrc (whichever matches $SHELL)
-#   2. optionally, a user-level Claude Code `/lsync` command that points at this
-#      clone (skip with --no-claude; not useful on a cluster)
+#   1. two shell aliases in ~/.zshrc or ~/.bashrc (whichever matches $SHELL):
+#      `lsync` (scripts/git_sync.sh) and `lsbatch` (scripts/submit.sh: submit a batch
+#      file by name from any folder, with the allocation of the cluster it is on)
+#   2. a user-level Claude Code `/lsync` command that points at this clone, ONLY
+#      on a machine that has Claude Code (a ~/.claude folder or a `claude` command).
+#      Everywhere else, a cluster included, the step is skipped by itself.
+#      --no-claude skips it on a machine that does have Claude Code.
+#   3. ~/Documents/lammps_data/input_data, the folder the runner reads .data files from
 #
 # Both `lsync` entry points shell out to scripts/git_sync.sh in THIS clone, so
 # there is a single implementation and nothing to keep in sync by hand.
@@ -32,7 +38,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 SYNC="$REPO_ROOT/scripts/git_sync.sh"
-DO_CLAUDE=1
+# Claude Code is an optional AI coding tool; nothing in this repo needs it. Its /lsync command
+# is installed only where Claude Code already is.
+DO_CLAUDE=0
+if [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; then DO_CLAUDE=1; fi
 [ "${1:-}" = "--no-claude" ] && DO_CLAUDE=0
 
 [ -f "$SYNC" ] || { echo "ERROR: $SYNC not found — is this a full lammps_work clone?"; exit 1; }
@@ -66,20 +75,22 @@ case "${SHELL:-}" in
     *zsh) RC="$HOME/.zshrc" ;;
     *)    RC="$HOME/.bashrc" ;;
 esac
-ALIAS="alias lsync='bash \"$REPO_ROOT/scripts/git_sync.sh\"'"
-
 touch "$RC"
-if grep -q "^alias lsync=" "$RC"; then
-    # rewrite in place so a moved/re-cloned repo updates cleanly
-    tmp="$(mktemp)"
-    grep -v "^alias lsync=" "$RC" > "$tmp"
-    printf '%s\n' "$ALIAS" >> "$tmp"
-    mv "$tmp" "$RC"
-    echo ">>> updated existing lsync alias in $RC"
-else
-    printf '\n# lammps_work one-command git sync (scripts/install_lsync.sh)\n%s\n' "$ALIAS" >> "$RC"
-    echo ">>> added lsync alias to $RC"
-fi
+for pair in "lsync:git_sync.sh:one-command git sync" "lsbatch:submit.sh:submit a .batch by name from any folder (Expanse or Pod)"; do
+    IFS=: read -r name script what <<<"$pair"
+    ALIAS="alias $name='bash \"$REPO_ROOT/scripts/$script\"'"
+    if grep -q "^alias $name=" "$RC"; then
+        # rewrite in place so a moved/re-cloned repo updates cleanly
+        tmp="$(mktemp)"
+        grep -v "^alias $name=" "$RC" > "$tmp"
+        printf '%s\n' "$ALIAS" >> "$tmp"
+        mv "$tmp" "$RC"
+        echo ">>> updated existing $name alias in $RC"
+    else
+        printf '\n# lammps_work: %s (scripts/install_lsync.sh)\n%s\n' "$what" "$ALIAS" >> "$RC"
+        echo ">>> added $name alias to $RC"
+    fi
+done
 
 # ── 2. user-level Claude Code command (optional) ───────────────────────────
 if [ "$DO_CLAUDE" -eq 1 ]; then
@@ -98,11 +109,16 @@ if [ "$DO_CLAUDE" -eq 1 ]; then
         echo ">>> skipped Claude Code command ($CMD_SRC not in this clone)"
     fi
 else
-    echo ">>> skipped Claude Code command (--no-claude)"
+    echo ">>> Claude Code not found on this machine (or --no-claude): /lsync command not installed; nothing else needs it"
 fi
 
+# ── 3. the folder for simulation input files (not tracked by git) ──────────
+mkdir -p "$HOME/Documents/lammps_data/input_data"
+echo ">>> input files go in $HOME/Documents/lammps_data/input_data"
+
 echo "======================================"
-echo "Done.  Run:  source $RC"
-echo "Then:        lsync              (or  lsync \"my message\")"
-echo "In Claude Code:  /lsync"
+echo "Done. Open a new terminal (or run:  source $RC ), then:"
+echo "    lsync                    pull, commit and push in one step  (lsync \"my message\")"
+echo "    lsbatch <name>.batch     submit a batch file from any folder (on a cluster)"
+[ "$DO_CLAUDE" -eq 1 ] && echo "    /lsync                   the same sync, inside Claude Code"
 echo "======================================"

@@ -16,12 +16,12 @@
 # -----------------------------------------------------------------------------
 # SETUP — once per machine (laptop, Expanse, Bridges-2, Pod), from any clone:
 #
-#     bash scripts/install_lsync.sh
+#     bash install.sh          (in the repo root; it runs scripts/install_lsync.sh)
 #
-# That adds the `lsync` alias to ~/.zshrc or ~/.bashrc and links the Claude Code
-# /lsync command.  It is idempotent and derives every path from the clone it
-# lives in, so it works for any collaborator without editing anything.
-# On a cluster (no Claude Code) use:  bash scripts/install_lsync.sh --no-claude
+# That adds the `lsync` alias to ~/.zshrc or ~/.bashrc and, where Claude Code is
+# installed, its /lsync command.  It is idempotent, takes no options and derives
+# every path from the clone it lives in, so it works for any collaborator and on
+# any cluster without editing anything.
 #
 # Entry points, all calling THIS script so they can never drift apart:
 #     lsync            shell alias
@@ -100,7 +100,7 @@ if git diff --staged --name-only | grep -q '\.ipynb$' \
     echo "!! WARNING: nbstripout is not set up on this machine — the notebook(s)"
     echo "   below will be committed WITH their embedded plot images (large diffs)."
     git diff --staged --name-only | grep '\.ipynb$' | sed 's/^/     /'
-    echo "   Fix once, then re-run lsync:  bash \"$REPO_ROOT/scripts/install_lsync.sh\""
+    echo "   Fix once, then re-run lsync:  bash \"$REPO_ROOT/install.sh\""
 fi
 
 # ── 4. Build commit message ────────────────────────────────────────────────

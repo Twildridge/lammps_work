@@ -6,14 +6,16 @@ Rule (same as `lammps_data_files_local/`): a notebook or script lives here while
 
 | Script | Role |
 |---|---|
-| `run_lammps.sh` | **The Expanse job runner.** Every `.batch` in `simulations/` calls it with `<folder> <dataname> <interaction> <nsteps>`: finds the deck by folder name, forwards the exported knobs as `-var`s (table in `lib/run_common.sh`), runs `mpirun lmp`, then `postprocess.sh`; with `CHAIN=1` hands over to `continue_sim.sh --chain`. `DRY_RUN=1` prints the run instead. |
+| `run_lammps.sh` | **The job runner (Expanse and Pod).** Every `.batch` in `simulations/` calls it with `<folder> <dataname> <interaction> <nsteps>`: finds the deck by folder name, forwards the exported knobs as `-var`s (table in `lib/run_common.sh`), runs `mpirun lmp`, then `postprocess.sh`; with `CHAIN=1` hands over to `continue_sim.sh --chain`. `DRY_RUN=1` prints the run instead. |
 | `batch_prologue.sh` | Sourced first by every `.batch`: pulls the repo and re-runs the fresh batch, sets the MPI environment, loads the modules, exports `LAMMPS_WORK_DIR`. |
-| `lib/site.sh` | Site settings: LAMMPS binary, data / runs / scratch paths, `MPI_MAP_BY` (core), `WALL_MARGIN`, module names. |
+| `lib/site.sh` | Site settings, one block per cluster (`CLUSTER` = expanse or pod, detected): LAMMPS binary, data / runs / scratch paths, modules, MPI environment, cores per node, `MPI_MAP_BY` (core), `WALL_MARGIN`. |
+| `submit.sh` | The command `lsbatch [sbatch options] <name>.batch` (alias from `bash install.sh`): submits a batch file from any folder, found by name under `simulations/`. Plain `sbatch` on Expanse; on Pod it swaps the `#SBATCH` allocation for the batch file's `#POD` line. |
+| `cluster_check.sh` | Compares `lib/site.sh` with the cluster it runs on (binary, modules, scratch, cores per node, partitions). Changes nothing. |
 | `lib/run_common.sh` | Shared by the two runners: the knob table (`KNOBS`), run-dir creation, the guarded `mpirun` launch with its completion verdict, the chaining step. |
 | `postprocess.sh` | Regenerates every post-run plot of a finished run directory (calls `lib/plot_*.py`); run automatically by the runners, or by hand. |
 | `continue_sim.sh` | Resume a finished run, or chain a run that hit its wall-clock budget, from the simulation folder (`docs/running_simulations.md` §5e). |
 | `git_sync.sh` | What `lsync` runs: pull --rebase, stage, commit, push (`docs/github_sync.md`). |
-| `install_lsync.sh` | One-time per machine: registers the `lsync` alias and nbstripout. |
+| `install_lsync.sh` | One-time per machine, run as `bash install.sh` from the repo root: the `lsync` and `lsbatch` aliases, nbstripout, the input-data folder. No options. |
 | `node_git_sync.sh` | Sourced by `batch_prologue.sh` and `run_lammps.sh`: serialised, fast-forward-only `git pull` on the compute node. |
 
 ## Data-file builders and converters (notebooks; converter code in `lib/`)

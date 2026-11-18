@@ -1,6 +1,6 @@
 # Allocation benchmark
 
-Finds the nodes, tasks per node and CPUs per task that run the x/y-periodic random slab fastest
+Finds the nodes, tasks per node and CPUs per task that run the x/y-periodic slab fastest
 at 5 to 30 beads per chain, while checking the results stay correct. Production files are not edited:
 each run works on a temporary copy of `simulations/slab_with_support/slab_with_support.lmp`.
 
@@ -33,6 +33,57 @@ under real MPI.
 baseline. Keep two answers apart, because `--map-by` lives in `run_lammps.sh` and the cutoff in the deck: the
 fastest configuration from Slurm settings alone, and the fastest with those changes too. Mac results in
 `local_test_results/` are local tests only and say nothing about MPI layouts.
+
+## Running it on Pod (set up 2026-11-18, not yet run)
+
+Pod is the backup for when the Expanse allocation runs out. The question is the same as on Expanse: which
+nodes x ranks x threads runs the rot45 standard gel (5 and 15 beads per strand) fastest, with `--map-by core`
+and comm cutoff 2.5, the two settings that gave 1.4-1.6x and 1.4x on Expanse. The archived Pod runner used
+`--map-by node` and cutoff 5.0, and its notes (`archive/pod_bridges/documenting_pod_runs.md`) show 2 nodes no
+faster than 1 with those settings.
+
+`submit_benchmark.sh` reads the cluster from `scripts/lib/site.sh`: on Pod a node is 40 cores, the layouts are
+40x1, 20x2, 10x4 and 8x5, jobs go to the `batch` partition (Pod's default) with no account, and time limits are four times the
+Expanse ones. "SU" in the output is core-hours; nothing is charged on Pod. `submit_debug_sweep.sh` and the
+`subnode` tier are Expanse-only.
+
+```bash
+# 0. On the Mac, VPN on: the two fresh files (354k and 660k atoms), after pushing the repo
+scp lammps_data_files_local/slab_support_periodic_{5,15}beads_tall_rho04_rot45.data \
+    pod-login1.cnsi.ucsb.edu:Documents/lammps_data/input_data/
+
+# 1. On Pod: does lib/site.sh match the machine? Fix its pod block until this is clean.
+cd ~/Documents/lammps_work && git pull && bash scripts/cluster_check.sh
+
+# 2. The common starting states (2 jobs, 1 node each), then wait for them
+cd simulations/allocation_benchmark
+export NETWORK=rot45 NS="5 15"
+bash submit_benchmark.sh prep --dry-run && bash submit_benchmark.sh prep
+
+# 3. Pilot (4 jobs): the first run of ppr:40:node:pe=1 under Open MPI 5. Check it before the rest.
+bash submit_benchmark.sh pilot
+python3 collect_results.py                      # no excluded runs; note the steps/s against the assumed ones
+
+# 4. Node count at 40 x 1 (54 jobs) and ranks x threads on 1, 2 and 4 nodes (30 jobs)
+bash submit_benchmark.sh nodescan               # SCAN_NODES="1 2 3 4" if 6 and 8 nodes do not start
+bash submit_benchmark.sh layouts
+
+# 5. Results
+python3 collect_results.py
+R=~/Documents/lammps_runs/allocation_benchmark
+python plot_nodescan.py $R/results.csv --network rot45 --out $R/nodescan_rot45_pod.png > $R/nodescan_rot45_pod.txt
+python plot_layouts.py  $R/results.csv --network rot45 --out $R/layouts_rot45_pod.png  > $R/layouts_rot45_pod.txt
+```
+
+The plots need matplotlib (`module load miniconda; conda activate lammps_analysis`). What to check in the pilot:
+`logs/<tag>.bindings` shows 40 ranks on each node for `core`; a mapping error appears within seconds, and
+`MAP=node` runs are the fallback. Threads above 1 are safe for timing, but `bond_style hybrid` with `-sf omp`
+and more than one thread under-tallies the per-atom bond virial (found 2026-09-22), so a hybrid layout that
+wins here needs the stress output checked before it is used for production.
+
+What to do with the result: set the node count and `--time` of the `#POD` line in each batch file (they are
+4 nodes and four times the Expanse time until then), set `MPI_MAP_BY` in the pod block of `lib/site.sh` if
+`node` wins, and add a Pod table next to the Expanse one in `docs/running_simulations.md` §5f.
 
 ## Debug-partition layout scan of the rot45 standard gel (2026-11-07)
 

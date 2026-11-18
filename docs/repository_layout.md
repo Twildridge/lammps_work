@@ -5,6 +5,8 @@
 ```
 lammps_work/                    ← This git repository
 │
+├── install.sh                  ← One-time setup of a clone: `bash install.sh` (runs scripts/install_lsync.sh)
+│
 ├── simulations/                ← One folder per simulation type
 │   ├── slab_with_support/      ← Gel equilibration and compression (main workhorse)
 │   ├── uniaxial_compression/  ← STANDARD compression workflow (two-piston, 2026-09-16; standard since 2026-09-22): NPT-pistons on both reservoirs + load piston; cumulative strain sweep
@@ -21,13 +23,15 @@ lammps_work/                    ← This git repository
 │
 ├── scripts/                    ← CURRENT notebooks + the shell scripts (see scripts/README.md); EVERY .py lives in scripts/lib/ (since 2026-10-01)
 │   ├── README.md               ← One line per file in this folder (2026-10-11)
-│   ├── run_lammps.sh           ← Job runner for Expanse (the Bridges-2 / Pod runners are in archive/pod_bridges/ since 2026-10-11)
+│   ├── run_lammps.sh           ← Job runner for Expanse and Pod (cluster settings: lib/site.sh). The 2026-10 Bridges-2 / Pod runners are in archive/pod_bridges/
 │   ├── postprocess.sh          ← Post-run plotting (calls lib/plot_*.py; run by the job runners and continue_sim.sh)
 │   ├── git_sync.sh             ← One-command GitHub sync (MacBook + clusters) — this is what `lsync` runs
-│   ├── install_lsync.sh        ← One-time-per-machine setup: registers `lsync` + nbstripout (see github_sync.md)
+│   ├── install_lsync.sh        ← One-time-per-machine setup, run as `bash install.sh` from the repo root: `lsync`, `lsbatch`, nbstripout (see github_sync.md)
 │   ├── batch_prologue.sh       ← Sourced first by every .batch: git pull + re-exec, MPI env, modules
 │   ├── node_git_sync.sh        ← Serialised fast-forward git pull on the compute node (used by batch_prologue.sh)
-│   ├── lib/site.sh             ← Site settings: LAMMPS binary, paths, MPI_MAP_BY, WALL_MARGIN, modules
+│   ├── lib/site.sh             ← Site settings, one block per cluster (expanse | pod): LAMMPS binary, paths, modules, MPI environment, MPI_MAP_BY, WALL_MARGIN
+│   ├── submit.sh               ← The `lsbatch` command: submit a .batch by name from any folder with the allocation of this cluster (#SBATCH lines on Expanse, the #POD line on Pod)
+│   ├── cluster_check.sh        ← Compares lib/site.sh with the cluster it runs on; changes nothing
 │   ├── lib/run_common.sh       ← Knob table + launch / verdict / chaining shared by run_lammps.sh and continue_sim.sh
 │   ├── continue_sim.sh         ← Resume a finished run without redoing setup (see running_simulations.md)
 │   │

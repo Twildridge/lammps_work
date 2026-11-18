@@ -1,5 +1,5 @@
 #!/bin/bash
-# run_lammps.sh -- run one LAMMPS job on Expanse. Every .batch in simulations/ calls it.
+# run_lammps.sh -- run one LAMMPS job on Expanse or Pod (settings per cluster: lib/site.sh). Every .batch in simulations/ calls it.
 #
 #   run_lammps.sh <folder> <dataname> <interaction> <nsteps>
 #
@@ -69,6 +69,7 @@ echo "Trajectory directory (scratch): $TRAJ_DIR"
 echo "Deck: $DECK_SRC"
 echo "Data: $DATA_SRC"
 echo "Steps: $NSTEPS   wall budget: ${WALL_TIMEOUT}s (WALL_MARGIN $WALL_MARGIN, CHAIN ${CHAIN:-0})"
+echo "Cluster: $CLUSTER   LAMMPS: $LMP_BIN"
 echo "Allocation: ${SLURM_NNODES:-?} node(s) x ${SLURM_NTASKS_PER_NODE:-?} tasks x $OMP_NUM_THREADS thread(s), map-by $MPI_MAP_BY"
 echo "Vars: ${LAMMPS_VARS[*]}"
 echo "======================================"

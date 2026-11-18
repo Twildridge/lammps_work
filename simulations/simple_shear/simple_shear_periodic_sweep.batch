@@ -8,6 +8,7 @@
 #SBATCH --mem=0
 #SBATCH --time=20:00:00
 #SBATCH --output=%x.o%j.%N
+#POD --nodes=4 --ntasks-per-node=40 --cpus-per-task=1 --time=80:00:00   # Pod allocation (submit with lsbatch); provisional: 4x the Expanse time, not yet timed on Pod
 source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 
 # PERIODIC-gel shear strain SWEEP (the folder default since 2026-11-14: simple_shear_sweep.batch

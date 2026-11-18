@@ -8,6 +8,7 @@
 #SBATCH --mem=0
 #SBATCH --time=10:00:00
 #SBATCH --output=%x.o%j.%N
+#POD --nodes=4 --ntasks-per-node=40 --cpus-per-task=1 --time=40:00:00   # Pod allocation (submit with lsbatch); provisional: 4x the Expanse time, not yet timed on Pod
 source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 
 # Free-swelling equilibration of an ISOLATED gel block in its bath (no sheets) at P* = 1.5.
