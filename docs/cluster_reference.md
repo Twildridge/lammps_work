@@ -80,7 +80,7 @@ The raw tables are in `~/Documents/lammps_runs/allocation_benchmark/{nodescan,la
 
 Pod requires the UCSB campus VPN. Install Ivanti Secure Access from [it.ucsb.edu/ivanti-secure-access-campus-vpn/get-connected-campus-vpn](https://it.ucsb.edu/ivanti-secure-access-campus-vpn/get-connected-campus-vpn) and connect before `ssh pod-login1.cnsi.ucsb.edu`.
 
-`bash install.sh` creates the conda environment `lammps_analysis` for the plotters (`scripts/pod_setup.sh`: python 3.11, numpy, scipy, matplotlib, pandas) and the jobs activate it themselves (`load_python_module` in `site.sh`). Pod has no site LAMMPS: each account builds its own once with `bash lammps_build/build_lammps_pod.sh` on the login node (the four-command setup is in [cluster_setup.md](cluster_setup.md)).
+`bash install.sh` creates the conda environment `lammps_analysis` for the plotters (python 3.11, numpy, scipy, matplotlib, pandas), which the jobs activate themselves (`load_python_module` in `site.sh`), and builds the LAMMPS binary on the login node when it is missing (`lammps_build/build_lammps_pod.sh`, about 10 min), since Pod has no site LAMMPS. The setup is the same two commands as on Expanse ([cluster_setup.md](cluster_setup.md)).
 
 Open points until the benchmark has run on Pod (`simulations/allocation_benchmark/README.md`, "Running it on Pod"):
 

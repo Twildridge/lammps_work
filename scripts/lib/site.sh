@@ -84,8 +84,8 @@ expanse)
 # 70 TB NVMe; neither is backed up.
 # The binary is the Pod build of lammps_build/build_lammps_pod.sh (22Jul2025 update 3, the Expanse
 # package list, gnu14 + openmpi5, built 2026-11-18). The fabric settings are from
-# archive/pod_bridges/run_lammps_pod.sh (last used 2026-10). `bash scripts/cluster_check.sh`
-# compares this block with the machine.
+# archive/pod_bridges/run_lammps_pod.sh (last used 2026-10). `bash install.sh` builds the binary and
+# the conda env when missing; `bash scripts/cluster_check.sh` compares this block with the machine.
 pod)
     CORES_PER_NODE=40
     LMP_BIN="${LMP_BIN:-$HOME/software/lammps/22Jul2025_update3/mpi-omp/gnu14/14.2.0/openmpi5/5.0.7/lammps-22Jul2025/build/lmp}"

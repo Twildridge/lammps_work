@@ -5,7 +5,7 @@
 ```
 lammps_work/                    ← This git repository
 │
-├── install.sh                  ← One-time setup of a clone: `bash install.sh` (runs scripts/install_lsync.sh)
+├── install.sh                  ← One-time setup of a clone on any machine: `bash install.sh` (runs scripts/setup.sh)
 │
 ├── simulations/                ← One folder per simulation type
 │   ├── slab_with_support/      ← Gel equilibration and compression (main workhorse)
@@ -26,8 +26,7 @@ lammps_work/                    ← This git repository
 │   ├── run_lammps.sh           ← Job runner for Expanse and Pod (cluster settings: lib/site.sh). The 2026-10 Bridges-2 / Pod runners are in archive/pod_bridges/
 │   ├── postprocess.sh          ← Post-run plotting (calls lib/plot_*.py; run by the job runners and continue_sim.sh)
 │   ├── git_sync.sh             ← One-command GitHub sync (MacBook + clusters) — this is what `lsync` runs
-│   ├── install_lsync.sh        ← One-time-per-machine setup, run as `bash install.sh` from the repo root: `lsync`, `lsbatch`, nbstripout (see github_sync.md); on Pod also pod_setup.sh
-│   ├── pod_setup.sh            ← Pod only (2026-11-18): the conda env `lammps_analysis` for the plotters, and a check that the LAMMPS binary of lib/site.sh exists
+│   ├── setup.sh                ← The one-time setup, run as `bash install.sh`: `lsync`, `lsbatch`, nbstripout, input_data everywhere; on a cluster also what the jobs need (Pod: conda env, LAMMPS build) and cluster_check.sh (2026-11-18; was install_lsync.sh + pod_setup.sh)
 │   ├── batch_prologue.sh       ← Sourced first by every .batch: git pull + re-exec, MPI env, modules
 │   ├── node_git_sync.sh        ← Serialised fast-forward git pull on the compute node (used by batch_prologue.sh)
 │   ├── lib/site.sh             ← Site settings, one block per cluster (expanse | pod): LAMMPS binary, paths, modules, MPI environment, MPI_MAP_BY, WALL_MARGIN

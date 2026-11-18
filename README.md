@@ -24,7 +24,7 @@ cd lammps_work
 bash install.sh        # once per machine, then open a new terminal
 ```
 
-`install.sh` adds two commands: `lsync` (pull, commit and push in one step) and `lsbatch` (submit a job from any folder on a cluster). [docs/getting_started.md](docs/getting_started.md) goes from there to a first finished simulation and its plots, and assumes no git experience.
+That is the whole setup on any machine. `install.sh` adds two commands, `lsync` (pull, commit and push in one step) and `lsbatch` (submit a job from any folder on a cluster), and on a cluster it also installs what the jobs need (on Pod: the conda environment for the plotters and, if missing, the LAMMPS binary, built on the login node in about 10 min) and ends with a check of the whole setup. [docs/getting_started.md](docs/getting_started.md) goes from there to a first finished simulation and its plots, and assumes no git experience; [docs/cluster_setup.md](docs/cluster_setup.md) is the cluster page.
 
 ## Repository layout
 

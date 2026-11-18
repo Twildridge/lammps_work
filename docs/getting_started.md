@@ -40,7 +40,7 @@ Run the one-time setup, then open a new terminal window:
 ```bash
 bash install.sh
 ```
-It needs no options. It adds two commands to your shell, `lsync` (sync with GitHub) and `lsbatch` (submit a job on a cluster), sets git up so notebook plots are not committed, and makes the folder for simulation input files, `~/Documents/lammps_data/input_data` (not tracked by git; [github_sync.md](github_sync.md) says why). Running it again does no harm.
+It needs no options. It adds two commands to your shell, `lsync` (sync with GitHub) and `lsbatch` (submit a job on a cluster), sets git up so notebook plots are not committed, and makes the folder for simulation input files, `~/Documents/lammps_data/input_data` (not tracked by git; [github_sync.md](github_sync.md) says why). On a cluster it does more, see Step 2. Running it again does no harm.
 
 Test it in the new terminal:
 ```bash
@@ -52,12 +52,12 @@ It should print `Nothing to commit. Already up to date.`
 
 ## Step 2 — One-time setup on the cluster
 
-SSH into Expanse ([cluster_reference.md](cluster_reference.md) has the login addresses):
+SSH into Expanse, or into Pod ([cluster_reference.md](cluster_reference.md) has the login addresses):
 ```bash
 ssh <your-username>@login.expanse.sdsc.edu
 ```
 
-Repeat the clone and the setup there. The repo has to sit in `~/Documents` on a cluster, because the batch files look for it at `~/Documents/lammps_work`:
+Repeat the clone and the setup there. The repo has to sit in `~/Documents` on a cluster, because the batch files look for it at `~/Documents/lammps_work`. On a cluster `install.sh` also installs what the jobs need (on Pod: the conda environment for the plotters and, if missing, the LAMMPS binary, built in about 10 min) and ends with a check that prints `OK` or `PROBLEM` per item; [cluster_setup.md](cluster_setup.md) lists the steps:
 ```bash
 mkdir -p ~/Documents && cd ~/Documents
 git clone https://github.com/Twildridge/lammps_work.git

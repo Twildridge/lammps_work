@@ -18,9 +18,9 @@ Expanse / Bridges-2 / Pod
 bash install.sh      # from the lammps_work folder; then open a new terminal
 ```
 
-This installs, on whichever machine it runs on, the `lsync` and `lsbatch` shell commands, the `nbstripout` filter, and, only where Claude Code is installed, its `/lsync` command. `install.sh` runs `scripts/install_lsync.sh` and takes no options. The `nbstripout` filter is there so notebooks are committed without their embedded plot images. Running it again does no harm, for instance after moving the clone. [getting_started.md](getting_started.md) is the first-clone walkthrough.
+This installs, on whichever machine it runs on, the `lsync` and `lsbatch` shell commands, the `nbstripout` filter, and, only where Claude Code is installed, its `/lsync` command; on a cluster it also sets up what the jobs need and checks the setup ([cluster_setup.md](cluster_setup.md)). `install.sh` runs `scripts/setup.sh` and needs no options. The `nbstripout` filter is there so notebooks are committed without their embedded plot images. Running it again does no harm, for instance after moving the clone. [getting_started.md](getting_started.md) is the first-clone walkthrough.
 
-`nbstripout`: `.gitattributes` at the repo root marks every `*.ipynb` for filtering, but each machine has to register the filter in its own `.git/config`, which `git clone` does not carry over. `install_lsync.sh` does that. If `lsync` warns that a notebook is about to be committed with its outputs, the install step has not run on that machine.
+`nbstripout`: `.gitattributes` at the repo root marks every `*.ipynb` for filtering, but each machine has to register the filter in its own `.git/config`, which `git clone` does not carry over. `setup.sh` does that. If `lsync` warns that a notebook is about to be committed with its outputs, the install step has not run on that machine.
 
 ### Using it
 

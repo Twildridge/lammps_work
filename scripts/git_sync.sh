@@ -16,7 +16,7 @@
 # -----------------------------------------------------------------------------
 # SETUP — once per machine (laptop, Expanse, Bridges-2, Pod), from any clone:
 #
-#     bash install.sh          (in the repo root; it runs scripts/install_lsync.sh)
+#     bash install.sh          (in the repo root; it runs scripts/setup.sh)
 #
 # That adds the `lsync` alias to ~/.zshrc or ~/.bashrc and, where Claude Code is
 # installed, its /lsync command.  It is idempotent, takes no options and derives
@@ -94,7 +94,7 @@ git add -A
 
 # Warn (don't block) if a notebook is about to be committed WITH its plot
 # outputs embedded, i.e. nbstripout isn't registered on this machine yet.
-# See scripts/install_lsync.sh step 0 for why this is a per-clone setting.
+# See scripts/setup.sh step 1 for why this is a per-clone setting.
 if git diff --staged --name-only | grep -q '\.ipynb$' \
    && [ -z "$(git config --get filter.nbstripout.clean 2>/dev/null)" ]; then
     echo "!! WARNING: nbstripout is not set up on this machine — the notebook(s)"

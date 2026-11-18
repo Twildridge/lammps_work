@@ -4,30 +4,24 @@
 
 A cluster is a set of computers (nodes) used remotely. A job is a script that says how many CPUs it needs and for how long; the queue manager, SLURM, runs it when the nodes are free. Nobody interacts with a job while it runs.
 
-SSH into the cluster, then clone the repo:
+SSH into the cluster, clone the repo into `~/Documents` (the batch files expect it at `~/Documents/lammps_work`) and run the one setup command. It is the same two commands on Expanse and on Pod:
 
 ```bash
-# Example for Expanse:
-ssh <username>@login.expanse.sdsc.edu
+ssh <username>@login.expanse.sdsc.edu        # Pod: ssh <username>@pod-login1.cnsi.ucsb.edu, on the campus VPN
 
-mkdir -p ~/Documents && cd ~/Documents    # the batch files expect the repo at ~/Documents/lammps_work
+mkdir -p ~/Documents && cd ~/Documents
 git clone https://github.com/Twildridge/lammps_work.git
 cd lammps_work
-bash install.sh        # lsync, lsbatch, the notebook filter and ~/Documents/lammps_data/input_data; then log out and back in
+bash install.sh        # everything below; then log out and back in
 ```
 
-**Python for the post-processing scripts.** On Expanse nothing needs doing: the job loads `anaconda3` itself. On Pod the job activates the conda environment `lammps_analysis`; `install.sh` creates it (python 3.11, numpy, scipy, matplotlib, pandas) and verifies the imports, through `scripts/pod_setup.sh`, which can be re-run alone at any time.
+`install.sh` (`scripts/setup.sh`) works out which cluster it is on from `scripts/lib/site.sh` and does, in order:
 
-**LAMMPS on Pod.** Pod has no site LAMMPS, so each account builds its own once, directly on the login node with every thread it has, since Pod's queues are often full for hours (`lammps_build/README.md`). `install.sh` says so when the binary is missing. The whole Pod setup is four commands:
+1. the parts every machine gets: the `lsync` and `lsbatch` commands, the `nbstripout` filter so notebook plots are not committed, and the input folder `~/Documents/lammps_data/input_data`;
+2. what the jobs need on this cluster. **Expanse:** nothing to install; the jobs load `anaconda3` themselves and `site.sh` points at a shared LAMMPS binary, which is checked. **Pod:** the conda environment `lammps_analysis` (python 3.11, numpy, scipy, matplotlib, pandas) that the jobs activate for the plotters, created if missing; and the LAMMPS binary, which Pod does not provide, built on the login node with every thread if missing (`lammps_build/build_lammps_pod.sh`, about 10 min; `bash install.sh --no-build` postpones it);
+3. `scripts/cluster_check.sh`, which compares `site.sh` with the machine (binary and its packages, modules, python, scratch, cores per node, Slurm partitions) and prints `OK` or `PROBLEM` per item. Its last line says whether the setup is complete.
 
-```bash
-git clone https://github.com/Twildridge/lammps_work.git ~/Documents/lammps_work && cd ~/Documents/lammps_work
-bash install.sh                                   # lsync, lsbatch, nbstripout, input_data, the conda env
-bash lammps_build/build_lammps_pod.sh             # on the login node, 20-40 min: ~/software/lammps/.../lmp, the LMP_BIN of site.sh
-bash scripts/cluster_check.sh
-```
-
-**Check the cluster settings.** `bash scripts/cluster_check.sh` compares `scripts/lib/site.sh` with the machine (LAMMPS binary, modules, scratch, cores per node) and lists what does not match.
+Running `bash install.sh` again at any time is safe: it skips what exists and repeats the check. `bash scripts/cluster_check.sh` alone repeats only the check, for instance after the cluster's software changed.
 
 **Git credentials**, so that `git pull` does not prompt for a password every time:
 ```bash

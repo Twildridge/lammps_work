@@ -15,8 +15,7 @@ Rule (same as `lammps_data_files_local/`): a notebook or script lives here while
 | `postprocess.sh` | Regenerates every post-run plot of a finished run directory (calls `lib/plot_*.py`); run automatically by the runners, or by hand. |
 | `continue_sim.sh` | Resume a finished run, or chain a run that hit its wall-clock budget, from the simulation folder (`docs/running_simulations.md` §5e). |
 | `git_sync.sh` | What `lsync` runs: pull --rebase, stage, commit, push (`docs/github_sync.md`). |
-| `install_lsync.sh` | One-time per machine, run as `bash install.sh` from the repo root: the `lsync` and `lsbatch` aliases, nbstripout, the input-data folder; on Pod it also runs `pod_setup.sh`. No options. |
-| `pod_setup.sh` | Pod only, run by `install.sh` there (or alone, any time): creates the conda env `lammps_analysis` for the plotters if missing, verifies its imports, and says whether the LAMMPS binary of `lib/site.sh` has been built (`lammps_build/build_lammps_pod.sh`). |
+| `setup.sh` | The one-time setup, run as `bash install.sh` from the repo root. Everywhere: the `lsync` and `lsbatch` aliases, nbstripout, the input-data folder. On a cluster: what the jobs need (Pod: the conda env `lammps_analysis`, and the LAMMPS build if the binary is missing; Expanse: a check of the shared binary), then `cluster_check.sh`. Options `--no-claude`, `--no-build`. |
 | `node_git_sync.sh` | Sourced by `batch_prologue.sh` and `run_lammps.sh`: serialised, fast-forward-only `git pull` on the compute node. |
 
 ## Data-file builders and converters (notebooks; converter code in `lib/`)

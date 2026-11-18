@@ -26,7 +26,7 @@ What the job does (`build_lammps.sh`):
 
 `build_lammps_pod.sh` is the same build for Pod (binary `~/software/lammps/22Jul2025_update3/mpi-omp/gnu14/14.2.0/openmpi5/5.0.7/lammps-22Jul2025/build/lmp`, the `LMP_BIN` of the Pod block in `scripts/lib/site.sh`). The CMake options and the package list are identical; what differs is listed in its header: modules `gnu14/14.2.0 openmpi5/5.0.7 hdf5/1.14.6`, `Kokkos_ARCH_SKX` for Pod's Skylake Xeons, `FFT=KISS` because Pod has no FFTW (the decks use no kspace), and the source from the GitHub tag `stable_22Jul2025_update3` because download.lammps.org no longer serves that tarball.
 
-It runs directly on the login node, not as a Slurm job: Pod's queues are often full for hours, and the login node has 80 threads, all of which the build uses (`-j $(nproc)` at nice 10), 20-40 min. The script logs itself to `build-lammps.<date>.<host>.log` in this folder, the counterpart of the Expanse job log.
+It runs directly on the login node, not as a Slurm job: Pod's queues are often full for hours, and the login node has 80 threads, all of which the build uses (`-j $(nproc)` at nice 10), about 10 min. The script logs itself to `build-lammps.<date>.<host>.log` in this folder, the counterpart of the Expanse job log. `bash install.sh` runs it by itself when the binary is missing, so it is only run by hand to rebuild:
 
 ```bash
 # on a Pod login node, from anywhere
