@@ -123,3 +123,7 @@ Every folder under `simulations/` now keeps at most two batch files, `<folder>_s
 Also removed the same day: `lammps_work/lammps_data_files_local/` (two August `..._with_six_plates_FIXED*.data` files that had been
 committed by mistake; input data lives in `lammps_data_files_local/` NEXT TO the repo, never inside it) and every `.info.json`
 sidecar and `_profiles.png` / `_zprofile.png` in that data folder (the converters stopped writing them; `--png` draws one on request).
+
+## Archived (2026-11-17): compression hold (load) D_c fits → `archive/scripts/lib/triaxial_load_Dc.py`
+
+The hold-consolidation D_c of `lib/triaxial.py` (`fit_Dc`, `fit_Dc_stress`, the D_c(t) and D_c(φ_s) fits, `fig_Dc`, the hold-adequacy check), moved out when the compression D_c became the unload (free re-swelling) fit only. The module imports the current `scripts/lib/triaxial.py` and still runs; its docstring has the three lines needed to use it from a notebook.

@@ -41,6 +41,8 @@ import matplotlib
 matplotlib.use('Agg')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'lib'))
 import triaxial as tri
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'archive' / 'scripts' / 'lib'))
+import triaxial_load_Dc as ldc      # the hold (load) fit, archived 2026-11-17
 
 DT_LJ = 0.005            # tau per MD step (the decks' timestep_prod)
 SAMPLE = 5000            # MD steps between stored solver states (the thickness-trace cadence)
@@ -156,7 +158,7 @@ def held_slab(D, split=0.5, L=113.6, closure=12.8, v=0.04, hold=8_400_000, n_sna
     R = dict(z_support=z_sup0, z_piston=z_sup0 + 2 * gap + L + closure)
     disp = dict(ts=ends.astype(float), z=zc, Nc=Nc, uz=uz, z_pist_held=z_face + L + gap, z_supp_held=z_sup,
                 t_hold=float(ramp_steps), L_bb=L)
-    return tri.fit_Dc(cfg, R, disp), L ** 2 / (4 * np.pi ** 2 * D)
+    return ldc.fit_Dc(cfg, R, disp), L ** 2 / (4 * np.pi ** 2 * D)
 
 
 def permeation(D, rigid_drop=3.0, L0=126.4, dP=0.1, M=0.42, onset=1_000_000, n_ramp=100, ramp_steps=10_000,
