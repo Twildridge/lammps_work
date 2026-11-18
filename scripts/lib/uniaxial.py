@@ -129,8 +129,9 @@ class Config:
     # ---- which sequence (2026-09-16) ------------------------------------
     mode: str = 'compression'             # 'compression' | 'permeation': data folder flow_data_local/<mode>/<RUN_ID>,
                                           # Expanse folder uniaxial_<mode>, and which loaders/figures apply
-    two_pist: bool = False                # two-piston (feed/permeate NPT-piston) run: Expanse folder
-                                          # uniaxial_<mode>; wet-piston files are synced and analysed.
+    two_pist: bool = True                 # two-piston (feed/permeate NPT-piston) run, the default since 2026-11-18: Expanse
+                                          # folder uniaxial_<mode>; wet-piston files are synced and analysed.  False = an
+                                          # archived one-piston run (Expanse folder uniaxial_<mode>_one_pist, no wet-piston files).
                                           # The file readers auto-detect multi-piston columns regardless.
     DP_PISTON: object = None              # permeation: applied dP; None -> read from the piston_pressure file
     # ---- profile / window knobs -----------------------------------------

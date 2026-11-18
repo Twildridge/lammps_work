@@ -131,7 +131,7 @@ def solver_check(D, L=20.0, dP=0.1, M=0.42):
 
 def _cfg(**kw):
     with contextlib.redirect_stdout(io.StringIO()):
-        return uni.Config(DATANAME='dc_convention', INTERACTION='1.0_1.0', RUN_ID='dc_convention', two_pist=True, **kw)
+        return uni.Config(DATANAME='dc_convention', INTERACTION='1.0_1.0', RUN_ID='dc_convention', **kw)
 
 
 def held_slab(D, split=0.5, L=113.6, closure=12.8, v=0.04, hold=8_400_000, n_snap=20, noise=0.01, seed=1):

@@ -109,7 +109,7 @@ Same Config → sync → load → figures pattern and the same eleven (single) /
 notebooks — the load piston is "the piston" (its force is the network load; the piston files carry it in the first
 value column, `[load | feed | perm]`) — plus the **wet-piston bath check** (`fig_wet_pistons[_sweep]`: P_feed, P_perm
 measured on the sheets vs `P_target` over the hold) and the **solvent expelled** (`fig_solvent_expelled`, feed-piston
-rise + permeate-piston descent). `Config(mode="compression", two_pist=True)` points the sync at
+rise + permeate-piston descent). `Config(mode="compression")` (`two_pist=True` is the default) points the sync at
 `lammps_runs/uniaxial_compression` and pulls `piston_pressure`, `permeation`, `pressure_reservoirs` too.
 The pore-pressure baseline is the feed-reservoir interior (the box top is vacuum in this geometry), rebuilt per
 stress snapshot from the measured feed-piston plane (`piston_position`, column `z_feed`) with every bin kept entirely
@@ -135,7 +135,7 @@ certain (the `RELAX_SYS` tail fit is the direct measure of the unrelaxed stress)
 *v⁰ check (2026-10-09; the compression version `fig_v0_check` and its cell were removed on 2026-10-15, `fig_perm_v0_check` stays in the permeation notebook):* is the barycentric velocity v⁰(t) = φ_s v_s + φ_p v_p mishandled?  It is uniform in z, so it drops out of the strain equation but not of the displacement one the fits use.  Rerunning each displacement fit with the per-snapshot rigid translation projected out (`free_offset=True`) changed D_c by < 1 % on every window (run 7 level 0.10: 0.0507 vs 0.0506) -- v⁰ is not where the factor 2 comes from.  The follow-up tests on the fine-cadence + unload run (2026-10-12 to 14; all removed from the code once concluded) found the same: the finite-difference convention test passes for the hold, permeation and unload fitters; excluding the faces from the hold fit does not raise its D_c; windows starting after the ramp-end skin has relaxed still read 0.05; and a global strain-dependent D(ε) fit gives the hold half the re-swelling D at equal local strain.  The hold's consolidation and the free re-swelling are different processes on the same gel, and the re-swelling profile fit (0.12, uniform initial state, free faces) is the primary D_c since 2026-10-15 (`DC_PRIMARY = 'unload'`).
 
 **`uniaxial_permeation_single.ipynb`** (two-piston permeation, 2026-09-16, standard since 2026-09-22 — no sweep notebook)
-`Config(mode="permeation", two_pist=True)`; `uni.load_permeation` builds one dict `P`: total / partial / network
+`Config(mode="permeation")`; `uni.load_permeation` builds one dict `P`: total / partial / network
 stress and density evolutions (cividis, bold final, zero-flux `_ref` baseline dashed), both wet pistons
 (displacement; block-averaged `F_fluid/(lx ly)` from `piston_force_avg` measured vs applied; reservoir virial
 pressures dotted, pf cadence since 2026-09-23), the flux `Q_perm` as the **slope of the permeate bead count** over

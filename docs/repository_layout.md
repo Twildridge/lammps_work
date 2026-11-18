@@ -142,7 +142,8 @@ Not renamed:
   notebooks' sync searches both (`LEGACY_RUN_FOLDERS` in `lib/uniaxial.py`). Moving the old run
   folders into the new ones on the cluster makes that table unnecessary.
 * The `two_pist` flag of `uniaxial.Config` and the `cfg.two_pist` tests in the libraries, which
-  tell two-piston runs from the archived one-piston ones.
+  tell two-piston runs from the archived one-piston ones. The flag defaults to `True` and the
+  notebooks no longer set it; pass `two_pist=False` to read a one-piston run.
 * The archived `solvent_pure` files under `archive/`.
 
 ## Inside a run folder

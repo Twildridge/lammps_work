@@ -16,7 +16,7 @@ base = str(root / 'flow_data_local')
 
 print('\n################ compression single / sweep (two-piston fixture) ################')
 cfg = uni.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_comp', COMP_LEVELS=['0.05', '0.10'],
-                 mode='compression', two_pist=True, base_dir=base, VOR_ENABLE=False)
+                 mode='compression', base_dir=base, VOR_ENABLE=False)
 R = uni.load_reference(cfg)
 LEVELS = [L for L in (uni.load_level(cfg, R, l) for l in cfg.COMP_LEVELS) if L is not None]
 assert len(LEVELS) == 2, 'levels not loaded'
@@ -37,7 +37,7 @@ uni.fig_strain(cfg, R, LEVELS, stem='sweep_strain_diagnostic')
 assert L['wet'] is not None and 'P_feed_meas' in L['wet']['plat']
 
 print('\n################ permeation (two-piston fixture) ################')
-cfgp = uni.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', two_pist=True, base_dir=base,
+cfgp = uni.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', base_dir=base,
                   P_CAL_MODE='pore')          # the fixture traj has 80 mobile atoms: the Voronoi pass is cheap here
 Rp = uni.load_reference(cfgp)
 P = uni.load_permeation(cfgp, Rp)
@@ -61,7 +61,7 @@ for f in (uni.fig_perm_stages, uni.fig_perm_reconcile, uni.fig_perm_frozen):
     assert f(cfgp, Rp, P) is not None, f.__name__
     plt.close('all')
 # a run without the stage files (every run before 2026-11-16) still loads and reconciles on the constant-dP kappa
-cfg0 = uni.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', two_pist=True, base_dir=base,
+cfg0 = uni.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', base_dir=base,
                   VOR_ENABLE=False, PSD_ENABLE=False, PERM_VCTRL=False, PERM_FROZEN=False)
 P0 = uni.load_permeation(cfg0, Rp, verbose=False)
 uni.add_perm_displacement(cfg0, Rp, P0, verbose=False)
