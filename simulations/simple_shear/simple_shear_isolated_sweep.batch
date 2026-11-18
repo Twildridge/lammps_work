@@ -19,7 +19,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # _g<strain>), then UNLOAD (deck Phase 2c): grips back to gamma = 0 and a free relaxation hold
 # of UNLOAD_STEPS (0 = NSTEPS; files _u<strain>, where D_c and kappa are read), and the next
 # level shears from gamma = 0 again. The wall-clock guard ends the level in flight and skips the
-# rest; finished levels stay intact. Analyse with shear_analysis_sweep.ipynb,
+# rest; finished levels stay intact. Analyse with simple_shear_sweep.ipynb,
 # DECK = "simple_shear_iso", STRAINS as written here ("0.1", not "0.10").
 
 FOLDER=simple_shear

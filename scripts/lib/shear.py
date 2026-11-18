@@ -1,7 +1,7 @@
 """shear.py -- shared analysis library for the shear notebooks (2026-09-23).
 
-Used by  scripts/shear_analysis_single.ipynb  (one shear-strain level)  and
-         scripts/shear_analysis_sweep.ipynb   (every level of a strain sweep).
+Used by  scripts/simple_shear_single.ipynb  (one shear-strain level)  and
+         scripts/simple_shear_sweep.ipynb   (every level of a strain sweep).
 
 The shear counterpart of lib/uniaxial.py, laid out section for section like it
 so the two notebooks read like the compression ones and -- more important -- so
@@ -126,7 +126,7 @@ class Config:
     # ---- which run -------------------------------------------------------
     DATANAME: str
     INTERACTION: str                      # "epsSS_epsSP"
-    RUN_ID: str                           # local folder under flow_data_local/{shear,plots/shear}
+    RUN_ID: str                           # local folder under flow_data_local/{raw_data,plots}/simple_shear
     STRAINS: list = field(default_factory=list)   # shear-strain targets as STRINGS ("0.1"), = STRAINS_LIST
                                           # in simple_shear_plates.batch / simple_shear.batch (files are tagged _g<level>)
     DECK: str = 'simple_shear_plates'              # 'simple_shear_plates' (plate-driven) | 'simple_shear' (two-piston system,
@@ -226,9 +226,9 @@ class Config:
         assert self.STRAINS, 'STRAINS is empty -- list at least one level, e.g. ["0.1"]'
         self.STRAINS = [str(l) for l in self.STRAINS]
         base = Path(self.base_dir)
-        self.DATA_DIR = base / 'shear' / self.RUN_ID
-        self.PLOT_DIR = base / 'plots' / 'shear' / self.RUN_ID
-        self.TRAJ_DIR = base / 'traj_files.nosync'
+        self.DATA_DIR = base / 'raw_data' / 'simple_shear' / self.RUN_ID
+        self.PLOT_DIR = base / 'plots' / 'simple_shear' / self.RUN_ID
+        self.TRAJ_DIR = base / 'raw_data' / 'traj_files.nosync'
         for d in (self.DATA_DIR, self.PLOT_DIR, self.TRAJ_DIR):
             d.mkdir(parents=True, exist_ok=True)
         self._tags = {}

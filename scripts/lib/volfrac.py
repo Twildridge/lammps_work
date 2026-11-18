@@ -55,7 +55,7 @@ Monodisperse (plain, not radical) tessellation — all beads are σ=1. Mobile
 types are (1, 2, 3) = crosslink, chain, solvent; walls (4, 5) are excluded by
 default, matching the convention formerly referenced as
 longitudinal_modulus_analysis.ipynb (that notebook is now
-bulk_modulus_analysis.ipynb). Norm 'bin' divides by the geometric bin volume
+isotropic_compression.ipynb). Norm 'bin' divides by the geometric bin volume
 (absolute, the W/V_solv-honest choice); 'mobile' divides by the summed cell
 volume in the bin (exact saturation φ_f+φ_p=1 — use for the CALIBRATED φ).
 """

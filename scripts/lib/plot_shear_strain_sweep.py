@@ -13,7 +13,7 @@ and produces two PNGs in <folder>/output_plots/:
   2. <stem>_sigma_xz_profiles.png  (only if stress_profile_x files are present)
        polymer sigma_xz(z) across the gap, one curve per strain.
 
-This complements (and matches) shear_analysis.ipynb Steps 12-13; it is just an
+This complements (and matches) simple_shear.ipynb Steps 12-13; it is just an
 automatic first look so you don't have to open the notebook to sanity-check a run.
 
 Usage:

@@ -110,7 +110,7 @@ one polymer companion per P. Chained batches auto-pass `--skip-prep`.
 ## Analysis / regenerating the calibration json
 
 `scripts/calibration_analysis.ipynb` syncs the sweep outputs to
-`flow_data_local/calibration_sweep/` (paramiko + manifest, volmix style),
+`flow_data_local/raw_data/calibration_sweep/` (paramiko + manifest, volmix style),
 applies the aniso gate, fits φ_f^th and λ(φ_p,P), and writes
 `scripts/calibration/calibration_lambda.json` (coefficients, covariance, full
 raw table, metadata). Re-running the notebook end-to-end regenerates the json;

@@ -41,8 +41,8 @@ run_nb uniaxial_compression_sweep.ipynb "s = __import__('re').sub(r'RUN_ID\\s*=\
 run_nb uniaxial_permeation_single.ipynb "s = __import__('re').sub(r'RUN_ID\\s*=\\s*\"[^\"]*\",', 'RUN_ID      = \"fixture_perm\", base_dir=\"' + root + '/flow_data_local\",', s); s = __import__('re').sub(r'DATANAME\\s*=\\s*\"[^\"]*\"', 'DATANAME    = \"fixture_slab\"', s); s = __import__('re').sub(r'NSTEPS\\s*=\\s*[0-9]+,', 'NSTEPS      = None,', s); s = s.replace('VOR_ENABLE = True,', 'VOR_ENABLE = False,')"
 # bulk-modulus notebooks (2026-09-29) on the six-plate fixture (built from a known K; dt_lj = the fixture's)
 BULK_RW="s = s.replace('VOR_ENABLE = True,', 'VOR_ENABLE = False,'); s = __import__('re').sub(r'RUN_ID\\s*=\\s*\"[^\"]*\",', 'RUN_ID      = \"fixture_bulk\", base_dir=\"' + root + '/flow_data_local\", dt_lj=0.5,', s); s = __import__('re').sub(r'DATANAME\\s*=\\s*\"[^\"]*\"', 'DATANAME    = \"fixture_cube\"', s)"
-run_nb bulk_modulus_analysis_single.ipynb "$BULK_RW"
-run_nb bulk_modulus_analysis_sweep.ipynb "$BULK_RW; s = __import__('re').sub(r'COMP_LEVELS\\s*=\\s*\\[[^\\]]*\\]', 'COMP_LEVELS = [\"0.05\", \"0.10\"]', s)"
+run_nb isotropic_compression_single.ipynb "$BULK_RW"
+run_nb isotropic_compression_sweep.ipynb "$BULK_RW; s = __import__('re').sub(r'COMP_LEVELS\\s*=\\s*\\[[^\\]]*\\]', 'COMP_LEVELS = [\"0.05\", \"0.10\"]', s)"
 # the six-plate converter notebook on a small generated gel (no cluster file needed)
 $PY - "$SCRIPTS" "$ROOT" <<'PYEOF' || fail=1
 import sys, json

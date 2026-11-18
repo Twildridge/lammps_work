@@ -36,15 +36,15 @@ lammps_work/                    ← This git repository
 │   ├── slab_with_support_periodic.ipynb ← xy-periodic crosslinked slab (bonds wrap x,y only; finite-z; p p p; one support+piston per z-period). The reference 14000002 slab. Knobs only since 2026-11-02 (NETWORK = tetrahedral | random); code in lib/periodic_data_file_generator.py
 │   ├── slab_two_pistons_periodic.ipynb          ← CONVERTER notebook (code: lib/slab_two_pistons_periodic.py): equilibrated periodic slab → two-piston (feed/permeate) data file (input for uniaxial_*, simple_shear)
 │   ├── pure_polymer.ipynb              ← Build pure polymer data file (pure_polymer sweep)
-│   ├── pure_solvent_1.ipynb            ← Build pure solvent data file (pure_solvent sweep)
+│   ├── pure_solvent.ipynb            ← Build pure solvent data file (pure_solvent sweep)
 │   │
 │   │   # ── analysis notebooks (code in lib/) ──
 │   ├── uniaxial_compression_single.ipynb ← STANDARD: two-piston compression, one level: the eleven figures + wet-piston bath check + solvent expelled
 │   ├── uniaxial_compression_sweep.ipynb  ← STANDARD: two-piston compression, all levels (M, G, D_c, κ vs strain) + per-level bath check
 │   ├── uniaxial_permeation_single.ipynb  ← STANDARD: two-piston permeation: D_c + M from the polymer displacement, kappa from the velocity-controlled and frozen stages, the reconciliation kappa = D_c/M; then checks and the gel's state under flow (stresses, phi_s, pore sizes)
-│   ├── shear_analysis_single.ipynb          ← one shear level: G (network + series estimators, increments from γ = 0), N1/N2, P_th; D_c and κ from the level's UNLOAD (2026-10-28); DECK in Config
-│   ├── shear_analysis_sweep.ipynb           ← every level of a shear sweep: G vs γ, stress–strain slope, D_c (unloads), κ
-│   ├── bulk_modulus_analysis_{single,sweep}.ipynb ← Bulk modulus K (code in lib/bulk.py, on top of lib/uniaxial.py)
+│   ├── simple_shear_single.ipynb          ← one shear level: G (network + series estimators, increments from γ = 0), N1/N2, P_th; D_c and κ from the level's UNLOAD (2026-10-28); DECK in Config
+│   ├── simple_shear_sweep.ipynb           ← every level of a shear sweep: G vs γ, stress–strain slope, D_c (unloads), κ
+│   ├── isotropic_compression_{single,sweep}.ipynb ← Bulk modulus K (code in lib/isotropic.py, on top of lib/uniaxial.py)
 │   ├── calibration_analysis.ipynb           ← φ_f calibration / PMV sweep analysis (lib/volfrac.py)
 │   ├── cross_deck_comparison.ipynb          ← figures built from more than one deck's run (lib/compare.py)
 │   ├── (one-piston analysis notebooks, the walled/angled/isolate/split/add_plates builders and run_analysis_notebook.sh → archive/scripts/, 2026-10-11;
@@ -55,7 +55,7 @@ lammps_work/                    ← This git repository
 │   │   │   # analysis modules (imported by the notebooks)
 │   │   ├── uniaxial.py                      ← all analysis code behind the uniaxial_* notebooks and the archived one-piston ones (Config, readers, Terzaghi, plateau bootstrap, G, D_c, figures)
 │   │   ├── shear.py                         ← all shear analysis code for both shear decks (mirrors uniaxial.py and imports its machinery; G_STRAIN = M_STRAIN's counterpart)
-│   │   ├── bulk.py                          ← all bulk-modulus analysis code (on top of uniaxial.py)
+│   │   ├── isotropic.py                          ← all bulk-modulus analysis code (on top of uniaxial.py)
 │   │   ├── volfrac.py                       ← Voronoi volume fraction + λ calibration (shared with calibration_analysis.ipynb)
 │   │   ├── psd.py                           ← geometric porosity + pore-size distribution (2026-09-24)
 │   │   │   # data-file converters / CLI tools (imported by the converter notebooks, or run as `python scripts/lib/<tool>.py`)
@@ -129,6 +129,14 @@ the docs use the new names; text written before that date was updated in place.
 | `final_tricomp_*`, `final_triperm_*`, `strained_tricomp_*`, `strained_triperm_*` | `final_unicomp_*`, `final_uniperm_*`, `strained_unicomp_*`, `strained_uniperm_*` |
 | archived one-piston `triaxial_compression`, `triaxial_permeation` (decks, notebooks) | `uniaxial_compression_one_pist`, `uniaxial_permeation_one_pist` |
 | archived plate-driven `shear_slab` | `simple_shear_plates` |
+| `bulk_modulus_analysis_{single,sweep}.ipynb`, `pure_solvent_1.ipynb` | `isotropic_compression_{single,sweep}.ipynb`, `pure_solvent.ipynb` |
+| `shear_analysis_{single,sweep}.ipynb` | `simple_shear_{single,sweep}.ipynb` |
+| `lib/bulk.py`, `import bulk` | `lib/isotropic.py`, `import isotropic as iso` |
+| `final_compress_*`, `strained_compress_*` | `final_isocomp_*`, `strained_isocomp_*` |
+| `flow_data_local/plots/volmix/` | `flow_data_local/plots/volmix_sweep/` (same name as its data folder; the archived volume-of-mixing sweep) |
+| `flow_data_local/{compression,permeation,shear,bulk}/` | `flow_data_local/raw_data/{uniaxial_compression,uniaxial_permeation,simple_shear,isotropic_compression}/` |
+| `flow_data_local/plots/{compression,permeation,shear,bulk}/` | `flow_data_local/plots/{uniaxial_compression,uniaxial_permeation,simple_shear,isotropic_compression}/` |
+| `flow_data_local/{traj_files.nosync,chain_length,calibration_sweep,volmix_sweep,partial_stress_data}/` | the same names under `flow_data_local/raw_data/` |
 
 Not renamed:
 
@@ -182,7 +190,7 @@ same guide into every run folder as `README.txt`.
 | Part | Meaning |
 |------|---------|
 | `<stem>` | `<dataname>_<epsSS>_<epsSP>_<steps>`; `<steps>` is the length of one hold (or of the production run) |
-| `<deck>` (in `data_files/`) | `config` = equilibration (`slab_with_support`, `chain_length_testing`), `unicomp` = uniaxial compression, `uniperm` = uniaxial permeation, `shear`, `compress` = six-plate bulk compression; the pure-phase runs write `purepol_<stem>.data` / `puresolv_<stem>.data` |
+| `<deck>` (in `data_files/`) | `config` = equilibration (`slab_with_support`, `chain_length_testing`), `unicomp` = uniaxial compression, `uniperm` = uniaxial permeation, `shear`, `isocomp` = isotropic (six-plate) compression; the pure-phase runs write `purepol_<stem>.data` / `puresolv_<stem>.data` |
 | `_ref` | zero-load reference window, before any loading |
 | `_c<strain>` / `_g<strain>` | the hold at that compression / shear level |
 | `_u<strain>` | the unload after that level (re-swelling or relaxation; permeation: `_u`) |

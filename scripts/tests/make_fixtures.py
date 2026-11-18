@@ -13,7 +13,7 @@ output trees:
   <root>/six_plate_bulk/    a isotropic_compression run (2026-09-29), levels c0.05 c0.10: six plates +
                             two wet pistons, profiles along z, x and y, with a KNOWN bulk
                             modulus K_TRUE so the analysis can be checked against it
-  <root>/flow_data_local/{compression,permeation,bulk}/<RUN_ID>/  +  traj_files.nosync/
+  <root>/flow_data_local/raw_data/{uniaxial_compression,uniaxial_permeation,isotropic_compression}/<RUN_ID>/  +  traj_files.nosync/
                             the same files laid out as the notebooks expect
                             (flat, plus a 2-frame traj_ref / traj_stress for the box header)
 
@@ -386,7 +386,7 @@ def _b_slab_remaining(t, D, L, n=40):
 
 
 def _b_cube_remaining(t, D, L3):
-    """the free-cube series R(t) of lib/bulk.py (fraction of the dilatation excess still inside)."""
+    """the free-cube series R(t) of lib/isotropic.py (fraction of the dilatation excess still inside)."""
     return _b_slab_remaining(t, D, L3[0]) * _b_slab_remaining(t, D, L3[1]) * _b_slab_remaining(t, D, L3[2])
 
 
@@ -447,7 +447,7 @@ def _b_profiles(axis, steps, dPi, ref=False):
 
 def six_plate_bulk(root, levels=('0.05', '0.10')):
     """isotropic_compression.lmp output tree.  Every stress is built from K_TRUE, so
-    lib_headless_test.py can assert that lib/bulk.py returns it."""
+    lib_headless_test.py can assert that lib/isotropic.py returns it."""
     r = mk(root)
     hold = 6000
     sd, pd_, vd, pm, cp, dd = (r / 'output_files' / s for s in ('stress_data', 'piston_data', 'volume_data', 'permeation_data',
@@ -641,7 +641,7 @@ def six_plate_bulk(root, levels=('0.05', '0.10')):
     asteps = np.arange(0, t_start, 500)
     write_print(sd / f'stress_aniso_{rst}.dat', '# Time-averaged data for fix stress_aniso_output\n# TimeStep sig_p_xx sig_p_yy sig_p_zz P_xx P_yy P_zz',
                 np.column_stack([asteps] + [0.42 + rng.normal(0, 0.004, len(asteps)) for _ in range(3)] + [1.5 + 0 * asteps] * 3))
-    with open(r / 'data_files' / f'final_compress_{rst}.data', 'w') as f:
+    with open(r / 'data_files' / f'final_isocomp_{rst}.data', 'w') as f:
         f.write(f'fixture\n\n10 atoms\n11 atom types\n\n0.0 {B_BOX[0]} xlo xhi\n0.0 {B_BOX[1]} ylo yhi\n0.0 {B_BOX[2]} zlo zhi\n')
     (r / 'log.lammps').write_text(_log(np.arange(0, 20000, 1000)))
     return rst
@@ -667,8 +667,8 @@ if __name__ == '__main__':
     s3 = two_piston_comp(root / 'two_piston_comp')
     s4 = six_plate_bulk(root / 'six_plate_bulk')
     fdl = root / 'flow_data_local'
-    flatten_to_flow_data(root / 'two_piston_perm', fdl / 'permeation' / 'fixture_perm', fdl / 'traj_files.nosync')
-    flatten_to_flow_data(root / 'two_piston_comp', fdl / 'compression' / 'fixture_comp', fdl / 'traj_files.nosync')
-    flatten_to_flow_data(root / 'six_plate_bulk', fdl / 'bulk' / 'fixture_bulk', fdl / 'traj_files.nosync')
+    flatten_to_flow_data(root / 'two_piston_perm', fdl / 'raw_data' / 'uniaxial_permeation' / 'fixture_perm', fdl / 'raw_data' / 'traj_files.nosync')
+    flatten_to_flow_data(root / 'two_piston_comp', fdl / 'raw_data' / 'uniaxial_compression' / 'fixture_comp', fdl / 'raw_data' / 'traj_files.nosync')
+    flatten_to_flow_data(root / 'six_plate_bulk', fdl / 'raw_data' / 'isotropic_compression' / 'fixture_bulk', fdl / 'raw_data' / 'traj_files.nosync')
     print(f'fixtures written under {root}\n  one_piston stem      {s1}\n  two_piston_perm stem {s2}\n  two_piston_comp stem {s3}\n'
           f'  six_plate_bulk stem  {s4}   (built from K_TRUE = {K_TRUE})')

@@ -117,7 +117,7 @@ class Config:
     # ---- which run -------------------------------------------------------
     DATANAME: str
     INTERACTION: str                      # "epsSS_epsSP"
-    RUN_ID: str                           # local folder under flow_data_local/{compression,plots}
+    RUN_ID: str                           # local folder under flow_data_local/{raw_data,plots}/uniaxial_compression
     COMP_LEVELS: list = field(default_factory=list)   # applied-strain targets, as STRINGS ("0.10"), = STRAIN_TARGETS
                                           # in the .batch (compression); leave empty for mode='permeation'
     NSTEPS: object = None                 # the <steps> tag in the file names.  None (default) -> resolved PER LEVEL
@@ -127,7 +127,7 @@ class Config:
                                           # (key 'ref' for the reference files) pins them by hand.
     base_dir: str = '../../flow_data_local'
     # ---- which sequence (2026-09-16) ------------------------------------
-    mode: str = 'compression'             # 'compression' | 'permeation': data folder flow_data_local/<mode>/<RUN_ID>,
+    mode: str = 'compression'             # 'compression' | 'permeation': data folder flow_data_local/raw_data/uniaxial_<mode>/<RUN_ID>,
                                           # Expanse folder uniaxial_<mode>, and which loaders/figures apply
     two_pist: bool = True                 # two-piston (feed/permeate NPT-piston) run, the default since 2026-11-18: Expanse
                                           # folder uniaxial_<mode>; wet-piston files are synced and analysed.  False = an
@@ -322,7 +322,7 @@ class Config:
     # ---- permeation vs compression consistency check (2026-10-03) ------------
     M_RECORD: object = None               # path of the compression stress-strain record the permeation notebook checks
                                           # against (save_M_record writes it from the sweep notebook); None -> the newest,
-                                          # flow_data_local/compression/M_record_latest.json
+                                          # flow_data_local/raw_data/uniaxial_compression/M_record_latest.json
     PERM_M_TOL: float = 0.10              # relative tolerance of the check (|u_F measured / predicted - 1|) before it flags
     # ---- D_c consolidation fit ------------------------------------------
     DC_N_MODES: int = 5
@@ -406,9 +406,10 @@ class Config:
         if self.RUNS_ROOT is None:
             self.RUNS_ROOT = f'/home/dpollard/Documents/lammps_runs/uniaxial_{self.mode}' + ('' if self.two_pist else '_one_pist')
         base = Path(self.base_dir)
-        self.DATA_DIR = base / self.mode / self.RUN_ID
-        self.PLOT_DIR = base / 'plots' / self.mode / self.RUN_ID
-        self.TRAJ_DIR = base / 'traj_files.nosync'
+        # <base>/raw_data/<simulation type>/<RUN_ID> holds the synced files, <base>/plots/<simulation type>/<RUN_ID> the figures
+        self.DATA_DIR = base / 'raw_data' / f'uniaxial_{self.mode}' / self.RUN_ID
+        self.PLOT_DIR = base / 'plots' / f'uniaxial_{self.mode}' / self.RUN_ID
+        self.TRAJ_DIR = base / 'raw_data' / 'traj_files.nosync'
         for d in (self.DATA_DIR, self.PLOT_DIR, self.TRAJ_DIR):
             d.mkdir(parents=True, exist_ok=True)
         self._tags = {}
@@ -5749,7 +5750,7 @@ def save_M_record(cfg, R, levels, path=None):
 def load_M_record(cfg):
     """The compression record for the permeation check (cfg.M_RECORD or the newest), or None."""
     import json
-    p = Path(cfg.M_RECORD) if cfg.M_RECORD else Path(cfg.base_dir) / 'compression' / 'M_record_latest.json'
+    p = Path(cfg.M_RECORD) if cfg.M_RECORD else Path(cfg.base_dir) / 'raw_data' / 'uniaxial_compression' / 'M_record_latest.json'
     if not p.exists():
         return None
     rec = json.loads(p.read_text())
@@ -5865,7 +5866,7 @@ def perm_vs_compression(cfg, R, P, verbose=True):
             say(f'  support_force file present but unreadable: {e}')
     if rec is None:
         out['verdict'] = 'NO COMPRESSION RECORD'
-        say('CHECK vs compression: NO RECORD -- run the compression sweep notebook (it saves flow_data_local/compression/'
+        say('CHECK vs compression: NO RECORD -- run the compression sweep notebook (it saves flow_data_local/raw_data/uniaxial_compression/'
             'M_record_latest.json via uni.save_M_record) and rerun this cell.  The permeation M is unchecked.')
         return out
     # ---- prediction from the compression curve for the same drag load ----

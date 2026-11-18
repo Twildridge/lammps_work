@@ -18,7 +18,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # gives K. Then the UNLOAD: plates back to the seated gaps + 2 x UNLOAD_MARGIN and a free
 # re-swelling hold of UNLOAD_STEPS (0 = the hold length; files _u<strain>), which gives
 # D_m = (K/M) D_c and kappa = D_m / K. Input: lib/add_more_plates_to_gel.py --layout six_plates
-# on an equilibrated isolated gel. Analysis: scripts/bulk_modulus_analysis_single.ipynb.
+# on an equilibrated isolated gel. Analysis: scripts/isotropic_compression_single.ipynb.
 # DATANAME comes from the environment (2026-11-11), so one batch serves every six-plate gel:
 #     DATANAME=<stem of the six_plates file in input_data/> sbatch isotropic_compression_single.batch
 # The default is the square rho-1.0 cube of 2026-10-11.

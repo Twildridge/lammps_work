@@ -1,7 +1,7 @@
-"""bulk.py -- shared analysis library for the isotropic_compression (bulk modulus) notebooks (2026-09-29).
+"""isotropic.py -- shared analysis library for the isotropic_compression (bulk modulus) notebooks (2026-09-29).
 
-Used by  scripts/bulk_modulus_analysis_single.ipynb  (one volumetric-strain level)  and
-         scripts/bulk_modulus_analysis_sweep.ipynb   (every level of a sweep).
+Used by  scripts/isotropic_compression_single.ipynb  (one volumetric-strain level)  and
+         scripts/isotropic_compression_sweep.ipynb   (every level of a sweep).
 
 The bulk counterpart of lib/uniaxial.py, laid out section for section like it so the two
 notebooks read like the compression ones and -- more important -- so K is estimated the way
@@ -166,7 +166,7 @@ class Config(uni.Config):
     PARTIAL_NORM: str = 'raw'             # the uniaxial notebooks' normalised partial-stress figures (uniaxial.Config,
                                           # 2026-10-06) stay off here: the six-plate cube has no feed / permeate side
                                           # and no single driving pressure
-    FLIP_Z: bool = False                  # likewise their z-flip; bulk.load_reference does not set R['flip_z'], so the
+    FLIP_Z: bool = False                  # likewise their z-flip; isotropic.load_reference does not set R['flip_z'], so the
                                           # profile figures here keep their orientation whatever this says
 
     def __post_init__(self):
@@ -180,9 +180,9 @@ class Config(uni.Config):
         if self.RUNS_ROOT is None:
             self.RUNS_ROOT = '/home/dpollard/Documents/lammps_runs/isotropic_compression'
         base = Path(self.base_dir)
-        self.DATA_DIR = base / 'bulk' / self.RUN_ID
-        self.PLOT_DIR = base / 'plots' / 'bulk' / self.RUN_ID
-        self.TRAJ_DIR = base / 'traj_files.nosync'
+        self.DATA_DIR = base / 'raw_data' / 'isotropic_compression' / self.RUN_ID
+        self.PLOT_DIR = base / 'plots' / 'isotropic_compression' / self.RUN_ID
+        self.TRAJ_DIR = base / 'raw_data' / 'traj_files.nosync'
         for d in (self.DATA_DIR, self.PLOT_DIR):
             d.mkdir(parents=True, exist_ok=True)
         self._axis = 'z'

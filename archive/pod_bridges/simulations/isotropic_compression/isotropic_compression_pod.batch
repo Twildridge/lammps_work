@@ -45,7 +45,7 @@ module load openmpi5
 # through a sweep of cumulative VOLUMETRIC strain targets (STRAIN_TARGETS ->
 # COMPRESSIONS, files tagged _<hold>_c<strain>, auto-sized holds).  The deck, its
 # variables and its files follow uniaxial_compression; analysis in
-# scripts/bulk_modulus_analysis_{single,sweep}.ipynb (lib/bulk.py).
+# scripts/isotropic_compression_{single,sweep}.ipynb (lib/isotropic.py).
 #
 # DATANAME is the CONVERTER output (scripts/add_more_plates_to_gel.ipynb) of an
 # equilibrated slab_with_support snapshot of the ISOLATED gel; copy it to

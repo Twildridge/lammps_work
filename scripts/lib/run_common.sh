@@ -97,7 +97,7 @@ data_files/
   strained_<deck>_<stem>_<stage>.restart     the strained state at the end of a level's hold, before any
                                              unload: the start of a repeated unload / D_c measurement
   <deck>: config = equilibration (slab_with_support, chain_length_testing), unicomp = uniaxial
-  compression, uniperm = uniaxial permeation, shear, compress = six-plate bulk compression;
+  compression, uniperm = uniaxial permeation, shear, isocomp = isotropic (six-plate) compression;
   the pure-phase runs write purepol_<stem>.data / puresolv_<stem>.data.
 
 output_files/

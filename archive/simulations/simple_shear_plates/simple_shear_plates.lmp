@@ -294,7 +294,7 @@ variable dump_freq_setup  equal floor(v_setup_span/v_num_dump_frames)
 # ----- Time Averaging (stress) -----
 # nfreq = nevery * nrepeat  (LAMMPS constraint).  ~num_stress_curves blocks per
 # hold -> the block-to-block scatter is the stress-strain error bar
-# (shear_analysis.ipynb / plot_shear_strain_sweep.py).
+# (simple_shear.ipynb / plot_shear_strain_sweep.py).
 variable num_stress_curves equal 10
 variable nevery_target     equal 100   # ~0.5 tau -- near the stress decorrelation time
 variable nrepeat_max       equal 2000  # cap to preserve transient resolution

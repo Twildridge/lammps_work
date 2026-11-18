@@ -22,7 +22,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # under the small levels.
 #     DATANAME=<stem> sbatch simple_shear_periodic_sweep.batch
 # The ISOLATED-gel sweep (with its unload phase) is simple_shear_isolated_sweep.batch.
-# Analyse with shear_analysis_sweep.ipynb, DECK = "simple_shear", STRAINS as written here.
+# Analyse with simple_shear_sweep.ipynb, DECK = "simple_shear", STRAINS as written here.
 
 FOLDER=simple_shear
 export DECK_FILE=simple_shear_periodic

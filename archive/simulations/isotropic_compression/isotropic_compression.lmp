@@ -12,7 +12,7 @@
 # Stage count/targets come entirely from the batch script via -var stage_targets;
 # defaults below (0.015 0.030 0.045) reproduce the original fixed 3-stage ladder.
 # All stages' stress data append into the same output files so K = slope of
-# P'_net vs ε_vol across stages (see bulk_modulus_analysis.ipynb).
+# P'_net vs ε_vol across stages (see isotropic_compression.ipynb).
 #
 # NOTE: nsteps (per-stage hold length) has NOT been validated against a solvent
 # drainage timescale (τ ~ L_gel²/D_c) — check stress_tensor_solvent_*.dat has
@@ -288,7 +288,7 @@ velocity gel create ${temp_target} 90210 mom yes rot yes dist gaussian
 
 # Never unfixed — records continuously through the whole run. Pairs Π with the
 # co-evolving Rg gel volume for the osmotic bulk modulus K = -V(dΠ/dV) in
-# bulk_modulus_analysis.ipynb.
+# isotropic_compression.ipynb.
 # Columns: step sigP_xx sigP_yy sigP_zz sigP_xy sigP_zx sigP_yz Pi_osm V_gel_rg lx_rg ly_rg lz_rg
 fix out_bulk_modulus all print ${stress_freq} &
     "$(step) $(v_sigP_xx) $(v_sigP_yy) $(v_sigP_zz) $(v_sigP_xy) $(v_sigP_zx) $(v_sigP_yz) $(v_Pi_osm) $(v_gel_vol_rg) $(v_gel_lx_rg) $(v_gel_ly_rg) $(v_gel_lz_rg)" &

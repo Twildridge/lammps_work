@@ -71,7 +71,7 @@
 #                 plates are driven back to the seated gap + 2 x unload_margin_eff per axis and
 #                 frozen; the gel RE-SWELLS FREELY for unload_steps (0 = this level's hold
 #                 length), files _<hold>_u<strain>.  The re-swelling is where the diffusivity
-#                 is measured (free cube, all six faces unloaded: lib/bulk.py fit_Dm_unload on
+#                 is measured (free cube, all six faces unloaded: lib/isotropic.py fit_Dm_unload on
 #                 the Rg edges and the cumulative displacement profiles); the next level
 #                 compresses from the reference again.
 #
@@ -92,7 +92,7 @@
 #      displacement_data/disp_{z,alongx,alongy}_polymer_cum_<stem>_c<strain>.dat (never
 #      reset): the steady profile u_a(a) whose interior slope is the strain of the NETWORK
 #      alone -- the applied plate strain also counts the plates closing on the diffuse faces
-#      (~0.02 per axis in the compression runs) -- the eps_vol K divides by (lib/bulk.py
+#      (~0.02 per axis in the compression runs) -- the eps_vol K divides by (lib/isotropic.py
 #      K_STRAIN = 'disp').
 #   9. (2026-10-28) the hold-onset displace/atom files (disp_*_polymer_<stem>_c<strain>, the
 #      held-cube D_c fit) are gone: a displace/atom reference is one instantaneous snapshot,
@@ -175,7 +175,7 @@ variable unload_margin index 3.0          # sigma: extra retraction of EACH plat
 
 # ---- STRAINED-STATE RESTART (2026-11-17; -var save_strained 0 / SAVE_STRAINED=0 turns it off) ----
 # At the end of every level's hold, BEFORE the unload retracts the plates, the equilibrated
-# compressed state is written to data_files/strained_compress_<stem>_<hold_tag>_c<strain>.restart
+# compressed state is written to data_files/strained_isocomp_<stem>_<hold_tag>_c<strain>.restart
 # (binary), so an unload / re-swelling measurement can be repeated from the same compressed state
 # without redoing the drive and the hold.  read_restart restores atoms, velocities, bonds, box and
 # groups; the fixes and computes of this deck have to be declared again.
@@ -196,7 +196,7 @@ variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) 
 #       measured from the same state as M.  The sparse outer shell of dangling
 #       strands (3-5 sigma per side outside the Rg face on the 12-cell cube) is
 #       folded in by the first levels: the displacement-profile strain
-#       (disp_*_polymer_cum, lib/bulk.py K_STRAIN = 'disp') is the network strain
+#       (disp_*_polymer_cum, lib/isotropic.py K_STRAIN = 'disp') is the network strain
 #       the plate strain overstates there.
 #   rg: the Rg-based face, com +/- L_rg/2 (L_rg = 2 sqrt(3) Rg_ii).  Plates start
 #       at the network's effective surface, but the shell they fold in during the
@@ -1045,7 +1045,7 @@ variable movie_open equal 1
 # by current coordinate in the core columns in each hold (and each re-swelling, Phase 2c) ->
 # disp_*_polymer_cum files: the steady profile u_a(a), whose slope s gives the network's own linear
 # strain along a, eps_a = -s/(1-s) (Eulerian bins); referenced to its own late plateau in the unload,
-# the lag still to relax (lib/bulk.py fit_Dm_unload).
+# the lag still to relax (lib/isotropic.py fit_Dm_unload).
 compute displace_poly_cum polymer displace/atom
 variable ux_poly_cum atom c_displace_poly_cum[1]
 variable uy_poly_cum atom c_displace_poly_cum[2]
@@ -1330,8 +1330,8 @@ variable rg_resp_bad delete
 
 # ----- strained-state restart: the equilibrated compressed state, before any unload (see save_strained) -----
 if "${save_strained} == 1" then &
-    "write_restart data_files/strained_compress_${dataname}_${interaction}_${hold_tag}_c${compressions}.restart" &
-    "print '>>> [eps_vol=${compressions}] strained-state restart written at step $(step): data_files/strained_compress_${dataname}_${interaction}_${hold_tag}_c${compressions}.restart'"
+    "write_restart data_files/strained_isocomp_${dataname}_${interaction}_${hold_tag}_c${compressions}.restart" &
+    "print '>>> [eps_vol=${compressions}] strained-state restart written at step $(step): data_files/strained_isocomp_${dataname}_${interaction}_${hold_tag}_c${compressions}.restart'"
 
 variable e_lin_prev delete
 variable e_lin_prev equal $(v_e_lin)
@@ -1605,6 +1605,6 @@ unfix trk_dims_rg
 unfix trk_box
 
 # every .data / .restart of the run lives in data_files/ (2026-11-17; before: the run folder's top level)
-variable outfile string "data_files/final_compress_${dataname}_${interaction}_${hold_tag}"
+variable outfile string "data_files/final_isocomp_${dataname}_${interaction}_${hold_tag}"
 write_restart ${outfile}.restart
 write_data ${outfile}.data

@@ -93,7 +93,7 @@ Start Jupyter:
 cd ~/Documents/lammps_work/scripts
 jupyter lab
 ```
-This opens a browser tab. Open `pure_solvent_1.ipynb` and run every cell in order (Shift+Enter on each, or Run → Run All Cells).
+This opens a browser tab. Open `pure_solvent.ipynb` and run every cell in order (Shift+Enter on each, or Run → Run All Cells).
 
 The last cell writes the input file to `lammps_data_files_local/solvent_box_rho04_02.data`, in the data folder next to `lammps_work`. The name encodes the parameters (density 0.4, box variant 02). Nothing needs changing for this first run.
 
@@ -156,7 +156,7 @@ From your own computer:
 ```bash
 rsync -avP <your-username>@login.expanse.sdsc.edu:\
   ~/Documents/lammps_runs/pure_solvent/pure_solvent_solvent_box_rho04_02_1.0_0.0_<timestamp>/output_files/ \
-  ~/Documents/flow_data_local/pure_solvent/      # the local output folder next to lammps_work (the notebooks read ../../flow_data_local)
+  ~/Documents/flow_data_local/raw_data/pure_solvent/      # the local output folder next to lammps_work (the notebooks read ../../flow_data_local)
 ```
 [downloading_output.md](downloading_output.md) covers what is worth downloading and why trajectories are handled separately.
 

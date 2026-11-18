@@ -15,6 +15,7 @@ traj_files/
 final_config_*.data
 final_unicomp_*.data
 final_uniperm_*.data
+final_isocomp_*.data
 final_shear_*.data
 puresolv_*.data
 purepol_*.data

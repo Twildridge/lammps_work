@@ -106,7 +106,7 @@ def find_eq_dir(n, roots, interaction='1.0_1.0'):
 
 def load_equilibration(n, roots=('~/Documents/lammps_runs/chain_length_testing',
                                 '~/Documents/lammps_runs/slab_with_support',
-                                '../../flow_data_local/chain_length'),
+                                '../../flow_data_local/raw_data/chain_length'),
                        interaction='1.0_1.0', dt=0.005):
     """Rg(t), gel thickness and box traces of N's equilibration run (+ its continuations), the Rg-halt
     bookkeeping from the log.  Returns None (with a note) when no run directory is found."""
@@ -169,7 +169,7 @@ def load_equilibration(n, roots=('~/Documents/lammps_runs/chain_length_testing',
     return out
 
 
-EQ_LOCAL = '../../flow_data_local/chain_length'            # where sync_equilibration puts the runs (scripts/ relative)
+EQ_LOCAL = '../../flow_data_local/raw_data/chain_length'            # where sync_equilibration puts the runs (scripts/ relative)
 EQ_REMOTE = ('~/Documents/lammps_runs/chain_length_testing', '~/Documents/lammps_runs/slab_with_support')
 
 

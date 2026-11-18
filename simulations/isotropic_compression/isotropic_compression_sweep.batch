@@ -17,7 +17,7 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 # (SEAT_MODE=rg: the plates fold the surface fringe in while seating, so every level strains the
 # network; UNLOAD_MARGIN counts from the free gel's outermost-bead face). The converter's
 # margin_feed + margin_perm must cover the deepest level or the box-face halt ends the run.
-# Analysis: scripts/bulk_modulus_analysis_sweep.ipynb.
+# Analysis: scripts/isotropic_compression_sweep.ipynb.
 
 FOLDER=isotropic_compression
 DATANAME="${DATANAME:-final_config_slab_support_5beads_square_rho10_nowalls_1.0_1.0_8000000_six_plates}"   # from the environment, as the single batch (2026-11-11)
