@@ -2967,7 +2967,8 @@ def sftp_pull_tree(sftp, remote_dir, local_dir):
 
 
 # Run folders under lammps_runs/ were named after the deck folder, and the decks were renamed on 2026-11-18.
-# Runs made before that are still in the old folder on the cluster, so sync_pull searches both.
+# sync_pull searches the old folder too. The runs in the old folders were moved into the new ones on the
+# cluster on 2026-11-18 (docs/repository_layout.md), so the old paths no longer exist and find skips them.
 LEGACY_RUN_FOLDERS = {
     'uniaxial_compression': ('triaxial_compression_two_pist',),
     'uniaxial_permeation': ('triaxial_permeation_two_pist',),

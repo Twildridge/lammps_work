@@ -19,8 +19,10 @@ Old names. Before 2026-11-14 the unsuffixed deck and batches were the isolated o
 `..._isolated.lmp`, `..._isolated_single.batch`, `..._isolated_sweep.batch`) and the one
 periodic batch was `..._periodic.batch`; `docs/running_simulations.md`, `README.md` and the
 shear notebooks' text still describe that layout in places. Before 2026-11-18 this folder and
-every file in it were named `shear_slab_two_pist...`, and runs made until then are in
-`lammps_runs/shear_slab_two_pist/` on the cluster (the notebooks' sync looks there too).
+every file in it were named `shear_slab_two_pist...`. Runs made until then keep that prefix in
+their run-folder names and are in `lammps_runs/simple_shear/` on the cluster with the newer ones
+(moved there from `lammps_runs/shear_slab_two_pist/` on 2026-11-18); their SLURM output files are
+in this folder.
 
 Differences that matter when choosing: the periodic deck has no unload phase and no wall-clock
 guard (`wall_timeout`); the isolated deck has both.

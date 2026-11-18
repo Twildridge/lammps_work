@@ -31,6 +31,25 @@ source "$SCRIPT_DIR/lib/run_common.sh"
 declare -A FOLDER_PREFIX=([slab_with_support]=final_config [chain_length_testing]=final_config
                           [pure_polymer]=purepol [pure_solvent]=puresolv)
 
+# Run parents under $RUNS_DIR took the new simulation names on 2026-11-18 and the runs in them were
+# moved across (run folders kept their names). A SLURM output file written before that still names
+# the old parent on its "Working directory:" line; renamed_run_dir maps such a path to where the
+# run is now (empty when the parent was not renamed).
+declare -A RENAMED_RUN_PARENT=([triaxial_compression_two_pist]=uniaxial_compression
+                               [triaxial_permeation_two_pist]=uniaxial_permeation
+                               [shear_slab_two_pist]=simple_shear [compress_slab]=isotropic_compression
+                               [triaxial_compression]=uniaxial_compression_one_pist
+                               [triaxial_permeation]=uniaxial_permeation_one_pist [shear_slab]=simple_shear_plates
+                               [polymer_pure]=pure_polymer [polymer_phase]=pure_polymer
+                               [solvent_pure]=pure_solvent [solvent_phase]=pure_solvent)
+renamed_run_dir() {
+    local rel old new
+    case "$1" in "$RUNS_DIR"/*/*) ;; *) return 0 ;; esac
+    rel="${1#"$RUNS_DIR"/}"; old="${rel%%/*}"; new="${RENAMED_RUN_PARENT[$old]:-}"
+    if [ -n "$new" ]; then echo "$RUNS_DIR/$new/${rel#*/}"; fi
+    return 0
+}
+
 usage() { sed -n '2,21p' "$SELF" | sed 's/^# \{0,1\}//'; exit 1; }
 
 MODE=extend; DRY_RUN=0; BATCH_OVERRIDE=""; POSITIONAL=()
@@ -102,6 +121,13 @@ if [ "$MODE" != run ]; then
     JOBNAME="$(basename "$OUTPUT_FILE")"; JOBNAME="${JOBNAME%%.o${JOB_ID}.*}"
 
     WORK_DIR=$(grep "^Working directory:" "$OUTPUT_FILE" | awk '{print $NF}' | head -1 || true)
+    if [ -n "$WORK_DIR" ] && [ ! -d "$WORK_DIR" ]; then       # output file written before the 2026-11-18 move
+        MOVED_DIR="$(renamed_run_dir "$WORK_DIR")"
+        if [ -n "$MOVED_DIR" ] && [ -d "$MOVED_DIR" ]; then
+            echo "NOTE: $OUTPUT_FILE names $WORK_DIR; its run folder was moved on 2026-11-18, using $MOVED_DIR"
+            WORK_DIR="$MOVED_DIR"
+        fi
+    fi
     [ -d "$WORK_DIR" ] || { echo "Error: run directory from $OUTPUT_FILE not found: '$WORK_DIR'"; exit 1; }
     echo "Mode: $MODE   job $JOB_ID ($JOBNAME)   run dir: $WORK_DIR"
 

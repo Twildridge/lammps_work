@@ -144,15 +144,47 @@ Not renamed:
   tells the converted two-piston file from the periodic slab it was made from, and the files exist
   under those names on the cluster. `DATANAME` strings are unchanged everywhere.
 * Local `RUN_ID` folders under `flow_data_local/` (some start with `two_pist_`).
-* Run folders that already exist on the cluster. Runs made before the rename are still in
-  `lammps_runs/triaxial_compression_two_pist/`, `.../triaxial_permeation_two_pist/`,
-  `.../shear_slab_two_pist/` and `.../compress_slab/`; new runs go to the new folder names. The
-  notebooks' sync searches both (`LEGACY_RUN_FOLDERS` in `lib/uniaxial.py`). Moving the old run
-  folders into the new ones on the cluster makes that table unnecessary.
+* The individual run folders that already exist on the cluster. Each keeps the name it was made
+  with, so a run from before the rename is for example
+  `lammps_runs/uniaxial_compression/triaxial_compression_two_pist_<dataname>_<interaction>_<stamp>/`.
+  Only their parent folders changed: see the next section.
 * The `two_pist` flag of `uniaxial.Config` and the `cfg.two_pist` tests in the libraries, which
   tell two-piston runs from the archived one-piston ones. The flag defaults to `True` and the
   notebooks no longer set it; pass `two_pist=False` to read a one-piston run.
 * The archived `solvent_pure` files under `archive/`.
+
+### Moved on the cluster (2026-11-18)
+
+The old-name folders on Expanse were emptied into the new-name ones and removed, so old and new
+runs of a simulation type sit side by side.
+
+| Old `lammps_runs/` parent | Now in `lammps_runs/` |
+|---|---|
+| `triaxial_compression_two_pist/` | `uniaxial_compression/` |
+| `triaxial_permeation_two_pist/` | `uniaxial_permeation/` |
+| `shear_slab_two_pist/` | `simple_shear/` |
+| `compress_slab/` | `isotropic_compression/` |
+| `triaxial_compression/` (one piston) | `uniaxial_compression_one_pist/` |
+| `triaxial_permeation/` (one piston) | `uniaxial_permeation_one_pist/` |
+| `shear_slab/` (plate-driven) | `simple_shear_plates/` |
+| `polymer_pure/` + `polymer_phase/` | `pure_polymer/` |
+| `solvent_pure/` + `solvent_phase/` | `pure_solvent/` |
+
+* In the two merged folders the run-folder prefix tells where a run came from: `polymer_pure_*`
+  and `solvent_pure_*` from the `_pure` folders; `solvent_phase_*` and the March 2026
+  `pure_solvent_*` / `pure_polymer_*` runs from the `_phase` folders.
+* The SLURM output files (`<jobname>.o<jobid>.<node>`) moved the same way, from
+  `simulations/<old>/` to `simulations/<new>/` and from `archive/simulations/{shear_slab,triaxial_compression}/`
+  to `archive/simulations/{simple_shear_plates,uniaxial_compression_one_pist}/`. The
+  `Working directory:` line inside a file written before the move still names the old parent;
+  `continue_sim.sh` maps it to the new one (`RENAMED_RUN_PARENT`; see
+  [running_simulations.md §5e](running_simulations.md#5e-continuing-a-run-with-continue_simsh)).
+* The stage folders the notebooks' sync left in the old parents (`triaxial_stage/`,
+  `permeation_stage/`) moved along with the runs; the sync skips them.
+* Trajectories on scratch (`lammps_trajectories/<run folder>/`) are stored by run-folder name with
+  no parent folder, so nothing moved there.
+* `LEGACY_RUN_FOLDERS` in `lib/uniaxial.py` still adds the old parents to the notebooks' sync
+  search. They no longer exist, so it finds nothing there and the table can be deleted.
 
 ## Inside a run folder
 
