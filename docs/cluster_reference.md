@@ -10,9 +10,9 @@ Production runs on Expanse (SDSC). Pod (CNSI, UCSB) is the backup since 2026-11-
 |---------|---------|-----|
 | Login node | `login.expanse.sdsc.edu` | `pod-login1.cnsi.ucsb.edu` (campus VPN) |
 | Cores/node (`CORES_PER_NODE`) | 128 (2 x AMD EPYC 7742) | 40 (2 x Intel Xeon Gold 6148), 64 nodes, Omni-Path |
-| Partition, account | `--partition=compute --account=csb197 --mem=0` | `batch` (node[1-55,57-63]), no account; `short` = nodes 56 and 64, 2 h limit; `largemem`, `gpu` (V100) unused |
+| Partition, account | `--partition=compute --account=csb197 --mem=0` | `batch` (62 nodes, 58 d limit, 3 d default), no account; `short` = 1 node, 2 h limit; `largemem`, `gpu` (V100) unused |
 | Modules (`LAMMPS_MODULES`) | `gcc/10.2.0 openmpi/4.1.3 python/3.8.12` | `gnu14 openmpi5` |
-| LAMMPS binary (`LMP_BIN`) | `/home/dpollard/software/lammps/22Jul2025_update3/.../build/lmp` | `~/MD/lammps/lammps-22Jul2025/build/lmp` |
+| LAMMPS binary (`LMP_BIN`) | `/home/dpollard/software/lammps/22Jul2025_update3/.../build/lmp` | `~/software/lammps/22Jul2025_update3/mpi-omp/gnu14/14.2.0/openmpi5/5.0.7/lammps-22Jul2025/build/lmp`, the same version and packages (`lammps_build/build_lammps_pod.sh`) |
 | MPI fabric (`mpi_env`) | UCX over InfiniBand (`UCX_TLS`, `UCX_NET_DEVICES=mlx5_2:1`) | PSM2 over Omni-Path (`OMPI_MCA_pml=cm`, `OMPI_MCA_mtl=psm2`) |
 | Rank placement (`MPI_MAP_BY`) | `core` = `ppr:128:node:pe=1`, measured 1.4-1.6x over `node` | `core` = `ppr:40:node:pe=1`, not measured; the archived runner used `node` |
 | Comm cutoff | 2.5 (deck default since 2026-11-07) | the same decks, so 2.5 |
@@ -21,7 +21,7 @@ Production runs on Expanse (SDSC). Pod (CNSI, UCSB) is the backup since 2026-11-
 | Default production allocation | 6 nodes x 128 x 1 | 4 nodes x 40 x 1, provisional |
 | Charge | SUs (core-hours) | none |
 
-The Pod column was copied from the runner archived on 2026-10-11 and from the CNSI hardware page. It had not been re-run on Pod when this was written.
+The Pod column was checked on Pod on 2026-11-18 (`cluster_check.sh`, `sinfo`) after a clean re-clone and the LAMMPS rebuild; the MPI placement has not been benchmarked there.
 
 ## Submitting a job
 
@@ -50,7 +50,7 @@ Ported to Pod: the `_single` and `_sweep` batch of every simulation folder, `uni
 | Data transfer node | `data.expanse.sdsc.edu` |
 | Partitions | `compute` (48 h limit); `debug` (2 nodes, 30 min, 2 jobs per user) for smoke tests and layout scans; `shared` with one core for bridge jobs that only copy and convert files |
 | Account | `--account=csb197`, required |
-| Build | `lammps_build/` (22Jul2025 update 3, MPI + OpenMP) |
+| Build | `lammps_build/build_lammps.sh` (22Jul2025 update 3, MPI + OpenMP); Pod: `build_lammps_pod.sh`, same options |
 
 ### Allocation size (benchmark of 2026-11-07)
 
@@ -80,20 +80,13 @@ The raw tables are in `~/Documents/lammps_runs/allocation_benchmark/{nodescan,la
 
 Pod requires the UCSB campus VPN. Install Ivanti Secure Access from [it.ucsb.edu/ivanti-secure-access-campus-vpn/get-connected-campus-vpn](https://it.ucsb.edu/ivanti-secure-access-campus-vpn/get-connected-campus-vpn) and connect before `ssh pod-login1.cnsi.ucsb.edu`.
 
-The plotters need a conda environment that is created once:
-
-```bash
-module load miniconda
-conda create -n lammps_analysis python=3.11 numpy scipy matplotlib pandas -y
-```
-
-The jobs activate it themselves (`load_python_module` in `site.sh`).
+`bash install.sh` creates the conda environment `lammps_analysis` for the plotters (`scripts/pod_setup.sh`: python 3.11, numpy, scipy, matplotlib, pandas) and the jobs activate it themselves (`load_python_module` in `site.sh`). Pod has no site LAMMPS: each account builds its own once with `bash lammps_build/build_lammps_pod.sh` on the login node (the four-command setup is in [cluster_setup.md](cluster_setup.md)).
 
 Open points until the benchmark has run on Pod (`simulations/allocation_benchmark/README.md`, "Running it on Pod"):
 
 - The `#POD` lines are placeholders: 4 nodes (1 for the pure-phase runs) and four times the Expanse time.
 - `--map-by ppr:40:node:pe=1` has not run under Pod's Open MPI 5. The archived runner used `--map-by node` with cutoff 5.0, and its notes show 2 nodes no faster than 1.
-- The time limit of the `batch` partition is not known. The two-piston decks cannot be continued, so a level has to fit inside one job.
+- The `batch` partition allows 58 days per job (3 days when `--time` is omitted), so one level of the two-piston decks, which cannot be continued, fits in one job.
 
 The runner and batches of 2026-10 are kept in `archive/pod_bridges/` with the benchmark notes [`documenting_pod_runs.md`](../archive/pod_bridges/documenting_pod_runs.md).
 

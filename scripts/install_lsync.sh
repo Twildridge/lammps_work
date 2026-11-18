@@ -23,6 +23,8 @@
 #      Everywhere else, a cluster included, the step is skipped by itself.
 #      --no-claude skips it on a machine that does have Claude Code.
 #   3. ~/Documents/lammps_data/input_data, the folder the runner reads .data files from
+#   4. on Pod only (detected by scripts/lib/site.sh): scripts/pod_setup.sh creates the conda
+#      environment the plotters use and says whether the LAMMPS binary has been built yet
 #
 # Both `lsync` entry points shell out to scripts/git_sync.sh in THIS clone, so
 # there is a single implementation and nothing to keep in sync by hand.
@@ -45,6 +47,8 @@ if [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; then DO_CLAUDE=1
 [ "${1:-}" = "--no-claude" ] && DO_CLAUDE=0
 
 [ -f "$SYNC" ] || { echo "ERROR: $SYNC not found — is this a full lammps_work clone?"; exit 1; }
+# Which cluster, if any: lib/site.sh detects it (a Mac comes out as expanse, which nothing below acts on)
+CLUSTER_NAME="$( set +eu; source "$REPO_ROOT/scripts/lib/site.sh" >/dev/null 2>&1; echo "${CLUSTER:-}" )"
 
 echo "======================================"
 echo "lammps_work one-time setup"
@@ -57,6 +61,15 @@ echo "======================================"
 # on THIS machine. That local registration is exactly what a fresh `git clone`
 # does not carry over — .gitattributes (committed, shared) says *.ipynb should
 # be filtered; this step is what actually wires the filter up here.
+export PATH="$HOME/.local/bin:$PATH"            # where pip --user puts nbstripout
+if [ "$CLUSTER_NAME" = pod ]; then
+    # Pod: pip is miniconda's only in a shell whose ~/.bashrc ran conda init; load the module explicitly.
+    # Lmod's init file and the module function read unset variables, which `set -u` would make fatal.
+    set +u
+    type module >/dev/null 2>&1 || source /etc/profile.d/lmod.sh 2>/dev/null || true
+    module load miniconda 2>/dev/null || echo "!! module load miniconda failed; pip is $(command -v pip || echo missing)"
+    set -u
+fi
 if ! command -v nbstripout >/dev/null 2>&1; then
     echo ">>> nbstripout not found — installing via pip..."
     pip install --quiet --user nbstripout 2>/dev/null || pip3 install --quiet --user nbstripout 2>/dev/null || true
@@ -115,6 +128,13 @@ fi
 # ── 3. the folder for simulation input files (not tracked by git) ──────────
 mkdir -p "$HOME/Documents/lammps_data/input_data"
 echo ">>> input files go in $HOME/Documents/lammps_data/input_data"
+
+# ── 4. Pod only: the conda environment for the plotters, and is LAMMPS built? ──
+if [ "$CLUSTER_NAME" = pod ]; then
+    echo ">>> Pod detected: scripts/pod_setup.sh"
+    # exit 2 = only the LAMMPS binary is missing (normal on a first install; the message above says what to do)
+    bash "$REPO_ROOT/scripts/pod_setup.sh" || [ $? -eq 2 ] || echo "!! pod_setup.sh reported a problem (above); re-run it alone with:  bash $REPO_ROOT/scripts/pod_setup.sh"
+fi
 
 echo "======================================"
 echo "Done. Open a new terminal (or run:  source $RC ), then:"

@@ -79,15 +79,16 @@ expanse)
     ;;
 
 # ---- Pod (CNSI, UCSB): 40-core nodes (2 x 20-core Xeon Gold 6148), Omni-Path, no SU charge ------
-# Partitions (CNSI page, 2026-11): batch = node[1-55,57-63]; short = nodes 56 and 64, 2 h limit;
+# Partitions (sinfo, 2026-11-18): batch = 62 nodes, 58 d limit, 3 d default; short = 1 node, 2 h limit;
 # largemem (1 TB) and gpu (V100) are not used here. /scratch is a 19 TB SSD array, /bigscratch
 # 70 TB NVMe; neither is backed up.
-# The binary, modules, scratch path and fabric settings are from archive/pod_bridges/run_lammps_pod.sh
-# and its batches (last used 2026-10) and have not been re-checked since. Run
-# `bash scripts/cluster_check.sh` on Pod before the first job.
+# The binary is the Pod build of lammps_build/build_lammps_pod.sh (22Jul2025 update 3, the Expanse
+# package list, gnu14 + openmpi5, built 2026-11-18). The fabric settings are from
+# archive/pod_bridges/run_lammps_pod.sh (last used 2026-10). `bash scripts/cluster_check.sh`
+# compares this block with the machine.
 pod)
     CORES_PER_NODE=40
-    LMP_BIN="${LMP_BIN:-$HOME/MD/lammps/lammps-22Jul2025/build/lmp}"
+    LMP_BIN="${LMP_BIN:-$HOME/software/lammps/22Jul2025_update3/mpi-omp/gnu14/14.2.0/openmpi5/5.0.7/lammps-22Jul2025/build/lmp}"
     SCRATCH_DIR="${SCRATCH_DIR:-/scratch/$USER}"
     LAMMPS_MODULES=(gnu14 openmpi5)
     PYTHON_MODULE=miniconda                          # plus the conda env below

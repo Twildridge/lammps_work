@@ -35,7 +35,7 @@ lammps_work/
 ├── scripts/        analysis notebooks, the job runner and the sync / submit scripts
 │   └── lib/        all the Python (analysis modules, data-file builders, plotters) and the cluster settings
 ├── docs/           the guides indexed below
-├── lammps_build/   how the Expanse LAMMPS binary was built
+├── lammps_build/   how the Expanse and Pod LAMMPS binaries were built
 └── archive/        superseded decks, notebooks and runners, kept for reading old runs
 ```
 

@@ -26,7 +26,8 @@ lammps_work/                    ← This git repository
 │   ├── run_lammps.sh           ← Job runner for Expanse and Pod (cluster settings: lib/site.sh). The 2026-10 Bridges-2 / Pod runners are in archive/pod_bridges/
 │   ├── postprocess.sh          ← Post-run plotting (calls lib/plot_*.py; run by the job runners and continue_sim.sh)
 │   ├── git_sync.sh             ← One-command GitHub sync (MacBook + clusters) — this is what `lsync` runs
-│   ├── install_lsync.sh        ← One-time-per-machine setup, run as `bash install.sh` from the repo root: `lsync`, `lsbatch`, nbstripout (see github_sync.md)
+│   ├── install_lsync.sh        ← One-time-per-machine setup, run as `bash install.sh` from the repo root: `lsync`, `lsbatch`, nbstripout (see github_sync.md); on Pod also pod_setup.sh
+│   ├── pod_setup.sh            ← Pod only (2026-11-18): the conda env `lammps_analysis` for the plotters, and a check that the LAMMPS binary of lib/site.sh exists
 │   ├── batch_prologue.sh       ← Sourced first by every .batch: git pull + re-exec, MPI env, modules
 │   ├── node_git_sync.sh        ← Serialised fast-forward git pull on the compute node (used by batch_prologue.sh)
 │   ├── lib/site.sh             ← Site settings, one block per cluster (expanse | pod): LAMMPS binary, paths, modules, MPI environment, MPI_MAP_BY, WALL_MARGIN
@@ -82,7 +83,7 @@ lammps_work/                    ← This git repository
 │   │
 │   └── tests/                  ← lint_lmp.py (deck linter), make_fixtures.py + run_plot_tests.sh + run_notebook_tests.sh + lib_headless_test.py
 │
-├── lammps_build/               ← build_lammps.sh (Expanse: 22Jul2025_update3, MPI+OpenMP, CMake) + the SLURM log of the build in use + README (2026-10-11; was scripts/)
+├── lammps_build/               ← build_lammps.sh (Expanse: 22Jul2025_update3, MPI+OpenMP, CMake), build_lammps_pod.sh (Pod, same options, 2026-11-18) + the logs of the builds in use + README (2026-10-11; was scripts/)
 │
 ├── docs/                       ← Everything below this repo-layout page: setup, running,
 │                                  analysis, cluster reference, troubleshooting (see README.md)
