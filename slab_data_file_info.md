@@ -553,7 +553,7 @@ Converted two-piston (feed/permeate) data file  [2026-09-17 11:54, slab_two_pist
 
 Shear input from the PERIODIC slab  [2026-09-22 22:14, slab_shear_plates.py]:
   Input: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002.data
-  Steps: isolate (support/piston/bath solvent removed; x,y periodic kept; z = polymer span + 0.5) -> plates NORMAL TO z on the slab faces (driven +/-x in shear_slab.lmp)
+  Steps: isolate (support/piston/bath solvent removed; x,y periodic kept; z = polymer span + 0.5) -> plates NORMAL TO z on the slab faces (driven +/-x in simple_shear_plates.lmp)
   Box: X (shear, periodic) 47.970 x Y 47.874 x Z (gap) 127.411
   Gel Z-extent 1.81..128.22 (gel_gap 126.41); plates at Z = 4.79, 125.24 (spacing 1.5, offset 0.5, box_buffer 2.0, solvent_delete 0.87)
   Crosslinks: 15066   Chain beads: 89424   Solvent: 65809   Plates: 1922   plate-polymer bonds: 1922 (cutoff 2.5)
@@ -561,7 +561,7 @@ Shear input from the PERIODIC slab  [2026-09-22 22:14, slab_shear_plates.py]:
 
 Shear input from the PERIODIC slab  [2026-09-25 20:05, slab_shear_plates.py]:
   Input: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002.data
-  Steps: isolate (support/piston/bath solvent removed; x,y periodic kept; z = polymer span + 4.0) -> plates NORMAL TO z on the slab faces (driven +/-x in shear_slab.lmp)
+  Steps: isolate (support/piston/bath solvent removed; x,y periodic kept; z = polymer span + 4.0) -> plates NORMAL TO z on the slab faces (driven +/-x in simple_shear_plates.lmp)
   Box: X (shear, periodic) 47.970 x Y 47.874 x Z (gap) 134.411
   Gel Z-extent 1.81..128.22 (gel_gap 126.41); plates at Z = 4.79, 125.24 (spacing 1.5, offset 0.5, box_buffer 2.0, solvent_delete 0.87)
   Crosslinks: 15066   Chain beads: 89424   Solvent: 73358   Plates: 1922   plate-polymer bonds: 1922 (cutoff 2.5)
@@ -581,7 +581,7 @@ Two-piston data file with a THINNED gel  [2026-10-03 16:29, slab_two_pistons.cut
   z: perm piston 18.73 | support 29.73 | gel BB [31.43, 94.64] (L_bb 63.21, L_rg 60.85) | load piston 101.50 | feed piston 108.37 | zhi 123.37
   Crosslinks: 7540   Chain beads: 44706   Solvent: 59261   Support: 23316   Feed piston: 23316   Permeate piston: 23316   Load piston: 23316
   Total atoms: 204771   Total bonds: 59442   Output: final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist_half.data
-  Purpose: half-thickness L^2 test of the hold relaxation (triaxial_compression_two_pist_half.batch). The new face is a CUT face (dangling ends).
+  Purpose: half-thickness L^2 test of the hold relaxation (uniaxial_compression_half.batch). The new face is a CUT face (dangling ends).
 
 
 Two-piston data file with a THINNED gel  [2026-10-05 13:05, slab_two_pistons.cut_two_pist, keep_frac 0.25]:

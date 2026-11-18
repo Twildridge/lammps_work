@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+
+#SBATCH --job-name=simple_shear_plates
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=128 # was 32, 128
+#SBATCH --cpus-per-task=1     # was 4, 1
+#SBATCH --mem=0
+#SBATCH --time=24:00:00
+#SBATCH --output=%x.o%j.%N
+# #SBATCH --error=%x.e%j.%N
+
+# -----------------------------------------------------------------------
+# SELF-SYNC GUARD (must run BEFORE STRAINS is defined below).
+# sbatch submits whatever copy of this file is on disk at submit time. If that
+# local copy is STALE (e.g. predates the STRAINS sweep), the run silently does
+# the wrong thing — and run_lammps.sh's own `git pull` is too late to fix it,
+# because this batch has ALREADY exported STRAINS by the time run_lammps.sh
+# runs. (That is exactly how a sweep collapses to a single strain=0.1.)
+# Fix: pull the repo FIRST, then re-exec the freshly pulled batch so STRAINS
+# is always read from the current file. The guard var prevents an exec loop.
+# -----------------------------------------------------------------------
+LAMMPS_WORK_DIR="$HOME/Documents/lammps_work"
+if [ -z "${SHEAR_BATCH_SYNCED:-}" ]; then
+    echo ">>> [self-sync] pulling lammps_work before defining STRAINS..."
+    command -v git &>/dev/null && git -C "$LAMMPS_WORK_DIR" pull --rebase --autostash || true
+    export SHEAR_BATCH_SYNCED=1
+    exec bash "$LAMMPS_WORK_DIR/simulations/simple_shear_plates/simple_shear_plates.batch"
+fi
+echo ">>> [self-sync] running freshly synced batch (SHEAR_BATCH_SYNCED=1)"
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# -----------------------------------------------------------------------
+# Simulation parameters
+# DATANAME: the PERIODIC slab converted for shear (2026-09-22): scripts/lib/slab_shear_plates_periodic.py
+#   isolates the 14000002 piston-transparent aniso-NPH slab (same input as the two-piston
+#   converter, so G here and G from the two-piston compression sweep come from the same
+#   gel state) and plates its two free faces: plates NORMAL TO z, driven +/-x (z = gap,
+#   x = shear, the compression decks' axes; no rotation).  Copy the *_with_plates*.data
+#   it writes into ~/Documents/lammps_data/input_data/ on Expanse.  The gap is the slab
+#   thickness (plate separation ~120 sigma, periodic 48 x 48 laterally) instead of the
+#   isolated cube's 48 sigma; strain targets are unchanged (plate travel scales).
+#   _film7 (2026-09-25): converter clearance 4.0 -> ~7 sigma of bath solvent BEHIND each
+#   plate (was ~3.5), a proper solvent-only reservoir for the pore pressure; the deck now
+#   profiles the whole box, uses dynamic bulk groups and logs the plate shear force.
+#   Previous inputs: ..._14000002_with_plates (3.5 sigma film, 2026-09-22);
+#   isolated_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_with_plates (isolated cube)
+# NSTEPS: Phase 3 production HOLD per strain level (also the output-file tag; the
+#   hold is padded up to the next stress-averaging epoch).  The other phase
+#   lengths are index-style knobs in simple_shear_plates.lmp (override with -var):
+#   Phase 1a:              SKIPPED (phase1a_mode = 0, default): the plated slab is already at
+#                          P* = 1.5 (the converter deletes the solvent the plates displace);
+#                          phase1a_mode = 1 = the old cube protocol's box NPT (nsteps_npt = 50000)
+#   Phase 1b (NVT):        nsteps_equil = 100000
+#   Phase 2  (shear drive): halts at each strain target (cap nsteps_shear = 570000)
+#   Phase 3  (production):  NSTEPS (set here), once per strain in STRAINS_LIST
+# -----------------------------------------------------------------------
+FOLDER="simple_shear_plates"
+DATANAME="isolated_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_with_plates_film7"
+INTERACTION="1.0_1.0"   # epsSS_epsSP (solvent-solvent _ polymer-solvent)
+NSTEPS=9000000
+TYPE=""                 # Options: stress, volume, stressvol, or leave empty
+
+# -----------------------------------------------------------------------
+# Stress-strain curve: cumulative shear strains to step through.
+#   strains = [0.1, 0.15, 0.2, 0.25, 0.3]
+# The gel shears to the first strain, runs an NSTEPS production hold there,
+# then shears FURTHER (incrementally, from that state) to each subsequent
+# strain and holds again. Each strain writes its own output files tagged
+# _g<strain>. For a single operating point, use one value, e.g. (0.1).
+# If this is left unset, simple_shear_plates.lmp falls back to a single strain of 0.1.
+# -----------------------------------------------------------------------
+# NOTE: the LIST must be a DISTINCT array name; `export STRAINS="${STRAINS[*]}"`
+# where STRAINS is itself an array keeps it typed as an array, and bash does NOT
+# pass array variables into a child's environment -> run_lammps.sh would see it
+# unset and silently fall back to a single strain (this is the real cause of the
+# "sweep collapsed to strain=0.1" symptom, which the self-sync guard does NOT
+# fix). Export a SCALAR string instead.
+STRAINS_LIST=(0.1)
+export STRAINS="${STRAINS_LIST[*]}"   # space-separated scalar for run_lammps.sh / LAMMPS -var
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+if [ -z "$TYPE" ]; then
+    bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"
+else
+    bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE"
+fi

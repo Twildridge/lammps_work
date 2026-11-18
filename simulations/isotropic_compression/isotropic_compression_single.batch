@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=isotropic_compression
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=6
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=27:00:00
+#SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
+
+# Bulk modulus K and re-swelling diffusivity D_m, ONE level (the sweep is isotropic_compression_sweep.batch).
+# Drained isotropic compression of an isolated gel: two wet NPT pistons hold the bath at
+# PRESS_TARGET; six solvent-transparent plates seat on the gel's Rg faces (SEAT_MODE=rg, see
+# below) and close to one cumulative VOLUMETRIC strain
+# (COMPRESSIONS; files _<hold>_c<strain>, hold auto-sized from tau_1 = L^2/(pi^2 D_c)), which
+# gives K. Then the UNLOAD: plates back to the seated gaps + 2 x UNLOAD_MARGIN and a free
+# re-swelling hold of UNLOAD_STEPS (0 = the hold length; files _u<strain>), which gives
+# D_m = (K/M) D_c and kappa = D_m / K. Input: lib/add_more_plates_to_gel.py --layout six_plates
+# on an equilibrated isolated gel. Analysis: scripts/bulk_modulus_analysis_single.ipynb.
+# DATANAME comes from the environment (2026-11-11), so one batch serves every six-plate gel:
+#     DATANAME=<stem of the six_plates file in input_data/> sbatch isotropic_compression_single.batch
+# The default is the square rho-1.0 cube of 2026-10-11.
+# Short trial first: HOLD_AUTO=0, a small NSTEPS, UNLOAD_STEPS=NSTEPS, NPT_PISTON_STEPS=100000.
+
+FOLDER=isotropic_compression
+DATANAME="${DATANAME:-final_config_slab_support_5beads_square_rho10_nowalls_1.0_1.0_8000000_six_plates}"
+INTERACTION=1.0_1.0
+NSTEPS=3000000          # hold length with HOLD_AUTO=0, and the tag of the setup-phase files
+export PRESS_TARGET=1.5
+export COMPRESSIONS="${COMPRESSIONS:-0.10}"
+# Seating (2026-11-17). rg = the plates seat on the Rg faces (the half-density faces), folding the
+# surface fringe onto the dense gel, so the plate closure strains the network on a sharp lattice
+# surface and on the thick fringe of a random gel alike. The strain reference is the free gel's
+# Rg box (L0 = seated gap - 2 contact_gap = the free L_rg); the seated gel carries a small preload,
+# printed on the `>>> reference check` line and subtracted with the reference window. bb (the
+# outermost bead) leaves the closure inside the fringe on every cube so far and is stopped by
+# FRINGE_MAX about 2 min in. PRESTRAIN_MAX / RG_STRAIN_MIN stop a run whose seating or response
+# is off (docs/running_simulations.md); set one to 0 to switch it off.
+export SEAT_MODE="${SEAT_MODE:-rg}"
+# UNLOAD_MARGIN counts from the free gel's outermost-bead face in both seat modes: with rg the
+# deck adds half the measured fringe (`>>> unload opening` line), so 3.0 serves every gel.
+export UNLOAD="${UNLOAD:-1}" UNLOAD_STEPS="${UNLOAD_STEPS:-0}" UNLOAD_MARGIN="${UNLOAD_MARGIN:-3.0}"
+
+echo ">>> DATANAME=$DATANAME"
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

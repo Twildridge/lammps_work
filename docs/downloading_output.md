@@ -8,7 +8,7 @@ After a job finishes, the output `.dat` files are in the working directory on th
 ```bash
 # From MacBook terminal — adjust path to match your run
 rsync -avP <username>@login.expanse.sdsc.edu:\
-  ~/Documents/lammps_runs/triaxial_compression_<dataname>_<interaction>_<timestamp>/output_files/ \
+  ~/Documents/lammps_runs/uniaxial_compression/uniaxial_compression_<dataname>_<interaction>_<timestamp>/output_files/ \
   ~/Documents/lammps/flow_data_local/
 ```
 

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=pure_polymer_sweep
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=6:00:00
+#SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
+
+# Pure-polymer pressure sweep (EOS): pure_polymer.lmp with PHASE_SWEEP=1 (attractive LJ, cutoff 2.5,
+# where the single run is WCA). The deck loops over its own pressure list, equilibrating
+# NSTEPS_EQ and averaging over NSTEPS_PROD steps per state point. NSTEPS is unused here.
+
+FOLDER=pure_polymer
+DATANAME=pure_polymer_5beads_8x8x8
+INTERACTION=1.0_0.0
+NSTEPS=0
+export PHASE_SWEEP=1
+export NSTEPS_EQ=200000 NSTEPS_PROD=100000   # NSTEPS_PROD must be divisible by 100
+
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

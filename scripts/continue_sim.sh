@@ -14,7 +14,7 @@
 #                    job inherited, else <folder>_single.batch)
 #   --dry-run        print the batch script that would be submitted, submit nothing
 #
-# Folders with a cont=1 path: slab_with_support, chain_length_testing, polymer_pure, solvent_pure
+# Folders with a cont=1 path: slab_with_support, chain_length_testing, pure_polymer, pure_solvent
 # (the two-piston decks have none). The continuation runs in <run dir>/continuation_<stamp>/;
 # a continuation of a continuation is a sibling there. The resume file is looked for in
 # <run dir>/data_files/ (where the decks write since 2026-11-17), then in <run dir>/ (older runs). Knobs (lib/run_common.sh, plus CHAIN,
@@ -29,7 +29,7 @@ source "$SCRIPT_DIR/lib/site.sh"
 source "$SCRIPT_DIR/lib/run_common.sh"
 
 declare -A FOLDER_PREFIX=([slab_with_support]=final_config [chain_length_testing]=final_config
-                          [polymer_pure]=purepol [solvent_pure]=puresolv)
+                          [pure_polymer]=purepol [pure_solvent]=puresolv)
 
 usage() { sed -n '2,21p' "$SELF" | sed 's/^# \{0,1\}//'; exit 1; }
 

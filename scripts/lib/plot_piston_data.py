@@ -3,7 +3,7 @@
 Plot piston position and velocity versus timesteps.
 Reads piston position and velocity from piston_data folder.
 
-Multi-piston aware (2026-09-16): the two-piston decks (triaxial_*_two_pist)
+Multi-piston aware (2026-09-16): the two-piston decks (uniaxial_*)
 write ONE COLUMN SET PER PISTON, e.g.
     # step z_feed z_perm            (permeation)
     # step z_load z_feed z_perm      (compression)
@@ -272,7 +272,7 @@ def plot_piston_data(folder, dataname, oldsteps=0):
     pos_file = os.path.join(piston_data_dir, f'piston_position_{dataname}.dat')
     vel_file = os.path.join(piston_data_dir, f'piston_velocity_{dataname}.dat')
 
-    # Check files exist. Some geometries (e.g. slab_with_support, compress_slab)
+    # Check files exist. Some geometries (e.g. slab_with_support, isotropic_compression)
     # never write piston position/velocity files, so a missing file is expected,
     # not an error — skip cleanly instead of printing a scary "Error:" line.
     # Two-piston compression writes its whole-run positions as piston_position_run_*.

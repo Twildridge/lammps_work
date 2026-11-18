@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Cluster-side quick-look for the shear_slab stress-strain sweep.
+"""Cluster-side quick-look for the simple_shear stress-strain sweep.
 
-Reads the per-strain output files written by shear_slab.lmp (tagged _g<strain>;
+Reads the per-strain output files written by simple_shear.lmp (tagged _g<strain>;
 z = gap / x = shear since 2026-09-22, sigma_xz = column 5 of the tensor files)
 and produces two PNGs in <folder>/output_plots/:
 

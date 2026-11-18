@@ -8,7 +8,7 @@ parameter (default 0.5 = the old hard-coded value) and `axis` (default 'x' =
 the isolated-cube geometry; 'z' plates the faces of the periodic slab).)
 
 Adds rigid graphene-like shear plates to the left and right sides (x-faces)
-of an isolated gel data file. The plates drive shear in shear_slab.lmp via
+of an isolated gel data file. The plates drive shear in simple_shear_plates.lmp via
 fix move linear.
 
 Design
@@ -26,12 +26,12 @@ Design
 - Existing polymer FENE bonds (type 1) are unchanged.
 - Output data file has 4 atom types and 2 bond types.
 
-Bond styles needed in shear_slab.lmp:
+Bond styles needed in simple_shear_plates.lmp:
     bond_style hybrid fene harmonic
     bond_coeff 1 fene 30.0 1.5 1.0 1.0        # polymer-polymer (unchanged)
     bond_coeff 2 harmonic 30.0 1.0             # plate-polymer
 
-Pair coeff for plate (type 4) — add to shear_slab.lmp:
+Pair coeff for plate (type 4) — add to simple_shear_plates.lmp:
     pair_coeff 4 4 1.0 1.0 1.122               # plate-plate  (WCA)
     pair_coeff 1 4 1.0 1.0 1.122               # polymer-plate (WCA)
     pair_coeff 2 4 1.0 1.0 1.122               # crosslinker-plate (WCA)
@@ -386,8 +386,8 @@ def add_plates(input_file, output_file,
           f"{len(all_bonds)} bonds to:\n  {output_file}")
     print("=" * 60)
 
-    # ── Summary for shear_slab.lmp ────────────────────────────────────────────
-    print("\n── shear_slab.lmp hints ─────────────────────────────────────")
+    # ── Summary for simple_shear_plates.lmp ────────────────────────────────────────────
+    print("\n── simple_shear_plates.lmp hints ─────────────────────────────────────")
     print(f"  gel_gap  ({axis} surface-to-surface) ≈ {gel_gap:.2f} σ")
     print(f"  plate separation ({axis})            ≈ {x_right_plate - x_left_plate:.2f} σ")
     print(f"  For target_strain=0.10, nsteps=285000, dt=0.005:")

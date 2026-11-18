@@ -1,8 +1,8 @@
 """Cross-deck comparison -- figures built from MORE THAN ONE deck's run (2026-10-03).
 
 Notebook: scripts/cross_deck_comparison.ipynb.  Each deck is loaded with its own library
-(lib/triaxial.py for the two-piston compression and permeation decks, lib/shear.py for
-shear_slab) through `load_deck`, which returns a plain dict
+(lib/uniaxial.py for the two-piston compression and permeation decks, lib/shear.py for
+simple_shear_plates) through `load_deck`, which returns a plain dict
     dict(kind='compression' | 'permeation' | 'shear', cfg, R, levels | P)
 so a comparison function takes the decks it needs and nothing here re-implements a loader.
 
@@ -11,7 +11,7 @@ First comparison: D_c and kappa as functions of the solvent volume fraction phi_
   Compression sweep (uniform states).  Level i is a uniformly compressed gel at phi_s,i with the
   network stress sigma'_i and the displacement-strain secant modulus M_i = dsigma'_i/eps_disp.
   The levels give the equilibrium curve sigma'(phi_s) (monotone PCHIP, Monte-Carlo CI), which the
-  closures and fig_states (b) use.  Their hold-relaxation D_c (tri.fit_Dc) is a LOAD measurement
+  closures and fig_states (b) use.  Their hold-relaxation D_c (uni.fit_Dc) is a LOAD measurement
   and is NOT used here (2026-10-21): the hold starts from the ramp's face skins plus an undrained
   interior strain (the 2026-10-20 amplitude-spectrum analysis), and its D_c moves with the mode
   count, trim and window (0.05-0.085 on run 7).  It stays in the compression notebooks, labelled LOAD.
@@ -51,8 +51,8 @@ import matplotlib.pyplot as plt
 from scipy import stats
 from scipy.interpolate import PchipInterpolator
 
-import triaxial as tri
-from triaxial import WONG, sig, smart_legend
+import uniaxial as uni
+from uniaxial import WONG, sig, smart_legend
 
 PHI_LABEL = {'cal': r'$\lambda$-calibrated Voronoi', 'vor': 'Voronoi', 'mf': 'mass fraction'}
 
@@ -102,7 +102,7 @@ def sync_deck(cfg, force=False):
     if _is_shear(cfg):
         import shear
         return shear.sync_from_expanse(cfg, force=force)
-    return tri.sync_from_expanse(cfg, force=force)
+    return uni.sync_from_expanse(cfg, force=force)
 
 
 def _is_shear(cfg):
@@ -111,8 +111,8 @@ def _is_shear(cfg):
 
 def load_deck(cfg, verbose=True):
     """Load one run with the library its Config belongs to.
-    tri.Config(mode='compression') -> dict(kind='compression', cfg, R, levels)   (M, G, D_c, phi per level)
-    tri.Config(mode='permeation')  -> dict(kind='permeation',  cfg, R, P)        (flux, phi profile, D_c, M)
+    uni.Config(mode='compression') -> dict(kind='compression', cfg, R, levels)   (M, G, D_c, phi per level)
+    uni.Config(mode='permeation')  -> dict(kind='permeation',  cfg, R, P)        (flux, phi profile, D_c, M)
     shear.Config                   -> dict(kind='shear',       cfg, R, levels)   (G, N1/N2, D_c per level)"""
     if _is_shear(cfg):
         import shear
@@ -120,17 +120,17 @@ def load_deck(cfg, verbose=True):
         levels = [L for L in (shear.load_level(cfg, R, lvl) for lvl in cfg.STRAINS) if L is not None]
         levels.sort(key=lambda L: L['gamma'])
         return dict(kind='shear', cfg=cfg, R=R, levels=levels)
-    R = tri.load_reference(cfg)
+    R = uni.load_reference(cfg)
     if cfg.mode == 'permeation':
-        P = tri.load_permeation(cfg, R, verbose=verbose)
-        tri.add_perm_volume_fractions(cfg, R, P)
+        P = uni.load_permeation(cfg, R, verbose=verbose)
+        uni.add_perm_volume_fractions(cfg, R, P)
         if cfg.PSD_ENABLE and cfg.VOR_ENABLE:
-            tri.add_perm_psd(cfg, R, P)                       # probe porosity (fig_solvent_measures); cfg.PSD_R_PROBE
-        tri.add_perm_displacement(cfg, R, P, verbose=verbose)
+            uni.add_perm_psd(cfg, R, P)                       # probe porosity (fig_solvent_measures); cfg.PSD_R_PROBE
+        uni.add_perm_displacement(cfg, R, P, verbose=verbose)
         return dict(kind='permeation', cfg=cfg, R=R, P=P)
-    levels = [L for L in (tri.load_level(cfg, R, lvl, verbose=verbose) for lvl in cfg.COMP_LEVELS) if L is not None]
+    levels = [L for L in (uni.load_level(cfg, R, lvl, verbose=verbose) for lvl in cfg.COMP_LEVELS) if L is not None]
     levels.sort(key=lambda L: L['eps'])
-    tri.add_volume_fractions(cfg, R, levels)
+    uni.add_volume_fractions(cfg, R, levels)
     return dict(kind='compression', cfg=cfg, R=R, levels=levels)
 
 
@@ -443,7 +443,7 @@ def print_phi_kinds(ccfg, comp, perm, unload=None, kinds=('cal', 'vor', 'mf')):
 #  5. FIGURES -- the permeation membrane on its own (2026-10-08)
 # ===========================================================================
 def fig_thermo_pressure_norm(ccfg, perm):
-    """The permeation notebook's normalised thermodynamic-pressure figure (tri.fig_thermo_pressure_norm:
+    """The permeation notebook's normalised thermodynamic-pressure figure (uni.fig_thermo_pressure_norm:
     solvent, polymer and total traces with the back pressure removed, / dP_ext) with its two dash-dot
     guides dP_th = (4/3)(G/M) dP_ext, one per shear-modulus estimate (cfg.G_REF = the shear decks' G,
     cfg.G_COMP_REF = the lateral network stress of the compression holds; M = this run's).  The deck's
@@ -451,7 +451,7 @@ def fig_thermo_pressure_norm(ccfg, perm):
     cfg, R, P = perm['cfg'], perm['R'], perm['P']
     if cfg.G_REF is None and cfg.G_COMP_REF is None:
         print('NOTE: set G_REF / G_COMP_REF in the permeation Config for the two dP_th guides')
-    fig = tri.fig_thermo_pressure_norm(cfg, R, P)
+    fig = uni.fig_thermo_pressure_norm(cfg, R, P)
     if fig is not None and ccfg.save:
         ccfg.PLOT_DIR.mkdir(parents=True, exist_ok=True)
         out = ccfg.PLOT_DIR / 'perm_thermo_pressure_norm.png'
@@ -504,7 +504,7 @@ def fig_solvent_measures(ccfg, perm):
     if S is None:
         print('  NOTE: no steady probe porosity (PSD_ENABLE / tessellated frames) -> eps_g left out')
     z = np.asarray(R['z'], float)
-    zx = tri.zn(R, z)
+    zx = uni.zn(R, z)
     # ---- z window: membrane (reference and steady) + the margin ----
     bw = cfg.binWidth
     zf = P['shade_hi'] if P.get('shade_hi') is not None else R['z_feed']          # the final feed-piston plane
@@ -544,11 +544,11 @@ def fig_solvent_measures(ccfg, perm):
         h_por = _band(ax, zx, [np.asarray(a) * win for a in S['por']], C_POR, '-', 2.4,
                       rf'probe porosity $\epsilon_g$  steady ($r_{{\rm probe}}={rp:g}\,\sigma$)', scale=rho0)
     ax.axhline(rho0, color='k', ls=':', lw=1.2, alpha=0.6, zorder=1)
-    tri.shade_gel(ax, R, P)
-    tri.mark_walls(ax, R, P)
-    tri.finish_axes(ax, r'concentration  $c_s=\phi_s\,\rho_{s,0}/M_s$   (beads/$\sigma^3$)',
+    uni.shade_gel(ax, R, P)
+    uni.mark_walls(ax, R, P)
+    uni.finish_axes(ax, r'concentration  $c_s=\phi_s\,\rho_{s,0}/M_s$   (beads/$\sigma^3$)',
                     r'(a) concentration $c_s$ vs mass fraction $\rho_s/\rho_{s,0}$ vs probe porosity $\epsilon_g$', R=R)
-    ax.set_xlim(sorted([tri.zn(R, lo_z), tri.zn(R, hi_z)]))
+    ax.set_xlim(sorted([uni.zn(R, lo_z), uni.zn(R, hi_z)]))
     ax.set_ylim(0, rho0 * 1.42)                                           # headroom for the legend and the numbers box
     ax2 = ax.secondary_yaxis('right', functions=(lambda c: c / rho0, lambda f: f * rho0))
     ax2.set_ylabel(r'fraction  $c_s/\rho_{s,0}$  (--)')
@@ -566,7 +566,7 @@ def fig_solvent_measures(ccfg, perm):
         txt.append(r'reservoirs, $\rho_s/\rho_{s,0}$:  feed ' + (f'{_im(P, "phi_mf", feed):.3f}' if feed.any() else '--')
                    + (rf',  permeate {_im(P, "phi_mf", perm_res):.3f}' if perm_res.any() else ''))
         txt.append(rf'  ($\rho_{{s,0}}$ = {rho0:.3f}: bulk reservoir at zero flux)')
-    tri.annotate_box(ax, '\n'.join(txt), loc='upper left', fontsize=10)
+    uni.annotate_box(ax, '\n'.join(txt), loc='upper left', fontsize=10)
     # ---- (b) differences from the calibrated fraction ----
     if ccfg.CONC_DIFF_PANEL:
         bx = axes[0, 1]
@@ -583,10 +583,10 @@ def fig_solvent_measures(ccfg, perm):
             m, lo, hi = (np.asarray(a, float) for a in D[k])
             bx.fill_between(zx, (lo - cal) * wm, (hi - cal) * wm, color=col, alpha=0.2, lw=0, zorder=2)
             bx.plot(zx, (m - cal) * wm, '-', color=col, lw=2.4, zorder=3, label=lab + f'  (interior mean {np.nanmean((m - cal)[P["interior"]]):+.3f})')
-        tri.shade_gel(bx, R, P)
-        tri.mark_walls(bx, R, P)
-        tri.finish_axes(bx, r'difference from $\phi_s^{\rm cal}$  (--)', r'(b) steady membrane: $\rho_s/\rho_{s,0}$ and $\epsilon_g$ minus $\phi_s^{\rm cal}$', R=R)
-        bx.set_xlim(sorted([tri.zn(R, P['z_mem_lo'] - 0.5 * ccfg.CONC_MARGIN), tri.zn(R, P['z_mem_hi'] + 0.5 * ccfg.CONC_MARGIN)]))
+        uni.shade_gel(bx, R, P)
+        uni.mark_walls(bx, R, P)
+        uni.finish_axes(bx, r'difference from $\phi_s^{\rm cal}$  (--)', r'(b) steady membrane: $\rho_s/\rho_{s,0}$ and $\epsilon_g$ minus $\phi_s^{\rm cal}$', R=R)
+        bx.set_xlim(sorted([uni.zn(R, P['z_mem_lo'] - 0.5 * ccfg.CONC_MARGIN), uni.zn(R, P['z_mem_hi'] + 0.5 * ccfg.CONC_MARGIN)]))
         smart_legend(bx, fontsize=10)
     fig.suptitle(rf'Three measures of the solvent across the membrane, zero flux (dashed) and steady permeation (solid):  '
                  rf'$c_s=\phi_s^{{\rm cal}}\rho_{{s,0}}/M_s$ ($\lambda$-calibrated Voronoi),  $\rho_s/\rho_{{s,0}}$ (mass = number fraction),  '
@@ -619,8 +619,8 @@ def fig_states(ccfg, X):
     a.axhline(PL['phi_ref'], color=WONG['blue'], ls='--', lw=1.8, label=f"zero-flux reference  {sig(PL['phi_ref'])}")
     for i in range(1, len(S['phi'])):
         if PL['phi_bot'] - 0.03 < S['phi'][i] < PL['phi_top'] + 0.03:
-            a.axhline(S['phi'][i], color=tri.level_color(i - 1), lw=1.2, alpha=0.8)
-            a.annotate(rf"$\varepsilon$ = {S['label'][i]}", (PL['z'][-1], S['phi'][i]), ha='right', va='bottom', fontsize=10, color=tri.level_color(i - 1))
+            a.axhline(S['phi'][i], color=uni.level_color(i - 1), lw=1.2, alpha=0.8)
+            a.annotate(rf"$\varepsilon$ = {S['label'][i]}", (PL['z'][-1], S['phi'][i]), ha='right', va='bottom', fontsize=10, color=uni.level_color(i - 1))
     a.set(xlabel=r'$z$  ($\sigma$)   [support $\leftarrow$ $\rightarrow$ feed]', ylabel=r'$\phi_s$')
     a.set_title(r'(a) steady membrane: $\phi_s(z)$, segments, compression levels', fontsize=14)
     a.grid(alpha=0.3)

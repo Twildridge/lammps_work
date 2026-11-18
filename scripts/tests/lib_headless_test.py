@@ -1,4 +1,4 @@
-"""Drive lib/triaxial.py and lib/bulk.py on the synthetic flow_data_local tree exactly as the
+"""Drive lib/uniaxial.py and lib/bulk.py on the synthetic flow_data_local tree exactly as the
 two-piston and the bulk-modulus notebooks do (SYNC off).
 Usage: python lib_headless_test.py <fixture_root>"""
 import sys, importlib
@@ -10,44 +10,44 @@ import matplotlib.pyplot as plt
 plt.show = lambda *a, **k: None
 root = Path(sys.argv[1])
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'lib'))
-import triaxial as tri
-tri.setup_style()
+import uniaxial as uni
+uni.setup_style()
 base = str(root / 'flow_data_local')
 
 print('\n################ compression single / sweep (two-piston fixture) ################')
-cfg = tri.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_comp', COMP_LEVELS=['0.05', '0.10'],
+cfg = uni.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_comp', COMP_LEVELS=['0.05', '0.10'],
                  mode='compression', two_pist=True, base_dir=base, VOR_ENABLE=False)
-R = tri.load_reference(cfg)
-LEVELS = [L for L in (tri.load_level(cfg, R, l) for l in cfg.COMP_LEVELS) if L is not None]
+R = uni.load_reference(cfg)
+LEVELS = [L for L in (uni.load_level(cfg, R, l) for l in cfg.COMP_LEVELS) if L is not None]
 assert len(LEVELS) == 2, 'levels not loaded'
-tri.add_volume_fractions(cfg, R, LEVELS)
-tri.print_summary(cfg, LEVELS)
+uni.add_volume_fractions(cfg, R, LEVELS)
+uni.print_summary(cfg, LEVELS)
 L = LEVELS[1]
-for f in (tri.fig_strain, tri.fig_volfrac, tri.fig_total_stress, tri.fig_partial_stress, tri.fig_network_stress,
-          tri.fig_piston, tri.fig_M, tri.fig_ratio, tri.fig_G, tri.fig_Dc_reswelling, tri.fig_kappa, tri.fig_wet_pistons, tri.fig_solvent_expelled,
-          tri.fig_thermo_pressure, tri.fig_osmotic_pressure):
-    f(cfg, R, L) if f is not tri.fig_strain else f(cfg, R, [L])
+for f in (uni.fig_strain, uni.fig_volfrac, uni.fig_total_stress, uni.fig_partial_stress, uni.fig_network_stress,
+          uni.fig_piston, uni.fig_M, uni.fig_ratio, uni.fig_G, uni.fig_Dc_reswelling, uni.fig_kappa, uni.fig_wet_pistons, uni.fig_solvent_expelled,
+          uni.fig_thermo_pressure, uni.fig_osmotic_pressure):
+    f(cfg, R, L) if f is not uni.fig_strain else f(cfg, R, [L])
     plt.close('all')
-for f in (tri.fig_volfrac_sweep, tri.fig_total_stress_sweep, tri.fig_partial_stress_sweep, tri.fig_network_stress_sweep,
-          tri.fig_piston_sweep, tri.fig_M_sweep, tri.fig_stress_strain_sweep, tri.fig_ratio_sweep, tri.fig_G_sweep,
-          tri.fig_Dc_sweep, tri.fig_kappa_sweep, tri.fig_wet_pistons_sweep, tri.fig_thermo_pressure_sweep, tri.fig_osmotic_pressure_sweep):
+for f in (uni.fig_volfrac_sweep, uni.fig_total_stress_sweep, uni.fig_partial_stress_sweep, uni.fig_network_stress_sweep,
+          uni.fig_piston_sweep, uni.fig_M_sweep, uni.fig_stress_strain_sweep, uni.fig_ratio_sweep, uni.fig_G_sweep,
+          uni.fig_Dc_sweep, uni.fig_kappa_sweep, uni.fig_wet_pistons_sweep, uni.fig_thermo_pressure_sweep, uni.fig_osmotic_pressure_sweep):
     f(cfg, R, LEVELS)
     plt.close('all')
-tri.fig_strain(cfg, R, LEVELS, stem='sweep_strain_diagnostic')
+uni.fig_strain(cfg, R, LEVELS, stem='sweep_strain_diagnostic')
 assert L['wet'] is not None and 'P_feed_meas' in L['wet']['plat']
 
 print('\n################ permeation (two-piston fixture) ################')
-cfgp = tri.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', two_pist=True, base_dir=base,
+cfgp = uni.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', two_pist=True, base_dir=base,
                   P_CAL_MODE='pore')          # the fixture traj has 80 mobile atoms: the Voronoi pass is cheap here
-Rp = tri.load_reference(cfgp)
-P = tri.load_permeation(cfgp, Rp)
-tri.add_perm_volume_fractions(cfgp, Rp, P)
-tri.add_perm_psd(cfgp, Rp, P)                # geometric porosity + PSD on the same (tiny) frames
-tri.add_perm_displacement(cfgp, Rp, P)
-tri.add_perm_vctrl(cfgp, Rp, P)              # deck Phase 2v: feed piston at a prescribed velocity, live network
-tri.add_perm_frozen(cfgp, Rp, P)             # deck Phase 2d: the frozen network at the same velocity
-tri.print_perm_summary(cfgp, Rp, P)
-X = tri.perm_reconcile(cfgp, Rp, P)
+Rp = uni.load_reference(cfgp)
+P = uni.load_permeation(cfgp, Rp)
+uni.add_perm_volume_fractions(cfgp, Rp, P)
+uni.add_perm_psd(cfgp, Rp, P)                # geometric porosity + PSD on the same (tiny) frames
+uni.add_perm_displacement(cfgp, Rp, P)
+uni.add_perm_vctrl(cfgp, Rp, P)              # deck Phase 2v: feed piston at a prescribed velocity, live network
+uni.add_perm_frozen(cfgp, Rp, P)             # deck Phase 2d: the frozen network at the same velocity
+uni.print_perm_summary(cfgp, Rp, P)
+X = uni.perm_reconcile(cfgp, Rp, P)
 # the fixture's stages: one prescribed flux, dP 0.10 live and 0.12 frozen
 Sv, Sf = P['vctrl'], P['frozen']
 assert Sv is not None and Sv['mode'] == 'velocity' and Sv['primary'] == 'v_measured', 'velocity-controlled stage not read'
@@ -57,23 +57,23 @@ assert abs(Sv['Q_ratio'] - 1.0) < 0.05, f"N-slope flux / prescribed flux = {Sv['
 assert abs(Sf['ratio']['v_measured']['r'] - Sv['dP_meas'] / Sf['dP_meas']) < 1e-3, Sf['ratio']   # same flux, so the kappa ratio is the inverse dP ratio (L differs by noise only)
 assert abs(Sv['k']['v_measured']['k'] - Sv['q_set'] * Sv['L'] / Sv['dP_meas']) < 1e-9
 assert {'v', 'f', 'dP'} <= set(X['kappa']) and 'kappa_f over kappa_v' in X['closure'], X
-for f in (tri.fig_perm_stages, tri.fig_perm_reconcile, tri.fig_perm_frozen):
+for f in (uni.fig_perm_stages, uni.fig_perm_reconcile, uni.fig_perm_frozen):
     assert f(cfgp, Rp, P) is not None, f.__name__
     plt.close('all')
 # a run without the stage files (every run before 2026-11-16) still loads and reconciles on the constant-dP kappa
-cfg0 = tri.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', two_pist=True, base_dir=base,
+cfg0 = uni.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', two_pist=True, base_dir=base,
                   VOR_ENABLE=False, PSD_ENABLE=False, PERM_VCTRL=False, PERM_FROZEN=False)
-P0 = tri.load_permeation(cfg0, Rp, verbose=False)
-tri.add_perm_displacement(cfg0, Rp, P0, verbose=False)
-tri.add_perm_vctrl(cfg0, Rp, P0, verbose=False); tri.add_perm_frozen(cfg0, Rp, P0, verbose=False)
+P0 = uni.load_permeation(cfg0, Rp, verbose=False)
+uni.add_perm_displacement(cfg0, Rp, P0, verbose=False)
+uni.add_perm_vctrl(cfg0, Rp, P0, verbose=False); uni.add_perm_frozen(cfg0, Rp, P0, verbose=False)
 assert P0['vctrl'] is None and P0['frozen'] is None
-X0 = tri.perm_reconcile(cfg0, Rp, P0, verbose=False)
+X0 = uni.perm_reconcile(cfg0, Rp, P0, verbose=False)
 assert 'v' not in X0['kappa'] and 'dP' in X0['kappa']
-tri.fig_perm_stages(cfg0, Rp, P0); tri.fig_perm_reconcile(cfg0, Rp, P0)
+uni.fig_perm_stages(cfg0, Rp, P0); uni.fig_perm_reconcile(cfg0, Rp, P0)
 plt.close('all')
-for f in (tri.fig_perm_pistons, tri.fig_total_stress, tri.fig_partial_stress, tri.fig_network_stress, tri.fig_perm_density,
-          tri.fig_perm_volfrac, tri.fig_perm_volfrac_evolution, tri.fig_perm_psd, tri.fig_perm_flux, tri.fig_perm_permeability,
-          tri.fig_thermo_pressure, tri.fig_osmotic_pressure):
+for f in (uni.fig_perm_pistons, uni.fig_total_stress, uni.fig_partial_stress, uni.fig_network_stress, uni.fig_perm_density,
+          uni.fig_perm_volfrac, uni.fig_perm_volfrac_evolution, uni.fig_perm_psd, uni.fig_perm_flux, uni.fig_perm_permeability,
+          uni.fig_thermo_pressure, uni.fig_osmotic_pressure):
     f(cfgp, Rp, P)
     plt.close('all')
 assert P['flux'] is not None and any(k.endswith('applied') for k in P['flux']['k'])
@@ -96,8 +96,8 @@ if Rp.get('CALIB') is not None:
     # the other two modes must run too (cached tessellation -> instant)
     for mode in ('thermo', 'const'):
         cfgp.P_CAL_MODE = mode
-        P2 = tri.load_permeation(cfgp, Rp, verbose=False)
-        tri.add_perm_volume_fractions(cfgp, Rp, P2)
+        P2 = uni.load_permeation(cfgp, Rp, verbose=False)
+        uni.add_perm_volume_fractions(cfgp, Rp, P2)
         assert P2['phi_cal'] is not None, mode
         plt.close('all')
 
@@ -166,7 +166,7 @@ for f in (bulk.fig_plates_sweep, bulk.fig_K_sweep, bulk.fig_stress_strain_sweep,
 assert abs(Rb['K_small_net'] - K_TRUE) < 0.06 * K_TRUE and abs(Rb['K_small_pl'] - K_TRUE) < 0.06 * K_TRUE, 'small-strain slopes'
 pngs = {q.name for q in cfgb.PLOT_DIR.glob('*.png')}
 assert any('_alongx_' in q for q in pngs) and any('_alongy_' in q for q in pngs), 'per-axis figures were not tagged'
-assert tri._save.__module__ == 'triaxial', 'the axis context did not restore triaxial._save'
+assert uni._save.__module__ == 'uniaxial', 'the axis context did not restore uniaxial._save'
 # K_STRAIN = 'rg': the same stress over the network's own strain
 cfgb.K_STRAIN = 'rg'
 L2 = bulk.load_level(cfgb, Rb, '0.10', verbose=False)

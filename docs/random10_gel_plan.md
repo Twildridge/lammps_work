@@ -139,7 +139,7 @@ All four jobs of the bridge finished on 2026-11-16. Three are valid; the compres
   loops, no dangling ends; rot45 lattices 4-8 sigma). The plates seat on the outermost bead, so the 9 sigma closure at strain
   0.10 went into that fringe: Rg strain 2.5 %, stress 0.0045 +/- 0.0007, no plateau.
 - **Rerun.** `SEAT_MODE=rg UNLOAD_MARGIN=8` with the bridge's `NSTEPS_OVERRIDE=4000000 UNLOAD_STEPS=7000000` on
-  `triaxial_compression_two_pist_single.batch` (plates seated on the Rg face; strain still measured on the bounding box; see
+  `uniaxial_compression_single.batch` (plates seated on the Rg face; strain still measured on the bounding box; see
   "SEAT_MODE and the credit guards" in `running_simulations.md`). About 7,600 SU; the guards stop it early if the seating
   pre-strains the network by more than 0.10 or the Rg strain stays below half the applied strain.
   Submitted 2026-11-16 as job 55793779 (`triax_comp2p_w10_rg`, 16 h limit, unload/re-swell on); files `_4000000_c0.10` and `_u0.10`.
@@ -150,6 +150,6 @@ All four jobs of the bridge finished on 2026-11-16. Three are valid; the compres
   Since 2026-11-16 the default sequence has a velocity-controlled stage between the drive and the frozen stage (feed piston at
   the drive's mean velocity, dP measured), and the frozen stage keeps that velocity instead of the applied dP; see "Permeation
   sequence since 2026-11-16" in `running_simulations.md`. The converted file needs feed-reservoir room for both stages.
-- **Code status.** `seat_mode` and the three guards (compression deck and `compress_slab`, commit e9f0e86) have run only on a toy
+- **Code status.** `seat_mode` and the three guards (compression deck and `isotropic_compression`, commit e9f0e86) have run only on a toy
   system: smoke-test both decks locally before the rerun. The permeation deck gained the velocity-controlled stage on 2026-11-16 (smoke-tested locally, not yet run on Expanse).
 

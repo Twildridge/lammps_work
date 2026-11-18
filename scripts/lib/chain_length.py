@@ -5,11 +5,11 @@ Two kinds of input, both keyed by N = beads per strand:
   * the EQUILIBRATION runs of simulations/chain_length_testing (slab_with_support.lmp with the Rg-plateau
     halt): the volume_data files (gel_volume_rg, gel_dimensions, box_dimensions) and the log's RG_BLOCK /
     RG_PLATEAU_CONVERGED lines -> Rg(t), thickness and in-plane box per N, where the halt fired;
-  * the COMPRESSION runs (triaxial_compression_two_pist on the converted final_config of each N), each loaded
-    by lib/triaxial.py exactly as the compression notebooks load it (compare.load_deck) -> M, G, phi_s per N.
+  * the COMPRESSION runs (uniaxial_compression on the converted final_config of each N), each loaded
+    by lib/uniaxial.py exactly as the compression notebooks load it (compare.load_deck) -> M, G, phi_s per N.
 
 The figures: the equilibration traces overlaid (one line per N), and the observables against N on log axes with
-a fitted power-law guide each.  Nothing here recomputes what triaxial.py computes; it only collects and draws.
+a fitted power-law guide each.  Nothing here recomputes what uniaxial.py computes; it only collects and draws.
 """
 from __future__ import annotations
 
@@ -210,7 +210,7 @@ def sync_equilibration(nbeads, local=EQ_LOCAL, remote_roots=EQ_REMOTE, interacti
     (remembered in local/.sync_absent.json), or force=True (clears that memory); the download skips files
     whose local copy is at least as new, so force=True on a run still in flight only fetches what grew.
     Returns the list of N with a local run directory afterwards."""
-    import triaxial as tri
+    import uniaxial as uni
     local = Path(local).expanduser()
     import json
     absent_f = local / '.sync_absent.json'
@@ -245,16 +245,16 @@ def sync_equilibration(nbeads, local=EQ_LOCAL, remote_roots=EQ_REMOTE, interacti
                                       else 'missing trace(s): ' + ', '.join(f'N {n} {f}' for n, f in lacking))
     print(f'Syncing equilibration runs from Expanse ({why}) ...')
     stage = f'/home/{user}/Documents/lammps_runs/chain_length_stage'
-    ssh, transport = tri.expanse_login(host, user)
+    ssh, transport = uni.expanse_login(host, user)
     print('Step 1 -- staging the run directories on Expanse ...')
-    out, err = tri.expanse_run_script(ssh, transport, eq_stage_script(nbeads, stage, remote_roots, interaction),
+    out, err = uni.expanse_run_script(ssh, transport, eq_stage_script(nbeads, stage, remote_roots, interaction),
                                       what='the staging command')
     print(out.rstrip())
     if err.strip():
         print('  (stderr) ' + err.strip().replace('\n', '\n  (stderr) '))
     print(f'Step 2 -- downloading via SFTP into {local} (skips files already up to date)...')
     sftp = ssh.open_sftp()
-    tri.sftp_pull_tree(sftp, stage, local)
+    uni.sftp_pull_tree(sftp, stage, local)
     sftp.close()
     ssh.close()
     have = _have()
@@ -362,7 +362,7 @@ def print_table(rows):
               f"{r['M_pist']:>8.3f} {r['G_xx']:>8.3f} [{r['G_xx_lo']:.3f},{r['G_xx_hi']:.3f}] {r['G_yy']:>7.3f} "
               f"{r['phi_s_ref']:>9.3f} {r['phi_s']:>7.3f} {r['G_xx'] / r['M_net'] if r['M_net'] else np.nan:>6.3f} | "
               f"{r['Rg']:>6.2f} {r['thickness']:>6.1f} {r['lx']:>6.2f}")
-    print('  M, G from the lowest compression level of each N (lib/triaxial.py: M_net = network stress increment / eps_M, '
+    print('  M, G from the lowest compression level of each N (lib/uniaxial.py: M_net = network stress increment / eps_M, '
           'G from the lateral network stress); phi_s = calibrated interior solvent volume fraction (reference = uncompressed)')
 
 

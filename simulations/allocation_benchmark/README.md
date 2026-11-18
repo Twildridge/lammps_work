@@ -101,7 +101,7 @@ nodes (node placement differs between jobs), so neighbouring node counts inside 
 **Deck change made the same evening.** Every active deck under `simulations/` now sets
 `variable comm_cutoff index 2.5` and issues `comm_modify cutoff ${comm_cutoff}` once the bonds
 are relaxed: `slab_with_support.lmp` (and its symlink `chain_length_testing.lmp`) and
-`polymer_pure.lmp` keep 5.0 through the push-off of a fresh file and switch right after it; the
+`pure_polymer.lmp` keep 5.0 through the push-off of a fresh file and switch right after it; the
 two-piston, phase and solvent decks, which read relaxed files, switch at start-up. `-var
 comm_cutoff 5.0` restores the old behaviour. **Decision 2026-11-08:** `MPI_MAP_BY=core` in `scripts/lib/site.sh` (the runner maps `ppr:128:node:pe=1`) and 6 nodes x 128 x 1 in
 every production batch; the summary table is in `docs/running_simulations.md` §5f.

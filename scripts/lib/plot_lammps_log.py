@@ -5,13 +5,13 @@ plot_lammps_log.py  —  Convergence and shear-diagnostics plots for LAMMPS runs
 Usage (general / slab_with_flow / slab_with_support):
     python plot_lammps_log.py <folder> <dataname>
 
-Usage (shear_slab — output files include interaction + nsteps in suffix):
+Usage (simple_shear_plates — output files include interaction + nsteps in suffix):
     python plot_lammps_log.py <folder> <dataname> \\
         --run-id <dataname>_<interaction>_<nsteps>
 
 <folder>   : run directory containing log.lammps
 <dataname> : base name used as plot title and for legacy file lookups
---run-id   : full output-file suffix for shear_slab runs
+--run-id   : full output-file suffix for simple_shear_plates runs
              (dataname_interaction_nsteps).  Defaults to <dataname>.
 
 Output (saved inside <folder>/output_plots/convergence_plots/):
@@ -242,7 +242,7 @@ def plot_convergence(data, folder, run_id, output):
     """Standard convergence figure for any sim type.
 
     Reads output files using run_id as the filename suffix (= dataname for
-    non-shear sims; = dataname_interaction_nsteps for shear_slab)."""
+    non-shear sims; = dataname_interaction_nsteps for simple_shear_plates)."""
     vd = os.path.join(folder, 'output_files', 'volume_data')
 
     box_file         = os.path.join(vd, f'box_dimensions_{run_id}.dat')
@@ -256,7 +256,7 @@ def plot_convergence(data, folder, run_id, output):
     has_gel_rg      = os.path.exists(gel_rg_file)
     # gel_volume_rg and gel_dimensions_rg give the same Rg volume (the volume file is the
     # product of the three edges), so draw the dims-based panel only when the volume file
-    # is missing (shear_slab writes only the dims file).
+    # is missing (simple_shear_plates writes only the dims file).
     has_gel_dims_rg = os.path.exists(gel_dims_rg_file) and not has_gel_rg
     has_num_dens    = os.path.exists(num_dens_file)
 
@@ -268,7 +268,7 @@ def plot_convergence(data, folder, run_id, output):
     idx = 0
     steps = data.get('Step', np.array([]))
 
-    # ── Temperature (supports both standard 'Temp' and shear_slab 'c_mobile_temp')
+    # ── Temperature (supports both standard 'Temp' and simple_shear_plates 'c_mobile_temp')
     temp_key = _first_key(data, 'Temp', 'c_mobile_temp')
     if temp_key:
         ax = axes[idx]; idx += 1
@@ -349,7 +349,7 @@ def plot_convergence(data, folder, run_id, output):
             ax.grid(alpha=0.3)
             _annotate_last30(ax, y)
 
-    # ── Gel volume — Rg dimensions file (shear_slab: gel_dimensions_rg_*.dat)
+    # ── Gel volume — Rg dimensions file (simple_shear_plates: gel_dimensions_rg_*.dat)
     # Columns: step  lx_rg  ly_rg  lz_rg  →  vol = product of last three
     if has_gel_dims_rg:
         arr = read_fix_print(gel_dims_rg_file)
@@ -391,7 +391,7 @@ def plot_stress_anisotropy(folder, run_id, output):
 
     Panels: (1) the three polymer partial stresses, (2) sig_p_xx/sig_p_zz and
     sig_p_yy/sig_p_zz -- the quantity to watch: both must sit at 1 (within the
-    last-30% scatter) before the slab is used as a triaxial input, (3) the same
+    last-30% scatter) before the slab is used as a uniaxial input, (3) the same
     ratios for the total pressure tensor, which the barostat pins to 1 by
     construction (context only)."""
     sd = os.path.join(folder, 'output_files', 'stress_data')
@@ -628,28 +628,28 @@ def plot_shear_diagnostics(data, folder, run_id, output):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# COMPRESSION (NORMAL-STRESS) DIAGNOSTICS PLOT  — compress_slab only
+# COMPRESSION (NORMAL-STRESS) DIAGNOSTICS PLOT  — isotropic_compression only
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_compression_diagnostics(data, folder, run_id, output):
-    """Normal-stress diagnostics for compress_slab runs.
+    """Normal-stress diagnostics for isotropic_compression runs.
 
     Replaces the shear-stress panel (which is meaningless for isotropic
     compression) with the three POLYMER normal stresses and their average.
     Auto-triggered only when bulk_modulus_plot_data_<run_id>.dat is present, so
-    shear_slab runs keep using plot_shear_diagnostics untouched.
+    simple_shear_plates runs keep using plot_shear_diagnostics untouched.
 
     Panels (shown when data is available):
       1. Temperature                    — thermo c_gel_temp
       2. Polymer normal stresses        — σ_xx, σ_yy, σ_zz vs step
                                           (all polymer / V_gel(Rg))
       3. Mean normal stress Π           — osmotic pressure vs step (signed;
-                                          compress_slab.lmp bakes in the sign
+                                          isotropic_compression.lmp bakes in the sign
                                           so +Π = compression, no abs() here —
                                           see NOTE below)
       4. Gel volume V_gel(Rg)           — context for the Π-vs-V bulk modulus
 
-    NOTE on sign: compress_slab.lmp's Pi_osm column already applies the
+    NOTE on sign: isotropic_compression.lmp's Pi_osm column already applies the
     -(1/3)tr(sigma) sign (fixed 2026-08-20) so this column is the physical,
     positive-under-compression osmotic pressure directly — do not take abs()
     of it (that folds any real negative excursion, e.g. during equilibration,
@@ -1177,7 +1177,7 @@ if __name__ == '__main__':
                         help='Base data name (plot title; file lookup key for '
                              'non-shear sims)')
     parser.add_argument('--run-id', dest='run_id', default=None,
-                        help='Full output-file suffix for shear_slab runs: '
+                        help='Full output-file suffix for simple_shear_plates runs: '
                              'dataname_interaction_nsteps.  '
                              'Defaults to <dataname> if omitted.')
     parser.add_argument('--p-ext', dest='p_ext', type=float, default=None,
@@ -1209,9 +1209,9 @@ if __name__ == '__main__':
         plot_stress_anisotropy(args.folder, run_id,
                                os.path.join(out_dir, f'{run_id}_stress_anisotropy.png'))
 
-    # Compression diagnostics (compress_slab) — auto-triggered when the osmotic
+    # Compression diagnostics (isotropic_compression) — auto-triggered when the osmotic
     # bulk-modulus data file is present.  Takes precedence over (and suppresses)
-    # the shear plot, since compress_slab has no meaningful shear signal.
+    # the shear plot, since isotropic_compression has no meaningful shear signal.
     sd = os.path.join(args.folder, 'output_files', 'stress_data')
     is_compress = os.path.exists(
         os.path.join(sd, f'bulk_modulus_plot_data_{run_id}.dat'))
@@ -1221,7 +1221,7 @@ if __name__ == '__main__':
             os.path.join(out_dir, f'{run_id}_compression_diagnostics.png'))
 
     # Shear diagnostics (auto-triggered by presence of shear output files or
-    # shear-specific thermo columns Pxz / Xz).  Skipped for compress_slab runs.
+    # shear-specific thermo columns Pxz / Xz).  Skipped for isotropic_compression runs.
     shear_files_present = (
         os.path.exists(os.path.join(sd, f'stress_tensor_polymer_{run_id}.dat')) or
         os.path.exists(os.path.join(sd, f'shear_strain_{run_id}.dat'))

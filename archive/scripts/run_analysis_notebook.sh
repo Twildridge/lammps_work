@@ -14,12 +14,12 @@
 #   bash run_analysis_notebook.sh <notebook.ipynb> [timeout_seconds]
 #
 # Example:
-#   bash scripts/run_analysis_notebook.sh triaxial_compression.ipynb
+#   bash scripts/run_analysis_notebook.sh uniaxial_compression_one_pist.ipynb
 #
 # Notes:
 #   - Run from anywhere; the notebook path is resolved relative to this
 #     script's own directory (scripts/) unless given as an absolute path.
-#   - Some notebooks (e.g. triaxial_compression.ipynb) opportunistically
+#   - Some notebooks (e.g. uniaxial_compression_one_pist.ipynb) opportunistically
 #     rsync missing files from a cluster over SSH; if the cluster/VPN is
 #     unreachable those cells print a warning and continue rather than
 #     hanging indefinitely, but budget extra wall time for that case.

@@ -65,7 +65,7 @@ Base snapshot (`BASE_SNAPSHOT`): the 14M-step P=1.5
 re-equilibration at each grid P erases the snapshot's origin.
 
 **Before production:** set the low end of `NF_GRID` to span the max φ_p
-reached in the c0.40 `triaxial_compression` profiles (validation needs the
+reached in the c0.40 `uniaxial_compression_one_pist` profiles (validation needs the
 calibration surface to cover the production range).
 
 ## How to run (Expanse login node)
@@ -118,7 +118,7 @@ production notebooks load it via `lib/volfrac.py: load_calibration()`.
 
 ## Engine notes
 
-`polymer_pure.lmp` (mixed + polymer boxes) and `solvent_pure.lmp` both run the
+`pure_polymer.lmp` (mixed + polymer boxes) and `pure_solvent.lmp` both run the
 barostat **aniso** (2026-08) and log the full pressure tensor. The
 convergence gate — Pxx≈Pyy≈Pzz within CI, stable aspect ratio, off-diagonals
 flagged only — is checked in analysis, never enforced in-run. No Voronoi

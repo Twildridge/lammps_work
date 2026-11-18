@@ -31,7 +31,7 @@ Full details are in [`lj_units_cheat_sheet.md`](../lj_units_cheat_sheet.md). Key
 Match the barostat to the geometry:
 
 - **Free-swelling gel in a solvent bath** (`slab_with_support` equilibration): use `fix npt … aniso P P pdamp`. Each of x, y, z is barostatted independently to the target pressure, so the box adopts whatever aspect ratio balances σxx = σyy = σzz = P and the gel relaxes to its own equilibrium shape — the analogue of a hydrogel free to swell in all directions. **Do not use `iso` here:** `iso` controls only the mean (hydrostatic) pressure and freezes the box aspect ratio, so any anisotropic stress or z-padding baked into the data file is never relaxed. Switching `slab_with_support` from `iso` → `aniso` (2026-06-24) fixed exactly this: the gel had been stuck artificially swollen along z, and with `aniso` it reaches a noticeably taller, true equilibrium swelling. Use `couple xy` only if you must enforce lateral isotropy (a free gel reaches it anyway); use `tri` only to relax shear stress (lets the box tilt).
-- **Piston-driven runs** (`triaxial_compression_two_pist`, `triaxial_permeation_two_pist`; likewise the archived one-piston `triaxial_compression` / `triaxial_permeation`): production is `fix nvt` with the box fixed and the two plates (load piston down, support up — symmetric drive since 2026-09-18) as the sole z-actuators — **no box barostat in production** (a barostat would double-control z and fight the piston). The two-piston decks have no box barostat at all: the reservoirs are held at P* by NPT-pistons, and the input is the already-equilibrated aniso-NPH slab via the converter. The archived one-piston decks instead ran a Phase-0.5 aniso NPH pre-equilibration with the piston/support temporarily on `nve`+`setforce` so they scaled with the box.
+- **Piston-driven runs** (`uniaxial_compression`, `uniaxial_permeation`; likewise the archived one-piston `uniaxial_compression_one_pist` / `uniaxial_permeation_one_pist`): production is `fix nvt` with the box fixed and the two plates (load piston down, support up — symmetric drive since 2026-09-18) as the sole z-actuators — **no box barostat in production** (a barostat would double-control z and fight the piston). The two-piston decks have no box barostat at all: the reservoirs are held at P* by NPT-pistons, and the input is the already-equilibrated aniso-NPH slab via the converter. The archived one-piston decks instead ran a Phase-0.5 aniso NPH pre-equilibration with the piston/support temporarily on `nve`+`setforce` so they scaled with the box.
 
   As of **2026-07-29** this Phase-0.5 barostat is **`fix nph z`** (z-only), replacing the earlier `aniso`/`iso` forms. Rationale: transverse (xx, yy) stresses build up in the polymer network during compression or permeation; a scalar (`iso`) or per-axis (`aniso`) barostat would let those transverse stresses perturb the box and drift the reservoir pressure. Barostatting **z only** targets the zz stress component directly, holding the solvent reservoir at Pzz = P* = 1.5 while x, y box dimensions stay fixed at the periodic slab's equilibrium extent. Because the target is now Pzz (not the full scalar `Press`), the old `+0.41` kinetic offset used by `slab_with_flow`'s `iso` convention is dropped — all three scripts target `npt_P05_target = P_target`.
 
@@ -49,7 +49,7 @@ The gel is a two-phase (poroelastic) material, so the measured total stress in e
 
     σᵗ_ii(z) = σ′_ii(z) + p_pore,        ii = zz, xx, yy
 
-where p_pore is the solvent (pore) pressure and σ′ is the **network** (effective) stress carried by the polymer. In the triaxial decks (the standard two-piston ones and the archived one-piston ones) the polymer + solvent partial stress profiles are written for all three diagonal components, and `scripts/lib/triaxial.py` treats every component the same way: p_pore for that component is read from the flat far-reservoir window of the **same** component's total profile (the reservoir fluid is isotropic, so the three baselines agree to noise), and σ′_ii is the total minus that baseline. In the two-piston geometry that window is the feed reservoir between the gel top and the feed piston, rebuilt per snapshot from the measured piston plane and restricted to bins lying entirely ≥ 3 σ (`Config.res_wall_margin`) from the piston sheet: the solvent next to a piston is depleted/layered and half of the wall pair virial is booked on the piston atoms (not in the solvent profile group), so a bin touching the piston reads σ_zz ≈ 1.43 for a 1.50 bath and would bias every σ′ by that much. At ε = 0 mechanical equilibrium with the bath forces σ′_zz ≈ 0; the lateral σ′_xx, σ′_yy need not vanish because the periodic box fixes l_x, l_y, so the moduli below use **increments** relative to the reference state.
+where p_pore is the solvent (pore) pressure and σ′ is the **network** (effective) stress carried by the polymer. In the uniaxial decks (the standard two-piston ones and the archived one-piston ones) the polymer + solvent partial stress profiles are written for all three diagonal components, and `scripts/lib/uniaxial.py` treats every component the same way: p_pore for that component is read from the flat far-reservoir window of the **same** component's total profile (the reservoir fluid is isotropic, so the three baselines agree to noise), and σ′_ii is the total minus that baseline. In the two-piston geometry that window is the feed reservoir between the gel top and the feed piston, rebuilt per snapshot from the measured piston plane and restricted to bins lying entirely ≥ 3 σ (`Config.res_wall_margin`) from the piston sheet: the solvent next to a piston is depleted/layered and half of the wall pair virial is booked on the piston atoms (not in the solvent profile group), so a bin touching the piston reads σ_zz ≈ 1.43 for a 1.50 bath and would bias every σ′ by that much. At ε = 0 mechanical equilibrium with the bath forces σ′_zz ≈ 0; the lateral σ′_xx, σ′_yy need not vanish because the periodic box fixes l_x, l_y, so the moduli below use **increments** relative to the reference state.
 
 Uniaxial strain ε along z with the lateral box fixed (ε_xx = ε_yy = 0), isotropic drained network with Lamé constants λ, G and longitudinal modulus M = λ + 2G:
 
@@ -59,7 +59,7 @@ so
 
     M = σ′_zz / ε,      σ′_zz / σ′_xx = M / (M − 2G),      G = (σ′_zz − σ′_xx) / (2ε)
 
-(Note the ratio is M/(M − 2G), **not** M/(M − 2G/3): λ = K − 2G/3 and M = K + 4G/3, so M − 2G = λ.) `M_network` uses the plateau network profile averaged over the membrane; `M_piston` = ⟨P⟩/ε from the block-bootstrapped piston force is the independent check. G is formed once from xx and once from yy; by symmetry the two must agree, and their spread is a second error estimate. The cooperative diffusivity D_c from the consolidation fit of u_z(z,t) then gives the hydraulic permeability κ = D_c/M (κ = k/η). All of this is implemented in `scripts/lib/triaxial.py` and drawn by `triaxial_compression_{single,sweep}.ipynb` (see `docs/analysis.md` §7b).
+(Note the ratio is M/(M − 2G), **not** M/(M − 2G/3): λ = K − 2G/3 and M = K + 4G/3, so M − 2G = λ.) `M_network` uses the plateau network profile averaged over the membrane; `M_piston` = ⟨P⟩/ε from the block-bootstrapped piston force is the independent check. G is formed once from xx and once from yy; by symmetry the two must agree, and their spread is a second error estimate. The cooperative diffusivity D_c from the consolidation fit of u_z(z,t) then gives the hydraulic permeability κ = D_c/M (κ = k/η). All of this is implemented in `scripts/lib/uniaxial.py` and drawn by `uniaxial_compression_one_pist_{single,sweep}.ipynb` (see `docs/analysis.md` §7b).
 
 **Consolidation modes (re-derived 2026-09-28).** The 1-D equation is ∂u_z/∂t = q(t) + D_c ∂²u_z/∂z² with q the total
 (mixture) flux — uniform in z but time-dependent — so the boundary conditions on u alone never fix the modes; the closure
@@ -72,7 +72,7 @@ constant-load L²/(π²D_c); q = 0 exactly for the symmetric drive, non-zero for
 support equals ΔP from t = 0⁺, so ε has Dirichlet ends (ΔP/M at the support, 0 at the free face), the displacement modes
 are 1 − cos(kπζ) at k²π²D_c/L² — **τ₁ = L²/(π²D_c)** — and the steady state is the parabola u_ss = −(ΔP L/2M)[ζ² − 2ζ],
 u_F = −ΔP L/(2M), i.e. **M = ΔP L/(2|u_F|)**. A *prescribed flux* (a pump, not our case) would give sin((k − ½)πζ) and
-τ₁ = 4L²/(π²D_c). Both fits in `lib/triaxial.py` had used a wrong family before 2026-09-28 (compression: Terzaghi's
+τ₁ = 4L²/(π²D_c). Both fits in `lib/uniaxial.py` had used a wrong family before 2026-09-28 (compression: Terzaghi's
 load-control shapes bent to vanish at both plates, ~5× too high a D_c; permeation, briefly: the prescribed-flux modes, 4×).
 With the corrected modes, comp_1 at ε = 0.1 gives D_c = 0.043 and κ = D_c/M = 0.13; perm_2 gives D_c ≈ 0.2, M ≈ 0.48
 and κ = D_c/M ≈ 0.4 against the Darcy κ = Q L/(A ΔP) = 0.29 — the two-piston consistency test now agrees to a factor 2–3.
@@ -90,7 +90,7 @@ not a convention factor.
 
 ## NPT-piston reservoirs (two-piston sequence)
 
-*(2026-09-16; `triaxial_permeation_two_pist`, `triaxial_compression_two_pist`, converter `slab_two_pistons_periodic.ipynb`.)*
+*(2026-09-16; `uniaxial_permeation`, `uniaxial_compression`, converter `slab_two_pistons_periodic.ipynb`.)*
 
 **Piston law.** Marioni et al., *J. Membr. Sci.* 738 (2026) 124837 ("Non-equilibrium simulations of hydraulic
 permeation: role of mechanical boundary conditions in dense membranes") hold each solvent reservoir at a prescribed
@@ -114,7 +114,7 @@ removes their thermal energy.  The bead mass is a deck variable (`mass 5/6/7 ${p
 **The damper is a settle aid only (permeation deck, 2026-09-23).**  Under steady flow the drag acts as a pressure
 C·v·N/A on each sheet: in the 2026-09-22 run (v ≈ 2×10⁻⁴ σ/τ, C ≈ 16–19, N ≈ 23,300, A ≈ 2320) that is ≈ 0.037 per
 sheet, and the measured P_feed − P_perm was ≈ 0.03 for an applied dP = 0.1 — the damper on the two sheets ate two
-thirds of the drive.  `triaxial_permeation_two_pist.lmp` therefore redefines `fz_feed`/`fz_perm` without the −C·v
+thirds of the drive.  `uniaxial_permeation.lmp` therefore redefines `fz_feed`/`fz_perm` without the −C·v
 term at the start of Phase 2 (`damp_prod = 0`, default; `damp_prod = 1` restores the old behaviour).  The sheets
 stay overdamped anyway: the gel's hydraulic resistance R = dP/Q gives an equivalent damping R·A² ≈ 0.8 of critical.
 The damper does not set the noise of the flux either — that is the sheet's thermal velocity (√(kT/M) ≈ the drift

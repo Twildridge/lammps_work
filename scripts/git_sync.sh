@@ -30,7 +30,7 @@
 #
 # WHY RUN IT ON THE CLUSTER TOO: edits made directly on Expanse (e.g. tweaking
 # NSTEPS in a .batch before an sbatch) are otherwise uncommitted, and
-# triaxial_compression.batch self-syncs with `git pull --rebase --autostash` at
+# uniaxial_compression_single.batch self-syncs with `git pull --rebase --autostash` at
 # job start.  Running lsync there commits those edits instead of leaving them to
 # be stashed and silently reapplied — and makes them visible on the Mac side.
 # =============================================================================

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=pure_solvent
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=1:00:00
+#SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
+
+# One NPT run of a solvent-only box (the isolated gel with its polymer removed): pure_solvent.lmp
+# in its single-state-point mode (PHASE_SWEEP unset). The pressure sweep is pure_solvent_sweep.batch.
+# Knobs: PRESS_TARGET, VEL_SEED, CALIB_FRAMES / CALIB_DUMP_EVERY.
+
+FOLDER=pure_solvent
+DATANAME=final_config_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_solvent_only
+INTERACTION=1.0_0.0
+NSTEPS=100000
+
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

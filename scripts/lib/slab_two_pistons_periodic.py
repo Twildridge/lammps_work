@@ -3,8 +3,8 @@
 slab_two_pistons_periodic.py
 ===================
 CONVERTER: an equilibrated slab_with_support PERIODIC snapshot  ->  a two-piston
-(feed / permeate) data file for triaxial_permeation_two_pist.lmp and
-triaxial_compression_two_pist.lmp   (2026-09-16).
+(feed / permeate) data file for uniaxial_permeation.lmp and
+uniaxial_compression.lmp   (2026-09-16).
 
 Why a converter and not a fresh lattice
 ---------------------------------------

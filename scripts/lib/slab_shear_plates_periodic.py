@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-slab_shear_plates_periodic.py -- CONVERTER: equilibrated PERIODIC slab -> shear_slab input (2026-09-22)
+slab_shear_plates_periodic.py -- CONVERTER: equilibrated PERIODIC slab -> simple_shear_plates input (2026-09-22)
 
 Turns a slab_with_support periodic snapshot (network percolating in x and y,
 finite in z, support + piston + bath solvent present) into the plated geometry
-that simulations/shear_slab/shear_slab.lmp expects -- plates NORMAL TO z on the
+that simulations/simple_shear_plates/simple_shear_plates.lmp expects -- plates NORMAL TO z on the
 slab's two free faces, driven +/-x (z = gap, x = shear, y = neutral), the same
 axes as the compression decks:
 
@@ -21,7 +21,7 @@ axes as the compression decks:
      into the fluid, and in a periodic box the gel cannot drain from their
      excluded volume otherwise compresses it (bulk gel P 1.53 instead of 1.50 in
      the shear hold, 2026-09-22); the radius is calibrated against that pressure
-     (shear_slab.lmp runs no barostat on this input -- see its Phase 1).
+     (simple_shear_plates.lmp runs no barostat on this input -- see its Phase 1).
 
 The result is a laterally infinite membrane sheared face-on between two plates.
 (The 2026-04-28 isolated-cube input had the plates on the x-faces driven +/-z,
@@ -38,13 +38,13 @@ outermost polymer beads, so the isolate step's `clearance` of bath solvent beyon
 the polymer span ends up BEHIND each plate (periodic z): with clearance 0.5 the
 film was ~3.5 sigma per side (the _with_plates file of 2026-09-22).  The default
 clearance is now 4.0 -> ~7 sigma of bath solvent per side (14 sigma across the
-periodic image), so the film is a proper solvent-only reservoir: shear_slab.lmp
+periodic image), so the film is a proper solvent-only reservoir: simple_shear_plates.lmp
 profiles the WHOLE box and the notebooks read p_pore from it (Terzaghi network
 stress), and the plates are permeable to solvent, so the film is the solvent's
 bath.  The input slab carries >= 7 sigma of bath solvent on both faces.
 Note:   image flags and the Velocities section of the input are dropped (the
         parsers read x y z only); bonds across x/y are minimum-image, which the
-        deck's `boundary p p p` handles, and shear_slab.lmp creates velocities.
+        deck's `boundary p p p` handles, and simple_shear_plates.lmp creates velocities.
 
 Usage:
   python slab_shear_plates_periodic.py [--input F] [--output F] [--clearance 0.5]
@@ -153,7 +153,7 @@ def main():
         entry = (f"\nShear input from the PERIODIC slab  [{info['date']}, slab_shear_plates_periodic.py]:\n"
                  f"  Input: {inp.name}\n"
                  f"  Steps: isolate (support/piston/bath solvent removed; x,y periodic kept; z = polymer span + {args.clearance}) "
-                 f"-> plates NORMAL TO z on the slab faces (driven +/-x in shear_slab.lmp)\n"
+                 f"-> plates NORMAL TO z on the slab faces (driven +/-x in simple_shear_plates.lmp)\n"
                  f"  Box: X (shear, periodic) {s['lx']:.3f} x Y {s['ly']:.3f} x Z (gap) {s['lz']:.3f}\n"
                  f"  Gel Z-extent {s['gel_z'][0]:.2f}..{s['gel_z'][1]:.2f} (gel_gap {s['gel_gap']:.2f}); plates at Z = "
                  f"{', '.join(f'{p:.2f}' for p in s['plate_z'])} (spacing {args.spacing}, offset {args.offset}, box_buffer {args.box_buffer}, solvent_delete {args.solvent_delete})\n"

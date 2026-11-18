@@ -13,9 +13,9 @@ DATANAME=$2
 INTERACTION=$3
 NSTEPS=$4
 TOTSTEPS=$NSTEPS
-STRAINS=${STRAINS:-0.1}  # Space-separated shear-strain list (shear_slab only); LAMMPS index var
+STRAINS=${STRAINS:-0.1}  # Space-separated shear-strain list (simple_shear_plates only); LAMMPS index var
 # COMPRESSIONS: space-separated cumulative strain targets, a LAMMPS index variable
-# (compress_slab: VOLUMETRIC strain).  Default 0.1 = one level.  Same stale-batch caveat
+# (isotropic_compression: VOLUMETRIC strain).  Default 0.1 = one level.  Same stale-batch caveat
 # as elsewhere: the batch must self-sync BEFORE exporting this.
 if [ -z "${COMPRESSIONS:-}" ]; then
     echo ">>> NOTE: COMPRESSIONS unset -- the compression decks fall back to the single level 0.1."
@@ -28,11 +28,11 @@ NPT_PISTON_STEPS=${NPT_PISTON_STEPS:-1000000}  # Phase-1 NPT-piston settle lengt
 SETTLE_HALT=${SETTLE_HALT:-0}                  # 1 = end the settle early once both pistons are at rest
 DRIVE_SPLIT=${DRIVE_SPLIT:-0.5}                # hi-plate share of each gap closure (0.5 = symmetric)
 PISTON_TRANSPARENT=${PISTON_TRANSPARENT:-0}    # slab_with_support: 1 = piston sheet invisible to solvent
-# compress_slab knobs (2026-09-29; the deck is the bulk-modulus counterpart of
-# triaxial_compression_two_pist and reads the SAME variables: COMPRESSIONS is its list of
+# isotropic_compression knobs (2026-09-29; the deck is the bulk-modulus counterpart of
+# uniaxial_compression and reads the SAME variables: COMPRESSIONS is its list of
 # cumulative VOLUMETRIC strain targets, and PRESS_TARGET / PISTON_MASS / C_PIST_FRAC /
 # NPT_PISTON_STEPS / SETTLE_HALT / DRIVE_SPLIT mean what they mean there).  Two more:
-#   SEAT_MODE  rg (default) | bb : the gel face the six plates seat on (compress_slab.lmp)
+#   SEAT_MODE  rg (default) | bb : the gel face the six plates seat on (isotropic_compression.lmp)
 #   HOLD_AUTO  1 (default) = size every hold from tau_1 = L^2/(pi^2 D_c); 0 = NSTEPS flat
 # BARO_MODE (slab_with_support only): aniso (default) | iso | z -- barostat coupling; use
 #   iso for an ISOLATED gel (see slab_with_support.lmp).
@@ -209,16 +209,16 @@ module load anaconda3/2024.10-1
 echo "Generating convergence plot..."
 python "$SCRIPT_DIR/lib/plot_lammps_log.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}"
 
-if [ "$FOLDER" = "compress_slab" ]; then
-    # compress_slab writes one file set per level, tagged _<hold>_c<level>, in the layout of
-    # triaxial_compression_two_pist: the consolidated sweep plotter overlays the levels.
+if [ "$FOLDER" = "isotropic_compression" ]; then
+    # isotropic_compression writes one file set per level, tagged _<hold>_c<level>, in the layout of
+    # uniaxial_compression: the consolidated sweep plotter overlays the levels.
     echo "Generating consolidated compression sweep plots (levels: $COMPRESSIONS)..."
     python "$SCRIPT_DIR/lib/plot_compression_strain_sweep.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$COMPRESSIONS" 0 \
         || echo "  WARNING: plot_compression_strain_sweep.py failed (skipping)"
     python "$SCRIPT_DIR/lib/plot_piston_data.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" 0 \
         || echo "  WARNING: plot_piston_data.py failed (skipping)"
-elif [ "$FOLDER" = "shear_slab" ]; then
-    # shear_slab writes per-strain (_g<strain>) files in its own schema; use the
+elif [ "$FOLDER" = "simple_shear_plates" ]; then
+    # simple_shear_plates writes per-strain (_g<strain>) files in its own schema; use the
     # dedicated sweep plotter instead of the compress/flow stress + piston plots.
     echo "Generating shear stress-strain sweep plots (per strain: $STRAINS)..."
     python "$SCRIPT_DIR/lib/plot_shear_strain_sweep.py" "." "${DATANAME}_${INTERACTION}_${TOTSTEPS}" "$STRAINS"

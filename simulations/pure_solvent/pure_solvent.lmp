@@ -1,0 +1,399 @@
+# ========== Pure Solvent: NPT at one pressure, or a pressure sweep ==========
+# One deck, two modes, chosen with -var phase_sweep (PHASE_SWEEP in the batch):
+#
+#   phase_sweep = 0 (default)  ONE state point.  NPT at press_target for nsteps, block-averaged
+#                              volume, calibration frames at the end.  The solvent companion of
+#                              the volume of mixing:
+#                                  dV_mix = V_mixture - V_pure_polymer - V_pure_solvent
+#                              Batch: pure_solvent_single.batch.  (Was solvent_pure.lmp.)
+#   phase_sweep = 1            EQUATION OF STATE.  The deck loops over its own pressure list
+#                              (P* = 1.0 ... 0.1, then 0.050 ... 0.005, high -> low), nsteps_eq of
+#                              NPT and nsteps_prod of averaging per state point; nsteps and
+#                              press_target are not used.  Batch: pure_solvent_sweep.batch.
+#                              (Was solvent_phase.lmp.)
+#
+# What the two modes do differently, besides the loop (each as its former deck did):
+#                              single (0)                  sweep (1)
+#   box rescale to rho = 0.5   yes                         no (starts from the file's density)
+#   gentle start               50000 steps, nve/limit 0.05 1000 steps, nve/limit 0.01
+#   thermo / volume cadence    10000 / 10000               5000 / 2000
+#   final configuration        puresolv_<stem>.data        final_config_<dataname>_<interaction>_psweep.data
+#   cont = 1 (continue_sim.sh) supported                   not supported
+#
+# Structure:
+#   Stage 0 - Minimize + gentle Langevin NVT
+#   Stage 1 - single: NPT production (one run, block-averaged output)
+#             sweep:  the pressure loops
+#
+# Atom types in the solvent-only data file (produced by split_gel_data.py):
+#   1 = Solvent          (original type 3)
+#   2 = Bottom support   (original type 4) — frozen; present only if walls exist
+#   3 = Top piston       (original type 5) — frozen; present only if walls exist
+#
+# If no support/piston beads exist (plain solvent-only file), the script
+# degrades gracefully: the support and piston groups are empty and their
+# fixes/pair_coeffs are harmless no-ops.
+#
+# Pair interactions (matching slab_with_support.lmp, in remapped types):
+#   1–1  solvent–solvent   : epsSS, cutoff 2.5
+#   1–2  solvent–support   : off (0.0)
+#   1–3  solvent–piston    : WCA  (ε=1.0, cutoff 1.22σ)
+#   2–2  support–support   : off
+#   2–3  support–piston    : off
+#   3–3  piston–piston     : off
+#
+# BAROSTAT (2026-09): ISO coupling. The 2026-08 sweep ran aniso, but for a
+# pure fluid the box shape is a free diffusive mode (no shear restoring
+# force) — the aspect ratio random-walked 30–45% while ⟨V⟩ stayed converged.
+# The fluid rearranges freely within the box, so iso gives the same ⟨V⟩(P)
+# with a fixed shape. Mixed gel boxes (pure_polymer engine) remain aniso.
+# CONVERGENCE GATE (checked in calibration_analysis.ipynb, NOT enforced here):
+# production averages are only valid if Pxx≈Pyy≈Pzz within CI. Aspect-ratio
+# drift and off-diagonal stresses (Pxy,Pxz,Pyz) are logged and flagged only —
+# no silent switch to a triclinic barostat.
+#
+# Outputs, single mode:
+#   vol_pure_solvent_${dataname}_${interaction}.dat
+#     → columns: step  press_mean  vol_mean  rho_mean  (one row per block)
+#   output_files/volume_data/box_dimensions_${dataname}_${interaction}_${totsteps}.dat
+#     → columns: step  lx  ly  lz
+#   output_files/volume_data/pressure_tensor_${dataname}_${interaction}_${totsteps}.dat
+#     → columns: step  pxx pyy pzz pxy pxz pyz  (window-averaged, aniso gate input)
+#   traj_files/calib_${dataname}_${interaction}_${totsteps}.lammpstrj
+#     → calib_frames+1 all-atom frames near the end (Voronoi input; Python-
+#       side tessellation only — NO Voronoi computes in any .lmp)
+#
+# Outputs, sweep mode:
+#   eos_${dataname}_${interaction}.dat
+#     → columns: P_target  rho_mean  (one row per state point)
+#   output_files/volume_data/rho_trace_${dataname}_${interaction}.dat
+#     → columns: <loop>_<index>  step  rho  (density trace of every averaging window)
+#
+# Variables passed from bash:
+#   dataname     — data file name (no extension)
+#   interaction  — epsilon label (e.g. "1p0")
+#   epsSS        — solvent-solvent LJ epsilon
+#   nsteps       — NPT run length (divisible by n_blocks * 100)
+#   n_blocks     — number of block-average windows (recommend 10)
+#   phase_sweep  — 0 single state point (default) | 1 pressure sweep
+#   nsteps_eq, nsteps_prod — sweep mode: equilibration / averaging steps per state point
+#                  (nsteps_prod divisible by 100)
+
+
+
+# ========== Parameters ==========
+variable sigma        equal 1.0
+variable temp_target  equal 1.0
+variable press_target index 1.5 # overridden by -var on command line
+variable vel_seed     index 12345  # RNG seed for create_velocity; overridden by -var for replica sweeps
+variable tdamp        equal 1.0
+variable pdamp        equal 1.0
+variable n_blocks     equal 10
+variable phase_sweep  index 0      # 0 = one state point at press_target | 1 = pressure sweep (EOS)
+
+variable timestep_gentle equal 0.001
+variable timestep_prod   equal 0.005
+
+# gentle-start length and force cap, thermo cadence, volume / density-trace cadence: per mode
+if "${phase_sweep} == 1" then &
+    "variable nsteps_gentle equal 1000" &
+    "variable limit_gentle  equal 0.01" &
+    "variable thermo_freq   equal 5000" &
+    "variable volume_freq   equal 2000" &
+else &
+    "variable nsteps_gentle equal 50000" &
+    "variable limit_gentle  equal 0.05" &
+    "variable thermo_freq   equal 10000" &
+    "variable volume_freq   equal 10000"
+
+# Calibration dump: a few decorrelated all-atom frames appended AFTER the
+# production run (barostat still on), ~calib_dump_every*dt/tau apart.
+# Driver-configurable via -var; index → command line wins.
+variable calib_frames     index 5
+variable calib_dump_every index 2000
+
+variable block_steps   equal ${nsteps}/${n_blocks}
+variable nrepeat_block equal ${block_steps}/100
+
+# ----- Continuation flag -----
+# 0 = fresh start (default)
+# 1 = continuation from a final .data file (via continue_sim.sh). The data
+#     file already holds a bulk-density-equilibrated solvent, so Stage 0
+#     (box rescale + minimize + gentle ramp) is skipped entirely and Stage 1
+#     (NPT production) just runs ${nsteps} more steps.  Single mode only.
+variable cont index 0
+
+
+
+# ========== Initialization ==========
+units lj
+dimension 3
+boundary p p p
+atom_style molecular
+atom_modify map array
+
+read_data data_files/${dataname}.data
+
+if "${phase_sweep} == 1" then &
+    "print '>>> pure_solvent, pressure sweep (EOS): T*=${temp_target} epsSS=${epsSS} nsteps_eq=${nsteps_eq} nsteps_prod=${nsteps_prod}'" &
+else &
+    "print '>>> pure_solvent, single state point: T*=${temp_target} P*=${press_target} epsSS=${epsSS} nsteps=${nsteps}'"
+
+# Ghost-atom cutoff (2026-11-07): this deck starts from a relaxed configuration (FENE bonds
+# <= 1.5 sigma, or no bonds), so 2.5 reaches every bonded partner; the allocation benchmark
+# (simulations/allocation_benchmark/layouts_rot45.txt) measured 1.4-1.6x more steps/s than 5.0
+# with identical step-0 forces.  Override with -var comm_cutoff.
+variable comm_cutoff index 2.5
+comm_modify cutoff ${comm_cutoff}
+
+
+
+# ========== Group Definitions ==========
+# Groups are always defined.  If a type is absent the group is simply empty,
+# and any fix applied to it becomes a harmless no-op.
+group solvent type 1
+group support type 2
+group piston  type 3
+group walls   type 2 3    # combined frozen group
+
+
+
+# ========== Pair Interactions ==========
+# Full pair_style with all 3 possible types.
+# Interactions reproduce the slab_with_support.lmp conventions after
+# the 3→1, 4→2, 5→3 type remapping performed by split_gel_data.py.
+pair_style lj/cut 1.122
+pair_coeff * * 0.0 ${sigma} 0.0       # default: all off
+pair_coeff 1 1 ${epsSS} ${sigma} 1.122  # solvent–solvent
+
+# Skip neighbour-list build for purely zero-interaction pairs
+# neigh_modify exclude type 2 2
+# neigh_modify exclude type 3 3
+# neigh_modify exclude type 2 3
+
+bond_style none
+special_bonds lj 0.0 0.0 0.0
+
+thermo_style custom step temp pe ke etotal press vol lx ly lz
+thermo ${thermo_freq}
+
+# Freeze support and piston — always, regardless of cont (Stage 1 unfixes
+# this at the end, so it must exist either way). setforce on an empty group
+# is a safe no-op.
+velocity walls set 0.0 0.0 0.0
+fix freeze_walls walls setforce 0.0 0.0 0.0
+
+# cont=1: the continued data file already holds a bulk-density-equilibrated,
+# minimized, thermalized solvent — rescaling it again here would corrupt the
+# box (rho_liquid=0.5 is only the right target for the RAW input file).
+# Skip straight to Stage 1 production.
+if "${cont} == 1" then "jump SELF label_after_setup"
+
+# ── Rescale box so solvent starts at bulk liquid density ──────────────
+# This eliminates the polymer-void pressure collapse before NVT begins.
+# Single mode only: the sweep starts from the density of its input box.
+if "${phase_sweep} == 1" then "jump SELF label_after_rescale"
+variable rho_liquid  equal 0.5          # bulk LJ liquid density at T*=1, P*=0.1
+variable N_s         equal count(solvent)
+variable V_box       equal lx*ly*lz
+variable rho_current equal v_N_s/v_V_box
+variable scale_f     equal (v_rho_current/v_rho_liquid)^(1.0/3.0)
+
+print ">>> Solvent density before rescale: ${rho_current}"
+print ">>> Box scale factor: ${scale_f}"
+
+change_box all x scale ${scale_f} y scale ${scale_f} z scale ${scale_f} remap
+
+label label_after_rescale
+
+
+
+# =====================================================================
+#   STAGE 0 — Minimize solvent, gentle NVT ramp
+# =====================================================================
+minimize 1.0e-4 1.0e-6 10000 100000
+
+reset_timestep 0
+velocity solvent create 0.1 ${vel_seed} mom yes rot no
+fix gentle solvent nve/limit ${limit_gentle}
+fix lang   solvent langevin ${temp_target} ${temp_target} ${tdamp} 904297
+timestep ${timestep_gentle}
+run ${nsteps_gentle}
+unfix gentle
+unfix lang
+
+
+
+label label_after_setup
+
+variable N_solvent   equal count(solvent)
+variable box_vol     equal lx*ly*lz
+variable num_density equal v_N_solvent/v_box_vol
+
+if "${phase_sweep} == 1" then "jump SELF label_sweep"
+
+# =====================================================================
+#   STAGE 1, single state point — NPT production with block averaging
+#
+#   NPT is applied only to the solvent group.  Support/piston atoms
+#   remain frozen via fix freeze_walls (setforce 0 0 0).  When the
+#   barostat rescales the box the frozen atoms are rescaled too — this
+#   is physically correct since they are non-interacting rigid layers
+#   that ride with the periodic cell, not independent particles.
+# =====================================================================
+variable inst_press  equal press
+
+reset_timestep 0
+# iso (2026-09): back to isotropic coupling for the PURE-SOLVENT companions —
+# a fluid rearranges freely within the box, so aniso adds nothing here and only
+# lets the aspect ratio random-walk (30–45% drift seen in the 2026-08 sweep).
+# The mixed gel boxes (pure_polymer engine) stay aniso.
+fix 1 solvent npt temp ${temp_target} ${temp_target} ${tdamp} &
+    iso ${press_target} ${press_target} ${pdamp}
+timestep ${timestep_prod}
+
+fix box_out all print ${volume_freq} "$(step) $(lx) $(ly) $(lz)" &
+    file output_files/volume_data/box_dimensions_${dataname}_${interaction}_${totsteps}.dat &
+    screen no title "# step lx ly lz"
+
+# Full pressure tensor, window-averaged every volume_freq steps — input for
+# the analysis-side aniso gate (Pxx≈Pyy≈Pzz; off-diagonals flagged only).
+variable nrepeat_ptens equal ${volume_freq}/100
+fix ptens_out all ave/time 100 ${nrepeat_ptens} ${volume_freq} &
+    c_thermo_press[1] c_thermo_press[2] c_thermo_press[3] &
+    c_thermo_press[4] c_thermo_press[5] c_thermo_press[6] &
+    file output_files/volume_data/pressure_tensor_${dataname}_${interaction}_${totsteps}.dat &
+    title1 "# window-averaged pressure tensor, one row per ${volume_freq} steps" &
+    title2 "# step  pxx  pyy  pzz  pxy  pxz  pyz"
+
+fix block_avg all ave/time 100 ${nrepeat_block} ${block_steps} &
+    v_inst_press v_box_vol v_num_density &
+    ave one &
+    file vol_pure_solvent_${dataname}_${interaction}.dat &
+    title1 "# one row per ${block_steps}-step block" &
+    title2 "# step  press_mean  vol_mean  rho_mean"
+
+run ${nsteps}
+
+unfix block_avg
+
+# ----- Calibration dump: all-atom frames near the end -----
+# Writes calib_frames+1 frames: the production-end frame (run start is a
+# multiple of the dump interval) plus calib_frames more, calib_dump_every
+# steps apart for decorrelation. Barostat (and box_out/ptens_out) stay on —
+# these extra steps are equilibrium NPT sampling. Voronoi runs Python-side on
+# these frames (lib/volfrac.py) — never in the engine.
+variable calib_dump_steps equal v_calib_frames*v_calib_dump_every
+# NOTE: LAMMPS `shell mkdir` is not /bin/sh — every argument is taken as a
+#       directory name and intermediate dirs are created anyway. Passing -p
+#       here silently created a stray directory literally named "-p" in every
+#       run dir (fixed 2026-08-30); do not add it back.
+shell mkdir traj_files
+dump calib_dump all custom ${calib_dump_every} &
+    traj_files/calib_${dataname}_${interaction}_${totsteps}.lammpstrj id type x y z
+run ${calib_dump_steps}
+undump calib_dump
+
+unfix ptens_out
+unfix box_out
+unfix freeze_walls
+unfix 1
+
+
+
+variable outfile string "data_files/puresolv_${dataname}_${interaction}_${totsteps}"   # all .data / .restart in data_files/ (2026-11-17)
+write_data ${outfile}.data
+print ">>> Done. Output: vol_pure_solvent_${dataname}_${interaction}.dat"
+jump SELF label_end
+
+
+
+# =====================================================================
+#   PRESSURE SWEEP (phase_sweep = 1): equation of state
+#
+#   P* goes HIGH -> LOW so the liquid branch is followed continuously.
+#   Each state point: nsteps_eq of NPT, then nsteps_prod over which the
+#   number density is averaged (one row of eos_<dataname>_<interaction>.dat).
+#     coarse  P* = 1.0, 0.9, ..., 0.1          (j = 1..10)
+#     fine    P* = 0.050, 0.045, ..., 0.005    (i = 1..10)
+# =====================================================================
+label label_sweep
+
+# ave/time: sample every 100 steps, one average over the whole production window
+variable nevery_rho  equal 100
+variable nrepeat_rho equal ${nsteps_prod}/100   # nsteps_prod must be divisible by 100
+variable nfreq_rho   equal ${nsteps_prod}
+
+print "# P_target   rho_mean" &
+    file eos_${dataname}_${interaction}.dat
+
+# ----- coarse: P* = (11 - j) * 0.1 -----
+variable j loop 10
+label loop1_start
+
+    variable p_state equal (11-${j})*0.1
+    print ">>> [Loop1 j=${j}] P* = ${p_state}"
+
+    reset_timestep 0
+    fix 1 solvent npt temp ${temp_target} ${temp_target} ${tdamp} &
+        iso ${p_state} ${p_state} ${pdamp}
+    timestep ${timestep_prod}
+    run ${nsteps_eq}
+
+    fix rho_avg all ave/time ${nevery_rho} ${nrepeat_rho} ${nfreq_rho} &
+        v_num_density
+    # density trace of this window (convergence check): columns  <loop>_<index>  step  rho
+    fix rho_trace_out all print ${volume_freq} "1_${j} $(step) ${num_density}" &
+        append output_files/volume_data/rho_trace_${dataname}_${interaction}.dat &
+        screen no
+
+    run ${nsteps_prod}
+
+    variable rho_mean equal f_rho_avg
+    print "${p_state}   ${rho_mean}" &
+        append eos_${dataname}_${interaction}.dat
+
+    unfix rho_trace_out
+    unfix rho_avg
+    unfix 1
+
+next j
+jump SELF loop1_start
+
+# ----- fine: P* = (11 - i) * 0.005 -----
+variable i loop 10
+label loop2_start
+
+    variable p_state equal (11-${i})*0.005
+    print ">>> [Loop2 i=${i}] P* = ${p_state}"
+
+    reset_timestep 0
+    fix 1 solvent npt temp ${temp_target} ${temp_target} ${tdamp} &
+        iso ${p_state} ${p_state} ${pdamp}
+    timestep ${timestep_prod}
+    run ${nsteps_eq}
+
+    fix rho_avg all ave/time ${nevery_rho} ${nrepeat_rho} ${nfreq_rho} &
+        v_num_density
+    fix rho_trace_out all print ${volume_freq} "2_${i} $(step) ${num_density}" &
+        append output_files/volume_data/rho_trace_${dataname}_${interaction}.dat &
+        screen no
+
+    run ${nsteps_prod}
+
+    variable rho_mean equal f_rho_avg
+    print "${p_state}   ${rho_mean}" &
+        append eos_${dataname}_${interaction}.dat
+
+    unfix rho_trace_out
+    unfix rho_avg
+    unfix 1
+
+next i
+jump SELF loop2_start
+
+variable outfile_sweep string "data_files/final_config_${dataname}_${interaction}_psweep"
+write_data ${outfile_sweep}.data
+print ">>> P-sweep complete. EOS written to eos_${dataname}_${interaction}.dat"
+
+label label_end

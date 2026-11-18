@@ -15,8 +15,8 @@ sees identical composition coverage.
     at least --min-dist from every existing atom (PBC-aware). If a placement
     stalls, the clearance is relaxed in 0.05σ steps down to a floor of 0.7σ —
     residual soft overlaps at that scale are absorbed by the downstream
-    engines' gentle-start stages (polymer_pure.lmp: harmonic pre-relax +
-    nve/limit; solvent_pure.lmp: minimize + nve/limit).
+    engines' gentle-start stages (pure_polymer.lmp: harmonic pre-relax +
+    nve/limit; pure_solvent.lmp: minimize + nve/limit).
 
 The polymer (types 1, 2) and all bonds are untouched, so N_p is constant
 across the whole composition grid — the Euler-closure requirement.

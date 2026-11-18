@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=pure_polymer
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=6:00:00
+#SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
+
+# One NPT run of a polymer-only box (the isolated gel with its solvent removed): pure_polymer.lmp
+# in its single-state-point mode (PHASE_SWEEP unset). The pressure sweep is pure_polymer_sweep.batch.
+# Knobs: PRESS_TARGET, VEL_SEED, PRERELAXED=1 (skip the harmonic pre-relaxation of an already
+# equilibrated FENE file), CALIB_FRAMES / CALIB_DUMP_EVERY (calibration dumps near the end).
+
+FOLDER=pure_polymer
+DATANAME=isolated_slab_support_5beads_tall_rho04_1.0_1.0_500000_polymer_only
+INTERACTION=1.0_0.0
+NSTEPS=100000
+
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

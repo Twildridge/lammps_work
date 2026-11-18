@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=uniax_comp_random
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=6
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=48:00:00
+#SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
+
+# The fine-cadence D_c protocol of uniaxial_compression_single.batch on the RANDOM
+# f = 4 periodic slab (the two-piston conversion of slab_with_support_periodic_random.batch's
+# final configuration, made and submitted by chain_random_periodic.batch). One level, flat
+# hold, fine displacement profiles on hold and unload, then a 25 M-step free re-swelling.
+# The deck has no wall_timeout: a run that outgrows 48 h loses the end of its unload (it is
+# post-processed as PARTIAL). Job 55517273 lost the last 7 % of the unload at the old layout.
+
+FOLDER=uniaxial_compression
+DATANAME=final_config_slab_support_periodic_5beads_tall_rho04_random_1.0_1.0_14000000_two_pist
+INTERACTION=1.0_1.0
+NSTEPS=9000000          # flat hold (HOLD_AUTO=0), and the tag of every level file
+export PRESS_TARGET=1.5
+export COMPRESSIONS="0.10"
+export HOLD_AUTO=0
+export DISP_FINE_NFREQ=5000           # fine displacement profiles every 25 tau (hold and unload), 1-sigma bins
+export UNLOAD=1 UNLOAD_STEPS=25000000 # plates back to the seated gap, then free re-swelling (files _u0.10)
+
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

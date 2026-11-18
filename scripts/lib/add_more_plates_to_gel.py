@@ -8,13 +8,13 @@ plated + two-wet-piston data file for one of the isolated-gel decks  (2026-09-29
 LAYOUTS 2026-10-14).  Which load plates are added is the `layout`:
 
     layout        plates (types)                        deck / use                       suffix
-    six_plates    z-lo 4, z-hi 7, x-lo 8, x-hi 9,       compress_slab.lmp (bulk modulus)  _six_plates
+    six_plates    z-lo 4, z-hi 7, x-lo 8, x-hi 9,       isotropic_compression.lmp (bulk modulus)  _six_plates
                   y-lo 10, y-hi 11
-    x_plates      x-lo 8, x-hi 9                        shear_slab_two_pist_isolated.lmp: the two   _x_plates
+    x_plates      x-lo 8, x-hi 9                        simple_shear_isolated.lmp: the two   _x_plates
                                                         grip plates it seats on the gel's
                                                         x-faces and drives -/+z
     z_plates      z-lo 4 (support), z-hi 7 (load)       the isolated-gel input of a        _z_plates
-                                                        triaxial-style deck (the two-piston
+                                                        uniaxial-style deck (the two-piston
                                                         decks' type map; those decks are
                                                         written for PERIODIC slabs)
     no_plates     none                                  gel + bath + wet pistons only      _no_plates
@@ -34,8 +34,8 @@ plates ON the faces of the periodic box and deleted every polymer bead within
     new periodic seam brings closer than overlap_min are removed);
   * the layout's solvent-TRANSPARENT load plates are PARKED plate_park_gap outside
     the bounding-box faces of the gel they load -- the deck seats them onto the gel
-    (compress_slab Phase 1.25, shear_slab_two_pist Phase 1.25) exactly as
-    triaxial_compression_two_pist.lmp seats its load piston and support;
+    (isotropic_compression Phase 1.25, simple_shear Phase 1.25) exactly as
+    uniaxial_compression.lmp seats its load piston and support;
   * z is closed by two wet NPT-pistons (feed above, permeate below) with vacuum
     margins, so the bath is held at P_target for the whole run and the solvent the
     gel expels is measured by the piston displacement.
@@ -59,7 +59,7 @@ Atom types written (11): 1 crosslink, 2 chain bead, 3 solvent, 4 plate z-lo,
 5 feed piston, 6 permeate piston, 7 plate z-hi, 8 plate x-lo, 9 plate x-hi,
 10 plate y-lo, 11 plate y-hi.  Types 4/5/6/7 keep the meaning they have in the
 two-piston decks (lower loading plate / feed / permeate / upper loading plate), so
-lib/triaxial.py reads the z planes of a compress_slab trajectory unchanged.
+lib/uniaxial.py reads the z planes of a isotropic_compression trajectory unchanged.
 One type per plate: the deck groups them by type (the old mol-ID lookup returned
 EMPTY groups whenever leftover wall atoms carried higher mol IDs than the gel).
 
@@ -73,7 +73,7 @@ HOW TO RUN IT ON THE LAPTOP (no notebook: this script IS the converter, 2026-10-
    lammps_data_files_local next to lammps_work.  For the shear deck:
        python add_more_plates_to_gel.py --layout x_plates \
            --input ../../../lammps_data_files_local/final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000.data
-   For compress_slab use --layout six_plates.  `python` must be the Anaconda Python that
+   For isotropic_compression use --layout six_plates.  `python` must be the Anaconda Python that
    runs JupyterLab (on Dylan's Mac /opt/anaconda3/bin/python; `which python` shows which one
    is active, `conda activate base` switches to it).  In a notebook cell the same line works
    with a leading `!` (and the path relative to the notebook: `!python lib/add_more_plates_to_gel.py ...`).
@@ -83,7 +83,7 @@ HOW TO RUN IT ON THE LAPTOP (no notebook: this script IS the converter, 2026-10-
    (no sidecar since 2026-10-28; --png draws <stem>_profiles.png: density profiles, open it and check
    the gel sits between the plates / pistons).  Copy the .data file to
    ~/Documents/lammps_data/input_data/ on the cluster and put the stem in the deck's batch
-   (shear_slab_two_pist.batch for x_plates, compress_slab.batch for six_plates).
+   (simple_shear.batch for x_plates, isotropic_compression.batch for six_plates).
    `python add_more_plates_to_gel.py --help` lists every option.
 
 Usage (CLI)
@@ -121,7 +121,7 @@ except ImportError:  # pragma: no cover
     _SCIPY = False
 
 # ---------------------------------------------------------------------------
-# Constants (mirror compress_slab.lmp)
+# Constants (mirror isotropic_compression.lmp)
 # ---------------------------------------------------------------------------
 T_CROSSLINK, T_CHAIN, T_SOLVENT = 1, 2, 3
 T_FEED, T_PERM = 5, 6
@@ -137,13 +137,13 @@ TYPE_NAMES = {1: 'crosslink', 2: 'chain bead', 3: 'solvent', 4: 'plate z-lo', 5:
               10: 'plate y-lo', 11: 'plate y-hi'}
 # layout -> the plates it adds (the output stem is <input stem>_<layout>)
 LAYOUTS = {
-    'six_plates': ('zlo', 'zhi', 'xlo', 'xhi', 'ylo', 'yhi'),   # compress_slab.lmp
-    'x_plates':   ('xlo', 'xhi'),                               # shear_slab_two_pist_isolated.lmp (grip plates)
-    'z_plates':   ('zlo', 'zhi'),                               # triaxial-style support + load plate
+    'six_plates': ('zlo', 'zhi', 'xlo', 'xhi', 'ylo', 'yhi'),   # isotropic_compression.lmp
+    'x_plates':   ('xlo', 'xhi'),                               # simple_shear_isolated.lmp (grip plates)
+    'z_plates':   ('zlo', 'zhi'),                               # uniaxial-style support + load plate
     'no_plates':  (),                                           # wet pistons only
 }
-LAYOUT_DECK = {'six_plates': 'compress_slab.lmp', 'x_plates': 'shear_slab_two_pist_isolated.lmp',
-               'z_plates': 'a triaxial-style isolated-gel deck (none written yet)', 'no_plates': 'any two-piston deck without load plates'}
+LAYOUT_DECK = {'six_plates': 'isotropic_compression.lmp', 'x_plates': 'simple_shear_isolated.lmp',
+               'z_plates': 'a uniaxial-style isolated-gel deck (none written yet)', 'no_plates': 'any two-piston deck without load plates'}
 
 
 # ---------------------------------------------------------------------------
@@ -809,8 +809,8 @@ def check_gel_unchanged(input_file, output_file, drop_types=(4, 5)):
 # ---------------------------------------------------------------------------
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description='Convert an equilibrated isolated-gel snapshot into a plated + '
-                                             'two-wet-piston data file (layout: six_plates for compress_slab, '
-                                             'x_plates for shear_slab_two_pist, z_plates, no_plates).')
+                                             'two-wet-piston data file (layout: six_plates for isotropic_compression, '
+                                             'x_plates for simple_shear, z_plates, no_plates).')
     ap.add_argument('--input')
     ap.add_argument('--output', default=None)
     ap.add_argument('--layout', choices=list(LAYOUTS), default='six_plates')

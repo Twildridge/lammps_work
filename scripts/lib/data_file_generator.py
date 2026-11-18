@@ -1019,7 +1019,7 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
     # it: those beads carry no bond, so they are free monomers that wander through the
     # bath.  They are polymer by TYPE, so every bounding-box measure of the gel (the
     # gel_dimensions output of slab_with_support.lmp, the plate seating of
-    # compress_slab.lmp) follows them instead of the network.  4 of them in every cube.
+    # isotropic_compression.lmp) follows them instead of the network.  4 of them in every cube.
     bonded = set()
     for b in bonds:
         bonded.add(b['atom1'])

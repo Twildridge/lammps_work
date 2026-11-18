@@ -1,14 +1,14 @@
-"""shear.py -- shared analysis library for the shear_slab notebooks (2026-09-23).
+"""shear.py -- shared analysis library for the shear notebooks (2026-09-23).
 
 Used by  scripts/shear_analysis_single.ipynb  (one shear-strain level)  and
          scripts/shear_analysis_sweep.ipynb   (every level of a strain sweep).
 
-The shear counterpart of lib/triaxial.py, laid out section for section like it
+The shear counterpart of lib/uniaxial.py, laid out section for section like it
 so the two notebooks read like the compression ones and -- more important -- so
 G is estimated the way the compression notebooks estimate M and G:
 
   * the eps = 0 reference of the compression deck is the gamma = 0 REFERENCE
-    window of shear_slab.lmp (Phase 1.5, _ref files): every G is an INCREMENT
+    window of simple_shear_plates.lmp (Phase 1.5, _ref files): every G is an INCREMENT
     from that reading (G_SUBTRACT_REF), i.e. a slope, like M and G there;
   * Terzaghi (2026-09-25, as the compression notebooks): the NETWORK stress is
     sigma' = sigma^t - p_pore, the total stress minus the solvent-only value
@@ -21,7 +21,7 @@ G is estimated the way the compression notebooks estimate M and G:
   * M_piston  <-> G_series:   the fine block-averaged bulk sigma^t_xz(t) series
     (stress_series_*, the analogue of piston_force_avg) read over the longest
     drift-free trailing window with the same circular block bootstrap;
-  * sign convention = the triaxial decks': normal components compression-
+  * sign convention = the uniaxial decks': normal components compression-
     POSITIVE (-stress/atom), shear components in the mechanical sign
     (sigma_xz = +G gamma for gamma > 0); P_th = +(1/3) tr sigma^t;
   * static-group swap correction (SWAP_CORR): the deck bins only the static
@@ -41,24 +41,24 @@ G is estimated the way the compression notebooks estimate M and G:
   * P_th = (1/3) tr(sigma^t) (compression positive) is the P* = 1.5 check.
 
 Shared machinery (style, readers, block bootstrap, plateau window, formatting,
-smart_legend, annotate_box, the Expanse puller) is imported from triaxial.py;
+smart_legend, annotate_box, the Expanse puller) is imported from uniaxial.py;
 nothing statistical is re-implemented here.
 
 Layout of this file
-    0. style                         (triaxial's)
+    0. style                         (uniaxial's)
     1. Config                        knobs, path builders, NSTEPS auto-detect, _g<level> tags
-    2. file readers                  tensor / series / profile files of shear_slab.lmp
+    2. file readers                  tensor / series / profile files of simple_shear_plates.lmp
     3. reference state               load_reference   (gamma = 0, shared by every level)
     4. one strain level              load_level       (stresses, plateau, G, N1/N2, P_th, D_c, kappa)
-    5. Expanse sync                  sync_from_expanse (via triaxial.sync_pull)
+    5. Expanse sync                  sync_from_expanse (via uniaxial.sync_pull)
     6. plotting primitives           evolution profiles in z/L_z with the plate planes
     7. figures, single level         fig_strain ... fig_thermo_pressure
     8. figures, sweep                fig_*_sweep
     9. summaries                     print_summary, print_hold_check
 
 Two decks (Config.DECK, 2026-10-03), same protocol, file names, _g<strain> tags and columns:
-  * 'shear_slab'          -- harmonic-bonded plates on the gel faces, driven +/-x.
-  * 'shear_slab_two_pist' -- the two-piston system (reservoirs at P_bath); the polymer
+  * 'simple_shear_plates'          -- harmonic-bonded plates on the gel faces, driven +/-x.
+  * 'simple_shear' -- the two-piston system (reservoirs at P_bath); the polymer
                              beads of the gel's two face layers are the plates: rigid in
                              x/y (prescribed translation, free in z; since 2026-10-05 --
                              the first version steered each layer's COM with a force),
@@ -71,7 +71,7 @@ Two decks (Config.DECK, 2026-10-03), same protocol, file names, _g<strain> tags 
                              maps the bulk bins onto the driven-layer planes (H_drv apart); no
                              unload phase.
 
-Geometry (shear_slab.lmp since 2026-09-22): z = gap (plate normal), x = shear
+Geometry (simple_shear_plates.lmp since 2026-09-22): z = gap (plate normal), x = shear
 direction, y neutral; the network is periodic in x and y; profiles are z-binned
 over the BULK region (plate_excl = 3 sigma inside each plate plane) in reduced
 coordinates z/L_z.
@@ -94,22 +94,22 @@ from matplotlib.patches import Patch
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
-import triaxial as tri  # noqa: E402
+import uniaxial as uni  # noqa: E402
 
 # ===========================================================================
-#  0. STYLE  (triaxial's palette and rcParams)
+#  0. STYLE  (uniaxial's palette and rcParams)
 # ===========================================================================
-WONG, EVO_CMAP, GEL_SHADE = tri.WONG, tri.EVO_CMAP, tri.GEL_SHADE
-level_color, setup_style = tri.level_color, tri.setup_style
-sig, fmt_step, fmt_val_unc, fmt_ci, fmt_mu = tri.sig, tri.fmt_step, tri.fmt_val_unc, tri.fmt_ci, tri.fmt_mu
-mean_ci, block_bootstrap_ci, plateau_window = tri.mean_ci, tri.block_bootstrap_ci, tri.plateau_window
-smart_legend, annotate_box, robust_ylim, rolling_mean, subsample = (tri.smart_legend, tri.annotate_box,
-                                                                     tri.robust_ylim, tri.rolling_mean, tri.subsample)
+WONG, EVO_CMAP, GEL_SHADE = uni.WONG, uni.EVO_CMAP, uni.GEL_SHADE
+level_color, setup_style = uni.level_color, uni.setup_style
+sig, fmt_step, fmt_val_unc, fmt_ci, fmt_mu = uni.sig, uni.fmt_step, uni.fmt_val_unc, uni.fmt_ci, uni.fmt_mu
+mean_ci, block_bootstrap_ci, plateau_window = uni.mean_ci, uni.block_bootstrap_ci, uni.plateau_window
+smart_legend, annotate_box, robust_ylim, rolling_mean, subsample = (uni.smart_legend, uni.annotate_box,
+                                                                     uni.robust_ylim, uni.rolling_mean, uni.subsample)
 COMP = ('xx', 'yy', 'zz', 'xy', 'xz', 'yz')          # column order of every tensor/profile file
 CI = {c: i for i, c in enumerate(COMP)}
 DIAG = ('xx', 'yy', 'zz')
 SERIES_COLS = ('sp_xx', 'sp_yy', 'sp_zz', 'sp_xz', 'ss_xx', 'ss_yy', 'ss_zz', 'ss_xz')
-# Sign convention (2026-09-25) = the triaxial decks': the deck writes raw stress/atom
+# Sign convention (2026-09-25) = the uniaxial decks': the deck writes raw stress/atom
 # (tension positive); the readers flip the NORMAL components so compression is
 # positive (sigma_zz = -c_stress[3]/V there) and leave the shear components in the
 # mechanical sign, so sigma_xz = +G gamma for gamma > 0.
@@ -128,11 +128,11 @@ class Config:
     INTERACTION: str                      # "epsSS_epsSP"
     RUN_ID: str                           # local folder under flow_data_local/{shear,plots/shear}
     STRAINS: list = field(default_factory=list)   # shear-strain targets as STRINGS ("0.1"), = STRAINS_LIST
-                                          # in shear_slab.batch / shear_slab_two_pist.batch (files are tagged _g<level>)
-    DECK: str = 'shear_slab'              # 'shear_slab' (plate-driven) | 'shear_slab_two_pist' (two-piston system,
+                                          # in simple_shear_plates.batch / simple_shear.batch (files are tagged _g<level>)
+    DECK: str = 'simple_shear_plates'              # 'simple_shear_plates' (plate-driven) | 'simple_shear' (two-piston system,
                                           # rigid-in-plane face layers, laterally periodic slab; deck file
-                                          # shear_slab_two_pist_periodic.lmp since 2026-10-13) |
-                                          # 'shear_slab_two_pist_iso' (2026-10-13/14: ISOLATED gel in the two-piston bath,
+                                          # simple_shear_periodic.lmp since 2026-10-13) |
+                                          # 'simple_shear_iso' (2026-10-13/14: ISOLATED gel in the two-piston bath,
                                           # grip plates seated on the x-faces (plate + 3 sigma of polymer = one rigid grip)
                                           # driven -/+z -- x is the GAP and z the SHEAR direction; plate_pressure cols 2-3
                                           # are the plates' seat planes;
@@ -144,9 +144,9 @@ class Config:
                                           # level); None -> resolved from the files on disk, an int pins it
     base_dir: str = '../../flow_data_local'
     # ---- profile / window knobs -----------------------------------------
-    binWidth: float = 2.0                 # z-bin (sigma); must match shear_slab.lmp
-    plate_excl: float = 3.0               # bulk region starts this far inside each plate plane (shear_slab.lmp plate_excl)
-    wall_margin: float = 4.0              # "interior" = bins >= this far inside each plate plane (as triaxial's wall_margin)
+    binWidth: float = 2.0                 # z-bin (sigma); must match the shear decks
+    plate_excl: float = 3.0               # bulk region starts this far inside each plate plane (simple_shear_plates.lmp plate_excl)
+    wall_margin: float = 4.0              # "interior" = bins >= this far inside each plate plane (as uniaxial's wall_margin)
     n_curves: int = 10                    # evolution curves drawn per profile
     Ncount_min: int = 200                 # min polymer atoms per z-bin to count as gel (profiles, D_c domain)
     dt_lj: float = 0.005
@@ -158,9 +158,9 @@ class Config:
     # ---- network stress sigma' = sigma^t - p_pore (Terzaghi, the compression notebooks' split; 2026-09-25) ----
     P_PORE_MODE: str = 'auto'             # 'film' -> p_pore per component = mean TOTAL stress over the solvent-only bins
                                           #           behind the plates, per snapshot (needs a deck that profiles ALL solvent;
-                                          #           shear_slab.lmp bins only the static bulk groups, so the film is unseen);
+                                          #           simple_shear_plates.lmp bins only the static bulk groups, so the film is unseen);
                                           # 'bath' -> p_pore = P_BARO on the diagonal, 0 off-diagonal (drained equilibrium,
-                                          #           the triaxial P_CAL_MODE='const' idea);
+                                          #           the uniaxial P_CAL_MODE='const' idea);
                                           # 'auto' -> 'film' when the first reference snapshot populates the film bins, else 'bath'
     film_margin: float = 3.0              # a film bin must be >= this far (sigma) from the nearest plate plane ('film' mode;
                                           # the outermost polymer beads reach ~3 sigma beyond the plates)
@@ -176,9 +176,9 @@ class Config:
     G_STRAIN: str = 'disp'                # 'disp': interior slope of the steady CUMULATIVE displacement profile u_x(z)
                                           #         (disp_x_polymer_cum, decks since 2026-10-03) = the network strain;
                                           # 'rg':   (Rg_xz - Rg_xz,ref)/Rg_zz^2 (shear_strain_rg);  'trk': tracking slabs
-                                          #         (shear_slab_two_pist);  'applied': the prescribed boundary strain.
+                                          #         (simple_shear);  'applied': the prescribed boundary strain.
                                           # Fallback chain disp -> rg -> trk -> applied when a source is missing.
-    DISP_TRIM_BINS: int = 3               # populated bins dropped at each face before the line fit (as triaxial's)
+    DISP_TRIM_BINS: int = 3               # populated bins dropped at each face before the line fit (as uniaxial's)
     # ---- the UNLOAD (deck Phase 2c, 2026-10-28; files _u<level>): the transverse relaxation D_c is read THERE ----
     DC_TRIM_BINS: int = 1                 # populated bins dropped at each end of the lag profile before the fit
     DC_UNLOAD: bool = True                # two-piston deck, runs with UNLOAD=1: read each level's _u<lvl> files (the grips
@@ -198,7 +198,9 @@ class Config:
     # ---- Expanse ---------------------------------------------------------
     EXPANSE_HOST: str = 'login.expanse.sdsc.edu'
     EXPANSE_USER: str = 'dpollard'
-    RUNS_ROOT: str = '/home/dpollard/Documents/lammps_runs/shear_slab'
+    RUNS_ROOT: str = None                 # None -> /home/dpollard/Documents/lammps_runs/simple_shear (two-piston decks) or
+                                          # .../simple_shear_plates; runs older than the 2026-11-18 rename are found in
+                                          # their old folder too (uniaxial.LEGACY_RUN_FOLDERS)
     TRAJ_ROOT: str = '/expanse/lustre/scratch/dpollard/temp_project/lammps_trajectories'
     # ---- derived ---------------------------------------------------------
     DATA_DIR: Path = field(init=False)
@@ -211,16 +213,16 @@ class Config:
 
     def __post_init__(self):
         assert self.DECK in _DECKS, f"DECK must be one of {_DECKS} (got {self.DECK!r})"
-        self.two_pist = self.DECK.startswith('shear_slab_two_pist')
-        self.iso = self.DECK == 'shear_slab_two_pist_iso'
+        self.two_pist = self.DECK.startswith('simple_shear')
+        self.iso = self.DECK == 'simple_shear_iso'
         global _AXIS_SWAP                      # module state read by the file readers (one Config per notebook)
         _AXIS_SWAP = self.iso
         if self.two_pist:
             # the deck's bulk starts layer_thick + track_thick = 5 sigma inside each Rg face
             self.plate_excl = max(self.plate_excl, 5.0)
             self.wall_margin = max(self.wall_margin, 6.0)
-            if self.RUNS_ROOT.rstrip('/').endswith('/shear_slab'):
-                self.RUNS_ROOT = self.RUNS_ROOT.rstrip('/') + '_two_pist'
+        if self.RUNS_ROOT is None:
+            self.RUNS_ROOT = '/home/dpollard/Documents/lammps_runs/' + ('simple_shear' if self.two_pist else 'simple_shear_plates')
         assert self.STRAINS, 'STRAINS is empty -- list at least one level, e.g. ["0.1"]'
         self.STRAINS = [str(l) for l in self.STRAINS]
         base = Path(self.base_dir)
@@ -270,7 +272,7 @@ class Config:
 
     def gsuf(self, lvl, phase='c'):
         """the level suffix: _g<lvl> (the hold), _u<lvl> (phase 'u': the level's unload, deck Phase 2c 2026-10-28),
-        _unload (the old shear_slab deck's single Phase 4 unload, lvl = 'unload')."""
+        _unload (the old simple_shear_plates deck's single Phase 4 unload, lvl = 'unload')."""
         if lvl is None:
             return ''
         if str(lvl) == 'unload':
@@ -294,7 +296,7 @@ class Config:
         return self.PLOT_DIR / f'{stem}_{self.DATANAME}_{self.INTERACTION}_{t}{self.gsuf(lvl, phase)}.png'
 
 
-_DECKS = ('shear_slab', 'shear_slab_two_pist', 'shear_slab_two_pist_iso')
+_DECKS = ('simple_shear_plates', 'simple_shear', 'simple_shear_iso')
 _AXIS_SWAP = False          # set by Config.__post_init__ (True for the isolated-gel deck): x <-> z relabelling
 _SWAP6 = (2, 1, 0, 5, 4, 3)  # (xx yy zz xy xz yz) -> (zz yy xx yz xz xy): the tensor with x and z renamed
 
@@ -322,7 +324,7 @@ def _to_convention(a6):
 def read_tensor(path):
     """fix ave/time scalar file (step + 6 components) -> (steps, array[n, 6]) in the SIGN
     convention; None if absent."""
-    a = tri.load2c(path, 7)
+    a = uni.load2c(path, 7)
     if a is None:
         return None, None
     return a[:, 0].astype(int), _to_convention(_relabel6(a[:, 1:7]))
@@ -331,7 +333,7 @@ def read_tensor(path):
 def read_series(path):
     """stress_series file (step + sp_xx sp_yy sp_zz sp_xz ss_xx ss_yy ss_zz ss_xz) -> dict of
     arrays in the SIGN convention."""
-    a = tri.load2c(path, 9)
+    a = uni.load2c(path, 9)
     if a is None:
         return None
     d = {'step': a[:, 0].astype(int)}
@@ -343,7 +345,7 @@ def read_series(path):
     if a.shape[1] >= 11:                       # 2026-09-25 deck: block-averaged plate sigma_xz (S_top S_bot)
         d['S_top'], d['S_bot'] = a[:, 9], a[:, 10]
         d['S_plate'] = 0.5 * (a[:, 9] + a[:, 10])
-    if a.shape[1] >= 12:                       # shear_slab_two_pist: block-averaged tracking-slab (interior) strain
+    if a.shape[1] >= 12:                       # simple_shear: block-averaged tracking-slab (interior) strain
         d['gamma'] = a[:, 11]
     return d
 
@@ -353,7 +355,7 @@ def read_profiles(path):
     dict(ts, zf, N[n, nb], stack{comp: [n, nb]}); None if absent/empty."""
     if not Path(path).exists():
         return None
-    snaps = tri.read_ave_chunk_file(path)
+    snaps = uni.read_ave_chunk_file(path)
     snaps = [s for s in snaps if s[1].shape[1] >= 9]
     if not snaps:
         return None
@@ -370,7 +372,7 @@ def read_disp(path):
     """disp_x_polymer file (ave/chunk: chunk, z/Lz, Ncount, u_x) -> dict(ts, zf, N, ux)."""
     if not Path(path).exists():
         return None
-    snaps = [s for s in tri.read_ave_chunk_file(path) if s[1].shape[1] >= 4]
+    snaps = [s for s in uni.read_ave_chunk_file(path) if s[1].shape[1] >= 4]
     if len(snaps) < 2:
         return None
     nb = min(s[1].shape[0] for s in snaps)
@@ -379,7 +381,7 @@ def read_disp(path):
 
 
 def _first_col(path, ncol, col):
-    a = tri.load2c(path, ncol)
+    a = uni.load2c(path, ncol)
     return None if a is None else a[:, col]
 
 
@@ -392,9 +394,9 @@ def _geometry(cfg, R, lvl_for_fallback=None):
     zlo, so the plate planes are EXACT ((z_plate - zlo)/lz) and the bulk = polymer bins
     inside the planes by plate_excl; older files bin only the bulk region, and the
     planes are placed plate_excl outside the populated bins."""
-    B = tri.load2c(cfg.path('box_dimensions'), 4)
+    B = uni.load2c(cfg.path('box_dimensions'), 4)
     if B is None and lvl_for_fallback is not None:
-        B = tri.load2c(cfg.path('box_dimensions', lvl_for_fallback), 4)
+        B = uni.load2c(cfg.path('box_dimensions', lvl_for_fallback), 4)
     if B is not None:
         R['LX'], R['LY'], R['LZ'] = float(np.mean(B[-5:, 1])), float(np.mean(B[-5:, 2])), float(np.mean(B[-5:, 3]))
         if cfg.iso:                            # the gap axis of the isolated-gel deck is the box x
@@ -407,7 +409,7 @@ def _geometry(cfg, R, lvl_for_fallback=None):
     if ps is None and lvl_for_fallback is not None:
         ps = _first_col(cfg.path('shear_strain', lvl_for_fallback), 4, 2)
     R['plate_sep'] = float(ps[0]) if ps is not None else np.nan
-    PP = tri.load2c(cfg.path('plate_pressure'), 5)
+    PP = uni.load2c(cfg.path('plate_pressure'), 5)
     if PP is None:
         R['z_top_abs'] = R['z_bot_abs'] = np.nan
     elif cfg.iso:
@@ -420,7 +422,7 @@ def _geometry(cfg, R, lvl_for_fallback=None):
         R['z_top_abs'], R['z_bot_abs'] = float(PP[0, 1]), float(PP[0, 2])
     if np.isfinite(R['z_top_abs']) and not np.isfinite(R['plate_sep']):
         R['plate_sep'] = R['z_top_abs'] - R['z_bot_abs']
-    BB = tri.load2c(cfg.path('box_bounds'), 7)
+    BB = uni.load2c(cfg.path('box_bounds'), 7)
     R['zlo_abs'] = float(BB[0, 1 if cfg.iso else 5]) if BB is not None else np.nan   # gap-axis origin (xlo for the isolated deck)
     zf, N = R['zf'], R['N_ref']
     dz = cfg.binWidth / R['LZ'] if np.isfinite(R['LZ']) else (zf[1] - zf[0])
@@ -455,7 +457,7 @@ def _film_mask(cfg, R, sp=None):
     """Solvent-only bins BEHIND the plates: solvent populated (first reference
     snapshot), at most film_poly_max polymer atoms in any reference snapshot and
     >= film_margin sigma from the nearest plate plane (periodic in z) -- the shear
-    analogue of the triaxial reservoir baseline window."""
+    analogue of the uniaxial reservoir baseline window."""
     zf, Np = R['zf'], R['N_ref']
     free = Np.max(axis=0) <= cfg.film_poly_max
     if sp is not None:
@@ -487,7 +489,7 @@ def _swap_fraction(R, prof):
 
 
 def _swap_correct(cfg, R, sp):
-    """Static-group correction of a SOLVENT profile (2026-09-25).  shear_slab.lmp bins
+    """Static-group correction of a SOLVENT profile (2026-09-25).  simple_shear_plates.lmp bins
     the static group solv_bulk, but the plates are permeable to solvent and a ~7 sigma
     solvent film sits behind them (periodic z), so group atoms diffuse out and film atoms
     -- invisible to the profile -- diffuse in.  The net solvent content of the gap is
@@ -526,7 +528,7 @@ def _resolve_pore_mode(cfg, R, sp):
 
 def pore_baseline(cfg, R, tot, n):
     """p_pore per component and snapshot -- ONE scalar per component per snapshot, as
-    triaxial.terzaghi_split: 'film' = mean of the total stress over the film bins behind
+    uniaxial.terzaghi_split: 'film' = mean of the total stress over the film bins behind
     the plates; 'bath' = P_BARO on the diagonal, 0 off-diagonal."""
     b = {}
     for c in COMP:
@@ -541,7 +543,7 @@ def read_plate_S(cfg):
     """Whole-run plate file -> (step, S) with S = (S_top + S_bot)/2 = sigma_xz transmitted to
     the plates (TOTAL x-force / lx*ly, pair + bond; deck columns 6-7 since 2026-09-25), or
     None for older 5-column files."""
-    PP = tri.load2c(cfg.path('plate_pressure'), 7)
+    PP = uni.load2c(cfg.path('plate_pressure'), 7)
     if PP is None:
         return None
     return dict(step=PP[:, 0], S=0.5 * (PP[:, 5] + PP[:, 6]), S_top=PP[:, 5], S_bot=PP[:, 6])
@@ -666,7 +668,7 @@ def load_reference(cfg, verbose=True):
     if dref is not None:                             # zero of the cumulative displacement profile
         w = dref['N'].sum(axis=0)
         Rf['ux_cum_ref'] = np.where(w > 0, (dref['ux'] * dref['N']).sum(axis=0) / np.maximum(w, 1), 0.0)
-    R['rg'] = RG = tri.load2c(cfg.path('shear_strain_rg'), 3)
+    R['rg'] = RG = uni.load2c(cfg.path('shear_strain_rg'), 3)
     if RG is not None:                               # zero of the Rg-based shear strain
         nf = float(tp_ts[1] - tp_ts[0]) if len(tp_ts) > 1 else 0.0
         w = (RG[:, 0] > tp_ts[0] - nf) & (RG[:, 0] <= tp_ts[-1])
@@ -944,7 +946,7 @@ def fit_disp_profile(cfg, R, L, lvl):
     """Steady CUMULATIVE displacement profile u_x(z) of one level (disp_x_polymer_cum: displace/atom never
     reset after the gamma = 0 reference; plateau mean minus the reference-window profile) and the line through
     its interior: slope = du_x/dz = the shear strain of the network -- the counterpart of
-    triaxial.fit_disp_profile (z does not change under shear, so the current-z bins need no conversion).
+    uniaxial.fit_disp_profile (z does not change under shear, so the current-z bins need no conversion).
     Fitted bins: populated, between the plate / face planes, DISP_TRIM_BINS dropped at each end.
     CI half-width = max(least-squares, frame-to-frame t-interval).  None without the file."""
     D = read_disp(cfg.path('disp_x_polymer_cum', lvl))
@@ -988,13 +990,13 @@ def fit_disp_profile(cfg, R, L, lvl):
 
 def _strains(cfg, R, L, lvl, say):
     """Every strain measure of the level and the one G and kappa divide by (cfg.G_STRAIN with its fallback
-    chain disp -> rg -> trk -> applied) -- triaxial._strain_for_M for shear.  On entry L['gamma'] is the
+    chain disp -> rg -> trk -> applied) -- uniaxial._strain_for_M for shear.  On entry L['gamma'] is the
     prescribed boundary strain; on exit it is the chosen one (L['gamma_src'], L['gamma_half']) and the
     prescribed strain is kept as L['gamma_applied']."""
     Rf = R.get('ref') or {}
     L['gamma_applied'] = float(L['gamma'])
     t1 = float(L['ts'][-1])
-    # tracking slabs (shear_slab_two_pist): plateau of the block-averaged series minus the gamma = 0 reading
+    # tracking slabs (simple_shear): plateau of the block-averaged series minus the gamma = 0 reading
     S = read_series(cfg.path('stress_series', lvl)) if cfg.two_pist else None
     if S is not None and 'gamma' in S and (S['step'] >= L['t_hold']).sum() >= 4:
         hold = S['step'] >= L['t_hold']
@@ -1038,7 +1040,7 @@ def load_level(cfg, R, lvl, verbose=True, phase='c'):
     N1/N2, P_th; and, for the two-piston deck run with UNLOAD=1, the level's UNLOAD
     (phase 'u', files _u<lvl>: residual stresses, loaded as L['U']) with the D_c of its
     transverse relaxation (fit_Dc_unload) and kappa = D_c/G.  lvl = 'unload' reads the old
-    shear_slab deck's single Phase 4 unload.  Returns a dict L, or None if the core files
+    simple_shear_plates deck's single Phase 4 unload.  Returns a dict L, or None if the core files
     are missing."""
     say = print if verbose else (lambda *a, **k: None)
     unload = str(lvl) == 'unload' or phase == 'u'
@@ -1065,7 +1067,7 @@ def load_level(cfg, R, lvl, verbose=True, phase='c'):
         f'plateau window: steps >= {L["halt_ts"]} (last {cfg.plateau_frac:.0%}, {int(L["plat"].sum())} snapshots)')
 
     # ---- strain: plate-based gamma (prescribed), surface-COM gamma (slip diagnostic) ----
-    SS = tri.load2c(cfg.path('shear_strain', lvl, phase=phase), 4)
+    SS = uni.load2c(cfg.path('shear_strain', lvl, phase=phase), 4)
     if SS is not None:
         L['strain_ts'], L['gamma_ts'] = SS[:, 0], SS[:, 3]
         L['plate_sep'] = float(SS[0, 2])
@@ -1075,7 +1077,7 @@ def load_level(cfg, R, lvl, verbose=True, phase='c'):
         L['gamma'] = L['gamma_target']
         L['plate_sep'] = R['plate_sep']
         say('  NOTE: no shear_strain file -> gamma = the target value')
-    SU = tri.load2c(cfg.path('shear_strain_surface', lvl, phase=phase), 3)
+    SU = uni.load2c(cfg.path('shear_strain_surface', lvl, phase=phase), 3)
     if SU is not None:
         L['surf_ts'], L['gamma_surf_ts'] = SU[:, 0], SU[:, 2]
         pl = SU[:, 0] >= L['halt_ts']
@@ -1294,7 +1296,7 @@ _REQUIRED = ('stress_tensor_polymer', 'stress_profile_z_polymer', 'shear_strain'
 
 def sync_files(cfg, levels=None):
     levels = cfg.STRAINS if levels is None else [str(l) for l in levels]
-    if cfg.two_pist:                           # no unload phase in shear_slab_two_pist
+    if cfg.two_pist:                           # no unload phase in simple_shear
         levels = [l for l in levels if l != 'unload']
     data = [cfg.path(n) for n in _REF_DAT + _RUN_DAT]
     req = []
@@ -1309,12 +1311,12 @@ def sync_files(cfg, levels=None):
 
 def sync_from_expanse(cfg, levels=None, force=False):
     """Pull every file the shear notebooks read from Expanse in ONE login (the
-    triaxial puller); the _ref files are optional for runs older than 2026-09-23."""
+    uniaxial puller); the _ref files are optional for runs older than 2026-09-23."""
     data, traj, req = sync_files(cfg, levels)
     optional = ({cfg.path(n).name for n in _REF_DAT} | {cfg.path('box_bounds').name}
                 | {cfg.path(n, 'unload').name for n in _PROD_DAT}
                 | {cfg.path(n, l, phase='u').name for n in _PROD_DAT for l in cfg.STRAINS})
-    tri.sync_pull(cfg, data, traj, req, optional, force, refresh=lambda: sync_files(cfg, levels))
+    uni.sync_pull(cfg, data, traj, req, optional, force, refresh=lambda: sync_files(cfg, levels))
 
 
 # ===========================================================================
@@ -1357,7 +1359,7 @@ def _xlim_from(R):
 
 
 def _save(fig, cfg, stem, lvl=None):
-    return tri._save(fig, cfg, stem, lvl)
+    return uni._save(fig, cfg, stem, lvl)
 
 
 def post_hold(cfg, ts, stack):
@@ -1470,7 +1472,7 @@ def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
 
 def _stress_evo_panels(cfg, R, L, kind, stem, suptitle):
     """1 x 4 evolution panels (xz, xx, yy, zz) of kind 't' (total) or 'p' (polymer).
-    Normal components are compression-positive and drawn / P_bath (the triaxial panels)."""
+    Normal components are compression-positive and drawn / P_bath (the uniaxial panels)."""
     if L.get('prof_p') is None or (kind == 't' and L.get('prof_t') is None):
         print(f'{stem} skipped (profile files missing)')
         return None
@@ -1516,7 +1518,7 @@ def fig_geometry(cfg, R, L=None, stem='geometry'):
     N_r N_l) over the gamma = 0 reference window is the seated preload: the only reason the
     total sigma_zz of figure 2 sits above P_bath while sigma_xx and sigma_yy sit on it."""
     if not cfg.iso:
-        print('geometry figure: drawn for the isolated-gel deck (shear_slab_two_pist_iso) only')
+        print('geometry figure: drawn for the isolated-gel deck (simple_shear_iso) only')
         return None
     zb, zt = R.get('zf_bot', np.nan), R.get('zf_top', np.nan)
     Lg, Ld, Ly = R['LZ'], R['LX'], R['LY']           # box lengths: gap axis (deck x), drive axis (deck z), y
@@ -1524,17 +1526,17 @@ def fig_geometry(cfg, R, L=None, stem='geometry'):
         print('geometry figure skipped (plate planes / box unknown)')
         return None
     lvl = L['lvl'] if L is not None else cfg.STRAINS[0]
-    Gd = tri.load2c(cfg.path('gel_dimensions_bb', lvl), 4)
+    Gd = uni.load2c(cfg.path('gel_dimensions_bb', lvl), 4)
     gel_d = float(np.nanmean(Gd[-20:, 3])) if Gd is not None else 0.7 * Ld      # deck lz_bb = extent along the drive
     gel_y = float(np.nanmean(Gd[-20:, 2])) if Gd is not None else 0.7 * Ly
-    # deck defaults (shear_slab_two_pist_isolated.lmp): grip layer, plate stand-off, core margins, plate thickness
+    # deck defaults (simple_shear_isolated.lmp): grip layer, plate stand-off, core margins, plate thickness
     layer, cgap, cm_y, cm_d, tpl = 3.0, 1.12, 6.0, 20.0, 1.0
     xl, xr = zb * Lg, zt * Lg                        # seated faces (absolute, gap axis)
     d0, d1 = 0.5 * (Ld - gel_d), 0.5 * (Ld + gel_d)
     y0, y1 = 0.5 * (Ly - gel_y), 0.5 * (Ly + gel_y)
     # seated preload over the reference window
     Npre = np.nan
-    PP = tri.load2c(cfg.path('plate_pressure'), 9)
+    PP = uni.load2c(cfg.path('plate_pressure'), 9)
     Rf = R.get('ref')
     if PP is not None:
         m = (PP[:, 0] >= Rf['ts'][0]) & (PP[:, 0] <= Rf['ts'][-1]) if Rf is not None else PP[:, 0] >= 0.9 * PP[-1, 0]
@@ -2193,7 +2195,7 @@ def fig_network_stress_sweep(cfg, R, levels):
 
 def fig_disp_profile(cfg, R, levels, stem='disp_profile'):
     """Steady displacement profile(s) of the network and the strain they give -- the shear counterpart of
-    triaxial.fig_disp_profile: (a) plateau-mean cumulative u_x(z) relative to the gamma = 0 reference, line fit
+    uniaxial.fig_disp_profile: (a) plateau-mean cumulative u_x(z) relative to the gamma = 0 reference, line fit
     over the interior bins (filled; hollow = trimmed), slope = gamma_disp; (b) residuals from the line."""
     hd = [L for L in levels if L.get('disp_prof') is not None]
     if not hd:

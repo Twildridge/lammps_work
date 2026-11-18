@@ -17,11 +17,11 @@ KNOBS=(
     drive_split hold_auto seat_mode disp_fine_nfreq disp_fine_bin           # compression decks
     unload unload_steps unload_margin                                       # compression / shear unload
     save_strained                                                           # strained-state restart at the end of each hold (default 1; 0 = off)
-    l0_avg_steps                                                            # window of the L0 / L_ss means (compression, compress_slab, permeation)
-    fringe_max rg_strain_min prestrain_max                                  # credit guards of triaxial_compression_two_pist (0 = off)
+    l0_avg_steps                                                            # window of the L0 / L_ss means (compression, isotropic_compression, permeation)
+    fringe_max rg_strain_min prestrain_max                                  # credit guards of uniaxial_compression (0 = off)
     ref_avg_steps nsteps_shear_base disp_fine_span stress_freq halt_every   # shear
     strains compressions                                                    # sweep lists (see below)
-    nsteps_eq nsteps_prod                                                   # phase sweeps
+    phase_sweep nsteps_eq nsteps_prod                                       # pure_solvent / pure_polymer pressure sweep (PHASE_SWEEP=1)
 )
 # Knobs the decks cannot default themselves: forwarded with these values when the environment
 # does not set them. strains / compressions also go out as the quoted string <name>_list.
@@ -96,8 +96,8 @@ data_files/
   final_config_<stem>_snap<N>.data           snapshots during an equilibration (resume points)
   strained_<deck>_<stem>_<stage>.restart     the strained state at the end of a level's hold, before any
                                              unload: the start of a repeated unload / D_c measurement
-  <deck>: config = equilibration (slab_with_support, chain_length_testing), tricomp = triaxial
-  compression, triperm = triaxial permeation, shear, compress = six-plate bulk compression;
+  <deck>: config = equilibration (slab_with_support, chain_length_testing), unicomp = uniaxial
+  compression, uniperm = uniaxial permeation, shear, compress = six-plate bulk compression;
   the pure-phase runs write purepol_<stem>.data / puresolv_<stem>.data.
 
 output_files/

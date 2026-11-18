@@ -4,13 +4,13 @@ make_fixtures.py -- synthetic run directories for testing the plotting scripts
 and the analysis notebooks (2026-09-16).  Generates SMALL but format-faithful
 output trees:
 
-  <root>/one_piston/   a triaxial_permeation-style run (single piston columns)
-  <root>/two_piston_perm/   a triaxial_permeation_two_pist run (feed | perm columns,
+  <root>/one_piston/   a uniaxial_permeation_one_pist-style run (single piston columns)
+  <root>/two_piston_perm/   a uniaxial_permeation run (feed | perm columns,
                             piston_pressure, permeation_data/permeation)
-  <root>/two_piston_comp/   a triaxial_compression_two_pist run, levels c0.05 c0.10
+  <root>/two_piston_comp/   a uniaxial_compression run, levels c0.05 c0.10
                             (load | feed | perm columns, _ref files, disp_z_polymer, ...; the six-plate
                             fixture also writes an unload, _u<lvl> files, since 2026-10-28)
-  <root>/six_plate_bulk/    a compress_slab run (2026-09-29), levels c0.05 c0.10: six plates +
+  <root>/six_plate_bulk/    a isotropic_compression run (2026-09-29), levels c0.05 c0.10: six plates +
                             two wet pistons, profiles along z, x and y, with a KNOWN bulk
                             modulus K_TRUE so the analysis can be checked against it
   <root>/flow_data_local/{compression,permeation,bulk}/<RUN_ID>/  +  traj_files.nosync/
@@ -135,7 +135,7 @@ def write_traj(path, steps, types_z):
 
 # ---------------------------------------------------------------------------
 def one_piston(root):
-    """triaxial_permeation-style (single piston column; piston_force_pressure)."""
+    """uniaxial_permeation_one_pist-style (single piston column; piston_force_pressure)."""
     r = mk(root)
     ns = 8000
     st = stem(ns)
@@ -169,7 +169,7 @@ def one_piston(root):
             prof = [np.abs(rng.normal(0.5, 0.05, nb)) for _ in steps]
             write_ave_time_vector(sd / f'stress_{dim}_{comp}_{st}.dat', 'avg', 'c_press', steps, prof)
     write_ave_chunk(r / 'output_files' / 'chemical_potential' / f'solvent_density_z_{st}.dat', 'avg_solv_density', steps, density_cols(steps), ['density/number'])
-    with open(r / 'data_files' / f'final_triperm_{st}.data', 'w') as f:
+    with open(r / 'data_files' / f'final_uniperm_{st}.data', 'w') as f:
         f.write(f'fixture\n\n10 atoms\n5 atom types\n\n0.0 {LX} xlo xhi\n0.0 {LY} ylo yhi\n0.0 {LZ} zlo zhi\n')
     (r / 'log.lammps').write_text(_log(steps))
     return st
@@ -261,7 +261,7 @@ def two_piston_perm(root):
         '# velocity-controlled stage (deck Phase 2v): key value\n'
         f'step_start {ns}\nsteps 6000\nvfeed_set {-vq}\nvfeed_meas {-vq}\nvfeed_user 0\navg_step_a {int(0.6 * ns)}\navg_step_b {ns}\n'
         f'z_feed_a {Z_FEED - 0.0015 * 0.6 * ns}\nz_feed_b {Z_FEED - 0.0015 * ns}\narea {LX * LY}\ndP_drive 0.1\nP_target 1.5\nfrozen_follows 1\n')
-    with open(r / 'data_files' / f'final_triperm_{st}.data', 'w') as f:
+    with open(r / 'data_files' / f'final_uniperm_{st}.data', 'w') as f:
         f.write(f'fixture\n\n10 atoms\n7 atom types\n\n0.0 {LX} xlo xhi\n0.0 {LY} ylo yhi\n0.0 {LZ} zlo zhi\n')
     (r / 'log.lammps').write_text(_log(steps))
     return st
@@ -339,14 +339,14 @@ def two_piston_comp(root, levels=('0.05', '0.10')):
                 prof = [np.abs(rng.normal(0.5, 0.05, nb)) for _ in steps]
                 write_ave_time_vector(sd / f'stress_{dim}_{comp}_{st}.dat', 'avg', 'c_press', steps, prof)
         t_start += hold + 1000
-    with open(r / 'data_files' / f'final_tricomp_{rst}.data', 'w') as f:
+    with open(r / 'data_files' / f'final_unicomp_{rst}.data', 'w') as f:
         f.write(f'fixture\n\n10 atoms\n7 atom types\n\n0.0 {LX} xlo xhi\n0.0 {LY} ylo yhi\n0.0 {LZ} zlo zhi\n')
     (r / 'log.lammps').write_text(_log(np.arange(0, 20000, 1000)))
     return rst
 
 
 # ---------------------------------------------------------------------------
-#  compress_slab (bulk modulus): six plates + two wet pistons, 2026-09-29
+#  isotropic_compression (bulk modulus): six plates + two wet pistons, 2026-09-29
 # ---------------------------------------------------------------------------
 B_DATANAME = 'fixture_cube'
 B_BOX = (60.0, 60.0, 90.0)                 # x, y periodic bath; z closed by the wet pistons
@@ -446,7 +446,7 @@ def _b_profiles(axis, steps, dPi, ref=False):
 
 
 def six_plate_bulk(root, levels=('0.05', '0.10')):
-    """compress_slab.lmp output tree.  Every stress is built from K_TRUE, so
+    """isotropic_compression.lmp output tree.  Every stress is built from K_TRUE, so
     lib_headless_test.py can assert that lib/bulk.py returns it."""
     r = mk(root)
     hold = 6000

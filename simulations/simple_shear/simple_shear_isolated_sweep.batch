@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=shear_iso_sweep
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=6
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=36:00:00
+#SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
+
+# (2026-11-14) Formerly simple_shear_sweep.batch. The isolated-gel deck is now
+# simple_shear_isolated.lmp (was simple_shear.lmp), named by DECK_FILE below; the
+# folder's default deck and batches are the laterally PERIODIC gel.
+
+# ISOLATED-gel shear strain SWEEP: the protocol of simple_shear_isolated_single.batch through
+# cumulative strain levels in one job. Each level: drive to the target, hold NSTEPS (files
+# _g<strain>), then UNLOAD (deck Phase 2c): grips back to gamma = 0 and a free relaxation hold
+# of UNLOAD_STEPS (0 = NSTEPS; files _u<strain>, where D_c and kappa are read), and the next
+# level shears from gamma = 0 again. The wall-clock guard ends the level in flight and skips the
+# rest; finished levels stay intact. Analyse with shear_analysis_sweep.ipynb,
+# DECK = "simple_shear_iso", STRAINS as written here ("0.1", not "0.10").
+
+FOLDER=simple_shear
+export DECK_FILE=simple_shear_isolated
+DATANAME=final_config_slab_support_5beads_tall_rho04_nowalls_1.0_1.0_8000000_x_plates
+INTERACTION=1.0_1.0
+NSTEPS=3000000          # hold per strain level, and the output-file tag
+export PRESS_TARGET=1.5
+export STRAINS="0.01 0.03 0.05 0.1"
+export REF_AVG_STEPS=1000000   # gamma = 0 reference window; its noise is the floor under the small levels
+export UNLOAD=1 UNLOAD_STEPS=0
+
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=uniax_comp
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=6
+#SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=48:00:00
+#SBATCH --output=%x.o%j.%N
+source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
+
+# Two-piston compression STRAIN SWEEP: the stress-strain curve. Both reservoirs at PRESS_TARGET;
+# each level closes the gap to the next cumulative strain (symmetric drive, DRIVE_SPLIT 0.5),
+# freezes the plates and holds for an auto-sized hold (HOLD_AUTO=1, tau_1 = L^2/(pi^2 D_c));
+# files _<hold>_c<strain>. Solvent expelled by the compression raises the feed piston by about
+# strain x L0: the converter's margin_feed must cover the deepest level or the box-face halt ends
+# the run. Short trial first: COMPRESSIONS="0.05", HOLD_AUTO=0 and a small NSTEPS.
+# Analysis: uniaxial_compression_sweep.ipynb.
+
+FOLDER=uniaxial_compression
+DATANAME=final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000002_two_pist
+INTERACTION=1.0_1.0
+NSTEPS=9000000          # fallback hold with HOLD_AUTO=0, and the tag of the setup-phase files
+export PRESS_TARGET=1.5
+export COMPRESSIONS="0.10 0.15 0.20 0.3 0.4 0.5 0.7"
+
+bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

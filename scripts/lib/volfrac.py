@@ -3,7 +3,7 @@
 and the Voronoi→thermodynamic calibration (2026-08 plan).
 
 Imported by calibration_analysis.ipynb AND both production notebooks
-(triaxial_compression.ipynb, triaxial_permeation.ipynb) the same way
+(uniaxial_compression_single.ipynb, uniaxial_permeation_single.ipynb) the same way
 cavity_widom.py used to be — a local import from scripts/:
 
     import sys; sys.path.insert(0, str(Path('lib').resolve()))   # or scripts/lib
@@ -286,7 +286,7 @@ def aniso_gate(steps, ptens, lx, ly, lz, tail_frac=0.5,
         fluid has no shear restoring force at all, so lx/lz random-walks tens
         of percent while ⟨V⟩ stays converged); shape drift alone therefore
         cannot invalidate a volume average
-      * off-diagonals: |⟨Pij⟩| / |⟨P⟩| ≤ offdiag_tol — FLAGGED only (no tri)
+      * off-diagonals: |⟨Pij⟩| / |⟨P⟩| ≤ offdiag_tol — FLAGGED only (no uni)
 
     Returns dict(passed, flags[list of str], stats). Production averages are
     only valid when 'passed'; the hard criterion is normal-stress isotropy —

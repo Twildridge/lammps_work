@@ -1,7 +1,7 @@
 """psd.py -- geometric porosity and pore-size distribution of the polymer network
 (2026-09-24), in-house, no external binary.
 
-Used by lib/triaxial.py (add_perm_psd / fig_perm_psd) on the SAME trajectory frames
+Used by lib/uniaxial.py (add_perm_psd / fig_perm_psd) on the SAME trajectory frames
 the Voronoi pass streams (the polymer coordinates are kept by _volume_fractions, so
 the 240 MB dump is never re-read for this).
 

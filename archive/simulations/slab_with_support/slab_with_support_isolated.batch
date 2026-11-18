@@ -30,7 +30,7 @@ module load python/3.8.12
 
 # =======================================================================
 # ISOLATED GEL (2026-09-30): free swelling of a finite gel block in its bath, the
-# equilibration that feeds compress_slab (bulk modulus K) through
+# equilibration that feeds isotropic_compression (bulk modulus K) through
 # scripts/lib/add_more_plates_to_gel.py.
 #
 # The data file has NO support and NO piston (slab_with_support.ipynb, includeWalls =
@@ -72,9 +72,9 @@ FOLDER="slab_with_support"
 DATANAME="slab_support_5beads_square_rho10_nowalls"   # renamed 2026-10-11 (twice): this cube is rhoSolv = 1.0, not 0.4, and "square" not "tall"
                         # (the local file was slab_support_5beads_tall_rho04_new_03_nowalls.data until then; the run submitted
                         # under the OLD stem keeps it on Expanse: final_config_slab_support_5beads_tall_rho04_new_03_nowalls_*,
-                        # which is what compress_slab.batch and lib/add_more_plates_to_gel.py name).  Copy the renamed file to
+                        # which is what isotropic_compression.batch and lib/add_more_plates_to_gel.py name).  Copy the renamed file to
                         # input_data/ before any resubmission.
-INTERACTION="1.0_1.0"   # the interaction of the triaxial runs, so that K, M and G belong to the same gel
+INTERACTION="1.0_1.0"   # the interaction of the uniaxial runs, so that K, M and G belong to the same gel
 NSTEPS=8000000
 TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
 PRESS_TARGET=1.5    # Barostat target pressure (overrides press_target in .lmp)
@@ -82,7 +82,7 @@ SEED=12345          # RNG seed for create_velocity / langevin
 
 export BARO_MODE=aniso        # x, y, z barostatted independently (the deck's default); iso = the fallback above
 export PIN_GEL=1              # zero the gel's linear + angular momentum every 100 steps: a free 60-sigma block
-                              # would turn ~14 deg in 10M steps, and the plates of compress_slab are parked along
+                              # would turn ~14 deg in 10M steps, and the plates of isotropic_compression are parked along
                               # the box axes (see slab_with_support.lmp)
 export PISTON_TRANSPARENT=1   # no piston in this file: irrelevant, kept so a file WITH a piston is safe too
 export CHAIN=1                # chain continuation jobs until all NSTEPS are done (see WALL LIMIT above)

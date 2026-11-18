@@ -90,9 +90,9 @@ def read_frame(fh, a, b, keep_types=POLYMER_TYPES):
         pos = j + 1
     step = int(head[1])
     natoms = int(head[3])
-    tri = "xy" in head[4]
+    uni = "xy" in head[4]
     bnd = np.array([[float(v) for v in head[5 + k].split()] for k in range(3)])
-    if tri:
+    if uni:
         xy, xz, yz = bnd[0, 2], bnd[1, 2], bnd[2, 2]
         lo = np.array([bnd[0, 0] - min(0.0, xy, xz, xy + xz), bnd[1, 0] - min(0.0, yz), bnd[2, 0]])
         hi = np.array([bnd[0, 1] - max(0.0, xy, xz, xy + xz), bnd[1, 1] - max(0.0, yz), bnd[2, 1]])

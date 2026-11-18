@@ -10,7 +10,7 @@ outside a tight bounding box around the polymer network, and writes a new data
 file containing only gel-internal atoms (types 1=crosslink, 2=chain, 3=solvent).
 
 This isolated file is now used as a *fully periodic mixed-gel* input: it is
-re-equilibrated under NPT (via polymer_pure.lmp) so that V_mix is a true
+re-equilibrated under NPT (via pure_polymer.lmp) so that V_mix is a true
 thermodynamic box volume, measured on the same footing as the pure-species
 references. The box written here is only an initial condition.
 

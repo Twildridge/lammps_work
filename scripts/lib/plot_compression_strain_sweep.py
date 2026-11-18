@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Cluster-side quick-look for the triaxial_compression stress-strain sweep.
+"""Cluster-side quick-look for the uniaxial_compression stress-strain sweep.
 
-Reads the per-level output files written by triaxial_compression.lmp (each level
+Reads the per-level output files written by uniaxial_compression.lmp (each level
 tagged _c<level>) and CONSOLIDATES every quantity into a single figure per
 quantity, with one curve per compression level -- instead of one PNG per level.
 This is the compression analog of plot_shear_strain_sweep.py.
@@ -17,7 +17,7 @@ Produces, in <folder>/output_plots/:
        sigma_xx, sigma_yy) -- one curve per level.  A compact consolidated
        stand-in for the old per-level 6x5 *_c<lvl>_stress.png grids.
 
-The notebooks (triaxial_compression.ipynb) remain the source of truth for the
+The notebooks (uniaxial_compression_{single,sweep}.ipynb) remain the source of truth for the
 detailed analysis; this is only an automatic first look so a run's sweep can be
 eyeballed without opening the notebook.  Only numpy + matplotlib are required.
 

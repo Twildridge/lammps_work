@@ -120,12 +120,12 @@ for what in $SUBMIT; do
     case "$what" in
         isotropy)        sub isotropy chain_length_testing --job-name=screen_iso_w10 --nodes=2 --time=10:00:00 \
                              --export=ALL,GEL=w10,DATA_FILE="$INPUT_DATA_DIR/$FINAL.data",PREFLIGHT=1,POST=1,REGISTER=1 screen_isotropy.batch || RC=1 ;;
-        compression)     sub compression triaxial_compression_two_pist --job-name=triax_comp2p_w10 --time=30:00:00 \
-                             --export=ALL,DATANAME="$TWO",NSTEPS_OVERRIDE=4000000,UNLOAD_STEPS=7000000 triaxial_compression_two_pist_single.batch || RC=1 ;;
-        shear)           sub shear shear_slab_two_pist --job-name=shear_2p_per_w10 --time=14:00:00 \
-                             --export=ALL,DATANAME="$TWO",NSTEPS_OVERRIDE=3000000 shear_slab_two_pist_periodic_single.batch || RC=1 ;;
-        permeation_fref) sub permeation_fref triaxial_permeation_two_pist --job-name=triax_perm2p_w10_fref --time=16:00:00 \
-                             --export=ALL,DATANAME="$TWO",FROZEN_AT=ref,NSTEPS_OVERRIDE=4000000 triaxial_permeation_two_pist_single.batch || RC=1 ;;
+        compression)     sub compression uniaxial_compression --job-name=uniax_comp_w10 --time=30:00:00 \
+                             --export=ALL,DATANAME="$TWO",NSTEPS_OVERRIDE=4000000,UNLOAD_STEPS=7000000 uniaxial_compression_single.batch || RC=1 ;;
+        shear)           sub shear simple_shear --job-name=shear_per_w10 --time=14:00:00 \
+                             --export=ALL,DATANAME="$TWO",NSTEPS_OVERRIDE=3000000 simple_shear_periodic_single.batch || RC=1 ;;
+        permeation_fref) sub permeation_fref uniaxial_permeation --job-name=uniax_perm_w10_fref --time=16:00:00 \
+                             --export=ALL,DATANAME="$TWO",FROZEN_AT=ref,NSTEPS_OVERRIDE=4000000 uniaxial_permeation_single.batch || RC=1 ;;
         *) say "unknown SUBMIT item $what"; RC=1 ;;
     esac
 done

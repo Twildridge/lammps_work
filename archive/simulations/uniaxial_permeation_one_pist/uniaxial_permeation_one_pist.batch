@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# ARCHIVED 2026-09-22 -- kept for reference, NOT maintained.  The one-piston
+# uniaxial decks were superseded by simulations/uniaxial_*/ (the
+# two-piston sequence).  This batch's self-sync guard re-execs
+# simulations/<folder>/<folder>.batch and run_lammps.sh resolves FOLDER to
+# simulations/<folder>/<folder>.lmp, so it only works again after
+#     git mv archive/simulations/<folder> simulations/
+# See archive/README.md.
+# ---------------------------------------------------------------------------
+
+#SBATCH --job-name=uniax_perm
+#SBATCH --partition=compute
+#SBATCH --account=csb197
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=32 # was 32
+#SBATCH --cpus-per-task=4     # was 4
+#SBATCH --mem=0
+#SBATCH --time=14:00:00
+#SBATCH --output=%x.o%j.%N
+
+# Set environment variables
+declare -xr OMPI_UNIT='core'
+declare -xr OMPI_MCA_btl='self,vader'
+
+declare -xr UCX_LOG_LEVEL='ERROR'
+declare -xr UCX_TLS='self,cma,shm,rc,ud,dc'
+declare -xr UCX_NET_DEVICES='mlx5_2:1'
+declare -xir UCX_MAX_RNDV_RAILS=1
+
+declare -xir OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+
+# Load required modules for LAMMPS on Expanse (use this order)
+module reset
+module load gcc/10.2.0
+module load openmpi/4.1.3
+module load python/3.8.12
+
+# Set simulation parameters
+FOLDER="uniaxial_permeation_one_pist"
+DATANAME="final_config_slab_support_periodic_5beads_tall_rho04_new_1.0_1.0_14000000"
+INTERACTION="1.0_1.0" # first number is solvent–solvent; second is polymer–solvent
+NSTEPS=800000
+TYPE=""             # Options: stress, volume, stressvol, or leave empty (just type "")
+
+# Navigate to the scripts directory
+cd ~/Documents/lammps_work/scripts || exit 1
+
+# Run the simulation
+if [ -z "$TYPE" ]; then
+    bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"
+else
+    bash run_lammps.sh "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS" "$TYPE"
+fi

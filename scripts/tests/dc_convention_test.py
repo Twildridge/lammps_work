@@ -1,7 +1,7 @@
 """One consolidation equation, one D_c, both D_c fitters (2026-10-03).
 
-The compression fit (tri.fit_Dc: slab HELD between two drained plates) and the permeation fit
-(tri.fit_perm_Dc: one face pinned on the support, one free, pressure drop prescribed) were each
+The compression fit (uni.fit_Dc: slab HELD between two drained plates) and the permeation fit
+(uni.fit_perm_Dc: one face pinned on the support, one free, pressure drop prescribed) were each
 checked on synthetic data built from their OWN mode series.  Here neither series is used: a
 finite-difference solver integrates
 
@@ -40,9 +40,9 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'lib'))
-import triaxial as tri
+import uniaxial as uni
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'archive' / 'scripts' / 'lib'))
-import triaxial_load_Dc as ldc      # the hold (load) fit, archived 2026-11-17
+import uniaxial_load_Dc as ldc      # the hold (load) fit, archived 2026-11-17
 
 DT_LJ = 0.005            # tau per MD step (the decks' timestep_prod)
 SAMPLE = 5000            # MD steps between stored solver states (the thickness-trace cadence)
@@ -131,7 +131,7 @@ def solver_check(D, L=20.0, dP=0.1, M=0.42):
 
 def _cfg(**kw):
     with contextlib.redirect_stdout(io.StringIO()):
-        return tri.Config(DATANAME='dc_convention', INTERACTION='1.0_1.0', RUN_ID='dc_convention', two_pist=True, **kw)
+        return uni.Config(DATANAME='dc_convention', INTERACTION='1.0_1.0', RUN_ID='dc_convention', two_pist=True, **kw)
 
 
 def held_slab(D, split=0.5, L=113.6, closure=12.8, v=0.04, hold=8_400_000, n_snap=20, noise=0.01, seed=1):
@@ -189,7 +189,7 @@ def permeation(D, rigid_drop=3.0, L0=126.4, dP=0.1, M=0.42, onset=1_000_000, n_r
     cfg = _cfg(mode='permeation', PERM_GAP=gap, PERM_RIGID='contact' if rigid_drop > 0 else 'none',
                PERM_DC_N_MODES=8, PERM_TRACE_SKIP=1_500_000)
     P = dict(halt_ts=int(S[-1] - 0.25 * (S[-1] - onset)))
-    F = tri.fit_perm_Dc(cfg, dict(z_support=z_sup), P, disp)
+    F = uni.fit_perm_Dc(cfg, dict(z_support=z_sup), P, disp)
     return F, L0 ** 2 / (np.pi ** 2 * D)
 
 
@@ -212,7 +212,7 @@ def unload(D, L_hold=113.6, s=0.11, retract=60_000, hold=25_000_000, stride=25_0
               L_ref=L_hold * (1.0 + s), L_ref_src='synthetic', L_hold=L_hold, Z_bot=z_bot, Z_top=z_bot + L_hold)
     cfg = _cfg(mode='compression', COMP_LEVELS=['0.10'], DC_N_MODES=5, DC_TRIM_BINS=2)
     F_hold = dict(L=L_hold, z_perm=z_bot, z_feed=z_bot + L_hold, Dc=D, Dc_all=D)
-    return tri.fit_Dc_unload(cfg, dict(z_support=z_bot - 1.0), Ud, F_hold), L_hold ** 2 / (np.pi ** 2 * D)
+    return uni.fit_Dc_unload(cfg, dict(z_support=z_bot - 1.0), Ud, F_hold), L_hold ** 2 / (np.pi ** 2 * D)
 
 
 def main(D=0.10, tol=0.10):

@@ -113,12 +113,12 @@ SSH back into the cluster if you're not still connected, then:
 ```bash
 cd ~/Documents/lammps_work
 git pull                      # make sure you have the latest scripts
-cd simulations/solvent_pure
+cd simulations/pure_solvent
 ```
 
-Open `solvent_pure_single.batch` in a text editor (`nano solvent_pure_single.batch` over SSH) and find this block near the bottom:
+Open `pure_solvent_single.batch` in a text editor (`nano pure_solvent_single.batch` over SSH) and find this block near the bottom:
 ```bash
-FOLDER="solvent_pure"
+FOLDER="pure_solvent"
 DATANAME="final_config_slab_support_5beads_tall_rho04_p1.5_1.0_1.0_600000_solvent_only"
 INTERACTION="1.0_0.0"
 NSTEPS=100000
@@ -131,7 +131,7 @@ Leave the rest as it is. `INTERACTION="1.0_0.0"` is right for a solvent-only run
 
 Submit it:
 ```bash
-sbatch solvent_pure_single.batch
+sbatch pure_solvent_single.batch
 ```
 This prints a job ID, e.g. `Submitted batch job 12345678`. The job is queued; the terminal can be closed.
 
@@ -144,7 +144,7 @@ The state column shows `PD` (pending) or `R` (running). This is a 1-node, 1-hour
 
 While it runs, the LAMMPS log can be watched live:
 ```bash
-tail -f ~/Documents/lammps_runs/solvent_pure/solvent_pure_solvent_box_rho04_02_1.0_0.0_<timestamp>/log.lammps
+tail -f ~/Documents/lammps_runs/pure_solvent/pure_solvent_solvent_box_rho04_02_1.0_0.0_<timestamp>/log.lammps
 ```
 The exact folder name is on the `Working directory:` line near the top of the job's `.o<jobid>.*` SLURM output file. Ctrl-C stops the watching, not the job.
 
@@ -155,8 +155,8 @@ When the job finishes, `squeue -u $USER` will no longer list it, and the log wil
 From your own computer:
 ```bash
 rsync -avP <your-username>@login.expanse.sdsc.edu:\
-  ~/Documents/lammps_runs/solvent_pure/solvent_pure_solvent_box_rho04_02_1.0_0.0_<timestamp>/output_files/ \
-  ~/Documents/flow_data_local/solvent_pure/      # the local output folder next to lammps_work (the notebooks read ../../flow_data_local)
+  ~/Documents/lammps_runs/pure_solvent/pure_solvent_solvent_box_rho04_02_1.0_0.0_<timestamp>/output_files/ \
+  ~/Documents/flow_data_local/pure_solvent/      # the local output folder next to lammps_work (the notebooks read ../../flow_data_local)
 ```
 [downloading_output.md](downloading_output.md) covers what is worth downloading and why trajectories are handled separately.
 
@@ -164,7 +164,7 @@ rsync -avP <your-username>@login.expanse.sdsc.edu:\
 
 The plots are generated at the end of every job. To regenerate them by hand:
 ```bash
-cd ~/Documents/lammps_runs/solvent_pure/solvent_pure_solvent_box_rho04_02_1.0_0.0_<timestamp>
+cd ~/Documents/lammps_runs/pure_solvent/pure_solvent_solvent_box_rho04_02_1.0_0.0_<timestamp>
 python ~/Documents/lammps_work/scripts/lib/plot_lammps_log.py . solvent_box_rho04_02_1.0_0.0_100000
 ```
 This writes convergence plots (temperature, pressure and volume against time) to `./output_plots/`. Temperature and pressure should be flat by the end of the run. [analysis.md](analysis.md) describes every analysis script and notebook.

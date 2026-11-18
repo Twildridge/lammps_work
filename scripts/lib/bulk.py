@@ -1,14 +1,14 @@
-"""bulk.py -- shared analysis library for the compress_slab (bulk modulus) notebooks (2026-09-29).
+"""bulk.py -- shared analysis library for the isotropic_compression (bulk modulus) notebooks (2026-09-29).
 
 Used by  scripts/bulk_modulus_analysis_single.ipynb  (one volumetric-strain level)  and
          scripts/bulk_modulus_analysis_sweep.ipynb   (every level of a sweep).
 
-The bulk counterpart of lib/triaxial.py, laid out section for section like it so the two
+The bulk counterpart of lib/uniaxial.py, laid out section for section like it so the two
 notebooks read like the compression ones and -- more important -- so K is estimated the way
 the compression notebooks estimate M:
 
   * geometry: an ISOLATED gel loaded on its six faces by solvent-transparent plates, the bath
-    held at P_target by two wet pistons (compress_slab.lmp since 2026-09-29);
+    held at P_target by two wet pistons (isotropic_compression.lmp since 2026-09-29);
   * every profile is taken in a CORE COLUMN through the gel (bath | gel | bath), along z, x and
     y; the deck divides by the live column cross-section, so the files hold true stresses;
   * Terzaghi: sigma' = sigma^t - p_pore, p_pore = the total stress in the BATH bins of the same
@@ -37,7 +37,7 @@ the compression notebooks estimate M:
   * the diffusivity comes from the UNLOAD (deck Phase 2c, 2026-10-28), not from the hold: after
     the hold the six plates open and the cube RE-SWELLS FREELY (_u<level> files).  All six faces
     unloaded is the 3-D unconstrained problem, whose diffusivity is D_m = (K/M) D_c = K/zeta
-    (the confined D_c = M/zeta of the triaxial holds divides by the longitudinal modulus; the
+    (the confined D_c = M/zeta of the uniaxial holds divides by the longitudinal modulus; the
     free volumetric response by K).  fit_Dm_unload fits the exact free-cube series -- the
     product of three slab series, every observable linear in the dilatation relaxes as
     1 - M_x M_y M_z -- to the Rg edges (headline), the Rg volume strain, the interior Pi and
@@ -53,22 +53,22 @@ the compression notebooks estimate M:
   * solvent volume fractions in the core columns along x, y and z: mass fraction from the
     density profiles, Voronoi and lambda-calibrated Voronoi from the trajectories
     (add_volume_fractions, one tessellation per frame serves the three axes);
-  * closure: with M from the triaxial run (M_REF), G = (3/4)(M - K) and D_c = (M/K) D_m, the
-    confined diffusivity this gel would show in a triaxial hold.
+  * closure: with M from the uniaxial run (M_REF), G = (3/4)(M - K) and D_c = (M/K) D_m, the
+    confined diffusivity this gel would show in a uniaxial hold.
 
 Shared machinery (style, readers, block bootstrap, plateau window, tail fit, Terzaghi split,
 the consolidation fit, smart_legend, the Expanse puller and the PROFILE FIGURES) is
-triaxial.py's; nothing statistical is re-implemented here.  The profile figures are
-triaxial's own functions, handed a per-axis "view" of the data (see view()).
+uniaxial.py's; nothing statistical is re-implemented here.  The profile figures are
+uniaxial's own functions, handed a per-axis "view" of the data (see view()).
 
 Layout of this file
-    0. style                         (triaxial's)
+    0. style                         (uniaxial's)
     1. Config                        knobs, path builders (per-axis file names)
     2. file readers                  plate tables, per-axis profile stacks
     3. reference state               load_reference   (eps_vol = 0, shared by every level)
     4. one strain level              load_level       (stresses, Terzaghi, plates, K; + the unload: D_m, kappa)
-    5. Expanse sync                  sync_from_expanse (via triaxial.sync_pull)
-    6. per-axis views                view, axis context for triaxial's figures
+    5. Expanse sync                  sync_from_expanse (via uniaxial.sync_pull)
+    6. per-axis views                view, axis context for uniaxial's figures
     7. figures, single level         fig_strain ... fig_Dm, fig_closure
     8. figures, sweep                fig_*_sweep
     9. summaries                     print_summary
@@ -95,20 +95,20 @@ from matplotlib.lines import Line2D
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
-import triaxial as tri  # noqa: E402
+import uniaxial as uni  # noqa: E402
 import volfrac       # noqa: E402  (scripts/lib/volfrac.py -- Voronoi + lambda calibration)
 
 # ===========================================================================
-#  0. STYLE  (triaxial's palette and rcParams)
+#  0. STYLE  (uniaxial's palette and rcParams)
 # ===========================================================================
-WONG, EVO_CMAP = tri.WONG, tri.EVO_CMAP
-level_color, setup_style = tri.level_color, tri.setup_style
-sig, fmt_step, fmt_val_unc, fmt_ci, fmt_mu = tri.sig, tri.fmt_step, tri.fmt_val_unc, tri.fmt_ci, tri.fmt_mu
-mean_ci, block_bootstrap_ci, plateau_window, relax_tail = (tri.mean_ci, tri.block_bootstrap_ci,
-                                                           tri.plateau_window, tri.relax_tail)
-smart_legend, annotate_box, robust_ylim, rolling_mean = (tri.smart_legend, tri.annotate_box,
-                                                         tri.robust_ylim, tri.rolling_mean)
-COMPONENTS = tri.COMPONENTS                       # ('zz', 'xx', 'yy')
+WONG, EVO_CMAP = uni.WONG, uni.EVO_CMAP
+level_color, setup_style = uni.level_color, uni.setup_style
+sig, fmt_step, fmt_val_unc, fmt_ci, fmt_mu = uni.sig, uni.fmt_step, uni.fmt_val_unc, uni.fmt_ci, uni.fmt_mu
+mean_ci, block_bootstrap_ci, plateau_window, relax_tail = (uni.mean_ci, uni.block_bootstrap_ci,
+                                                           uni.plateau_window, uni.relax_tail)
+smart_legend, annotate_box, robust_ylim, rolling_mean = (uni.smart_legend, uni.annotate_box,
+                                                         uni.robust_ylim, uni.rolling_mean)
+COMPONENTS = uni.COMPONENTS                       # ('zz', 'xx', 'yy')
 AXI = {'x': 0, 'y': 1, 'z': 2}
 PLATES = ('zlo', 'zhi', 'xlo', 'xhi', 'ylo', 'yhi')   # column order of every plate_* file
 AX_COLOR = {'x': WONG['blue'], 'y': WONG['vermillion'], 'z': WONG['green']}
@@ -120,13 +120,13 @@ PLATE_STYLE = {'zlo': (WONG['green'], '--'), 'zhi': (WONG['green'], '-'), 'xlo':
 #  1. CONFIG
 # ===========================================================================
 @dataclass
-class Config(tri.Config):
-    """Every knob of the bulk analysis.  Inherits triaxial.Config (same names, same meaning:
+class Config(uni.Config):
+    """Every knob of the bulk analysis.  Inherits uniaxial.Config (same names, same meaning:
     plateau_frac, wall_margin, res_wall_margin, RELAX_SYS, SS_FIT_NPTS, DC_*, ...); COMP_LEVELS
     holds the cumulative VOLUMETRIC strain targets as strings, = STRAIN_TARGETS in the .batch."""
     AXES: tuple = ('z', 'x', 'y')         # profile axes analysed; the first is the one the profile figures draw by default
-    contact_gap: float = 1.12             # compress_slab.lmp contact_gap: seated plate plane to the gel face
-    core_margin: float = 6.0              # compress_slab.lmp core_margin: the core column stops this far inside the plates
+    contact_gap: float = 1.12             # isotropic_compression.lmp contact_gap: seated plate plane to the gel face
+    core_margin: float = 6.0              # isotropic_compression.lmp core_margin: the core column stops this far inside the plates
     K_SUBTRACT_REF: bool = True           # K = (stress - its own eps_vol = 0 reading) / eps_vol for BOTH estimators
     K_STRAIN: str = 'disp'                # eps_vol in the denominator: 'disp' (steady displacement-profile slopes of
                                           # the network along the three axes, disp_*_polymer_cum files; falls back to
@@ -148,9 +148,9 @@ class Config(tri.Config):
                                           # plate pairs, (gap_a - 2 contact_gap)(gap_b - 2 contact_gap), constant over a
                                           # hold; 'bb': the live bounding-box face of the network (follows its extreme
                                           # beads, so it fluctuates)
-    M_REF: object = None                  # longitudinal modulus M of the SAME gel from the triaxial notebooks: gives
+    M_REF: object = None                  # longitudinal modulus M of the SAME gel from the uniaxial notebooks: gives
                                           # G = (3/4)(M - K) and the confined D_c = (M/K) D_m.  None -> both skipped
-    G_REF: object = None                  # shear modulus to compare that G with (shear or triaxial notebook); optional
+    G_REF: object = None                  # shear modulus to compare that G with (shear or uniaxial notebook); optional
     SYNC_TRAJ: bool = True                # pull traj_ref / traj_stress too (large): add_volume_fractions tessellates them
     # ---- unload / free re-swelling (deck Phase 2c, 2026-10-28): the diffusivity D_m = (K/M) D_c ----
     DM_UNLOAD: bool = True                # read the level's _u<lvl> files when they exist and fit the re-swelling (fit_Dm_unload)
@@ -163,7 +163,7 @@ class Config(tri.Config):
                                           # of the series; 'ref' = the edges the level drove from; 'mean')
     HOST: str = 'expanse'                 # 'expanse' | 'pod' | 'bridges': which cluster folder RUNS_ROOT defaults to
                                           # (the sync cell logs in to Expanse only; copy Pod / Bridges output by hand)
-    PARTIAL_NORM: str = 'raw'             # the triaxial notebooks' normalised partial-stress figures (triaxial.Config,
+    PARTIAL_NORM: str = 'raw'             # the uniaxial notebooks' normalised partial-stress figures (uniaxial.Config,
                                           # 2026-10-06) stay off here: the six-plate cube has no feed / permeate side
                                           # and no single driving pressure
     FLIP_Z: bool = False                  # likewise their z-flip; bulk.load_reference does not set R['flip_z'], so the
@@ -178,7 +178,7 @@ class Config(tri.Config):
         self.mode, self.two_pist = 'compression', True
         self.COMP_LEVELS = [str(l) for l in self.COMP_LEVELS]
         if self.RUNS_ROOT is None:
-            self.RUNS_ROOT = '/home/dpollard/Documents/lammps_runs/compress_slab'
+            self.RUNS_ROOT = '/home/dpollard/Documents/lammps_runs/isotropic_compression'
         base = Path(self.base_dir)
         self.DATA_DIR = base / 'bulk' / self.RUN_ID
         self.PLOT_DIR = base / 'plots' / 'bulk' / self.RUN_ID
@@ -227,7 +227,7 @@ class Config(tri.Config):
 def read_table(path):
     """'# step a b c' fix print / fix ave/time table -> dict(name -> column) with 'step'
     (the first column, whatever its header says); {} when the file is missing or empty."""
-    names, tab = tri.read_piston_table(path)
+    names, tab = uni.read_piston_table(path)
     if tab.size == 0:
         return {}
     if names is None:
@@ -246,7 +246,7 @@ def _stacks(cfg, axis, lvl=None, ref=False, phase='c'):
         fs = cfg.path(cfg.pname('sigma', axis, ref, comp, 'solvent'), None if ref else lvl, phase=phase)
         if not (fp.exists() and fs.exists()):
             continue
-        sp, ss = tri.read_ave_time_file(fp), tri.read_ave_time_file(fs)
+        sp, ss = uni.read_ave_time_file(fp), uni.read_ave_time_file(fs)
         if not sp or not ss:
             continue
         n = min(len(sp), len(ss))
@@ -260,7 +260,7 @@ def _density(cfg, axis, lvl=None, ref=False):
     f = cfg.path(cfg.pname('density', axis, ref), None if ref else lvl)
     if not f.exists():
         return None
-    snaps = tri.read_ave_chunk_file(f)
+    snaps = uni.read_ave_chunk_file(f)
     if not snaps:
         return None
     return dict(ts=np.array([s[0] for s in snaps], float), z=snaps[0][1][:, 1],
@@ -344,7 +344,7 @@ def _axis_geometry(cfg, axis, nbins, dens, box):
 
 def _box(cfg):
     for lvl in cfg.COMP_LEVELS:
-        B = tri.load2c(cfg.path('box_dimensions', lvl), 4)
+        B = uni.load2c(cfg.path('box_dimensions', lvl), 4)
         if B is not None:
             return B[-1, 1:4]
     return None
@@ -377,7 +377,7 @@ def load_reference(cfg, verbose=True):
     R['strain_tab'] = S
     R['V0_bb'] = float(np.mean(S['V_bb'])) if S else np.nan
     R['V0_rg'] = float(np.mean(S['V_rg'])) if S else np.nan
-    B = tri.load2c(cfg.path('gel_dimensions_bb_ref'), 4)
+    B = uni.load2c(cfg.path('gel_dimensions_bb_ref'), 4)
     R['L0_bb'] = {a: (float(np.mean(B[:, 1 + AXI[a]])) if B is not None else np.nan) for a in 'xyz'}
     say('reference edges L0 (plate gap - 2 contact_gap) = ' + ' x '.join(f'{R["L0"][a]:.2f}' for a in 'xyz')
         + f'   V0 = {R["V0_gap"]:.1f}')
@@ -440,7 +440,7 @@ def load_reference(cfg, verbose=True):
             Sx['t_m'], Sx['t_lo'], Sx['t_hi'] = mean_ci(Sx['t'], cfg.ci_level)
             Sx['p_m'], Sx['s_m'] = np.nanmean(Sx['p'], axis=0), np.nanmean(Sx['s'], axis=0)
             Sx['sd_bin'] = np.nanstd(Sx['t'], axis=0)
-            net, pore, _, _ = tri.terzaghi_split(Sx['t'], A['bw'], Sx['sd_bin'], cfg.ci_level)
+            net, pore, _, _ = uni.terzaghi_split(Sx['t'], A['bw'], Sx['sd_bin'], cfg.ci_level)
             Sx['net'] = net
             Sx['net_m'], Sx['net_lo'], Sx['net_hi'] = mean_ci(net, cfg.ci_level)
             Sx['pore'] = float(np.mean(pore))
@@ -448,7 +448,7 @@ def load_reference(cfg, verbose=True):
             Sx['net_interior'] = float(np.nanmean(Sx['net_m'][im])) if im.any() else np.nan
             _, ilo, ihi = mean_ci(Sx['net_m'][im], cfg.ci_level) if im.sum() > 1 else (np.nan, np.nan, np.nan)
             Sx['net_interior_half'] = float(0.5 * (ihi - ilo)) if np.isfinite(ihi) else 0.0
-        Pn = tri._tr3(st, 'net')
+        Pn = uni._tr3(st, 'net')
         Pm = np.nanmean(Pn, axis=0)
         im = A['interior']
         A['Pi_ref'] = float(np.nanmean(Pm[im])) if im.any() else np.nan
@@ -462,7 +462,7 @@ def load_reference(cfg, verbose=True):
             A['rho_s0'], A['phi_mf'] = np.nan, None
         R['ax'][a] = A
         say(f'along {a}: {A["n_ref"]} snapshots on {nb} bins [{z.min():.1f}, {z.max():.1f}];  gel {A["z_gel_lo"]:.1f}..{A["z_gel_hi"]:.1f} '
-            f'({int(A["in_gel"].sum())} bins, interior {int(im.sum())});  bath window {tri.mask_span(z, A["bw"])}')
+            f'({int(A["in_gel"].sum())} bins, interior {int(im.sum())});  bath window {uni.mask_span(z, A["bw"])}')
         say(f'          p_pore  ' + '  '.join(f'{c}: {st[c]["pore"]:.4f}' for c in COMPONENTS)
             + f"   |   sigma'(interior)  " + '  '.join(f"{c}: {st[c]['net_interior']:+.4f}" for c in COMPONENTS)
             + f'   |   Pi_ref = {A["Pi_ref"]:+.4f} ± {A["Pi_ref_half"]:.4f}   rho_bath = {A["rho_s0"]:.4f}')
@@ -482,13 +482,13 @@ def fit_disp_profile(cfg, L, axis, lvl):
     """Steady CUMULATIVE displacement profile u_a(a) along `axis` for one level (disp_*_polymer_cum:
     displace/atom never reset after the eps_vol = 0 reference; plateau-window, count-weighted mean) and
     the line through its interior: slope s = du_a/da in the CURRENT (Eulerian) bins, so the network's
-    linear strain along a is eps_a = -s/(1-s) -- the per-axis counterpart of triaxial.fit_disp_profile.
+    linear strain along a is eps_a = -s/(1-s) -- the per-axis counterpart of uniaxial.fit_disp_profile.
     Fitted bins: populated, between the held plate planes, DISP_TRIM_BINS dropped at each end.  CI
     half-width = max(least-squares, frame-to-frame t-interval).  None without the file."""
     f = cfg.path(cfg.pname('disp_cum', axis), lvl)
     if not f.exists():
         return None
-    snaps = [sn for sn in tri.read_ave_chunk_file(f) if sn[1].shape[1] >= 4]
+    snaps = [sn for sn in uni.read_ave_chunk_file(f) if sn[1].shape[1] >= 4]
     if not snaps:
         return None
     nb = min(sn[1].shape[0] for sn in snaps)
@@ -650,13 +650,13 @@ def load_level(cfg, R, lvl, verbose=True):
                 sd_bin = np.full(len(z), float(np.nanstd(Sx['t'][-1][A['bw'][-1]])))
             for k in ('p', 's', 't', 'ts'):
                 Sx[k] = Sx[k][:n]
-            Sx['net'], Sx['pore'], Sx['pore_half'], Sx['net_half'] = tri.terzaghi_split(Sx['t'], A['bw'], sd_bin, cfg.ci_level)
+            Sx['net'], Sx['pore'], Sx['pore_half'], Sx['net_half'] = uni.terzaghi_split(Sx['t'], A['bw'], sd_bin, cfg.ci_level)
             Sx['ref_net'] = Rs['net_interior'] if cfg.K_SUBTRACT_REF else 0.0
             Sx['net_plat'] = np.nanmean(Sx['net'][L['plat'][:n]], axis=0)
             Sx['t_plat'] = np.nanmean(Sx['t'][L['plat'][:n]], axis=0)
         im = A['interior'] if A['interior'].sum() >= 3 else A['in_mem']
         A['K_mask'] = 'interior' if im is A['interior'] else 'gel'
-        Pn = tri._tr3(st, 'net')
+        Pn = uni._tr3(st, 'net')
         A['Pi'] = Pn                                        # (n_snap, n_bins)
         A['Pi_plat'] = np.nanmean(Pn[L['plat'][:n]], axis=0)
         A['Pi_series'] = np.array([np.nanmean(Pn[i][im]) for i in range(n)])
@@ -780,7 +780,7 @@ def load_level(cfg, R, lvl, verbose=True):
             f'{a}: {L["P_ax"][a] - R.get("P_ref_ax", {}).get(a, 0.0) - (L["PF"]["mean"] - L.get("P_ref", 0.0)):+.4f}' for a in 'xyz')))
 
     # ---- wet pistons: bath check + solvent expelled --------------------------------
-    L['wet'] = tri.load_wet_pistons(cfg, R, lvl, plat_from=L['halt_ts'])
+    L['wet'] = uni.load_wet_pistons(cfg, R, lvl, plat_from=L['halt_ts'])
     if L['wet'] is not None:
         W = L['wet']
         say('  bath (wet pistons, plateau means): ' + '  '.join(
@@ -814,7 +814,7 @@ def load_level(cfg, R, lvl, verbose=True):
     elif cfg.DM_UNLOAD:
         say('  no unload files for this level (run without UNLOAD=1): D_m and kappa skipped')
 
-    # ---- closure with the triaxial M ------------------------------------------------
+    # ---- closure with the uniaxial M ------------------------------------------------
     if cfg.M_REF is not None:
         M = float(cfg.M_REF)
         L['G_from_MK'] = 0.75 * (M - L['K_net'])
@@ -823,7 +823,7 @@ def load_level(cfg, R, lvl, verbose=True):
             + (f"   (G_REF = {float(cfg.G_REF):.4f})" if cfg.G_REF is not None else ''))
         if L['Dm'] is not None:
             L['Dc_from_Dm'] = L['Dm']['Dm'] * M / L['K_net']
-            say(f"  confined D_c = (M/K) D_m = {L['Dc_from_Dm']:.4f}  (what a triaxial hold of this gel would show)")
+            say(f"  confined D_c = (M/K) D_m = {L['Dc_from_Dm']:.4f}  (what a uniaxial hold of this gel would show)")
     return L
 
 
@@ -866,7 +866,7 @@ def sync_files(cfg, levels=None):
 
 
 def sync_from_expanse(cfg, levels=None, force=False):
-    """Pull every file the notebooks read from Expanse in ONE login (triaxial.sync_pull).
+    """Pull every file the notebooks read from Expanse in ONE login (uniaxial.sync_pull).
     Runs made on Pod or Bridges-2 are not reachable this way: copy their output_files/*/
     contents into cfg.DATA_DIR by hand and leave SYNC off."""
     if cfg.HOST != 'expanse':
@@ -879,14 +879,14 @@ def sync_from_expanse(cfg, levels=None, force=False):
                                                'strain_zz', 'strain_piston', 'piston_force', 'gel_dimensions_rg')
                  for l in cfg.COMP_LEVELS}
     optional |= {cfg.path(n, l, phase='u').name for n in tuple(_PROD) + tuple(_profile_names(cfg, False)) for l in cfg.COMP_LEVELS}
-    tri.sync_pull(cfg, data, traj, req, optional, force, refresh=lambda: sync_files(cfg, levels))
+    uni.sync_pull(cfg, data, traj, req, optional, force, refresh=lambda: sync_files(cfg, levels))
 
 
 # ===========================================================================
-#  6. PER-AXIS VIEWS  (triaxial's profile figures, drawn along any axis)
+#  6. PER-AXIS VIEWS  (uniaxial's profile figures, drawn along any axis)
 # ===========================================================================
 def view(cfg, R, L=None, axis=None):
-    """(Rv, Lv): the data along one profile axis in the layout triaxial's figure functions
+    """(Rv, Lv): the data along one profile axis in the layout uniaxial's figure functions
     read (R['z'], R['stress'][comp], L['interior'], L['z_pist'], ...).  The lower plate of the
     axis plays the support, the upper one the loading piston; the wet pistons exist along z only."""
     a = axis or cfg.AXES[0]
@@ -913,9 +913,9 @@ def view(cfg, R, L=None, axis=None):
 
 @contextmanager
 def _axis(cfg, a):
-    """Draw one of triaxial's figures along axis `a`: the saved file is tagged _along<a> and
+    """Draw one of uniaxial's figures along axis `a`: the saved file is tagged _along<a> and
     the profile coordinate in every label reads <a> instead of z."""
-    orig_save, prev = tri._save, cfg._axis
+    orig_save, prev = uni._save, cfg._axis
 
     def _save(fig, c, stem, lvl=None):
         if a != 'z':
@@ -927,15 +927,15 @@ def _axis(cfg, a):
                         put(s2)
         return orig_save(fig, c, stem, lvl)
 
-    tri._save, cfg._axis = _save, a
+    uni._save, cfg._axis = _save, a
     try:
         yield
     finally:
-        tri._save, cfg._axis = orig_save, prev
+        uni._save, cfg._axis = orig_save, prev
 
 
 def _each_axis(cfg, R, L, fn, axes=None):
-    """call triaxial figure `fn(cfg, Rv, Lv)` along every axis in `axes` (default: the first)."""
+    """call uniaxial figure `fn(cfg, Rv, Lv)` along every axis in `axes` (default: the first)."""
     out = []
     for a in (axes or cfg.AXES[:1]):
         if a not in R['ax'] or (L is not None and a not in L['ax']):
@@ -959,63 +959,63 @@ def _each_axis_sweep(cfg, R, levels, fn, axes=None):
     return out[0] if len(out) == 1 else out
 
 
-# ---- triaxial's profile figures along any axis (axes=None -> cfg.AXES[0]; axes=cfg.AXES -> all) ----
+# ---- uniaxial's profile figures along any axis (axes=None -> cfg.AXES[0]; axes=cfg.AXES -> all) ----
 def fig_total_stress(cfg, R, L, axes=None):
-    return _each_axis(cfg, R, L, tri.fig_total_stress, axes)
+    return _each_axis(cfg, R, L, uni.fig_total_stress, axes)
 
 
 def fig_partial_stress(cfg, R, L, axes=None):
-    return _each_axis(cfg, R, L, tri.fig_partial_stress, axes)
+    return _each_axis(cfg, R, L, uni.fig_partial_stress, axes)
 
 
 def fig_network_stress(cfg, R, L, axes=None):
-    return _each_axis(cfg, R, L, tri.fig_network_stress, axes)
+    return _each_axis(cfg, R, L, uni.fig_network_stress, axes)
 
 
 def fig_thermo_pressure(cfg, R, L, axes=None):
-    return _each_axis(cfg, R, L, tri.fig_thermo_pressure, axes)
+    return _each_axis(cfg, R, L, uni.fig_thermo_pressure, axes)
 
 
 def fig_osmotic_pressure(cfg, R, L, axes=None):
-    return _each_axis(cfg, R, L, tri.fig_osmotic_pressure, axes)
+    return _each_axis(cfg, R, L, uni.fig_osmotic_pressure, axes)
 
 
 def fig_volfrac(cfg, R, L, axes=None):
     """solvent volume fraction in the column: mass fraction rho_s / rho_bath, Voronoi and
     lambda-calibrated (the last two after add_volume_fractions; blank otherwise)."""
-    return _each_axis(cfg, R, L, tri.fig_volfrac, axes)
+    return _each_axis(cfg, R, L, uni.fig_volfrac, axes)
 
 
 def fig_wet_pistons(cfg, R, L):
-    return _each_axis(cfg, R, L, tri.fig_wet_pistons, ('z',))
+    return _each_axis(cfg, R, L, uni.fig_wet_pistons, ('z',))
 
 
 def fig_total_stress_sweep(cfg, R, levels, axes=None):
-    return _each_axis_sweep(cfg, R, levels, tri.fig_total_stress_sweep, axes)
+    return _each_axis_sweep(cfg, R, levels, uni.fig_total_stress_sweep, axes)
 
 
 def fig_partial_stress_sweep(cfg, R, levels, axes=None):
-    return _each_axis_sweep(cfg, R, levels, tri.fig_partial_stress_sweep, axes)
+    return _each_axis_sweep(cfg, R, levels, uni.fig_partial_stress_sweep, axes)
 
 
 def fig_network_stress_sweep(cfg, R, levels, axes=None):
-    return _each_axis_sweep(cfg, R, levels, tri.fig_network_stress_sweep, axes)
+    return _each_axis_sweep(cfg, R, levels, uni.fig_network_stress_sweep, axes)
 
 
 def fig_thermo_pressure_sweep(cfg, R, levels, axes=None):
-    return _each_axis_sweep(cfg, R, levels, tri.fig_thermo_pressure_sweep, axes)
+    return _each_axis_sweep(cfg, R, levels, uni.fig_thermo_pressure_sweep, axes)
 
 
 def fig_osmotic_pressure_sweep(cfg, R, levels, axes=None):
-    return _each_axis_sweep(cfg, R, levels, tri.fig_osmotic_pressure_sweep, axes)
+    return _each_axis_sweep(cfg, R, levels, uni.fig_osmotic_pressure_sweep, axes)
 
 
 def fig_volfrac_sweep(cfg, R, levels, axes=None):
-    return _each_axis_sweep(cfg, R, levels, tri.fig_volfrac_sweep, axes)
+    return _each_axis_sweep(cfg, R, levels, uni.fig_volfrac_sweep, axes)
 
 
 def fig_wet_pistons_sweep(cfg, R, levels):
-    """Bath check per level only (the triaxial version's 'solvent expelled' panel is meaningless here:
+    """Bath check per level only (the uniaxial version's 'solvent expelled' panel is meaningless here:
     the six plates are solvent-transparent, so the wet pistons do not move when the gel is compressed)."""
     hw = [L for L in levels if L.get('wet') is not None]
     if not hw:
@@ -1026,22 +1026,22 @@ def fig_wet_pistons_sweep(cfg, R, levels):
         W = L['wet']
         for nm, ls in (('P_feed_meas', '-'), ('P_perm_meas', '--')):
             if nm in W:
-                axP.plot(W['step'], tri.rolling_mean(W[nm], cfg.roll_win), ls, color=tri.level_color(levels.index(L)), lw=2.0, alpha=0.9)
+                axP.plot(W['step'], uni.rolling_mean(W[nm], cfg.roll_win), ls, color=uni.level_color(levels.index(L)), lw=2.0, alpha=0.9)
     axP.axhline(cfg.P_BARO, color='k', ls=':', lw=1.0, alpha=0.6, label=f'$P_{{\\rm target}}={sig(cfg.P_BARO)}$')
     axP.set_xlabel('time step'); axP.set_ylabel(r'$P_{\rm bath}$ on the wet pistons  (LJ)')
     axP.set_title('bath check per level: feed (solid), permeate (dashed), rolling means', fontsize=13)
     axP.grid(alpha=0.3)
-    h = tri.level_handles(levels) + [Line2D([0], [0], color='0.3', ls='-', lw=2, label='feed'),
+    h = uni.level_handles(levels) + [Line2D([0], [0], color='0.3', ls='-', lw=2, label='feed'),
                                      Line2D([0], [0], color='0.3', ls='--', lw=2, label='permeate')]
     smart_legend(axP, handles=h, fontsize=11)
-    return tri._save(fig, cfg, 'sweep_wet_pistons')
+    return uni._save(fig, cfg, 'sweep_wet_pistons')
 
 
 # ===========================================================================
 #  7. FIGURES -- SINGLE LEVEL
 # ===========================================================================
 def _save(fig, cfg, stem, lvl=None):
-    return tri._save(fig, cfg, stem, lvl)
+    return uni._save(fig, cfg, stem, lvl)
 
 
 def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
@@ -1144,7 +1144,7 @@ def _pt(ax, x, D, key, marker, color, ms, label, hollow=False):
 
 
 def fig_K(cfg, R, L):
-    """Bulk modulus, two panes (the layout of triaxial.fig_M).
+    """Bulk modulus, two panes (the layout of uniaxial.fig_M).
     (a) diagnostic: the network K from each profile axis and their mean, the plate K, and the
         absolute stress / eps_vol values (hollow) with the eps_vol = 0 readings each subtracts;
     (b) presentation: the two K estimates alone, with their CIs."""
@@ -1210,7 +1210,7 @@ def fig_isotropy(cfg, R, L):
     """Is the loading isotropic?  (a) the increment of each normal network-stress component
     from its reference, per profile axis (equal bars = no deviator; their mean is the Pi
     increment); (b) the six plate pressure increments.  Replaces the anisotropy-ratio and G
-    figures of the triaxial notebooks: under isotropic compression the deviator is zero by
+    figures of the uniaxial notebooks: under isotropic compression the deviator is zero by
     symmetry, so there is no G in this measurement -- a deviator here is a loading defect."""
     axs = [a for a in cfg.AXES if a in L['ax']]
     fig, (axA, axB) = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
@@ -1256,19 +1256,19 @@ def fig_solvent_expelled(cfg, R, L):
     return None
 
 def fig_closure(cfg, R, L):
-    """K next to the triaxial M (cfg.M_REF): G = (3/4)(M - K); with an unload also kappa = D_m / K and D_c = (M/K) D_m."""
+    """K next to the uniaxial M (cfg.M_REF): G = (3/4)(M - K); with an unload also kappa = D_m / K and D_c = (M/K) D_m."""
     if not L.get('eps_ok', True):
         print(f"closure figure skipped: toe level (strain {L['eps']:+.4f} not resolved above zero, K undefined)")
         return None
     if cfg.M_REF is None:
-        print('closure figure skipped (set M_REF in the Config to the M of the triaxial notebook)')
+        print('closure figure skipped (set M_REF in the Config to the M of the uniaxial notebook)')
         return None
     fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
     M = float(cfg.M_REF)
     _pt(ax, 0, L, 'K_net', 'o', WONG['blue'], 13, f"$K$ (network) = {sig(L['K_net'])}")
     if 'K_pl' in L:
         _pt(ax, 0.2, L, 'K_pl', 's', WONG['vermillion'], 11, f"$K$ (plates) = {sig(L['K_pl'])}")
-    ax.plot([1], [M], 'D', ms=12, color='k', label=f'$M$ (triaxial, M_REF) = {sig(M)}')
+    ax.plot([1], [M], 'D', ms=12, color='k', label=f'$M$ (uniaxial, M_REF) = {sig(M)}')
     _pt(ax, 2, L, 'G_from_MK', '^', WONG['green'], 13, fr"$G=\frac{{3}}{{4}}(M-K)$ = {sig(L['G_from_MK'])}")
     if cfg.G_REF is not None:
         ax.plot([2.2], [float(cfg.G_REF)], 'v', ms=11, mfc='none', color=WONG['green'], label=f'$G$ (G_REF) = {sig(float(cfg.G_REF))}')
@@ -1337,7 +1337,7 @@ def _ser(ax, e, Ls, key, marker, color, label, hollow=False, dx=0.0):
 
 
 def fig_K_sweep(cfg, R, levels):
-    """Bulk modulus vs volumetric strain, two panes (the layout of triaxial.fig_M_sweep):
+    """Bulk modulus vs volumetric strain, two panes (the layout of uniaxial.fig_M_sweep):
     (a) diagnostic (per profile axis + the absolute values, hollow), (b) presentation.
     Toe levels (K undefined) are left out."""
     levels = _usable(levels)
@@ -1523,9 +1523,9 @@ def fig_isotropy_sweep(cfg, R, levels):
 
 
 def fig_closure_sweep(cfg, R, levels):
-    """K, the triaxial M (M_REF) and G = (3/4)(M - K) vs volumetric strain."""
+    """K, the uniaxial M (M_REF) and G = (3/4)(M - K) vs volumetric strain."""
     if cfg.M_REF is None:
-        print('closure figure skipped (set M_REF in the Config to the M of the triaxial notebook)')
+        print('closure figure skipped (set M_REF in the Config to the M of the uniaxial notebook)')
         return None
     levels = _usable(levels)
     if not levels:
@@ -1535,7 +1535,7 @@ def fig_closure_sweep(cfg, R, levels):
     eps = np.array([L['eps'] for L in levels])
     _ser(ax, eps, levels, 'K_net', 'o', WONG['blue'], '$K$ (network)')
     _ser(ax, eps, levels, 'G_from_MK', '^', WONG['green'], r'$G=\frac{3}{4}(M-K)$')
-    ax.axhline(float(cfg.M_REF), color='k', ls='--', lw=1.5, label=f'$M$ (triaxial, M_REF) = {sig(float(cfg.M_REF))}')
+    ax.axhline(float(cfg.M_REF), color='k', ls='--', lw=1.5, label=f'$M$ (uniaxial, M_REF) = {sig(float(cfg.M_REF))}')
     if cfg.G_REF is not None:
         ax.axhline(float(cfg.G_REF), color=WONG['green'], ls=':', lw=1.5, label=f'$G$ (G_REF) = {sig(float(cfg.G_REF))}')
     ax.set_xlabel(r'volumetric strain  $\varepsilon_{vol}$')
@@ -1576,7 +1576,7 @@ def print_summary(cfg, levels):
         print('  delta_sys = (plate plateau - fitted tail asymptote) / eps_vol;  * = larger than the K_net half-width')
     if any(L.get('Dm') is not None for L in levels):
         print('  D_m = diffusivity of the FREE re-swelling after the hold (deck Phase 2c; Rg edges against the free-cube series, 95% block-bootstrap CI);'
-              '  kappa = D_m / K_net' + (';  D_c = (M/K) D_m = the confined diffusivity a triaxial hold would show' if cfg.M_REF is not None else ''))
+              '  kappa = D_m / K_net' + (';  D_c = (M/K) D_m = the confined diffusivity a uniaxial hold would show' if cfg.M_REF is not None else ''))
     elif cfg.DM_UNLOAD:
         print('  D_m / kappa: no unload files (the run had UNLOAD=0); the compression hold itself is not used for a diffusivity')
 
@@ -1584,14 +1584,14 @@ def print_summary(cfg, levels):
 # ===========================================================================
 #  10. UNLOAD: FREE RE-SWELLING OF THE CUBE  ->  D_m  (deck Phase 2c, 2026-10-28)
 # ===========================================================================
-# Convention.  In a triaxial hold the solvent drains along one axis under lateral constraint
+# Convention.  In a uniaxial hold the solvent drains along one axis under lateral constraint
 # and the dilatation diffuses with the CONFINED coefficient D_c = M / zeta (M = K + 4G/3 the
 # longitudinal modulus, zeta the network-solvent friction).  Here the compressed cube is
 # released on all six faces and re-swells freely; the volumetric response is set by the bulk
 # modulus, so the diffusivity of the unconstrained problem is D_m = K / zeta = (K/M) D_c.
 # (The Tanaka-Fillmore bulk equation keeps M in its diffusion term and lets K enter through the
 # stress-free boundary; the D_m convention folds that into the coefficient.  Either way the
-# number to compare with the triaxial unloads is (K/M) D_c.)
+# number to compare with the uniaxial unloads is (K/M) D_c.)
 #
 # Model.  The plates leave at the drive speed, the faces are unloaded within a few tau, and
 # the dilatation excess e - e_inf starts uniform (the compressed state) and obeys
@@ -1725,8 +1725,8 @@ def load_unload(cfg, R, lvl, L, verbose=True):
         still = np.all([np.isclose(Pl[f], Pl[f][0], atol=1e-6) for f in PLATES], axis=0)
         t_drive = float(Pl['step'][np.argmin(still)]) if not still.all() else float(Pl['step'][-1])
     for key in ('rg', 'bb'):
-        Au = tri.load2c(cfg.path(f'gel_dimensions_{key}', lvl, phase='u'), 4)
-        Al = tri.load2c(cfg.path(f'gel_dimensions_{key}', lvl), 4)
+        Au = uni.load2c(cfg.path(f'gel_dimensions_{key}', lvl, phase='u'), 4)
+        Al = uni.load2c(cfg.path(f'gel_dimensions_{key}', lvl), 4)
         if Au is None or Al is None:
             continue
         U[f'{key}_step'], U[f'{key}_L'] = Au[:, 0], Au[:, 1:4]
@@ -1744,7 +1744,7 @@ def load_unload(cfg, R, lvl, L, verbose=True):
     for a in cfg.AXES:
         f = cfg.path(cfg.pname('disp_cum', a), lvl, phase='u')
         if f.exists():
-            snaps = [sn for sn in tri.read_ave_chunk_file(f) if sn[1].shape[1] >= 4]
+            snaps = [sn for sn in uni.read_ave_chunk_file(f) if sn[1].shape[1] >= 4]
             if snaps:
                 nb = min(sn[1].shape[0] for sn in snaps)
                 U['disp'][a] = dict(ts=np.array([sn[0] for sn in snaps], float), z=snaps[-1][1][:nb, 1],
@@ -1772,9 +1772,9 @@ def load_unload(cfg, R, lvl, L, verbose=True):
                 sd_bin = np.full(len(z), float(np.nanstd(Sx['t'][-1][bw[-1]])))
             for k in ('p', 's', 't', 'ts'):
                 Sx[k] = Sx[k][:n]
-            Sx['net'], Sx['pore'], Sx['pore_half'], Sx['net_half'] = tri.terzaghi_split(Sx['t'], bw, sd_bin, cfg.ci_level)
+            Sx['net'], Sx['pore'], Sx['pore_half'], Sx['net_half'] = uni.terzaghi_split(Sx['t'], bw, sd_bin, cfg.ci_level)
         im = La['interior'] if La['interior'].sum() >= 3 else La['in_mem']
-        Pn = tri._tr3(stx, 'net')
+        Pn = uni._tr3(stx, 'net')
         U['ax'][a] = dict(axis=a, ts=tsx, stress=stx, bw=bw, interior=im, Pi=Pn,
                           Pi_series=np.array([np.nanmean(Pn[i][im]) for i in range(n)]),
                           Pi_ref=float(Ra['Pi_ref']), Pi_hold=float(La['Pi_int']))
@@ -2080,7 +2080,7 @@ def _ratio_series(La, ref=False):
 def fig_ratio(cfg, R, L):
     """Network-stress anisotropy over the hold, per profile axis: (a) sigma'_ii / Pi in the gel
     interior (absolute; 1 = isotropic), (b) the increments from the eps_vol = 0 reference,
-    Delta sigma'_ii / Delta Pi (the triaxial ratio figure's convention).  Shaded = plateau."""
+    Delta sigma'_ii / Delta Pi (the uniaxial ratio figure's convention).  Shaded = plateau."""
     axs = [a for a in cfg.AXES if a in L['ax']]
     if not axs:
         print('anisotropy figure skipped (no profiles)')
@@ -2153,11 +2153,11 @@ def whole_run_file(cfg, name):
 
 
 def read_stress_aniso(path):
-    """stress_aniso file (slab_with_support, the triaxial decks, compress_slab): TimeStep
+    """stress_aniso file (slab_with_support, the uniaxial decks, isotropic_compression): TimeStep
     sig_p_xx sig_p_yy sig_p_zz P_xx P_yy P_zz -> dict of columns, or None."""
     if path is None or not Path(path).exists():
         return None
-    A = tri.load2c(path, 4)
+    A = uni.load2c(path, 4)
     if A is None:
         return None
     out = dict(step=A[:, 0], xx=A[:, 1], yy=A[:, 2], zz=A[:, 3])
@@ -2178,7 +2178,7 @@ def fig_anisotropy_run(cfg, R, levels=None, swell_file=None):
         print('anisotropy-run figure skipped (no stress_aniso file; sync it or set swell_file)')
         return None
     panels = ([('free swelling (slab_with_support): ' + Path(swell_file).name, sw, False)] if sw is not None else []) \
-        + ([('compress_slab run (shaded: the holds)', run, True)] if run is not None else [])
+        + ([('isotropic_compression run (shaded: the holds)', run, True)] if run is not None else [])
     fig, axes = plt.subplots(1, len(panels), figsize=(10 * len(panels), 6), constrained_layout=True, squeeze=False)
     for k, (ax, (title, D, mark)) in enumerate(zip(axes[0], panels)):
         ax.plot(D['step'], D['xx/zz'], '-', marker='o', ms=4, color=WONG['blue'], lw=2, label=r'$\sigma_{p,xx}/\sigma_{p,zz}$')
@@ -2291,12 +2291,12 @@ def _p_local_axis(cfg, R, D, a):
     Ra = R['ax'][a]
     z = Ra['z']
     Da = D['ax'][a]
-    Pmin, Pmax = tri._calib_range(R)
+    Pmin, Pmax = uni._calib_range(R)
     if cfg.P_CAL_MODE == 'const':
         return lambda t: np.clip(np.full(len(z), float(cfg.P_CAL)), Pmin, Pmax)
     ts = np.asarray(Da['stress']['zz']['ts'], float)
     if cfg.P_CAL_MODE == 'thermo':
-        Pt = tri._tr3(Da['stress'], 't')
+        Pt = uni._tr3(Da['stress'], 't')
         return lambda t: np.clip(np.asarray(Pt[int(np.argmin(np.abs(ts - t)))], float), Pmin, Pmax)
     pore = np.asarray(Da['stress']['zz']['pore'], float)
     if pore.ndim == 0:
@@ -2323,14 +2323,14 @@ def add_volume_fractions(cfg, R, levels=()):
     for the evolution figure).  The mass-fraction profiles were set by load_reference /
     load_level.  P per bin follows cfg.P_CAL_MODE ('const' = P_CAL, the drained-equilibrium
     choice; 'pore' = the axis' bath baseline; 'thermo' = the local P_th)."""
-    tri._load_calib(R)
+    uni._load_calib(R)
     if not cfg.VOR_ENABLE:
         print('VOR_ENABLE=False -> Voronoi / calibrated phi skipped')
         return
     tr = cfg.traj('traj_ref')
     if tr.exists():
         rts = R['ax'][cfg.AXES[0]]['stress']['zz']['ts']
-        want, _ = tri.subsample(rts, rts[:, None], cfg.REF_VOR_FRAMES)
+        want, _ = uni.subsample(rts, rts[:, None], cfg.REF_VOR_FRAMES)
         vf = _vf_columns(cfg, R, None, tr, want, 'reference: ')
         if vf:
             _apply_vf(cfg, R, R, vf)
@@ -2346,8 +2346,8 @@ def add_volume_fractions(cfg, R, levels=()):
         ts = L['ts']
         plat = ts[ts >= L['halt_ts']]
         plat = plat if len(plat) else ts[-1:]
-        want_p, _ = tri.subsample(plat, plat[:, None], cfg.VOR_MAX_FRAMES)
-        want_e, _ = tri.subsample(ts, ts[:, None], cfg.VOR_EVO_FRAMES)
+        want_p, _ = uni.subsample(plat, plat[:, None], cfg.VOR_MAX_FRAMES)
+        want_e, _ = uni.subsample(ts, ts[:, None], cfg.VOR_EVO_FRAMES)
         vf = _vf_columns(cfg, R, L, tp, np.unique(np.concatenate([want_p, want_e])), f'level {L["lvl"]}: ')
         if not vf:
             continue
@@ -2366,13 +2366,13 @@ def add_volume_fractions(cfg, R, levels=()):
     print(f'in-gel solvent volume fractions (interior; P_CAL_MODE = {cfg.P_CAL_MODE}):')
     for a in cfg.AXES:
         if a in R['ax']:
-            tri._vf_line(f'reference, along {a}', R['ax'][a], R['ax'][a]['interior'])
+            uni._vf_line(f'reference, along {a}', R['ax'][a], R['ax'][a]['interior'])
     for L in levels:
         if L is None:
             continue
         for a in cfg.AXES:
             if a in L['ax']:
-                tri._vf_line(f'eps={L["eps"]:.3f}, along {a}', L['ax'][a], L['ax'][a]['interior'])
+                uni._vf_line(f'eps={L["eps"]:.3f}, along {a}', L['ax'][a], L['ax'][a]['interior'])
 
 
 def fig_volfrac_evolution(cfg, R, L, key='phi_cal'):
@@ -2391,14 +2391,14 @@ def fig_volfrac_evolution(cfg, R, L, key='phi_cal'):
             dens = _density(cfg, a, lvl=L['lvl'])
             if dens is None or not np.isfinite(Ra['rho_s0']):
                 continue
-            ts, ev = tri.post_halt(cfg, Lv, dens['ts'], dens['n'] / Ra['rho_s0'])
+            ts, ev = uni.post_halt(cfg, Lv, dens['ts'], dens['n'] / Ra['rho_s0'])
         else:
             ve = La.get('vf_evo')
             if ve is None or ve.get(key) is None:
                 continue
             ts, ev = np.asarray(ve['ts'], float), np.asarray(ve[key], float)
         drawn = True
-        tri.plot_evolution(ax, cfg, Rv, Lv, Rv['z'], ts, ev, r'$\phi_s$', f'({"abc"[i]}) along {a}: ' + lab,
+        uni.plot_evolution(ax, cfg, Rv, Lv, Rv['z'], ts, ev, r'$\phi_s$', f'({"abc"[i]}) along {a}: ' + lab,
                            ref=Ra.get(key), annotate=False, legend=False)
         ax.set_xlabel(f'${a}/L$')
         ax.axhline(1.0, color='k', ls=':', lw=1.2, alpha=0.6)

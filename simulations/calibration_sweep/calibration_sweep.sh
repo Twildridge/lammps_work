@@ -20,10 +20,10 @@
 #           adjust_solvent.py → ISOLATED_STEM_nf${NF}.data      (skip if exists)
 #           split_gel.py      → ..._nf${NF}_solvent_only.data   (+ polymer_only)
 #   per pressure P (chained, WINDOW pressures per batch):
-#       polymer_pure companion (ONCE per P — N_p is loading-independent)
+#       pure_polymer companion (ONCE per P — N_p is loading-independent)
 #       for NF in NF_GRID: for rep in 1..NREPS:
-#           mixed NPT      (polymer_pure engine, aniso)   concurrent
-#           solvent_pure companion (same N_f)             concurrent
+#           mixed NPT      (pure_polymer engine, aniso)   concurrent
+#           pure_solvent companion (same N_f)             concurrent
 #
 # Naming convention:
 #   Isolated stem:     isolated_<BASE_SNAPSHOT stem without final_config_>
@@ -85,7 +85,7 @@ PRESSURES=(0.50 0.75 1.00 1.25 1.50 1.75 2.00)
 # The base snapshot isolates to N_p = 104490, N_f = 55868 (equilibrium-swollen
 # at P = 1.5). Defaults: 10 geometric steps (ratio ≈ 0.90) from N_f_eq down to
 # ~0.39×N_f_eq. EDIT the lower end to match the max φ_p reached in the c0.40
-# triaxial_compression profiles before production (validation needs the grid
+# uniaxial_compression_one_pist profiles before production (validation needs the grid
 # to span it).
 #
 # NOTE (2026-08-29): N_f_eq moved 53407 -> 55868 when isolate_gel.py stopped
@@ -376,7 +376,7 @@ for (( i=FROM; i<END; i++ )); do
              'BEGIN{print (p<=lo)?a:b}')
 
     # ------------------------------------------------------------------
-    # polymer_pure companion — ONCE per pressure (N_p loading-independent)
+    # pure_polymer companion — ONCE per pressure (N_p loading-independent)
     # ------------------------------------------------------------------
     POL_RUN_DATANAME="${ISOLATED_STEM}_polymer_only_pstar${P}"
     POL_BATCH=$(mktemp "${TMPDIR:-/tmp}/calib_pol_p${P}_XXXXXX.batch")
@@ -417,7 +417,7 @@ export LAMMPS_RUNS_OVERRIDE="${CALIB_RUNS}"
 export LAMMPS_INPUT_DATA_OVERRIDE="${INPUT_DATA_DIR}"
 export CALIB_FRAMES="${CALIB_FRAMES}" CALIB_DUMP_EVERY="${CALIB_DUMP_EVERY}"
 # The isolated_* inputs are equilibrated FENE configurations, not fresh diamond
-# lattices: skip polymer_pure's Stage 0 harmonic pre-relax, which assumes ~0.52σ
+# lattices: skip pure_polymer's Stage 0 harmonic pre-relax, which assumes ~0.52σ
 # bonds and crashes on an already-relaxed network. Velocities are still seeded
 # per replica and Stage 1 still runs. Solvent companions do NOT set this.
 export PRERELAXED=1
@@ -427,10 +427,10 @@ POL_LNK="${INPUT_DATA_DIR}/${POL_RUN_DATANAME}.data"
 if [ ! -f "\$POL_SRC" ]; then echo "ERROR: polymer_only not found: \$POL_SRC"; exit 1; fi
 [ -e "\$POL_LNK" ] || ln -s "\$POL_SRC" "\$POL_LNK"
 
-bash "${SCRIPTS_DIR}/run_lammps.sh" "polymer_pure" "${POL_RUN_DATANAME}" "${PURE_INTERACTION}" \
+bash "${SCRIPTS_DIR}/run_lammps.sh" "pure_polymer" "${POL_RUN_DATANAME}" "${PURE_INTERACTION}" \
     "${NSTEPS}" "" "${P}" "12345"
 
-WORK_DIR=\$(ls -dt "${CALIB_RUNS}/polymer_pure_${POL_RUN_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
+WORK_DIR=\$(ls -dt "${CALIB_RUNS}/pure_polymer_${POL_RUN_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_polymer.workdir"
 HEREDOC
 
@@ -450,7 +450,7 @@ HEREDOC
     MIX_RUN_DATANAME="${ISOLATED_STEM}_nf${NF}_pstar${P}_rep${rep}"
     SOL_RUN_DATANAME="${ISOLATED_STEM}_nf${NF}_solvent_only_pstar${P}_rep${rep}"
 
-    # ---- mixed NPT (polymer_pure engine, aniso) ----
+    # ---- mixed NPT (pure_polymer engine, aniso) ----
     MIX_BATCH=$(mktemp "${TMPDIR:-/tmp}/calib_mix_p${P}_nf${NF}_r${rep}_XXXXXX.batch")
     cat > "$MIX_BATCH" << HEREDOC
 #!/usr/bin/env bash
@@ -489,7 +489,7 @@ export LAMMPS_RUNS_OVERRIDE="${CALIB_RUNS}"
 export LAMMPS_INPUT_DATA_OVERRIDE="${INPUT_DATA_DIR}"
 export CALIB_FRAMES="${CALIB_FRAMES}" CALIB_DUMP_EVERY="${CALIB_DUMP_EVERY}"
 # The isolated_* inputs are equilibrated FENE configurations, not fresh diamond
-# lattices: skip polymer_pure's Stage 0 harmonic pre-relax, which assumes ~0.52σ
+# lattices: skip pure_polymer's Stage 0 harmonic pre-relax, which assumes ~0.52σ
 # bonds and crashes on an already-relaxed network. Velocities are still seeded
 # per replica and Stage 1 still runs. Solvent companions do NOT set this.
 export PRERELAXED=1
@@ -499,10 +499,10 @@ MIX_LNK="${INPUT_DATA_DIR}/${MIX_RUN_DATANAME}.data"
 if [ ! -f "\$MIX_SRC" ]; then echo "ERROR: loading file not found: \$MIX_SRC"; exit 1; fi
 [ -e "\$MIX_LNK" ] || ln -s "\$MIX_SRC" "\$MIX_LNK"
 
-bash "${SCRIPTS_DIR}/run_lammps.sh" "polymer_pure" "${MIX_RUN_DATANAME}" "${INTERACTION}" \
+bash "${SCRIPTS_DIR}/run_lammps.sh" "pure_polymer" "${MIX_RUN_DATANAME}" "${INTERACTION}" \
     "${NSTEPS}" "" "${P}" "${VEL_SEED}"
 
-WORK_DIR=\$(ls -dt "${CALIB_RUNS}/polymer_pure_${MIX_RUN_DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
+WORK_DIR=\$(ls -dt "${CALIB_RUNS}/pure_polymer_${MIX_RUN_DATANAME}_${INTERACTION}_"* 2>/dev/null | head -1)
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_nf${NF}_rep${rep}_mixed.workdir"
 HEREDOC
 
@@ -510,7 +510,7 @@ HEREDOC
     echo "P=${P} nf=${NF} rep=${rep}: submitted mixed NPT    JID=${MIX_JID}"
     BATCH_JIDS+=("$MIX_JID")
 
-    # ---- solvent_pure companion (same N_f — scale=1 ΔV_mix reference) ----
+    # ---- pure_solvent companion (same N_f — scale=1 ΔV_mix reference) ----
     SOL_BATCH=$(mktemp "${TMPDIR:-/tmp}/calib_sol_p${P}_nf${NF}_r${rep}_XXXXXX.batch")
     cat > "$SOL_BATCH" << HEREDOC
 #!/usr/bin/env bash
@@ -554,10 +554,10 @@ SOL_LNK="${INPUT_DATA_DIR}/${SOL_RUN_DATANAME}.data"
 if [ ! -f "\$SOL_SRC" ]; then echo "ERROR: solvent_only not found: \$SOL_SRC"; exit 1; fi
 [ -e "\$SOL_LNK" ] || ln -s "\$SOL_SRC" "\$SOL_LNK"
 
-bash "${SCRIPTS_DIR}/run_lammps.sh" "solvent_pure" "${SOL_RUN_DATANAME}" "${PURE_INTERACTION}" \
+bash "${SCRIPTS_DIR}/run_lammps.sh" "pure_solvent" "${SOL_RUN_DATANAME}" "${PURE_INTERACTION}" \
     "${NSTEPS}" "" "${P}" "${VEL_SEED}"
 
-WORK_DIR=\$(ls -dt "${CALIB_RUNS}/solvent_pure_${SOL_RUN_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
+WORK_DIR=\$(ls -dt "${CALIB_RUNS}/pure_solvent_${SOL_RUN_DATANAME}_${PURE_INTERACTION}_"* 2>/dev/null | head -1)
 echo "\$WORK_DIR" > "${MANIFEST_DIR}/p${P}_nf${NF}_rep${rep}_solvent.workdir"
 HEREDOC
 

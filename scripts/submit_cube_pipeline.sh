@@ -16,15 +16,15 @@
 #      An existing file is never overwritten: the build is skipped;
 #   2. sbatch simulations/slab_with_support/slab_with_support_single.batch (DATANAME = that stem,
 #      NSTEPS = 8 M; iso barostat, PIN_GEL, CHAIN=1);
-#   3+4. sbatch simulations/compress_slab/chain_cube_six_plates.batch with --dependency=afterany
+#   3+4. sbatch simulations/isotropic_compression/chain_cube_six_plates.batch with --dependency=afterany
 #      on the slab job: it copies the final config to input_data/, plates it with
-#      lib/add_more_plates_to_gel.py --layout six_plates and submits compress_slab_single.batch
+#      lib/add_more_plates_to_gel.py --layout six_plates and submits isotropic_compression_single.batch
 #      (eps 0.10 hold -> K, then UNLOAD=1 free re-swelling -> D_m).
 #
 # Check on it later with:   squeue -u $USER
 #   slab job output:        simulations/slab_with_support/slab_isolated_tall_random.o<job>.*
-#   bridge output:          simulations/compress_slab/chain_cube_six_plates.o<job>.*
-#   compression output:     simulations/compress_slab/compress_slab.o<job>.*
+#   bridge output:          simulations/isotropic_compression/chain_cube_six_plates.o<job>.*
+#   compression output:     simulations/isotropic_compression/isotropic_compression.o<job>.*
 # ---------------------------------------------------------------------------
 set -u
 NETWORK="${1:-rot45}"
@@ -49,7 +49,7 @@ LAMMPS_WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$LAMMPS_WORK_DIR/scripts/lib/site.sh"
 INPUT_DATA="$INPUT_DATA_DIR"
 SLAB_DIR="$LAMMPS_WORK_DIR/simulations/slab_with_support"
-COMP_DIR="$LAMMPS_WORK_DIR/simulations/compress_slab"
+COMP_DIR="$LAMMPS_WORK_DIR/simulations/isotropic_compression"
 SLAB_BATCH="slab_with_support_single.batch"
 BRIDGE_BATCH="chain_cube_six_plates.batch"
 GEN="$LAMMPS_WORK_DIR/scripts/lib/data_file_generator.py"
@@ -67,7 +67,7 @@ DATA="$INPUT_DATA/$STEM.data"
 echo ">>> NETWORK=$NETWORK  N=$N  ->  units ${UX} x ${UY} x ${UZ}   STEM=$STEM"
 
 for f in "$GEN" "$LAMMPS_WORK_DIR/scripts/lib/add_more_plates_to_gel.py" \
-         "$SLAB_DIR/$SLAB_BATCH" "$COMP_DIR/$BRIDGE_BATCH" "$COMP_DIR/compress_slab_single.batch"; do
+         "$SLAB_DIR/$SLAB_BATCH" "$COMP_DIR/$BRIDGE_BATCH" "$COMP_DIR/isotropic_compression_single.batch"; do
     [ -f "$f" ] || { echo "ERROR: missing $f"; exit 1; }
 done
 
@@ -122,14 +122,14 @@ SLAB_JOB=$(DATANAME="$STEM" NSTEPS="$SLAB_NSTEPS" sbatch --parsable "$SLAB_BATCH
 SLAB_JOB="${SLAB_JOB%%;*}"
 echo ">>> slab job: $SLAB_JOB   ($SLAB_DIR/$SLAB_BATCH, DATANAME $STEM, NSTEPS $SLAB_NSTEPS)"
 
-# ---- 3+4. the bridge (waits for the slab, plates, submits compress_slab) --------------
+# ---- 3+4. the bridge (waits for the slab, plates, submits isotropic_compression) --------------
 cd "$COMP_DIR" || exit 1
 BRIDGE_JOB=$(sbatch --parsable --dependency=afterany:"$SLAB_JOB" \
         --export=ALL,SLAB_JOB="$SLAB_JOB",STEM="$STEM",SLAB_NSTEPS="$SLAB_NSTEPS",CHAIN_HOPS=0 "$BRIDGE_BATCH") \
     || { echo "ERROR: sbatch of $BRIDGE_BATCH failed; the slab job $SLAB_JOB is running alone -- submit the bridge by hand:"; \
          echo "       cd $COMP_DIR && sbatch --dependency=afterany:$SLAB_JOB --export=ALL,SLAB_JOB=$SLAB_JOB,STEM=$STEM,SLAB_NSTEPS=$SLAB_NSTEPS $BRIDGE_BATCH"; exit 1; }
 BRIDGE_JOB="${BRIDGE_JOB%%;*}"
-echo ">>> bridge job: $BRIDGE_JOB  (afterany:$SLAB_JOB; it plates the cube and submits compress_slab_single.batch)"
+echo ">>> bridge job: $BRIDGE_JOB  (afterany:$SLAB_JOB; it plates the cube and submits isotropic_compression_single.batch)"
 echo
 squeue -u "$USER" -o "%.10i %.22j %.4t %.10M %.6D %R"
 echo

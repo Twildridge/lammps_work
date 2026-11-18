@@ -62,7 +62,8 @@ def get_box_dims(folder, dataname):
     # the run's own files are in data_files/ (decks since 2026-11-17) or, for older runs, at the
     # top level of the run folder
     finals = [f'{prefix}_{dataname}.data' for prefix in
-              ('final_config', 'final_tricomp', 'final_triperm', 'final_shear', 'puresolv', 'purepol')]
+              ('final_config', 'final_unicomp', 'final_uniperm', 'final_shear', 'puresolv', 'purepol',
+               'final_tricomp', 'final_triperm')]   # the last two: runs made before the 2026-11-18 rename
     possible_paths = (
         [os.path.join(folder, 'data_files', f'{base_name}.data')]
         + [os.path.join(folder, 'data_files', name) for name in finals]

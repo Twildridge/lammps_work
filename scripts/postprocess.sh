@@ -29,16 +29,21 @@ try() { "$@" || { echo "  WARNING: $(basename "$2") failed (skipping)"; FAILED=1
 
 try python "$LIB/plot_lammps_log.py" . "$STEM"
 case "$FOLDER" in
-    solvent_phase|polymer_phase)
-        try python "$LIB/plot_eos.py" . "$DATANAME" "$INTERACTION" ;;
-    shear_slab_two_pist)
+    pure_solvent|pure_polymer)
+        if [ "${PHASE_SWEEP:-0}" = 1 ]; then      # pressure sweep: the equation of state
+            try python "$LIB/plot_eos.py" . "$DATANAME" "$INTERACTION"
+        else                                      # single state point
+            try python "$LIB/plot_stress_profiles.py" . "$STEM" "$OLDSTEPS"
+            try python "$LIB/plot_piston_data.py" . "$STEM" "$OLDSTEPS"
+        fi ;;
+    simple_shear)
         try python "$LIB/plot_shear_strain_sweep.py" . "$STEM" "${STRAINS:-0.1}"
         try python "$LIB/plot_piston_data.py" . "$STEM" "$OLDSTEPS" ;;
-    triaxial_compression_two_pist|compress_slab)
+    uniaxial_compression|isotropic_compression)
         # every level's _c<level> curves on one figure per quantity, plus the whole-run piston file
         try python "$LIB/plot_compression_strain_sweep.py" . "$STEM" "${COMPRESSIONS:-0.1}" "$OLDSTEPS"
         try python "$LIB/plot_piston_data.py" . "$STEM" "$OLDSTEPS" ;;
-    *)  # slab_with_support, chain_length_testing, triaxial_permeation_two_pist, pure phases
+    *)  # slab_with_support, chain_length_testing, uniaxial_permeation
         try python "$LIB/plot_stress_profiles.py" . "$STEM" "$OLDSTEPS"
         try python "$LIB/plot_piston_data.py" . "$STEM" "$OLDSTEPS" ;;
 esac

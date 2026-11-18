@@ -8,7 +8,7 @@ boundaries (run with `boundary p p p`); in z every period is a finite slab with 
 solvent layer, frozen support sheet (type 4) and parked piston sheet (type 5).  The
 reference 14000002 state (slab_support_periodic_5beads_tall_rho04_new) comes from the
 'tetrahedral' build; the two-piston converter (slab_two_pistons_periodic.py) turns the
-equilibrated final configuration into the triaxial_*_two_pist input.
+equilibrated final configuration into the uniaxial_* input.
 
 Three networks, chosen by `network` in build():
     'tetrahedral'  the diamond lattice with the cube axes along the box axes (every periodic

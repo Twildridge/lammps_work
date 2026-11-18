@@ -10,16 +10,16 @@
 #SBATCH --output=/home/dpollard/Documents/lammps_runs/chain_length_testing/r10_measurements_20261114/%x.o%j
 # r10_measure_bridge.batch (2026-11-14) -- phases 6-7 for the random 10-bead periodic slab:
 # convert ONE equilibration snapshot to the two-piston geometry and submit the measurements on it.
-# Modelled on triaxial_compression_two_pist/chain_random_periodic.batch, which always takes the
+# Modelled on uniaxial_compression/chain_random_periodic.batch, which always takes the
 # run's last configuration; this one takes a named snapshot instead.
 #   SNAP     snapshot number of the 24 M-step equilibration (default 12, step 18.01 M: its box,
 #            47.261 x 47.494, is the one closest to the 16-24 M mean 47.210 x 47.567; the last
 #            configuration, 47.077 x 47.303, is 0.8 % low in area, and the two-piston decks keep
 #            the file's lateral box for the whole run)
 #   SUBMIT   which measurements to submit (default "compression shear permeation_fref"):
-#            compression      triaxial_compression_two_pist_single.batch (eps 0.10 hold + unload)
-#            shear            shear_slab_two_pist_periodic_single.batch (periodic gel, gamma 0.10)
-#            permeation_fref  triaxial_permeation_two_pist_single.batch with FROZEN_AT=ref:
+#            compression      uniaxial_compression_single.batch (eps 0.10 hold + unload)
+#            shear            simple_shear_periodic_single.batch (periodic gel, gamma 0.10)
+#            permeation_fref  uniaxial_permeation_single.batch with FROZEN_AT=ref:
 #                             Darcy kappa of the undeformed network, needs neither M nor D_c
 #            permeation       the live drive; set DP_PISTON (about 0.24 M from the compression
 #                             run) and NSTEPS_OVERRIDE (about 4 tau_1) once those are known
@@ -66,13 +66,13 @@ sub() {   # sub <what> <folder> <sbatch args...>
 RC=0
 for what in $SUBMIT; do
     case "$what" in
-        compression)     sub compression triaxial_compression_two_pist --job-name=triax_comp2p_r10 --export=ALL,DATANAME="$TWO" triaxial_compression_two_pist_single.batch || RC=1 ;;
-        shear)           sub shear shear_slab_two_pist --job-name=shear_2p_r10 --export=ALL,DATANAME="$TWO" shear_slab_two_pist_periodic_single.batch || RC=1 ;;
-        permeation_fref) sub permeation_fref triaxial_permeation_two_pist --job-name=triax_perm2p_r10_fref --time=14:00:00 \
-                             --export=ALL,DATANAME="$TWO",FROZEN_AT=ref,NSTEPS_OVERRIDE=4000000 triaxial_permeation_two_pist_single.batch || RC=1 ;;
+        compression)     sub compression uniaxial_compression --job-name=uniax_comp_r10 --export=ALL,DATANAME="$TWO" uniaxial_compression_single.batch || RC=1 ;;
+        shear)           sub shear simple_shear --job-name=shear_r10 --export=ALL,DATANAME="$TWO" simple_shear_periodic_single.batch || RC=1 ;;
+        permeation_fref) sub permeation_fref uniaxial_permeation --job-name=uniax_perm_r10_fref --time=14:00:00 \
+                             --export=ALL,DATANAME="$TWO",FROZEN_AT=ref,NSTEPS_OVERRIDE=4000000 uniaxial_permeation_single.batch || RC=1 ;;
         permeation)      [ -n "${DP_PISTON:-}" ] || { echo "permeation: set DP_PISTON (about 0.24 M)"; RC=1; continue; }
-                         sub permeation triaxial_permeation_two_pist --job-name=triax_perm2p_r10 \
-                             --export=ALL,DATANAME="$TWO",DP_PISTON="$DP_PISTON"${NSTEPS_OVERRIDE:+,NSTEPS_OVERRIDE="$NSTEPS_OVERRIDE"} triaxial_permeation_two_pist_single.batch || RC=1 ;;
+                         sub permeation uniaxial_permeation --job-name=uniax_perm_r10 \
+                             --export=ALL,DATANAME="$TWO",DP_PISTON="$DP_PISTON"${NSTEPS_OVERRIDE:+,NSTEPS_OVERRIDE="$NSTEPS_OVERRIDE"} uniaxial_permeation_single.batch || RC=1 ;;
         *) echo "unknown SUBMIT item: $what"; RC=1 ;;
     esac
 done

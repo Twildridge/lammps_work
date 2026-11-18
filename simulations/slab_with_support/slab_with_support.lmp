@@ -227,7 +227,7 @@ group polymer_and_support type 1 2 4 5
 # temp_target = 1.0 -- nothing is wrong with the thermostat (`fix langevin`
 # computes its own temperature internally on its own group).  c_mobile_temp
 # below is the physical temperature and should sit at ${temp_target}.
-# Naming matches triaxial_compression.lmp / triaxial_permeation.lmp so that
+# Naming matches uniaxial_compression_one_pist.lmp / uniaxial_permeation_one_pist.lmp so that
 # plot_lammps_log.py picks it up (it already prefers c_mobile_temp over Temp).
 # NOTE: diagnostic column only -- do NOT `thermo_modify temp mobile_temp`, that
 # would also feed the mobile temperature into thermo_press's kinetic term and
@@ -414,7 +414,7 @@ variable box_lz equal lz
 # `fix npt` this used to be did NOT hold T = temp_target here -- the 14M-step
 # rho04 output data file carries velocities at T = 1.24 in all three directions
 # (FENE bonds feed KE in faster than a single Nose-Hoover chain removes it; the
-# triaxial script saw the same and switched to Langevin long ago).  Every
+# uniaxial script saw the same and switched to Langevin long ago).  Every
 # downstream run then had to cool the slab to T = 1 and re-shrink the box.
 # Langevin's per-atom friction always wins, so the state written at the end is
 # genuinely at temp_target.  The barostat is unchanged: `nph aniso` relaxes x, y
@@ -455,7 +455,7 @@ fix box_dims_output all print ${volume_freq} "$(step) ${box_lx} ${box_ly} ${box_
 # itself has relaxed.  The polymer partial stress does: sigma_p,ii = -sum_i S_ii/V
 # over the polymer group (stress/atom, kinetic term included) is anisotropic
 # (xx/zz, yy/zz != 1) until the slab has relaxed its inherited aspect ratio, and
-# the triaxial reference state inherits whatever anisotropy is left here.
+# the uniaxial reference state inherits whatever anisotropy is left here.
 # plot_lammps_log.py draws sigma_p,xx/sigma_p,zz and sigma_p,yy/sigma_p,zz vs step
 # from this file (stress_anisotropy panel).
 #

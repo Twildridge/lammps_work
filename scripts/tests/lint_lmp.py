@@ -166,7 +166,7 @@ class Lint:
             rest = ' '.join(tok[3:])
             if style in ('equal', 'atom', 'vector', 'string', 'format', 'getenv', 'file', 'python', 'internal'):
                 if name in self.vars and self.vars[name] not in ('index', 'loop'):
-                    # LAMMPS replaces the formula (triaxial_permeation.lmp relies on it); the
+                    # LAMMPS replaces the formula (uniaxial_permeation_one_pist.lmp relies on it); the
                     # repo idiom is delete-first, so only warn
                     self.warn(n, f'variable {name} ({self.vars[name]}) redefined without `variable {name} delete`')
                 # formulas may reference the variable itself? no. Check references (own name excluded for loop-style)
