@@ -55,19 +55,29 @@ echo "======================================"
 (
     set +eu
     export LAMMPS_WORK_DIR="$REPO_ROOT"
-    source "$SCRIPT_DIR/lib/site.sh" >/dev/null 2>&1 || exit 0
-    [ -d "$RUNS_DIR" ] && command -v sbatch >/dev/null 2>&1 || exit 0
+    command -v sbatch >/dev/null 2>&1 || exit 0          # a laptop: nothing to publish
+    source "$SCRIPT_DIR/lib/site.sh" >/dev/null 2>&1 || { echo ">>> run log: lib/site.sh could not be read, skipped"; exit 0; }
+    [ -d "$RUNS_DIR" ] || { echo ">>> run log: no run folder $RUNS_DIR on this machine ($CLUSTER), skipped"; exit 0; }
     source "$SCRIPT_DIR/lib/run_record.sh"
+    export RUN_RECORD_VERBOSE=1
     _run_record_py refresh "$RUN_RECORD_STORE" "$RUNS_DIR" 30
+    echo ">>> run log ($CLUSTER, $(python3 -V 2>&1)): $(ls "$RUNS_DIR"/*/*/run_info.txt "$RUNS_DIR"/*/*/continuation_*/run_info.txt 2>/dev/null | wc -l | tr -d ' ') run folders with a run_info.txt under $RUNS_DIR, $(ls "$RUN_RECORD_STORE"/*.json 2>/dev/null | wc -l | tr -d ' ') records in $RUN_RECORD_STORE"
     publish_run_records
 ) || true
 
 # ── 1. Pull (rebase) to incorporate any cluster commits ────────────────────
+SYNC_HEAD_BEFORE=$(git rev-parse HEAD)
 echo ">>> Pulling latest from remote..."
 git pull --rebase --autostash || {
     echo "ERROR: git pull failed. Resolve conflicts manually, then re-run."
     exit 1
 }
+
+# ── 1a. The pull replaced this script: start again with the new one (once) ──
+if [ -z "${LSYNC_REEXEC:-}" ] && ! git diff --quiet "$SYNC_HEAD_BEFORE" HEAD -- scripts/git_sync.sh scripts/lib/run_record.sh scripts/lib/run_record.py 2>/dev/null; then
+    echo ">>> The sync scripts changed in this pull; running the new version."
+    LSYNC_REEXEC=1 exec bash "$SCRIPT_DIR/git_sync.sh" "$@"
+fi
 
 # ── 1b. Run log: rebuild the "Recent runs" table of the README from runs/*.json ─
 # (deterministic: the files change only when a record did, so no empty commits)

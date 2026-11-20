@@ -54,8 +54,8 @@ publish_run_records() {
         idx=$(mktemp "${TMPDIR:-/tmp}/run_record_index.XXXXXX") || exit 0
         trap 'rm -f "$idx"' EXIT
         for attempt in 1 2; do
-            ${to[@]+"${to[@]}"} git -C "$repo" fetch --quiet origin "$branch" 2>/dev/null \
-                || { echo "run records: fetch failed, not published now (they stay in $store)"; exit 0; }
+            err=$(${to[@]+"${to[@]}"} git -C "$repo" fetch --quiet origin "$branch" 2>&1) \
+                || { echo "run records: fetch failed, not published now (they stay in $store): $(printf '%s' "$err" | tail -1)"; exit 0; }
             base=$(git -C "$repo" rev-parse FETCH_HEAD) || exit 0
             GIT_INDEX_FILE="$idx" git -C "$repo" read-tree "$base" || exit 0
             n=0
@@ -66,16 +66,16 @@ publish_run_records() {
                 GIT_INDEX_FILE="$idx" git -C "$repo" update-index --add --cacheinfo "100644,$blob,$name" || continue
                 n=$((n + 1))
             done
-            [ "$n" -gt 0 ] || exit 0
+            [ "$n" -gt 0 ] || { [ -n "${RUN_RECORD_VERBOSE:-}" ] && echo "run records: GitHub already has every record"; exit 0; }
             tree=$(GIT_INDEX_FILE="$idx" git -C "$repo" write-tree) || exit 0
             commit=$(git -C "$repo" commit-tree "$tree" -p "$base" -m "run log: $n record(s) from ${CLUSTER:-?} [$(date '+%Y-%m-%d %H:%M')]") || exit 0
-            if ${to[@]+"${to[@]}"} git -C "$repo" push --quiet origin "${commit}:refs/heads/${branch}" 2>/dev/null; then
+            if err=$(${to[@]+"${to[@]}"} git -C "$repo" push --quiet origin "${commit}:refs/heads/${branch}" 2>&1); then
                 echo "run records: published $n to GitHub"
                 exit 0
             fi
             sleep $((attempt * 3))          # someone pushed in between (or no credentials): fetch again and retry
         done
-        echo "run records: push failed, not published now (they stay in $store; lsync on this cluster publishes them)"
+        echo "run records: push failed, not published now (they stay in $store; lsync on this cluster publishes them): $(printf '%s' "$err" | tail -1)"
     ) 9>"$repo/.git/.node_sync.lock"
     return 0
 }
