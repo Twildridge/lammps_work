@@ -101,7 +101,12 @@ VARS=(-var dataname "$DATANAME" -var interaction "$INTERACTION" -var epsSS 1.0 -
       -var nsteps "$RUN_STEPS" -var oldsteps 0 -var totsteps "$RUN_STEPS"
       -var press_target "$PRESS_TARGET" -var vel_seed "$SEED"
       -var baro_mode aniso -var pin_gel 0 -var piston_transparent 1
-      -var wall_timeout 0 -var n_snaps 1 -var cont "$CONT" -var comm_cutoff "$COMM_CUT")
+      -var wall_timeout 0 -var n_snaps 1 -var cont "$CONT" -var comm_cutoff "$COMM_CUT"
+      -var mean_box 0)
+# mean_box 0 (2026-11-19): the deck's mean-box ending (added 2026-11-14) would otherwise follow every
+# completed production with a 100k-step ramp and a 500k-step hold under nph z.  That is 60x the steps
+# of a bench run and 12x those of a prep, so every job would hit its time limit, and the Expanse
+# benchmark of 2026-11-07 predates the stage.  Timing only: production decks keep the default.
 
 T0=$(date +%s)
 if [ "${BENCH_LOCAL:-0}" = "1" ]; then

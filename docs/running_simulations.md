@@ -465,6 +465,24 @@ The margin covers the final `write_data` of a ~1 M-atom system, the MPI teardown
 | Expanse | `compute` | 128 | 128 | 2 days |
 | Pod | default | 40 | 40 (not re-measured since 2026-10) | `sinfo -o "%P %l"` |
 
+#### Pod per-user limits (queried 2026-11-19)
+
+Pod's cap is the QOS, not the account: `pod-users` carries no limits of its own, so each partition's QOS is the whole story. The `batch` partition (the default; 62 nodes x 40 cores = 2480 CPUs, default walltime 3 days, max 58 days) runs under the `normal` QOS:
+
+| QOS | Partitions | Max CPUs per user | Max running jobs | Max queued jobs | Partition walltime |
+|-----|------------|-------------------|------------------|-----------------|--------------------|
+| `normal` | `batch`, `normal` | **320** (8 full nodes) | 32 | 600 | 58 days (default 3) |
+| `short` | `short` (1 node) | none | none | none | 2 h |
+| `largemem` | `largemem` (4 nodes) | none | none | none | 37.5 days |
+| `gpu` | `gpu` (14 nodes) | none | 8 | none | 10 days |
+
+So at most eight 40-core jobs run at once per user; the rest sit with reason `QOSMaxCpuPerUserLimit` (a `Priority` reason means waiting on other users, not the cap). Size a sweep or node screen so no more than 8 x 40-core jobs need to be concurrent. Re-check with:
+
+```bash
+sacctmgr show qos format=Name,MaxTRESPU,MaxJobsPU,MaxSubmitPU
+sacctmgr show assoc user=$USER format=Account,Partition,QOS,GrpTRES,MaxTRESPU
+```
+
 **Expected runtimes** (4M timesteps, 400k–600k atoms):
 - 1 node (120 cores, Bridges-2): ~10–11 hours
 - 4 nodes (480 cores, Bridges-2): ~3 hours

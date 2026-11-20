@@ -54,3 +54,6 @@ tracking.txt
 tracking_backup.txt
 time_vs_atoms.png
 time_vs_timesteps.png
+
+# NFS silly-rename leftovers (a file deleted while a process held it open)
+.nfs*
