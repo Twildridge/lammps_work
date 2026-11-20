@@ -1,0 +1,27 @@
+{
+ "allocation": "",
+ "backfilled": true,
+ "cluster": "expanse",
+ "commit": "",
+ "continuation": null,
+ "dataname": "final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40",
+ "deck": "uniaxial_permeation",
+ "deck_file": "",
+ "dt": 0.005,
+ "ended": "2026-11-16 03:15:53",
+ "final_data": [
+  "final_triperm_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_4000000.data"
+ ],
+ "input_data": "",
+ "interaction": "1.0_1.0",
+ "job_id": "none",
+ "job_name": "",
+ "nsteps": null,
+ "run_dir": "/home/dpollard/Documents/lammps_runs/uniaxial_permeation/triaxial_permeation_two_pist_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_20261115_224448",
+ "run_name": "triaxial_permeation_two_pist_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_20261115_224448",
+ "started": "2026-11-15 22:44:48",
+ "status": "complete",
+ "steps_done": 6210000,
+ "vars": "",
+ "wall_seconds": 16260
+}

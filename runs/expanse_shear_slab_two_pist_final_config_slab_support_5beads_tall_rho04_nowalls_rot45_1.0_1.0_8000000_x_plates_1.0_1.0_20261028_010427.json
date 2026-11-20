@@ -1,0 +1,27 @@
+{
+ "allocation": "",
+ "backfilled": true,
+ "cluster": "expanse",
+ "commit": "",
+ "continuation": null,
+ "dataname": "final_config_slab_support_5beads_tall_rho04_nowalls_rot45_1.0_1.0_8000000_x_plates",
+ "deck": "simple_shear",
+ "deck_file": "",
+ "dt": 0.005,
+ "ended": "2026-10-28 07:05:40",
+ "final_data": [
+  "final_shear_final_config_slab_support_5beads_tall_rho04_nowalls_rot45_1.0_1.0_8000000_x_plates_1.0_1.0_3000000.data"
+ ],
+ "input_data": "",
+ "interaction": "1.0_1.0",
+ "job_id": "none",
+ "job_name": "",
+ "nsteps": null,
+ "run_dir": "/home/dpollard/Documents/lammps_runs/simple_shear/shear_slab_two_pist_final_config_slab_support_5beads_tall_rho04_nowalls_rot45_1.0_1.0_8000000_x_plates_1.0_1.0_20261028_010427",
+ "run_name": "shear_slab_two_pist_final_config_slab_support_5beads_tall_rho04_nowalls_rot45_1.0_1.0_8000000_x_plates_1.0_1.0_20261028_010427",
+ "started": "2026-10-28 01:04:27",
+ "status": "complete",
+ "steps_done": 5400000,
+ "vars": "",
+ "wall_seconds": 21669
+}

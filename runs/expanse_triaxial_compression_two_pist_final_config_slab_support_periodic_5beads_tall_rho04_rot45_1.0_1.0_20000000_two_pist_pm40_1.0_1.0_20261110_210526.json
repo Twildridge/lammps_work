@@ -1,0 +1,27 @@
+{
+ "allocation": "",
+ "backfilled": true,
+ "cluster": "expanse",
+ "commit": "",
+ "continuation": null,
+ "dataname": "final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40",
+ "deck": "uniaxial_compression",
+ "deck_file": "",
+ "dt": 0.005,
+ "ended": "2026-11-11 12:54:54",
+ "final_data": [
+  "final_tricomp_final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40_1.0_1.0_8000000.data"
+ ],
+ "input_data": "",
+ "interaction": "1.0_1.0",
+ "job_id": "none",
+ "job_name": "",
+ "nsteps": null,
+ "run_dir": "/home/dpollard/Documents/lammps_runs/uniaxial_compression/triaxial_compression_two_pist_final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40_1.0_1.0_20261110_210526",
+ "run_name": "triaxial_compression_two_pist_final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40_1.0_1.0_20261110_210526",
+ "started": "2026-11-10 21:05:26",
+ "status": "complete",
+ "steps_done": 25200000,
+ "vars": "",
+ "wall_seconds": 56962
+}

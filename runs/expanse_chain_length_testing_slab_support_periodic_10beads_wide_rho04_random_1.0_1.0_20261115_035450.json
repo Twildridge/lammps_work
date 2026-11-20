@@ -1,0 +1,27 @@
+{
+ "allocation": "",
+ "backfilled": true,
+ "cluster": "expanse",
+ "commit": "",
+ "continuation": null,
+ "dataname": "slab_support_periodic_10beads_wide_rho04_random",
+ "deck": "chain_length_testing",
+ "deck_file": "",
+ "dt": 0.005,
+ "ended": "2026-11-15 10:57:43",
+ "final_data": [
+  "final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000.data"
+ ],
+ "input_data": "",
+ "interaction": "1.0_1.0",
+ "job_id": "none",
+ "job_name": "",
+ "nsteps": null,
+ "run_dir": "/home/dpollard/Documents/lammps_runs/chain_length_testing/chain_length_testing_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_20261115_035450",
+ "run_name": "chain_length_testing_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_20261115_035450",
+ "started": "2026-11-15 03:54:50",
+ "status": "complete",
+ "steps_done": 14620003,
+ "vars": "",
+ "wall_seconds": 25365
+}

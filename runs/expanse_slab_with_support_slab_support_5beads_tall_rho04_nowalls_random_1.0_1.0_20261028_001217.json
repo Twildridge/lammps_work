@@ -1,0 +1,27 @@
+{
+ "allocation": "",
+ "backfilled": true,
+ "cluster": "expanse",
+ "commit": "",
+ "continuation": null,
+ "dataname": "slab_support_5beads_tall_rho04_nowalls_random",
+ "deck": "slab_with_support",
+ "deck_file": "",
+ "dt": 0.005,
+ "ended": "2026-10-28 05:48:32",
+ "final_data": [
+  "final_config_slab_support_5beads_tall_rho04_nowalls_random_1.0_1.0_8000000.data"
+ ],
+ "input_data": "",
+ "interaction": "1.0_1.0",
+ "job_id": "none",
+ "job_name": "",
+ "nsteps": null,
+ "run_dir": "/home/dpollard/Documents/lammps_runs/slab_with_support/slab_with_support_slab_support_5beads_tall_rho04_nowalls_random_1.0_1.0_20261028_001217",
+ "run_name": "slab_with_support_slab_support_5beads_tall_rho04_nowalls_random_1.0_1.0_20261028_001217",
+ "started": "2026-10-28 00:12:17",
+ "status": "complete",
+ "steps_done": 8020003,
+ "vars": "",
+ "wall_seconds": 20166
+}

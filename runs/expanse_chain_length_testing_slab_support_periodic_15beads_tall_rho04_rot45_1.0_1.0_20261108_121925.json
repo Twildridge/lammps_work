@@ -1,0 +1,27 @@
+{
+ "allocation": "",
+ "backfilled": true,
+ "cluster": "expanse",
+ "commit": "",
+ "continuation": null,
+ "dataname": "slab_support_periodic_15beads_tall_rho04_rot45",
+ "deck": "chain_length_testing",
+ "deck_file": "",
+ "dt": 0.005,
+ "ended": "2026-11-08 22:28:43",
+ "final_data": [
+  "final_config_slab_support_periodic_15beads_tall_rho04_rot45_1.0_1.0_60000000.data"
+ ],
+ "input_data": "",
+ "interaction": "1.0_1.0",
+ "job_id": "none",
+ "job_name": "",
+ "nsteps": null,
+ "run_dir": "/home/dpollard/Documents/lammps_runs/chain_length_testing/chain_length_testing_slab_support_periodic_15beads_tall_rho04_rot45_1.0_1.0_20261108_121925",
+ "run_name": "chain_length_testing_slab_support_periodic_15beads_tall_rho04_rot45_1.0_1.0_20261108_121925",
+ "started": "2026-11-08 12:19:25",
+ "status": "complete",
+ "steps_done": 18020002,
+ "vars": "",
+ "wall_seconds": 36553
+}
