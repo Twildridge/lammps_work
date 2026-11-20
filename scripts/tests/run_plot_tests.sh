@@ -3,6 +3,7 @@
 # plotting scripts on the one-piston, two-piston and six-plate (isotropic_compression) formats.
 # Usage: bash scripts/tests/run_plot_tests.sh [python] [fixture_root]
 set -u
+export LAMMPS_NO_PERM_RECORD=1   # save_M_record: no compression record in the repository from fixtures
 PY=${1:-python3}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS="$(dirname "$HERE")"

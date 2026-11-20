@@ -1,0 +1,42 @@
+{
+ "run_id": "random_16M_comp_1",
+ "sim_name": "final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_4000000",
+ "saved": "2026-11-20T13:44",
+ "M_STRAIN": "disp",
+ "M_SUBTRACT_REF": true,
+ "L0": 81.1415,
+ "z_support": 58.80150000000002,
+ "z_piston": 139.943,
+ "M_small_net": 0.19678205120046108,
+ "M_small_pist": 0.20655981420792485,
+ "n_fit": 3,
+ "levels": [
+  {
+   "level": "0.10",
+   "eps_applied": 0.1,
+   "eps": 0.07731508814032038,
+   "eps_src": "disp",
+   "eps_half": 0.0010858037013309618,
+   "eps_rg": 0.08627407935799712,
+   "dsig_net": 0.015214221632996686,
+   "dsig_net_half": 0.0006204304585349723,
+   "dP_pist": 0.015970190241733913,
+   "dP_pist_half": 0.0007162525568585798,
+   "M_net": 0.19678205120046108,
+   "M_pist": 0.20655981420792485,
+   "M_sys": 0.0
+  }
+ ],
+ "dataname": "final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40",
+ "dt": 0.005,
+ "z_feed": 168.94000000000003,
+ "feed_thickness": 28.997000000000014,
+ "Dc_unload": 0.1233552144580483,
+ "Dc_level": "0.10",
+ "Dc_src": "free re-swelling, profile fit",
+ "Dc_R2": 0.996945224317456,
+ "tau1_unload": 4151.002362487478,
+ "L_unload": 71.08944428391055,
+ "Dc_stab_min": 0.12603955646659482,
+ "Dc_stab_max": 0.1792695678974097
+}

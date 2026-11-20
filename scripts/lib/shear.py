@@ -196,6 +196,7 @@ class Config:
     DC_FINE_FIT_T: float = 0.0            # hold window (tau) the mode decays are fitted over; 0 = the whole fine file
     DC_FINE_BOUNDS: tuple = (1e-4, 100.0) # D_c bounds of the joint diffusive fit (a 10-tau relaxation at L = 42 reads D_c ~ 4)
     # ---- Expanse ---------------------------------------------------------
+    CLUSTER: str = 'auto'                 # sync source: 'expanse' | 'pod' | 'auto' (see uniaxial.Config.CLUSTER)
     EXPANSE_HOST: str = 'login.expanse.sdsc.edu'
     EXPANSE_USER: str = 'dpollard'
     RUNS_ROOT: str = None                 # None -> /home/dpollard/Documents/lammps_runs/simple_shear (two-piston decks) or

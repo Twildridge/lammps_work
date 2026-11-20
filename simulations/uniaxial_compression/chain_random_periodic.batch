@@ -145,7 +145,7 @@ esac
 case " $SUBMIT " in *" permeation "*)
     cd "$PERM_DIR" || exit 1
     echo ">>> submitting $PERM_BATCH (DATANAME $DATANAME, DP_PISTON ${DP_PISTON:-batch default})"
-    grep -n '^DATANAME=\|^NSTEPS=\|^export DP_PISTON=\|^export UNLOAD_STEPS=' "$PERM_BATCH"
+    python3 "$LAMMPS_WORK_DIR/scripts/lib/perm_plan.py" "$DATANAME" || true   # the plan the batch will take (none before the compression is analysed)
     sbatch --export=ALL,DATANAME="$DATANAME"${DP_PISTON:+,DP_PISTON="$DP_PISTON"} "$PERM_BATCH" || RC=$?
     ;;
 esac

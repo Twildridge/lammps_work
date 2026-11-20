@@ -133,7 +133,7 @@ All four jobs of the bridge finished on 2026-11-16. Three are valid; the compres
 | Periodic shear | 55745207 | valid (flat hold, G about 0.040 polymer) | no |
 | Frozen-reference permeation (`FROZEN_AT=ref`) | 55745208 | valid | not to run: fixed dP 0.1 through the network frozen undeformed. Only the later comparison of its kappa with D_c/M needs them |
 | Compression + unload | 55745206 | NOT usable, rerun | it is the source of M and D_c |
-| Live permeation drive | not submitted | waits | yes: dP about 0.24 M, drive about 4 tau_1 |
+| Live permeation drive | not submitted | waits | yes: dP about 0.24 M, drive about 4 tau_1 (set by the batch from the compression record since 2026-11-20, `scripts/lib/perm_plan.py`) |
 
 - **Why the compression failed.** The gel is equilibrated, but its surface is diffuse: `L_bb - L_rg` is 13-16 sigma (attached
   loops, no dangling ends; rot45 lattices 4-8 sigma). The plates seat on the outermost bead, so the 9 sigma closure at strain

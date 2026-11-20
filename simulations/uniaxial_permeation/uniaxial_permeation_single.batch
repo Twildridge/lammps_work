@@ -23,27 +23,58 @@ source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 #             kappa_f = q L/dP_measured on the rigid network (files _<NSTEPS>_f).
 #   Phase 2c  UNLOAD=1 (off by default): ramp back to zero dP and a free re-swelling hold
 #             (files _<NSTEPS>_u; ~10 M steps).
-# The feed reservoir has to last through 2v and 2d: at q ~ 2e-4 sigma/tau each 4 M steps takes ~4 sigma
-# (the deck halts cleanly at 2 sigma). The deck has no wall_timeout.
+# The feed reservoir has to last through 2v and 2d (the deck halts cleanly at 2 sigma); the plan below
+# checks it and shortens the two stages when it would not. The deck has no wall_timeout.
 #
 # DATANAME comes from the environment (default: the 5-bead rot45 standard gel, the same
-# _two_pist_pm40 file the compression deck reads). Variants:
+# _two_pist_pm40 file the compression deck reads).
+#
+# The drive is planned from the compression run of the SAME data file (scripts/lib/perm_plan.py):
+# uniaxial_compression_single.ipynb writes compression_records/<DATANAME>.json (M, unload D_c, feed
+# reservoir) and this batch takes from it
+#     DP_PISTON = 0.24 M (eps_F = dP/(2M) = 0.12),  NSTEPS = 4.1 tau_1,  tau_1 = L0^2/(pi^2 D_c),
+#     VCTRL_STEPS = FROZEN_STEPS = 4 M, cut when the feed reservoir would not last.
+# So: run the compression notebook, lsync, then
 #     DATANAME=<stem> sbatch uniaxial_permeation_single.batch
-#     DATANAME=<15-bead stem> DP_PISTON=<0.24 M> sbatch ...        dP from the 15-bead compression's M (eps_F = dP/(2M) ~ 0.12);
-#                                                                  1.9x the atoms: add --nodes=10 or halve the budgets
+# `python3 scripts/lib/perm_plan.py <stem>` prints the same plan without submitting. A value set in
+# the environment (DP_PISTON, NSTEPS_OVERRIDE, VCTRL_STEPS, FROZEN_STEPS) wins over the plan. A data
+# file with no record is refused unless DP_PISTON and NSTEPS_OVERRIDE are both given; the standard
+# gel and FROZEN_AT=ref runs keep the fixed values below.
+# Variants:
 #     FROZEN_AT=ref NSTEPS_OVERRIDE=4000000 DATANAME=<stem> sbatch ...   network frozen in the reference state BEFORE the
-#                                                                  ramp: the undeformed gel's kappa (~6 M steps; no 2v/2d/2c)
+#                                                                  ramp: the undeformed gel's kappa at dP 0.1 (~6 M steps;
+#                                                                  no 2v/2d/2c, needs no compression record)
 #     VCTRL=0 ... sbatch ...                                       the pre-2026-11-16 sequence: frozen stage at the applied dP
+#     the 15-bead gel has 1.9x the atoms: add --nodes=10
 # Analysis: uniaxial_permeation_single.ipynb.
 
 FOLDER=uniaxial_permeation
-DATANAME="${DATANAME:-final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40}"
+STANDARD=final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40
+DATANAME="${DATANAME:-$STANDARD}"
 INTERACTION=1.0_1.0
-NSTEPS="${NSTEPS_OVERRIDE:-10800000}"   # drive length and output-file tag: 54 k tau = 4.1 tau_1 at the drive D_c 0.147, L 138
+export FROZEN_AT="${FROZEN_AT:-end}"
+
+PLAN_DP="" PLAN_NSTEPS="" PLAN_STAGE=""
+if [ "$FROZEN_AT" != ref ]; then
+    PLAN=$(python3 "$LAMMPS_WORK_DIR/scripts/lib/perm_plan.py" "$DATANAME" --shell); PLAN_RC=$?
+    if [ "$PLAN_RC" -eq 0 ]; then
+        eval "$PLAN"
+    elif [ -n "${DP_PISTON:-}" ] && [ -n "${NSTEPS_OVERRIDE:-}" ]; then
+        echo ">>> no usable plan (perm_plan exit $PLAN_RC): running on the DP_PISTON and NSTEPS_OVERRIDE given"
+    elif [ "$PLAN_RC" -eq 2 ] && [ "$DATANAME" = "$STANDARD" ]; then
+        echo ">>> no compression record for the standard gel: fixed values (dP 0.1, 10.8 M steps)"
+    else
+        echo "ERROR: no permeation plan for $DATANAME (perm_plan exit $PLAN_RC)."
+        echo "       Run uniaxial_compression_single.ipynb on this data file's compression run and lsync,"
+        echo "       or give DP_PISTON and NSTEPS_OVERRIDE."
+        exit 1
+    fi
+fi
+NSTEPS="${NSTEPS_OVERRIDE:-${PLAN_NSTEPS:-10800000}}"   # drive length and output-file tag; 10.8 M = 4.1 tau_1 at the standard gel's drive D_c 0.147, L 138
 export PRESS_TARGET=1.5
-export DP_PISTON="${DP_PISTON:-0.1}"
-export VCTRL="${VCTRL:-1}" VCTRL_STEPS="${VCTRL_STEPS:-4000000}" VCTRL_AVG_STEPS="${VCTRL_AVG_STEPS:-0}" VFEED="${VFEED:-0}"
-export FROZEN="${FROZEN:-1}" FROZEN_STEPS="${FROZEN_STEPS:-4000000}" FROZEN_AT="${FROZEN_AT:-end}"
+export DP_PISTON="${DP_PISTON:-${PLAN_DP:-0.1}}"
+export VCTRL="${VCTRL:-1}" VCTRL_STEPS="${VCTRL_STEPS:-${PLAN_STAGE:-4000000}}" VCTRL_AVG_STEPS="${VCTRL_AVG_STEPS:-0}" VFEED="${VFEED:-0}"
+export FROZEN="${FROZEN:-1}" FROZEN_STEPS="${FROZEN_STEPS:-${PLAN_STAGE:-4000000}}"
 export UNLOAD="${UNLOAD:-0}" UNLOAD_STEPS="${UNLOAD_STEPS:-8000000}"
 echo ">>> DATANAME=$DATANAME DP_PISTON=$DP_PISTON NSTEPS=$NSTEPS VCTRL=$VCTRL ($VCTRL_STEPS) FROZEN=$FROZEN ($FROZEN_STEPS, $FROZEN_AT) UNLOAD=$UNLOAD"
 

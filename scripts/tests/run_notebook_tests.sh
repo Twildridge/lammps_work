@@ -4,11 +4,14 @@
 # sync cell disabled and the Config pointed at the fixtures (2026-09-16).
 # Usage: bash scripts/tests/run_notebook_tests.sh [python] [fixture_root]
 set -u
+export LAMMPS_NO_PERM_RECORD=1   # save_M_record: no compression record in the repository from fixtures
 PY=${1:-python3}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS="$(dirname "$HERE")"
 ROOT=${2:-${TMPDIR:-/tmp}/lammps_plot_fixtures}
-[ -d "$ROOT/flow_data_local" ] || $PY "$HERE/make_fixtures.py" "$ROOT" || exit 1
+# always regenerate: a tree left by an older layout (before the 2026-11-18 rename) fails every notebook with "run the sync cell"
+rm -rf "$ROOT/flow_data_local"
+$PY "$HERE/make_fixtures.py" "$ROOT" || exit 1
 OUT="$ROOT/notebooks"; mkdir -p "$OUT"
 fail=0
 run_nb () {   # name  python-rewrite-expression

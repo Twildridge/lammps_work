@@ -21,8 +21,8 @@
 #            shear            simple_shear_periodic_single.batch (periodic gel, gamma 0.10)
 #            permeation_fref  uniaxial_permeation_single.batch with FROZEN_AT=ref:
 #                             Darcy kappa of the undeformed network, needs neither M nor D_c
-#            permeation       the live drive; set DP_PISTON (about 0.24 M from the compression
-#                             run) and NSTEPS_OVERRIDE (about 4 tau_1) once those are known
+#            permeation       the live drive; its batch takes dP and the lengths from the compression
+#                             record (analyse the compression run and lsync first)
 # Files: input_data/final_config_<slab>_1.0_1.0_24000000_snap<SNAP>.data (copy of the snapshot)
 #        input_data/..._snap<SNAP>_two_pist_pm40.data (converter, --margin-perm 40 --margin-feed 30,
 #        --no-log: slab_data_file_info.md is NOT touched; the entry is in this job's output)
@@ -70,9 +70,8 @@ for what in $SUBMIT; do
         shear)           sub shear simple_shear --job-name=shear_r10 --export=ALL,DATANAME="$TWO" simple_shear_periodic_single.batch || RC=1 ;;
         permeation_fref) sub permeation_fref uniaxial_permeation --job-name=uniax_perm_r10_fref --time=14:00:00 \
                              --export=ALL,DATANAME="$TWO",FROZEN_AT=ref,NSTEPS_OVERRIDE=4000000 uniaxial_permeation_single.batch || RC=1 ;;
-        permeation)      [ -n "${DP_PISTON:-}" ] || { echo "permeation: set DP_PISTON (about 0.24 M)"; RC=1; continue; }
-                         sub permeation uniaxial_permeation --job-name=uniax_perm_r10 \
-                             --export=ALL,DATANAME="$TWO",DP_PISTON="$DP_PISTON"${NSTEPS_OVERRIDE:+,NSTEPS_OVERRIDE="$NSTEPS_OVERRIDE"} uniaxial_permeation_single.batch || RC=1 ;;
+        permeation)      sub permeation uniaxial_permeation --job-name=uniax_perm_r10 \
+                             --export=ALL,DATANAME="$TWO"${DP_PISTON:+,DP_PISTON="$DP_PISTON"}${NSTEPS_OVERRIDE:+,NSTEPS_OVERRIDE="$NSTEPS_OVERRIDE"} uniaxial_permeation_single.batch || RC=1 ;;
         *) echo "unknown SUBMIT item: $what"; RC=1 ;;
     esac
 done

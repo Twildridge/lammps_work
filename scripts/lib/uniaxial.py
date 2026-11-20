@@ -384,7 +384,12 @@ class Config:
                                           # has the same quantity recorded over the unload draws it as a '(b)' companion
                                           # (strain, total / partial / network sigma_zz, load piston, wet pistons, solvent
                                           # expelled / absorbed).  load_level builds L['U'] (load_unload_state).
-    # ---- Expanse ---------------------------------------------------------
+    # ---- clusters (sync) -------------------------------------------------
+    CLUSTER: str = 'auto'                 # where the sync cell looks for the run: 'expanse' | 'pod' | 'auto' (the cluster this
+                                          # run was last pulled from, else Expanse, then Pod for whatever is still missing;
+                                          # Pod is tried only when it is reachable, i.e. the campus VPN is up).  lib CLUSTERS
+                                          # holds the hosts and users; RUNS_ROOT / TRAJ_ROOT below are the Expanse paths and
+                                          # are translated for Pod ($HOME, /scratch/$USER)
     EXPANSE_HOST: str = 'login.expanse.sdsc.edu'
     EXPANSE_USER: str = 'dpollard'
     RUNS_ROOT: str = None                 # None -> /home/dpollard/Documents/lammps_runs/uniaxial_<mode> (two_pist) or
@@ -2870,8 +2875,8 @@ def sync_files(cfg, levels=None):
 
 
 def sync_from_expanse(cfg, levels=None, force=False):
-    """Pull every file the notebooks read from Expanse in ONE login (password +
-    TOTP prompts).  Logs in when ANY data (.dat) file is missing locally, or when
+    """Pull every file the notebooks read from the cluster (cfg.CLUSTER: Expanse, Pod or 'auto';
+    one login per cluster asked: Expanse password + TOTP, Pod password over the campus VPN).  Logs in when ANY data (.dat) file is missing locally, or when
     force=True (which also refreshes the large trajectories).  Files that a
     previous sync looked for and did NOT find on the cluster are remembered in
     DATA_DIR/.sync_absent.json so an old run that never wrote them does not
@@ -2888,48 +2893,91 @@ def sync_from_expanse(cfg, levels=None, force=False):
               refresh=lambda: sync_files(cfg, levels))
 
 
-def expanse_login(host='login.expanse.sdsc.edu', user='dpollard'):
-    """One interactive Expanse login (password + TOTP prompts) -> (paramiko SSHClient, Transport).
-    Shared by sync_pull (uniaxial / shear decks) and lib/chain_length.sync_equilibration (2026-11-05).
-    Raises ConnectionError with the usual advice when the host is unreachable or the login is refused."""
+# The clusters the sync cell can pull from (2026-11-20).  home / traj are written into the staging script as
+# shell text, so $HOME and $USER are the cluster's own.
+EXPANSE_HOME = '/home/dpollard'
+EXPANSE_TRAJ = '/expanse/lustre/scratch/dpollard/temp_project/lammps_trajectories'
+CLUSTERS = {
+    'expanse': dict(label='Expanse', host='login.expanse.sdsc.edu', user='dpollard', totp=True, home=EXPANSE_HOME, traj=EXPANSE_TRAJ,
+                    hint='Check the network and that the host name resolves.'),
+    'pod':     dict(label='Pod', host='pod-login1.cnsi.ucsb.edu', user='pollard', totp=False, home='$HOME',
+                    traj='/scratch/$USER/lammps_trajectories',
+                    hint='Pod is only reachable through the UCSB campus VPN (Ivanti Secure Access): connect it and re-run this cell.'),
+}
+
+
+def cluster_reachable(name, timeout=5):
+    """True when the cluster's login node answers on port 22 (Pod: only with the campus VPN up)."""
+    import socket
+    try:
+        socket.create_connection((CLUSTERS[name]['host'], 22), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
+def cluster_paths(cfg, name):
+    """(runs roots, trajectory root) of cfg's run on cluster `name`, as shell text for the staging script."""
+    C = CLUSTERS[name]
+    roots = [C['home'] + r[len(EXPANSE_HOME):] if r.startswith(EXPANSE_HOME + '/') else r for r in runs_roots(cfg.RUNS_ROOT)]
+    return roots, (C['traj'] if cfg.TRAJ_ROOT == EXPANSE_TRAJ else cfg.TRAJ_ROOT)
+
+
+def cluster_login(name, host=None, user=None):
+    """One interactive login to cluster `name` ('expanse': password + TOTP; 'pod': password) -> (paramiko
+    SSHClient, Transport).  Raises ConnectionError with the usual advice when the host is unreachable or
+    the login is refused."""
     import paramiko
     import getpass
     import socket
-    password = getpass.getpass(f'Expanse password for {user}: ')
-    totp = getpass.getpass('TOTP / verification code: ')
+    C = CLUSTERS[name]
+    label, host, user = C['label'], host or C['host'], user or C['user']
+    password = getpass.getpass(f'{label} password for {user}: ')
+    totp = getpass.getpass('TOTP / verification code: ') if C['totp'] else ''
 
     def auth_handler(title, instructions, prompt_list):
-        return [password if 'password' in p.strip().lower() else totp for p, _ in prompt_list]
+        return [password if ('password' in p.strip().lower() or not C['totp']) else totp for p, _ in prompt_list]
 
     print(f'Connecting to {host} ...')
-    if 'expanse' in socket.gethostname().lower() or 'sdsc' in socket.gethostname().lower():
-        print('  NOTE: this notebook seems to be running ON Expanse; the login node may not accept an SSH\n'
+    here = socket.gethostname().lower()
+    if any(k in here for k in ('expanse', 'sdsc', 'pod-login', 'cnsi')):
+        print('  NOTE: this notebook seems to be running ON a cluster; the login node may not accept an SSH\n'
               '  connection from here.  Turn the sync off and read the run directories directly instead.')
     try:
         sock = socket.create_connection((host, 22), timeout=30)
     except (socket.timeout, OSError) as e:
-        raise ConnectionError(f'cannot reach {host}:22 ({type(e).__name__}: {e}).  '
-                              'Check network / VPN / that the host name resolves, then re-run this cell.') from e
+        raise ConnectionError(f'cannot reach {host}:22 ({type(e).__name__}: {e}).  {C["hint"]}') from e
     transport = paramiko.Transport(sock)
     transport.banner_timeout = 60
     transport.set_keepalive(30)
     try:
         transport.connect()
-        transport.auth_interactive(user, auth_handler)
+        if C['totp']:
+            transport.auth_interactive(user, auth_handler)
+        else:
+            try:
+                transport.auth_password(user, password, fallback=True)
+            except paramiko.BadAuthenticationType:
+                transport.auth_interactive(user, auth_handler)
     except paramiko.AuthenticationException as e:
         transport.close()
-        raise ConnectionError('Expanse rejected the login: wrong password, or the TOTP code expired '
-                              '(codes last 30 s -- have the code ready before running the cell).') from e
+        raise ConnectionError(f'{label} rejected the login: wrong password' + (', or the TOTP code expired '
+                              '(codes last 30 s -- have the code ready before running the cell).' if C['totp'] else '.')) from e
     except (paramiko.SSHException, OSError) as e:
         transport.close()
         raise ConnectionError(f'SSH handshake with {host} failed ({type(e).__name__}: {e}).  '
                               'Repeated failed logins get the connection dropped for a while; wait a minute and retry.') from e
     if not transport.is_authenticated():
         transport.close()
-        raise ConnectionError('Expanse login did not complete (transport not authenticated).')
+        raise ConnectionError(f'{label} login did not complete (transport not authenticated).')
     ssh = paramiko.SSHClient()
     ssh._transport = transport
     return ssh, transport
+
+
+def expanse_login(host='login.expanse.sdsc.edu', user='dpollard'):
+    """The Expanse login of cluster_login (kept for lib/chain_length.sync_equilibration)."""
+    return cluster_login('expanse', host, user)
 
 
 def expanse_run_script(ssh, transport, script, what='the command', timeout=600):
@@ -2944,7 +2992,7 @@ def expanse_run_script(ssh, transport, script, what='the command', timeout=600):
         return stdout.read().decode(), stderr.read().decode()
     except (socket.timeout, OSError, paramiko.SSHException) as e:
         transport.close()
-        raise ConnectionError(f'{what} on Expanse failed ({type(e).__name__}: {e}).') from e
+        raise ConnectionError(f'{what} on the cluster failed ({type(e).__name__}: {e}).') from e
 
 
 def sftp_pull_tree(sftp, remote_dir, local_dir):
@@ -2988,7 +3036,7 @@ def runs_roots(runs_root):
 
 
 def sync_pull(cfg, data_files, traj_files, required, optional, force=False, refresh=None):
-    """The Expanse login + staging + SFTP pull behind sync_from_expanse, for any
+    """The cluster login + staging + SFTP pull behind sync_from_expanse (cfg.CLUSTER picks Expanse / Pod / auto), for any
     file list (2026-09-23: shared with lib/shear.py).  `optional` = basenames whose
     absence never triggers a login; `refresh()` -> (data_files, traj_files, required)
     is called after the pull to re-resolve file tags."""
@@ -3012,19 +3060,18 @@ def sync_pull(cfg, data_files, traj_files, required, optional, force=False, refr
         known = len(missing_all) - len(missing_new) - n_opt
         print(f'All data files present locally' + (f' except {known} known absent on the cluster' if known else '')
               + (f' (+{n_opt} optional file(s) this run never wrote, e.g. piston_force_avg_ref)' if n_opt else '')
-              + f' ({len(missing_all)} target file(s) missing in total) -- skipping Expanse login.  '
+              + f' ({len(missing_all)} target file(s) missing in total) -- skipping the cluster login.  '
               f'FORCE_SYNC=True re-checks everything.')
         if missing_req:
             print('  WARNING: required files missing: ' + ', '.join(f.name for f in missing_req))
         return
     why = 'force=True' if (force and not missing_new) else f'{len(missing_new)} data file(s) missing'
-    print(f'Syncing from Expanse ({why}); {len(missing_all)} of {len(data_files) + len(traj_files)} target files missing locally.')
+    print(f'Syncing from the cluster ({why}); {len(missing_all)} of {len(data_files) + len(traj_files)} target files missing locally.')
     if missing_new:
         print('  missing: ' + ', '.join(f.name for f in missing_new[:6]) + (' ...' if len(missing_new) > 6 else ''))
     # an unresolved <steps> tag ('*') must match DIGITS ONLY on the cluster (extglob), so a
     # permeation request never stages a compression level's <tag>_c<lvl> file (2026-09-24)
     bn = lambda paths: ' '.join('"' + p.name.replace('*', '+([0-9])') + '"' for p in paths)
-    stage = f'{cfg.RUNS_ROOT}/uniaxial_stage'
     script = r"""
 set -u
 shopt -s extglob
@@ -3043,27 +3090,72 @@ for B in __TRAJ_BN__; do
 done
 echo "  staged: $(ls "$STAGE/data" 2>/dev/null | wc -l) data, $(ls "$STAGE/traj" 2>/dev/null | wc -l) traj"
 """
-    script = (script.replace('__RUNS__', ' '.join(f'"{r}"' for r in runs_roots(cfg.RUNS_ROOT))).replace('__TRAJ__', cfg.TRAJ_ROOT)
-              .replace('__STAGE__', stage).replace('__DATA_BN__', bn(data_files))
+    # ---- which cluster(s) (2026-11-20): cfg.CLUSTER, or 'auto' = the one this run was last pulled from, then the rest ----
+    want = str(getattr(cfg, 'CLUSTER', 'auto')).lower()
+    assert want == 'auto' or want in CLUSTERS, f"CLUSTER must be 'auto' or one of {sorted(CLUSTERS)}"
+    from_f = cfg.DATA_DIR / '.sync_cluster'
+    if want == 'auto':
+        last = from_f.read_text().strip() if from_f.exists() else ''
+        order = ([last] if last in CLUSTERS else []) + [c for c in CLUSTERS if c != last]
+    else:
+        order = [want]
+    names = lambda fs: {f.name for f in fs}
+    pulled_any, contacted, skipped = False, 0, []
+    for i, name in enumerate(order):
+        C = CLUSTERS[name]
+        if want == 'auto' and name != 'expanse' and not cluster_reachable(name):
+            print(f"  {C['label']}: not reachable, skipped.  {C['hint']}")
+            skipped.append(C['label'])
+            continue
+        roots, traj_root = cluster_paths(cfg, name)
+        sc = (script.replace('__RUNS__', ' '.join(f'"{r}"' for r in roots)).replace('__TRAJ__', traj_root)
+              .replace('__STAGE__', roots[0] + '/uniaxial_stage').replace('__DATA_BN__', bn(data_files))
               .replace('__TRAJ_BN__', bn(traj_files)))
-    ssh, transport = expanse_login(cfg.EXPANSE_HOST, cfg.EXPANSE_USER)
-    print('Step 1 -- staging files on Expanse (find over the runs tree; can take a minute)...')
-    out, err = expanse_run_script(ssh, transport, script, what='the staging command')
-    print(out)
-    if err.strip():
-        print('  (stderr) ' + err.strip().replace('\n', '\n  (stderr) '))
-    print('Step 2 -- downloading via SFTP (skips files already present)...')
-    sftp = ssh.open_sftp()
-
-    sftp_pull_tree(sftp, f'{stage}/data', cfg.DATA_DIR)
-    sftp_pull_tree(sftp, f'{stage}/traj', cfg.TRAJ_DIR)
-    sftp.close()
-    ssh.close()
+        try:
+            ssh, transport = cluster_login(name, *((cfg.EXPANSE_HOST, cfg.EXPANSE_USER) if name == 'expanse' else ()))
+            print(f"Step 1 -- staging files on {C['label']} (find over the runs tree; can take a minute)...")
+            out, err = expanse_run_script(ssh, transport, sc, what='the staging command')
+        except ConnectionError as e:
+            if want != 'auto' or i == len(order) - 1 and not pulled_any:
+                raise
+            print(f"  {C['label']}: {e}\n  -> trying the next cluster")
+            skipped.append(C['label'])
+            continue
+        contacted += 1
+        print(out)
+        if err.strip():
+            print('  (stderr) ' + err.strip().replace('\n', '\n  (stderr) '))
+        print('Step 2 -- downloading via SFTP (skips files already present)...')
+        before = names(f for f in data_files + traj_files if _present(f))
+        sftp = ssh.open_sftp()
+        home = sftp.normalize('.')                                     # the staging path as SFTP sees it ($HOME, $USER resolved)
+        stage = (roots[0] + '/uniaxial_stage').replace('$HOME', home).replace('$USER', C['user'])
+        sftp_pull_tree(sftp, f'{stage}/data', cfg.DATA_DIR)
+        sftp_pull_tree(sftp, f'{stage}/traj', cfg.TRAJ_DIR)
+        sftp.close()
+        ssh.close()
+        got = re.search(r'staged:\s*0 data,\s*0 traj', out) is None
+        if got:
+            pulled_any = True
+            from_f.write_text(name)
+        left = [f for f in data_files + traj_files if not _present(f) and f.name not in optional]
+        print(f"  {C['label']}: {len(names(f for f in data_files + traj_files if _present(f)) - before)} new file(s)"
+              + ('' if got else ' (this run is not there)'))
+        if not left:
+            break
+        if want == 'auto' and i < len(order) - 1:
+            print(f"  {len(left)} file(s) still missing -> looking on {CLUSTERS[order[i + 1]]['label']}")
+    if not contacted:
+        print('No cluster was reached; nothing pulled.')
+        return
     if not isinstance(cfg.NSTEPS, (int, dict)):
         cfg._tags = {}                                     # re-resolve the tags from the new files
     if refresh is not None:
         data_files, traj_files, required = refresh()
     still = [f.name for f in data_files + traj_files if not _present(f)]
+    if still and skipped:                                  # a cluster was not asked: do not remember the files as absent
+        print(f'Sync complete; {len(still)} file(s) still missing and ' + ' / '.join(skipped) + ' was not asked -- the next run of this cell tries again.')
+        return
     absent_f.write_text(json.dumps(sorted(set(still)), indent=1))
     if still:
         print(f'Sync complete; {len(still)} file(s) not found on the cluster (remembered in {absent_f.name}): '
@@ -5740,11 +5832,40 @@ def save_M_record(cfg, R, levels, path=None):
                z_support=float(R['z_support']), z_piston=float(R['z_piston']),
                M_small_net=slopes['dsig_net'], M_small_pist=slopes['dP_pist'], n_fit=n_fit, levels=rows)
     outs = [Path(path)] if path else [cfg.DATA_DIR / 'M_record.json', cfg.DATA_DIR.parent / 'M_record_latest.json']
+    # ---- what the permeation batch plans its drive from (lib/perm_plan.py, 2026-11-20): the unload D_c of the
+    #      lowest level that has one and the feed reservoir above the seated load piston.  A record with a D_c is
+    #      also written into the repository, keyed by the data file, so that it reaches the cluster with the next sync.
+    rec.update(dataname=cfg.DATANAME, dt=float(cfg.dt_lj))
+    if np.isfinite(R.get('z_feed', np.nan)) and np.isfinite(R.get('z_load', np.nan)):
+        rec.update(z_feed=float(R['z_feed']), feed_thickness=float(R['z_feed'] - R['z_load']))
+    for L in sorted(levels, key=lambda L: L['eps']):
+        Dp = L.get('Dc_primary')
+        if Dp is not None:
+            stab = [x['Dc'] for x in ((L.get('unload') or {}).get('prof') or {}).get('stab', [])]
+            rec.update(Dc_unload=float(Dp['Dc']), Dc_level=str(L['lvl']), Dc_src=Dp['src'], Dc_R2=float(Dp['R2']),
+                       tau1_unload=float(Dp['tau1']), L_unload=float(L['unload']['L']),
+                       Dc_stab_min=float(min(stab)) if stab else None, Dc_stab_max=float(max(stab)) if stab else None)
+            break
+    if 'Dc_unload' in rec and 'feed_thickness' in rec:
+        import os, perm_plan
+        if not os.environ.get('LAMMPS_NO_PERM_RECORD'):                # the test runners set it: fixtures stay out of the repository
+            outs.append(perm_plan.record_path(cfg.DATANAME))
     for o in outs:
         o.parent.mkdir(parents=True, exist_ok=True)
         o.write_text(json.dumps(rec, indent=1, default=lambda x: None if (isinstance(x, float) and not np.isfinite(x)) else float(x)))
     print(f"compression record saved ({len(rows)} levels, strain = eps_{cfg.M_STRAIN}, small-strain M net {slopes['dsig_net']:.3f} / "
           f"pist {slopes['dP_pist']:.3f}):\n  " + '\n  '.join(str(o) for o in outs))
+    if 'Dc_unload' in rec and 'feed_thickness' in rec:
+        try:
+            P = perm_plan.plan(rec)
+            print(f"permeation drive this record plans for the same data file (uniaxial_permeation_single.batch reads it after the next "
+                  f"sync):  DP_PISTON {P['dP']:g} (eps_F {P['eps_F']:.3f}),  NSTEPS {P['nsteps']} ({P['n_tau1']:.1f} tau_1, tau_1 = {P['tau1']:.0f} tau),  "
+                  f"2v / 2d stages {P['stage']} each,  feed piston travel {P['travel']:.1f} of {P['room']:.1f} sigma"
+                  + ('' if P['fits'] else '   <-- the feed reservoir is TOO SHORT'))
+        except ValueError as e:
+            print(f'no permeation plan: {e}')
+    else:
+        print('no permeation plan written: it needs an unload D_c (UNLOAD=1) and a two-piston reference')
     return rec
 
 

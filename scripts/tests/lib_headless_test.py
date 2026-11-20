@@ -1,7 +1,8 @@
 """Drive lib/uniaxial.py and lib/isotropic.py on the synthetic flow_data_local tree exactly as the
 two-piston and the bulk-modulus notebooks do (SYNC off).
 Usage: python lib_headless_test.py <fixture_root>"""
-import sys, importlib
+import sys, importlib, os
+os.environ['LAMMPS_NO_PERM_RECORD'] = '1'   # save_M_record: no compression record in the repository from fixtures
 from pathlib import Path
 import numpy as np
 import matplotlib

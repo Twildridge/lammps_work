@@ -162,7 +162,7 @@ class Config(uni.Config):
                                           # (UNLOAD_L, inherited: 'hold' = the compressed edges at the hold end set the lengths
                                           # of the series; 'ref' = the edges the level drove from; 'mean')
     HOST: str = 'expanse'                 # 'expanse' | 'pod' | 'bridges': which cluster folder RUNS_ROOT defaults to
-                                          # (the sync cell logs in to Expanse only; copy Pod / Bridges output by hand)
+                                          # ('pod' also makes the sync cell pull from Pod; copy Bridges output by hand)
     PARTIAL_NORM: str = 'raw'             # the uniaxial notebooks' normalised partial-stress figures (uniaxial.Config,
                                           # 2026-10-06) stay off here: the six-plate cube has no feed / permeate side
                                           # and no single driving pressure
@@ -866,10 +866,12 @@ def sync_files(cfg, levels=None):
 
 
 def sync_from_expanse(cfg, levels=None, force=False):
-    """Pull every file the notebooks read from Expanse in ONE login (uniaxial.sync_pull).
-    Runs made on Pod or Bridges-2 are not reachable this way: copy their output_files/*/
-    contents into cfg.DATA_DIR by hand and leave SYNC off."""
-    if cfg.HOST != 'expanse':
+    """Pull every file the notebooks read from Expanse or Pod (uniaxial.sync_pull; cfg.CLUSTER, and
+    HOST = 'pod' forces Pod).  Runs made on Bridges-2 are not reachable this way: copy their
+    output_files/*/ contents into cfg.DATA_DIR by hand."""
+    if cfg.HOST == 'pod':
+        cfg.CLUSTER = 'pod'
+    elif cfg.HOST != 'expanse':
         print(f"HOST = '{cfg.HOST}': no automatic sync -- copy the run's output_files/*/*.dat into {cfg.DATA_DIR}")
         return
     data, traj, req = sync_files(cfg, levels)
