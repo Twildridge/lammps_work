@@ -118,6 +118,37 @@ def record_from_dir(work_dir):
         started=(m.group(1) if m else ''), status='running', ended=None, steps_done=None, dt=None, wall_seconds=None, final_data=[])
 
 
+def legacy_record_from_dir(work_dir, cluster):
+    """A record for a run folder older than run_info.txt (before 2026-11-17), from its name
+    <folder>_<dataname>_<interaction>_<YYYYMMDD>_<HHMMSS> and its log.lammps. No job ID is known."""
+    work_dir = os.path.abspath(work_dir)
+    parent, base = os.path.split(work_dir)
+    folder = os.path.basename(parent)
+    m = re.match(r'(.*)_(\d{4})(\d\d)(\d\d)_(\d\d)(\d\d)(\d\d)$', base)
+    if not m or not os.path.isfile(os.path.join(work_dir, 'log.lammps')):
+        return None
+    rest = m.group(1)
+    interaction = None
+    mi = re.match(r'(.*)_(\d+(?:\.\d+)?_\d+(?:\.\d+)?)$', rest)
+    if mi:
+        rest, interaction = mi.group(1), mi.group(2)
+    dataname = rest[len(folder) + 1:] if rest.startswith(folder + '_') else None
+    if not dataname:                                      # folder renamed since: ask the log
+        with open(os.path.join(work_dir, 'log.lammps'), errors='replace') as f:
+            for i, line in enumerate(f):
+                mm = re.match(r'read_data\s+(\S+)', line)
+                if mm and '$' not in mm.group(1):
+                    dataname = re.sub(r'\.data$', '', os.path.basename(mm.group(1)))
+                    break
+                if i > 5000:
+                    break
+    return dict(
+        cluster=cluster or '?', job_id='none', job_name='', deck=folder, deck_file='', run_name=base, continuation=None,
+        run_dir=work_dir, dataname=dataname or rest, input_data='', interaction=interaction, nsteps=None, allocation='',
+        commit='', vars='', backfilled=True, started='%s-%s-%s %s:%s:%s' % m.groups()[1:],
+        status='running', ended=None, steps_done=None, dt=None, wall_seconds=None, final_data=[])
+
+
 def close_record(rec, work_dir, status):
     L = log_facts(work_dir)
     rec.update(status=status, steps_done=L['steps'] or None, dt=L['dt'], final_data=final_data_files(work_dir))
@@ -214,6 +245,20 @@ def cmd_refresh(store, runs_dir, days=30):
         L = log_facts(d)
         write_record(store, rec if alive else close_record(rec, d, 'complete' if L['done'] else 'ended'))
         n_new += 1
+    # run folders older than run_info.txt: from the folder name and the log, when the log is no longer written
+    cut_day = time.strftime('%Y%m%d', time.localtime(cutoff))
+    for log in glob.glob(os.path.join(runs_dir, '*', '*', 'log.lammps')):
+        d = os.path.dirname(os.path.abspath(log))
+        m = re.search(r'_(\d{8})_\d{6}$', d)
+        if d in known or not m or m.group(1) < cut_day or os.path.exists(os.path.join(d, 'run_info.txt')):
+            continue
+        if time.time() - os.path.getmtime(log) < 3600:    # may still be running
+            continue
+        rec = legacy_record_from_dir(d, os.environ.get('CLUSTER', ''))
+        if rec is None:
+            continue
+        write_record(store, close_record(rec, d, 'complete' if log_facts(d)['done'] else 'ended'))
+        n_new += 1
     for p, rec in have.items():
         if rec.get('status') == 'running' and not (rec.get('job_id') not in ('none', '?', '') and _job_alive(rec['job_id'])):
             d = rec.get('run_dir', '')
@@ -292,7 +337,7 @@ def table(recs, links):
             deck += ', continuation'
         init = r.get('input_data') or ((r.get('dataname') or '') + '.data')
         rows.append('| %s | %s | %s | %s | %s | `%s` | %s | %s | %s | %s | %s |' % (
-            (r.get('started') or '')[:16], r.get('cluster', ''), r.get('job_id', ''), deck, lattice(r.get('dataname')), init,
+            (r.get('started') or '')[:16], r.get('cluster', ''), '' if r.get('job_id') in ('none', '?') else r.get('job_id', ''), deck, lattice(r.get('dataname')), init,
             '<br>'.join('`%s`' % n for n in r.get('final_data') or []), _steps(r), _hms(r.get('wall_seconds')),
             STATUS.get(r.get('status'), r.get('status') or ''),
             ', '.join('`%s`' % x for x in links.get(r.get('run_name'), []))))

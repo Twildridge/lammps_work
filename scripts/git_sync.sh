@@ -59,9 +59,9 @@ echo "======================================"
     source "$SCRIPT_DIR/lib/site.sh" >/dev/null 2>&1 || { echo ">>> run log: lib/site.sh could not be read, skipped"; exit 0; }
     [ -d "$RUNS_DIR" ] || { echo ">>> run log: no run folder $RUNS_DIR on this machine ($CLUSTER), skipped"; exit 0; }
     source "$SCRIPT_DIR/lib/run_record.sh"
-    export RUN_RECORD_VERBOSE=1
+    export RUN_RECORD_VERBOSE=1 CLUSTER
     _run_record_py refresh "$RUN_RECORD_STORE" "$RUNS_DIR" 30
-    echo ">>> run log ($CLUSTER, $(python3 -V 2>&1)): $(ls "$RUNS_DIR"/*/*/run_info.txt "$RUNS_DIR"/*/*/continuation_*/run_info.txt 2>/dev/null | wc -l | tr -d ' ') run folders with a run_info.txt under $RUNS_DIR, $(ls "$RUN_RECORD_STORE"/*.json 2>/dev/null | wc -l | tr -d ' ') records in $RUN_RECORD_STORE"
+    echo ">>> run log ($CLUSTER, $(python3 -V 2>&1)): $(ls "$RUNS_DIR"/*/*/run_info.txt "$RUNS_DIR"/*/*/continuation_*/run_info.txt 2>/dev/null | wc -l | tr -d ' ') run folders with a run_info.txt and $(ls "$RUNS_DIR"/*/*/log.lammps 2>/dev/null | wc -l | tr -d ' ') with a log under $RUNS_DIR, $(ls "$RUN_RECORD_STORE"/*.json 2>/dev/null | wc -l | tr -d ' ') records in $RUN_RECORD_STORE"
     publish_run_records
 ) || true
 

@@ -26,7 +26,7 @@ A job appears when it starts, not when it is submitted: a pending job is not in 
 
 Publishing does not use the working tree. It fetches the branch, adds the changed records to that commit's tree in a private index, makes a commit with `git commit-tree` and pushes that commit. The checkout that running jobs read their scripts from is never modified, and uncommitted edits on the cluster do not get in the way. The record files appear in the working tree with the next pull.
 
-If the push fails (a compute node without network or credentials), the records stay in `.run_records/` and the next job or the next `lsync` on that cluster publishes them. `lsync` on a cluster also adds records for run folders that have none (runs of the last 30 days with a `run_info.txt`, so this backfills) and closes records of jobs that are no longer in the queue.
+If the push fails (a compute node without network or credentials), the records stay in `.run_records/` and the next job or the next `lsync` on that cluster publishes them. `lsync` on a cluster also adds records for run folders of the last 30 days that have none, and closes records of jobs that are no longer in the queue. A folder without a `run_info.txt` (started before 2026-11-17) is recorded from its name and its `log.lammps`: no job ID, and the data file name is read from the folder name.
 
 Nothing in this path can fail a job: every step is best-effort and prints one line to the job's output. `RUN_RECORDS=0` in the environment turns it off.
 
@@ -44,6 +44,7 @@ Data that was already on the laptop before 2026-11-20 has no link; a `FORCE_SYNC
 
 ## Limits
 
-- Jobs started before 2026-11-20 are not in the log unless `lsync` on the cluster backfilled them, and only runs with a `run_info.txt` (since 2026-11-17) can be backfilled.
+- Jobs started before 2026-11-20 are in the log only if `lsync` on the cluster backfilled them (the last 30 days at the time of that `lsync`). Backfilled rows from before 2026-11-17 have no job ID.
+- `lsync` on a cluster prints a `>>> run log (...)` line with what it found and whether it published; when a pull changes the sync scripts it restarts itself with the new version.
 - Jobs that do not go through `run_lammps.sh` or `continue_sim.sh` (the benchmark, the data-file builders, the screens) are not recorded.
 - A job killed at the SLURM limit keeps the status `running` until the next `lsync` on that cluster.
