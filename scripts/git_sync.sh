@@ -48,12 +48,30 @@ echo "lammps_work git sync"
 echo "Repo: $REPO_ROOT"
 echo "======================================"
 
+# ── 0. Run log (clusters only): publish the job records GitHub does not have ─
+# Each job writes a record to $RUNS_DIR/.run_records/ and pushes it itself; this
+# catches the ones whose push failed and closes records of jobs that were killed.
+# Best-effort, in a subshell: nothing here can stop the sync. See docs/run_log.md.
+(
+    set +eu
+    export LAMMPS_WORK_DIR="$REPO_ROOT"
+    source "$SCRIPT_DIR/lib/site.sh" >/dev/null 2>&1 || exit 0
+    [ -d "$RUNS_DIR" ] && command -v sbatch >/dev/null 2>&1 || exit 0
+    source "$SCRIPT_DIR/lib/run_record.sh"
+    _run_record_py refresh "$RUN_RECORD_STORE" "$RUNS_DIR" 30
+    publish_run_records
+) || true
+
 # ── 1. Pull (rebase) to incorporate any cluster commits ────────────────────
 echo ">>> Pulling latest from remote..."
 git pull --rebase --autostash || {
     echo "ERROR: git pull failed. Resolve conflicts manually, then re-run."
     exit 1
 }
+
+# ── 1b. Run log: rebuild the "Recent runs" table of the README from runs/*.json ─
+# (deterministic: the files change only when a record did, so no empty commits)
+python3 "$SCRIPT_DIR/lib/run_record.py" table "$REPO_ROOT" || echo ">>> (run log table not rebuilt: run_record.py failed)"
 
 # ── 2. Check for changes ───────────────────────────────────────────────────
 # A clean working tree does NOT mean the remote is up to date. Anything already

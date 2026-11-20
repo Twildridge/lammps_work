@@ -16,6 +16,16 @@ Coarse-grained molecular dynamics of tetrahedral hydrogel slabs (Kremer–Grest 
 
 **Physical analog:** PEG-based hydrogel membranes used in filtration, drug delivery, and soft robotics.
 
+## Recent runs
+
+The jobs most recently started on any cluster. Each job records itself when it starts and when it ends, and `lsync` rebuilds this table ([how it works](docs/run_log.md)). The last column is the folder of that run under `flow_data_local/` on the laptop, filled in once a notebook has pulled its files.
+
+<!-- RECENT_RUNS:BEGIN (written by scripts/lib/run_record.py; edits here are overwritten) -->
+*No runs recorded yet.*
+
+The 0 most recent of 0 recorded jobs; all of them: [`runs/README.md`](runs/README.md).
+<!-- RECENT_RUNS:END -->
+
 ## Start here
 
 ```bash
@@ -73,6 +83,7 @@ Production runs on Expanse (SDSC). Pod (CNSI, UCSB) is the backup since 2026-11-
 | `lsync`, collaborator access, SSH keys on a cluster, merge conflicts | [docs/github_sync.md](docs/github_sync.md) |
 | A new cluster account: clone, Python, copying data files | [docs/cluster_setup.md](docs/cluster_setup.md) |
 | Expanse and Pod settings, partitions, allocation sizes | [docs/cluster_reference.md](docs/cluster_reference.md) |
+| The run log behind the "Recent runs" table | [docs/run_log.md](docs/run_log.md) |
 | LJ units, simulation parameters, barostat and piston choices | [docs/physics_reference.md](docs/physics_reference.md) |
 | A specific error message | [docs/common_issues.md](docs/common_issues.md) |
 | Every file in the repo, and the layout of a run folder | [docs/repository_layout.md](docs/repository_layout.md) |

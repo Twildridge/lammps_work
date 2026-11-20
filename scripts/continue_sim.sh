@@ -27,6 +27,7 @@ SELF="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 source "$SCRIPT_DIR/lib/site.sh"
 source "$SCRIPT_DIR/lib/run_common.sh"
+source "$SCRIPT_DIR/lib/run_record.sh"
 
 declare -A FOLDER_PREFIX=([slab_with_support]=final_config [chain_length_testing]=final_config
                           [pure_polymer]=purepol [pure_solvent]=puresolv)
@@ -225,6 +226,7 @@ LAMMPS_VARS=(-var dataname "$DATANAME" -var interaction "$INTERACTION" -var epsS
              -var wall_timeout "$WALL_TIMEOUT")
 knob_vars
 write_run_info "$CONT_DIR" "$DECK_SRC" "$RESUME_FILE"
+run_record_start "$CONT_DIR"
 echo "======================================"
 echo "Working directory: $CONT_DIR"
 echo "Trajectory directory (scratch): $TRAJ_DIR"
@@ -235,6 +237,7 @@ echo "======================================"
 
 set +e
 launch_lammps "$CONT_DIR/$(basename "$DECK_SRC")" "${LAMMPS_VARS[@]}"
+run_record_end "$CONT_DIR" "$LAMMPS_STATUS"
 [ "$LAMMPS_STATUS" = failed ] && exit "$LAMMPS_RC"
 chain_if_incomplete "$SIM_FOLDER"
 export_knobs

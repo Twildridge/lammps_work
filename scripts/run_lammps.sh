@@ -33,6 +33,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/site.sh"
 source "$SCRIPT_DIR/lib/run_common.sh"
+source "$SCRIPT_DIR/lib/run_record.sh"
 source "$SCRIPT_DIR/node_git_sync.sh"
 
 if [ $# -lt 4 ]; then
@@ -81,9 +82,11 @@ make_run_dirs "$WORK_DIR" "$TRAJ_DIR"
 cp "$DECK_SRC" "$WORK_DIR/"
 ln -s "$DATA_SRC" "$WORK_DIR/data_files/$DATANAME.data"
 write_run_info "$WORK_DIR" "$DECK_SRC" "$DATA_SRC"
+run_record_start "$WORK_DIR"          # the run log (lib/run_record.sh): the README's "Recent runs" table
 cd "$WORK_DIR" || exit 1
 
 launch_lammps "$WORK_DIR/$(basename "$DECK_SRC")" "${LAMMPS_VARS[@]}"
+run_record_end "$WORK_DIR" "$LAMMPS_STATUS"
 case "$LAMMPS_STATUS" in
     failed)  exit "$LAMMPS_RC" ;;
     partial) export_knobs

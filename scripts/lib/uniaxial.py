@@ -3035,6 +3035,31 @@ def runs_roots(runs_root):
     return [root] + [f'{parent}/{old}' for old in LEGACY_RUN_FOLDERS.get(name, ())]
 
 
+def _link_run_log(cfg, cluster, staging_out):
+    """Tell the run log (README "Recent runs", lib/run_record.py) which cluster run folders this notebook's
+    RUN_ID was pulled from: runs/local/<deck>__<RUN_ID>.json in the repository, committed by the next lsync.
+    Best-effort; LAMMPS_NO_PERM_RECORD (the test runners) turns it off."""
+    import json, os, datetime
+    if os.environ.get('LAMMPS_NO_PERM_RECORD'):
+        return
+    try:
+        m = re.search(r'^\s*runs:\s*(.*)$', staging_out, re.M)
+        names = [n for n in (m.group(1).split() if m else []) if not n.endswith('_stage')]
+        if not names:
+            return
+        deck = cfg.DATA_DIR.parent.name
+        f = Path(__file__).resolve().parents[2] / 'runs' / 'local' / f'{deck}__{cfg.RUN_ID}.json'
+        old = json.loads(f.read_text()) if f.exists() else {}
+        rec = dict(run_id=cfg.RUN_ID, deck=deck, dataname=cfg.DATANAME, cluster=cluster,
+                   run_names=sorted(set(old.get('run_names', [])) | set(names)),
+                   pulled=datetime.datetime.now().isoformat(timespec='minutes'))
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(rec, indent=1) + '\n')
+        print(f"  run log: {cfg.RUN_ID} <- {', '.join(names)} (runs/local/{f.name}; the README table shows it after the next lsync)")
+    except Exception as e:
+        print(f'  (run log link not written: {type(e).__name__}: {e})')
+
+
 def sync_pull(cfg, data_files, traj_files, required, optional, force=False, refresh=None):
     """The cluster login + staging + SFTP pull behind sync_from_expanse (cfg.CLUSTER picks Expanse / Pod / auto), for any
     file list (2026-09-23: shared with lib/shear.py).  `optional` = basenames whose
@@ -3075,20 +3100,22 @@ def sync_pull(cfg, data_files, traj_files, required, optional, force=False, refr
     script = r"""
 set -u
 shopt -s extglob
-RUNS=(__RUNS__); TRAJ="__TRAJ__"; STAGE="__STAGE__"
+RUNS=(__RUNS__); TRAJ="__TRAJ__"; STAGE="__STAGE__"; SRC_RUNS=()
 rm -rf "$STAGE"; mkdir -p "$STAGE/data" "$STAGE/traj"
 # newest-first lists of every candidate file; each requested name may be a glob
 # pattern (the <steps> tag is '*' until the level's files exist locally), and the
 # NEWEST match wins.
 mapfile -t ALL_D < <(find "${RUNS[@]}" -name '*.dat' -not -path '*/uniaxial_stage/*' -not -path '*/triaxial_stage/*' -size +0 -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
 for B in __DATA_BN__; do
-  for p in "${ALL_D[@]}"; do b=${p##*/}; if [[ "$b" == $B ]]; then cp -p "$p" "$STAGE/data/" 2>/dev/null || true; break; fi; done
+  for p in "${ALL_D[@]}"; do b=${p##*/}; if [[ "$b" == $B ]]; then cp -p "$p" "$STAGE/data/" 2>/dev/null || true
+    for r in "${RUNS[@]}"; do case "$p" in "$r"/*) q=${p#"$r"/}; SRC_RUNS+=("${q%%/*}") ;; esac; done; break; fi; done
 done
 mapfile -t ALL_T < <(find "$TRAJ" "${RUNS[@]}" -name '*.lammpstrj' -not -path '*/uniaxial_stage/*' -not -path '*/triaxial_stage/*' -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
 for B in __TRAJ_BN__; do
   for p in "${ALL_T[@]}"; do b=${p##*/}; if [[ "$b" == $B ]]; then cp -p "$p" "$STAGE/traj/" 2>/dev/null || true; break; fi; done
 done
 echo "  staged: $(ls "$STAGE/data" 2>/dev/null | wc -l) data, $(ls "$STAGE/traj" 2>/dev/null | wc -l) traj"
+echo "  runs: $(printf '%s\n' "${SRC_RUNS[@]-}" | sort -u | tr '\n' ' ')"
 """
     # ---- which cluster(s) (2026-11-20): cfg.CLUSTER, or 'auto' = the one this run was last pulled from, then the rest ----
     want = str(getattr(cfg, 'CLUSTER', 'auto')).lower()
@@ -3138,6 +3165,7 @@ echo "  staged: $(ls "$STAGE/data" 2>/dev/null | wc -l) data, $(ls "$STAGE/traj"
         if got:
             pulled_any = True
             from_f.write_text(name)
+            _link_run_log(cfg, name, out)
         left = [f for f in data_files + traj_files if not _present(f) and f.name not in optional]
         print(f"  {C['label']}: {len(names(f for f in data_files + traj_files if _present(f)) - before)} new file(s)"
               + ('' if got else ' (this run is not there)'))
