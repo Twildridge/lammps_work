@@ -322,7 +322,7 @@ def load_all(repo):
             links.setdefault(rn, [])
             if L.get('run_id') and L['run_id'] not in links[rn]:
                 links[rn].append(L['run_id'])
-    recs.sort(key=lambda r: (r.get('started') or '', r.get('job_id') or ''), reverse=True)
+    recs.sort(key=lambda r: (r.get('started') or '', r.get('job_id') or '', r.get('cluster') or '', r.get('run_name') or ''), reverse=True)
     return recs, links
 
 
