@@ -108,6 +108,19 @@ for pair in "lsync:git_sync.sh:one-command git sync" "lsbatch:submit.sh:submit a
     fi
 done
 
+# ── 2b. data folders next to the clone (a personal computer only) ──────────
+# The notebooks read and write ../flow_data_local (downloaded run data and plots, one folder per
+# RUN_ID) and ../lammps_data_files_local (the .data files built here). Neither is in git: only
+# lammps_work is synced with GitHub. lsync cross-references the RUN_ID folders with the run log.
+if [ "$ON_CLUSTER" = 0 ]; then
+    PARENT="$(dirname "$REPO_ROOT")"
+    for d in flow_data_local/raw_data flow_data_local/plots lammps_data_files_local; do
+        if [ ! -d "$PARENT/$d" ]; then
+            mkdir -p "$PARENT/$d" && echo ">>> created $PARENT/$d"
+        fi
+    done
+fi
+
 # ── 3. Claude Code /lsync command (optional) ───────────────────────────────
 # Claude Code is an optional AI coding tool; nothing in this repo needs it. The repo ships
 # .claude/commands/lsync.md, so inside the lammps_work folder /lsync works with no install; this

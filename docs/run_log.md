@@ -38,9 +38,14 @@ Run `lsync` on the laptop to see what the clusters have recorded since the last 
 
 ## The laptop RUN_ID
 
-When a notebook's sync cell pulls files from a cluster, the staging step reports which run folders they came from, and `sync_pull` (`scripts/lib/uniaxial.py`) writes `runs/local/<deck>__<RUN_ID>.json` with those folder names. The table shows the RUN_ID on every job of those folders. The file is committed by the next `lsync`.
+The RUN_ID is the name of a folder under `flow_data_local/raw_data/<deck>/`, the data folder next to `lammps_work` (`install.sh` creates it, with `lammps_data_files_local/`, on a personal computer; neither is in git). The link between a RUN_ID and the cluster run folders is a small file in the repository, `runs/local/<deck>__<RUN_ID>.json`, so the table on GitHub shows it for everyone. It is written in two ways:
 
-Data that was already on the laptop before 2026-11-20 has no link; a `FORCE_SYNC=True` run of the notebook's sync cell writes it.
+- When a notebook's sync cell pulls files from a cluster, the staging step reports which run folders they came from and `sync_pull` (`scripts/lib/uniaxial.py`) writes the link. This one is exact.
+- `lsync` on a computer that has `flow_data_local/` cross-references the folders already there with the recorded jobs (`cross_reference` in `scripts/lib/run_record.py`), without a cluster login and without rerunning a notebook. A folder named like a cluster run folder is that run. Otherwise a job matches when it is of the same deck and a file in the folder carries its tag `_<dataname>_<interaction>_<steps>`. When the same data file was run more than once, each file is given the newest of those jobs that had started when the file was downloaded, which is the job the sync would have staged. A link written by a pull is never replaced by this.
+
+The second way is an inference from file names and download times. It can be wrong when two jobs of one deck used the same data file and the older one's files were downloaded after the newer one had started; rerun that notebook's sync cell with `FORCE_SYNC=True` to replace it with the exact link. It also assumes the laptop and the cluster keep the same clock (both Pacific time here).
+
+A job with no RUN_ID has no folder on any laptop that ran `lsync`: its data was never downloaded, or the folder was superseded by a later run of the same data file.
 
 ## Limits
 

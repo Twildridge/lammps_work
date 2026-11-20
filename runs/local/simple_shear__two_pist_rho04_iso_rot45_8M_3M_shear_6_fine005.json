@@ -1,0 +1,10 @@
+{
+ "cluster": "expanse",
+ "dataname": "final_config_slab_support_5beads_tall_rho04_nowalls_rot45_1.0_1.0_8000000_x_plates",
+ "deck": "simple_shear",
+ "matched": "from the file names and download times in flow_data_local (lib/run_record.py cross_reference)",
+ "run_id": "two_pist_rho04_iso_rot45_8M_3M_shear_6_fine005",
+ "run_names": [
+  "shear_slab_two_pist_final_config_slab_support_5beads_tall_rho04_nowalls_rot45_1.0_1.0_8000000_x_plates_1.0_1.0_20261028_010427"
+ ]
+}

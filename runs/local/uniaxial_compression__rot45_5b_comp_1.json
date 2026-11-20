@@ -1,0 +1,10 @@
+{
+ "cluster": "expanse",
+ "dataname": "final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40",
+ "deck": "uniaxial_compression",
+ "matched": "from the file names and download times in flow_data_local (lib/run_record.py cross_reference)",
+ "run_id": "rot45_5b_comp_1",
+ "run_names": [
+  "triaxial_compression_two_pist_final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40_1.0_1.0_20261110_210526"
+ ]
+}

@@ -1,0 +1,10 @@
+{
+ "cluster": "expanse",
+ "dataname": "slab_support_periodic_30beads_tall_rho04_random",
+ "deck": "chain_length",
+ "matched": "from the file names and download times in flow_data_local (lib/run_record.py cross_reference)",
+ "run_id": "chain_length_testing_slab_support_periodic_30beads_tall_rho04_random_1.0_1.0_20261103_174846",
+ "run_names": [
+  "chain_length_testing_slab_support_periodic_30beads_tall_rho04_random_1.0_1.0_20261103_174846"
+ ]
+}

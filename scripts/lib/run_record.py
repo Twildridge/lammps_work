@@ -326,6 +326,70 @@ def load_all(repo):
     return recs, links
 
 
+def cross_reference(repo):
+    """Link the RUN_ID folders of ../flow_data_local/raw_data/<deck>/ to the recorded jobs without a
+    cluster login, for data that is already on this computer. Writes runs/local/<deck>__<RUN_ID>.json
+    (the same file lib/uniaxial.py sync_pull writes; a link written by a real pull is left alone).
+
+    A folder named like a cluster run folder is that run. Otherwise a job matches when it is of the
+    same deck and a file in the folder carries its tag, _<dataname>_<interaction>_<steps>; of several
+    such jobs (the same data file run twice) each file is given the newest one that had started when
+    the file was downloaded, which is the one the sync would have staged. The output depends only on
+    the records and the files, so a second pass changes nothing."""
+    raw = os.path.join(os.path.dirname(os.path.abspath(repo)), 'flow_data_local', 'raw_data')
+    if not os.path.isdir(raw):
+        return 0
+    recs, _ = load_all(repo)
+    if not recs:
+        return 0
+    by_name = {r.get('run_name'): r for r in recs}
+    out_dir, n = os.path.join(repo, 'runs', 'local'), 0
+    for deck_dir in sorted(glob.glob(os.path.join(raw, '*', ''))):
+        deck = os.path.basename(deck_dir.rstrip(os.sep))
+        same_deck = [r for r in recs if r.get('deck') == deck and r.get('dataname') and r.get('started')]
+        for run_dir in sorted(glob.glob(os.path.join(deck_dir, '*', ''))):
+            run_id = os.path.basename(run_dir.rstrip(os.sep))
+            path = os.path.join(out_dir, '%s__%s.json' % (deck, run_id))
+            try:
+                with open(path) as f:
+                    if 'pulled' in json.load(f):          # written by a real pull: exact, keep it
+                        continue
+            except (OSError, ValueError):
+                pass
+            names, dataname, cluster = set(), None, None
+            if run_id in by_name:
+                r = by_name[run_id]
+                names, dataname, cluster = {run_id}, r.get('dataname'), r.get('cluster')
+            elif same_deck:
+                try:
+                    files = [(e.name, e.stat().st_mtime) for e in os.scandir(run_dir) if e.is_file() and not e.name.startswith('.')]
+                except OSError:
+                    files = []
+                for r in same_deck:
+                    r['_tag'] = re.compile('_' + re.escape(r['dataname'])
+                                           + ('_' + re.escape(r['interaction']) if r.get('interaction') else '') + r'_\d')
+                    r['_t0'] = time.mktime(time.strptime(r['started'][:19], '%Y-%m-%d %H:%M:%S'))
+                for fname, mtime in files:
+                    cands = [r for r in same_deck if r['_t0'] <= mtime and r['_tag'].search(fname)]
+                    if cands:
+                        r = max(cands, key=lambda r: r['_t0'])
+                        names.add(r['run_name'])
+                        dataname, cluster = r['dataname'], r.get('cluster')
+            if not names:
+                continue
+            os.makedirs(out_dir, exist_ok=True)
+            text = json.dumps(dict(run_id=run_id, deck=deck, dataname=dataname, cluster=cluster, run_names=sorted(names),
+                                   matched='from the file names and download times in flow_data_local (lib/run_record.py cross_reference)'),
+                              indent=1, sort_keys=True) + '\n'
+            if _read(path) != text:
+                with open(path, 'w') as f:
+                    f.write(text)
+                n += 1
+    if n:
+        print('run log: %d RUN_ID folder(s) of flow_data_local linked to recorded jobs (runs/local/)' % n)
+    return 0
+
+
 def table(recs, links):
     if not recs:
         return '*No runs recorded yet.*'
@@ -345,6 +409,10 @@ def table(recs, links):
 
 
 def cmd_table(repo=REPO):
+    try:
+        cross_reference(repo)
+    except Exception as e:                                # never stop the sync over the cross-reference
+        print('run log: flow_data_local not cross-referenced (%s: %s)' % (type(e).__name__, e))
     recs, links = load_all(repo)
     os.makedirs(os.path.join(repo, 'runs'), exist_ok=True)
     full = ('# Run log\n\nEvery job that `scripts/run_lammps.sh` or `scripts/continue_sim.sh` started since 2026-11-20, newest first, '
