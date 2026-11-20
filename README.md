@@ -21,9 +21,15 @@ Coarse-grained molecular dynamics of tetrahedral hydrogel slabs (Kremer–Grest 
 The jobs most recently started on any cluster. Each job records itself when it starts and when it ends, and `lsync` rebuilds this table ([how it works](docs/run_log.md)). The last column is the folder of that run under `flow_data_local/` on the laptop, filled in once a notebook has pulled its files.
 
 <!-- RECENT_RUNS:BEGIN (written by scripts/lib/run_record.py; edits here are overwritten) -->
-*No runs recorded yet.*
+| Started | Cluster | Job | Deck | Lattice | Initial data file | Final data file(s) | Simulated | Wall time | Status | Laptop RUN_ID |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-17 03:30 | expanse |  | uniaxial_compression | random, 10 beads/strand | `final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40.data` | `final_tricomp_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_4000000.data` | 13.65 M steps = 68,250 τ | 10 h 01 min | complete |  |
+| 2026-11-15 22:44 | expanse |  | uniaxial_permeation | random, 10 beads/strand | `final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40.data` | `final_triperm_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_4000000.data` | 6.21 M steps = 31,050 τ | 4 h 31 min | complete |  |
+| 2026-11-15 22:44 | expanse |  | simple_shear | random, 10 beads/strand | `final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40.data` | `final_shear_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_3000000.data` | 4.50 M steps = 22,500 τ | 3 h 19 min | complete |  |
+| 2026-11-15 22:44 | expanse |  | uniaxial_compression | random, 10 beads/strand | `final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40.data` | `final_tricomp_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_4000000.data` | 13.65 M steps = 68,250 τ | 9 h 53 min | complete |  |
+| 2026-11-15 03:54 | expanse |  | chain_length_testing | random, 10 beads/strand | `slab_support_periodic_10beads_wide_rho04_random.data` | `final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000.data` | 14.62 M steps = 73,100 τ | 7 h 02 min | complete |  |
 
-The 0 most recent of 0 recorded jobs; all of them: [`runs/README.md`](runs/README.md).
+The 5 most recent of 21 recorded jobs; all of them: [`runs/README.md`](runs/README.md).
 <!-- RECENT_RUNS:END -->
 
 ## Start here
