@@ -117,6 +117,60 @@ pod)
         source "$(conda info --base)/etc/profile.d/conda.sh"
         conda activate "$PYTHON_CONDA_ENV"
     }
+
+    # Node health (2026-11-20). Pod's nodes differ: some throttle at 95 C, some run a system daemon that
+    # steals a core (the Prometheus node exporter spinning at 100% made 40-rank runs up to 20x slower).
+    # simulations/allocation_benchmark/node_screen.sh measures every batch node (clocks, temperatures,
+    # throttle counters, stray processes, timed LAMMPS runs) and summarize_node_screen.py --current keeps
+    # the verdicts in $NODE_SCREEN_DIR/current/: exclude.txt lists the nodes to avoid (thermal or slow, or
+    # measured while the exporter was spinning and not yet re-measured), suspects.txt only the first group.
+    # batch_header (below) appends that list as an `#SBATCH --exclude=` line to the Pod job header, so
+    # lsbatch, continue_sim.sh and the chained continuations all skip those nodes without a change to any
+    # batch file; Expanse is untouched. (Slurm 24.11 ignores the SBATCH_EXCLUDE variable; tested 2026-11-20.)
+    # POD_NODE_HEALTH=0 turns it off, POD_NODE_EXCLUDE=<list> replaces the list, and `lsbatch --exclude=...`
+    # wins over the header line as any sbatch option does. submit.sh also calls pod_health_refresh, which
+    # re-derives the verdicts and submits a new screen when the last 1-core measurements are older than
+    # POD_SCREEN_CORE_DAYS or the last whole-node runs older than POD_SCREEN_NODE_DAYS (the screen's jobs
+    # run by themselves; its summary job rewrites current/).
+    NODE_SCREEN_DIR="${NODE_SCREEN_DIR:-$RUNS_DIR/allocation_benchmark/node_screen}"
+    POD_EXCLUDE_MAX="${POD_EXCLUDE_MAX:-30}"         # above this, only suspects.txt is excluded (keeps jobs schedulable)
+    POD_SCREEN_CORE_DAYS="${POD_SCREEN_CORE_DAYS:-7}"
+    POD_SCREEN_NODE_DAYS="${POD_SCREEN_NODE_DAYS:-30}"
+    pod_node_exclude_list() {    # prints the comma list of nodes to exclude, or nothing
+        local cur="$NODE_SCREEN_DIR/current" list n
+        [ "${POD_NODE_HEALTH:-1}" = 0 ] && return 0
+        if [ -n "${POD_NODE_EXCLUDE:-}" ]; then echo "$POD_NODE_EXCLUDE"; return 0; fi
+        [ -s "$cur/exclude.txt" ] || return 0
+        list=$(tr -d ' \n' < "$cur/exclude.txt")
+        n=$(awk -F, '{print NF}' <<< "$list")
+        if [ "$n" -gt "$POD_EXCLUDE_MAX" ] && [ -f "$cur/suspects.txt" ]; then list=$(tr -d ' \n' < "$cur/suspects.txt"); fi
+        [ -n "$list" ] && echo "$list"
+        return 0
+    }
+    pod_health_refresh() {       # submit.sh, login node only. $1 = 1: say what would happen, submit nothing
+        local dry="${1:-0}" cur="$NODE_SCREEN_DIR/current" bench="$LAMMPS_WORK_DIR/simulations/allocation_benchmark"
+        local now core node list modes=""
+        [ "${POD_NODE_HEALTH:-1}" = 0 ] && { echo "    Pod node health: off (POD_NODE_HEALTH=0)"; return 0; }
+        [ -z "${SLURM_JOB_ID:-}" ] || return 0
+        command -v sbatch >/dev/null 2>&1 || return 0
+        [ -d "$NODE_SCREEN_DIR" ] && command -v python3 >/dev/null 2>&1 && python3 "$bench/summarize_node_screen.py" --current --quiet 2>/dev/null
+        list=$(pod_node_exclude_list)
+        if [ -n "$list" ]; then echo "    Pod node health: excluding $(awk -F, '{print NF}' <<< "$list") nodes (the --exclude line below; table: python3 $bench/summarize_node_screen.py --current)"
+        else echo "    Pod node health: no nodes excluded"; fi
+        now=$(date +%s); core=0; node=0
+        if [ -s "$cur/last_screen.txt" ]; then
+            core=$(awk -F= '$1 == "core_epoch" {print $2}' "$cur/last_screen.txt")
+            node=$(awk -F= '$1 == "node_epoch" {print $2}' "$cur/last_screen.txt")
+        fi
+        if   [ $(( (now - ${node:-0}) / 86400 )) -ge "$POD_SCREEN_NODE_DAYS" ]; then modes="core node"
+        elif [ $(( (now - ${core:-0}) / 86400 )) -ge "$POD_SCREEN_CORE_DAYS" ]; then modes="core"; fi
+        [ -n "$modes" ] || return 0
+        if squeue -u "$USER" -h -o %j 2>/dev/null | grep -q '^screen_'; then return 0; fi   # one is already queued
+        if [ "$dry" = 1 ]; then echo "    Pod node health: the last screen is old; a real submission would start a new one ($modes)"; return 0; fi
+        echo "    Pod node health: the last screen is old; starting a new one ($modes) in the background"
+        mkdir -p "$NODE_SCREEN_DIR"
+        nohup bash "$bench/submit_node_screen.sh" --modes "$modes" --chain 3 > "$NODE_SCREEN_DIR/refresh_$(date +%Y%m%d_%H%M).log" 2>&1 &
+    }
     ;;
 *)  echo "ERROR: lib/site.sh has no settings for CLUSTER='$CLUSTER' (expanse | pod)." >&2
     return 1 2>/dev/null || exit 1 ;;
@@ -139,6 +193,12 @@ batch_header() {
         case "$opt" in '#'*) break ;; esac          # trailing comment on the line
         echo "#SBATCH $opt"
     done
+    # Pod: the nodes the health screen says to avoid (pod block above); an --exclude on the command line wins
+    if declare -F pod_node_exclude_list >/dev/null; then
+        local ex; ex=$(pod_node_exclude_list)
+        [ -n "$ex" ] && echo "#SBATCH --exclude=$ex"
+    fi
+    return 0
 }
 
 # Older Slurm versions do not export SLURM_JOB_END_TIME, which the wall-clock budget

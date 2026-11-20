@@ -483,6 +483,10 @@ sacctmgr show qos format=Name,MaxTRESPU,MaxJobsPU,MaxSubmitPU
 sacctmgr show assoc user=$USER format=Account,Partition,QOS,GrpTRES,MaxTRESPU
 ```
 
+#### Pod node health (2026-11-20)
+
+On Pod `lsbatch` adds an `#SBATCH --exclude` line for the nodes the node screen marks as suspect (throttling, slow) or still to be re-measured, and prints it with the header. The list is refreshed by a new screen when the last one is older than 7 days (1-core jobs) or 30 days (whole-node runs); `lsbatch` starts that screen itself, in the background, and the screen's own summary job updates the list when it is done. Nothing changes for Expanse or in the batch files. Details, overrides and how to read the table: [cluster_reference.md](cluster_reference.md), "Node health".
+
 **Expected runtimes** (4M timesteps, 400k–600k atoms):
 - 1 node (120 cores, Bridges-2): ~10–11 hours
 - 4 nodes (480 cores, Bridges-2): ~3 hours

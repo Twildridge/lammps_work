@@ -55,6 +55,7 @@ if [ "$CLUSTER" = expanse ]; then
 fi
 
 TAG="#$(printf '%s' "$CLUSTER" | tr '[:lower:]' '[:upper:]')"
+pod_health_refresh "$DRY"      # lib/site.sh, pod block: node-screen verdicts -> the header's --exclude line; new screen when stale
 HEADER=$(batch_header "$BATCH") || {
     echo "Error: $(basename "$BATCH") has no '$TAG ...' line, so it has no allocation for $CLUSTER."
     echo "       Add one under its #SBATCH lines, e.g.:  $TAG --nodes=1 --ntasks-per-node=$CORES_PER_NODE --cpus-per-task=1 --time=24:00:00"
