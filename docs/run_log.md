@@ -1,6 +1,6 @@
 # Run log
 
-The "Recent runs" table at the top of the README and the full table in [`runs/README.md`](../runs/README.md) list the jobs started on any cluster, newest first. Nothing has to be entered by hand.
+The "Recent runs" table at the top of the README and the full table in [`runs/README.md`](../runs/README.md) list the jobs started on any cluster, newest first. Nothing has to be entered by hand; job IDs of old runs and notes on what went wrong can be added in `runs/annotations.json` (below).
 
 ## What is recorded
 
@@ -12,10 +12,10 @@ One JSON file per job, `runs/<cluster>_<jobid>.json`:
 | Deck | the simulation folder (and the deck file when `DECK_FILE` picked another one); "continuation" for a `continue_sim.sh` job |
 | Lattice | read from the data file name: `random`, `rot45`, else diamond; beads per strand from `<N>beads` |
 | Initial data file | the file the job read (`-var dataname`, or the resume file of a continuation) |
-| Final data file(s) | `final_*.data` in the run's `data_files/` when the job ended |
+| Final data file(s) | `final_*.data` in the run's `data_files/` when the job ended. The job's data name (the initial file without `.data`) is written `{dataname}` |
 | Simulated | steps summed over every `run` in `log.lammps`, and steps × timestep in τ. While the job runs: the planned production steps |
 | Wall time | "Total wall time" of the log, else end minus start |
-| Status | `running`, `complete`, `partial (wall limit)`, `failed`, `stopped at wall budget, continued`, or `ended without finishing` (the job disappeared without writing its end, usually killed at the SLURM limit) |
+| Status | `running`, `complete`, `partial (wall limit)`, `failed`, `stopped at wall budget, continued`, or `ended without finishing` (the job disappeared without writing its end, usually killed at the SLURM limit). A reason follows the status when there is one: the note in `runs/annotations.json`, else the last `ERROR` line of `log.lammps` for a job that did not complete |
 | Laptop RUN_ID | the folder under `flow_data_local/` whose files were pulled from this run; see below |
 
 A job appears when it starts, not when it is submitted: a pending job is not in the table.
@@ -29,6 +29,18 @@ Publishing does not use the working tree. It fetches the branch, adds the change
 If the push fails (a compute node without network or credentials), the records stay in `.run_records/` and the next job or the next `lsync` on that cluster publishes them. `lsync` on a cluster also adds records for run folders of the last 30 days that have none, and closes records of jobs that are no longer in the queue. A folder without a `run_info.txt` (started before 2026-11-17) is recorded from its name and its `log.lammps`: no job ID, and the data file name is read from the folder name.
 
 Nothing in this path can fail a job: every step is best-effort and prints one line to the job's output. `RUN_RECORDS=0` in the environment turns it off.
+
+## Job IDs and notes added by hand
+
+`runs/annotations.json` is the only hand-written file of the run log. Each key is a run folder name (the `run_name` of a record) or a job ID:
+
+```json
+{
+ "<run folder name or job ID>": {"job_id": "55745206", "note": "NOT usable. Plates seated in the fringe ..."}
+}
+```
+
+`job_id` fills the Job column of a record that has none (the backfilled ones). `note` is printed after the status, for a run that failed or finished but is not usable. Both are read when the tables are built. They are not written into the records, because a cluster pushes its own copy of each record over the one in the repository.
 
 ## How the tables are rebuilt
 
@@ -49,7 +61,7 @@ A job with no RUN_ID has no folder on any laptop that ran `lsync`: its data was 
 
 ## Limits
 
-- Jobs started before 2026-11-20 are in the log only if `lsync` on the cluster backfilled them (the last 30 days at the time of that `lsync`). Backfilled rows from before 2026-11-17 have no job ID.
+- Jobs started before 2026-11-20 are in the log only if `lsync` on the cluster backfilled them (the last 30 days at the time of that `lsync`). Backfilled rows from before 2026-11-17 have no job ID unless `runs/annotations.json` gives one.
 - `lsync` on a cluster prints a `>>> run log (...)` line with what it found and whether it published; when a pull changes the sync scripts it restarts itself with the new version.
 - Jobs that do not go through `run_lammps.sh` or `continue_sim.sh` (the benchmark, the data-file builders, the screens) are not recorded.
 - A job killed at the SLURM limit keeps the status `running` until the next `lsync` on that cluster.

@@ -1,0 +1,32 @@
+{
+ "triaxial_compression_two_pist_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_20261117_033033": {
+  "job_id": "55793779",
+  "note": "rerun of 55745206 with SEAT_MODE=rg UNLOAD_MARGIN=8"
+ },
+ "triaxial_compression_two_pist_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_20261115_224448": {
+  "job_id": "55745206",
+  "note": "NOT usable. Plates seated on the outermost bead of a 13-16 σ diffuse fringe (SEAT_MODE=bb), so the 9 σ closure went into the fringe: Rg strain 2.5 % for 10 % applied, stress 0.0045 with no plateau. Rerun as 55793779"
+ },
+ "triaxial_permeation_two_pist_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_20261115_224448": {
+  "job_id": "55745208"
+ },
+ "shear_slab_two_pist_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_20261115_224448": {
+  "job_id": "55745207"
+ },
+ "triaxial_compression_two_pist_final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40_1.0_1.0_20261110_210526": {
+  "job_id": "55663497"
+ },
+ "triaxial_compression_two_pist_final_config_slab_support_periodic_15beads_tall_rho04_rot45_1.0_1.0_60000000_two_pist_pm40_1.0_1.0_20261110_195124": {
+  "job_id": "55663502"
+ },
+ "shear_slab_two_pist_final_config_slab_support_periodic_5beads_tall_rho04_rot45_1.0_1.0_20000000_two_pist_pm40_1.0_1.0_20261110_213855": {
+  "job_id": "55663498"
+ },
+ "shear_slab_two_pist_final_config_slab_support_periodic_15beads_tall_rho04_rot45_1.0_1.0_60000000_two_pist_pm40_1.0_1.0_20261110_213415": {
+  "job_id": "55663503"
+ },
+ "triaxial_compression_two_pist_final_config_slab_support_periodic_5beads_tall_rho04_random_1.0_1.0_14000000_two_pist_1.0_1.0_20261103_042805": {
+  "job_id": "55517273",
+  "note": "killed at the SLURM time limit during the 25 M-step re-swelling unload; the last 7 % of the unload is missing, no final data file"
+ }
+}

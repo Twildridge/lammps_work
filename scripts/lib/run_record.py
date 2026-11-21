@@ -27,6 +27,7 @@ import sys
 import time
 
 N_RECENT = 5
+ANNOTATIONS = 'annotations.json'                         # runs/annotations.json: job IDs and notes added by hand
 BEGIN, END = '<!-- RECENT_RUNS:BEGIN (written by scripts/lib/run_record.py; edits here are overwritten) -->', '<!-- RECENT_RUNS:END -->'
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -53,8 +54,9 @@ def parse_run_info(work_dir):
 
 
 def log_facts(work_dir):
-    """What log.lammps says: steps run (sum over the run commands), the timestep, the wall time."""
-    steps, dt, wall, done = 0, None, None, False
+    """What log.lammps says: steps run (sum over the run commands), the timestep, the wall time, the
+    last ERROR line (None when there is none)."""
+    steps, dt, wall, done, error = 0, None, None, False, None
     path = os.path.join(work_dir, 'log.lammps')
     try:
         with open(path, errors='replace') as f:
@@ -70,6 +72,8 @@ def log_facts(work_dir):
                             dt = float(m.group(1))
                         except ValueError:
                             pass
+                elif line.startswith('ERROR'):
+                    error = line.strip()[:300]
                 elif line.startswith('Total wall time'):
                     done = True
                     m = re.search(r'(\d+):(\d+):(\d+)', line)
@@ -77,7 +81,7 @@ def log_facts(work_dir):
                         wall = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
     except OSError:
         pass
-    return dict(steps=steps, dt=dt, wall=wall, done=done)
+    return dict(steps=steps, dt=dt, wall=wall, done=done, error=error)
 
 
 def final_data_files(work_dir):
@@ -152,6 +156,8 @@ def legacy_record_from_dir(work_dir, cluster):
 def close_record(rec, work_dir, status):
     L = log_facts(work_dir)
     rec.update(status=status, steps_done=L['steps'] or None, dt=L['dt'], final_data=final_data_files(work_dir))
+    if L['error'] and status not in ('running', 'complete'):
+        rec['reason'] = L['error']                        # shown in the Status column
     try:
         end_t = os.path.getmtime(os.path.join(work_dir, 'log.lammps'))
     except OSError:
@@ -307,18 +313,48 @@ def _steps(rec):
     return txt
 
 
+LEGEND = ('`{dataname}` in a final file name is the initial data file\'s name without `.data`. A reason after the status is '
+          'the last `ERROR` line of the log, or a note in `runs/annotations.json`.')
 STATUS = {'running': 'running', 'complete': 'complete', 'partial': 'partial (wall limit)', 'failed': 'failed',
           'incomplete': 'stopped at wall budget, continued', 'ended': 'ended without finishing'}
+
+
+def load_annotations(repo):
+    """runs/annotations.json, the one hand-written file of the run log: {key: {"job_id": ..., "note": ...}}
+    with key a run folder name or a job ID. The records themselves are rewritten by the clusters
+    (their copies in $RUNS_DIR/.run_records/ are pushed over the ones here), so nothing typed into a
+    record would last; this file is read on top of them when the tables are built."""
+    try:
+        with open(os.path.join(repo, 'runs', ANNOTATIONS)) as f:
+            notes = json.load(f)
+    except OSError:
+        return {}
+    except ValueError as e:
+        print('run log: runs/%s is not valid JSON, ignored (%s)' % (ANNOTATIONS, e))
+        return {}
+    return {k: v for k, v in notes.items() if isinstance(v, dict)} if isinstance(notes, dict) else {}
 
 
 def load_all(repo):
     recs = []
     for p in glob.glob(os.path.join(repo, 'runs', '*.json')):
+        if os.path.basename(p) == ANNOTATIONS:
+            continue
         try:
             with open(p) as f:
                 recs.append(json.load(f))
         except ValueError:
             pass
+    notes = load_annotations(repo)
+    for r in recs:
+        for key in (r.get('run_name'), r.get('continuation'), r.get('job_id')):
+            a = notes.get(key) if key and key not in ('none', '?') else None
+            if not a:
+                continue
+            if a.get('job_id') and r.get('job_id') in ('none', '?', '', None):
+                r['job_id'] = str(a['job_id'])
+            if a.get('note'):
+                r['note'] = str(a['note'])
     links = {}                                            # cluster run folder -> laptop RUN_ID(s)
     for p in glob.glob(os.path.join(repo, 'runs', 'local', '*.json')):
         try:
@@ -398,6 +434,21 @@ def cross_reference(repo):
     return 0
 
 
+def _final_name(name, rec):
+    """A final data file name with the job's data name written as {dataname}."""
+    d = rec.get('dataname') or re.sub(r'\.data$', '', rec.get('input_data') or '')
+    return name.replace(d, '{dataname}', 1) if d and d in name else name
+
+
+def _status(rec):
+    """Status, then why: the hand-written note of runs/annotations.json, else the log's last ERROR line."""
+    txt = STATUS.get(rec.get('status'), rec.get('status') or '')
+    why = rec.get('note') or rec.get('reason')
+    if why:
+        txt += ': ' + ' '.join(str(why).split()).replace('|', '\\|')
+    return txt
+
+
 def table(recs, links):
     if not recs:
         return '*No runs recorded yet.*'
@@ -409,9 +460,9 @@ def table(recs, links):
             deck += ', continuation'
         init = r.get('input_data') or ((r.get('dataname') or '') + '.data')
         rows.append('| %s | %s | %s | %s | %s | `%s` | %s | %s | %s | %s | %s |' % (
-            (r.get('started') or '')[:16], r.get('cluster', ''), '' if r.get('job_id') in ('none', '?') else r.get('job_id', ''), deck, lattice(r.get('dataname')), init,
-            '<br>'.join('`%s`' % n for n in r.get('final_data') or []), _steps(r), _hms(r.get('wall_seconds')),
-            STATUS.get(r.get('status'), r.get('status') or ''),
+            (r.get('started') or '')[:16], r.get('cluster', ''), '' if r.get('job_id') in ('none', '?', None) else r.get('job_id'), deck, lattice(r.get('dataname')), init,
+            '<br>'.join('`%s`' % _final_name(n, r) for n in r.get('final_data') or []), _steps(r), _hms(r.get('wall_seconds')),
+            _status(r),
             ', '.join('`%s`' % x for x in links.get(r.get('run_name'), []))))
     return '\n'.join(rows)
 
@@ -426,14 +477,15 @@ def cmd_table(repo=REPO):
     full = ('# Run log\n\nEvery job that `scripts/run_lammps.sh` or `scripts/continue_sim.sh` started since 2026-11-20, newest first, '
             'on any cluster. One JSON record per job in this folder (`<cluster>_<jobid>.json`), written by the job when it starts and '
             'when it ends; `lsync` rebuilds this table and the five-row copy in the top-level README. "Laptop RUN_ID" is filled in '
-            'once an analysis notebook has pulled that run\'s files (`runs/local/`). How it works: `docs/run_log.md`.\n\n'
+            'once an analysis notebook has pulled that run\'s files (`runs/local/`). ' + LEGEND + ' How it works: `docs/run_log.md`.\n\n'
             + table(recs, links) + '\n')
     _write_if_changed(os.path.join(repo, 'runs', 'README.md'), full)
     readme = os.path.join(repo, 'README.md')
     text = _read(readme)
     if BEGIN in text and END in text:
         block = (BEGIN + '\n' + table(recs[:N_RECENT], links) + '\n\n'
-                 + 'The %d most recent of %d recorded jobs; all of them: [`runs/README.md`](runs/README.md).\n' % (min(N_RECENT, len(recs)), len(recs)) + END)
+                 + 'The %d most recent of %d recorded jobs; all of them: [`runs/README.md`](runs/README.md). ' % (min(N_RECENT, len(recs)), len(recs))
+                 + LEGEND + '\n' + END)
         _write_if_changed(readme, text[:text.index(BEGIN)] + block + text[text.index(END) + len(END):])
     return 0
 
