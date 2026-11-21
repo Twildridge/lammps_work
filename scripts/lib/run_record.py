@@ -232,15 +232,22 @@ def cmd_refresh(store, runs_dir, days=30):
                 have[p] = json.load(f)
         except ValueError:
             pass
+    # <deck>_stage folders are the notebooks' sync staging area (copies of run folders), not runs; a
+    # record made from one is replaced by the real folder's. Two folders that give the same record
+    # name would otherwise overwrite each other on alternate passes: the first one recorded stays.
+    staged = lambda d: os.path.basename(os.path.dirname(d or '')).endswith('_stage')
+    have = {p: r for p, r in have.items() if not staged(r.get('run_dir'))}
     known = {r.get('run_dir') for r in have.values()}
+    names = {os.path.basename(p) for p in have}
     cutoff, n_new, n_closed = time.time() - float(days) * 86400, 0, 0
     for info in glob.glob(os.path.join(runs_dir, '*', '*', 'run_info.txt')) + glob.glob(os.path.join(runs_dir, '*', '*', 'continuation_*', 'run_info.txt')):
         d = os.path.dirname(os.path.abspath(info))
-        if d in known or os.path.getmtime(info) < cutoff:
+        if d in known or staged(d) or os.path.getmtime(info) < cutoff:
             continue
         rec = record_from_dir(d)
-        if rec is None:
+        if rec is None or record_name(rec) in names:
             continue
+        names.add(record_name(rec))
         alive = rec['job_id'] not in ('none', '?', '') and _job_alive(rec['job_id'])
         L = log_facts(d)
         write_record(store, rec if alive else close_record(rec, d, 'complete' if L['done'] else 'ended'))
@@ -250,13 +257,14 @@ def cmd_refresh(store, runs_dir, days=30):
     for log in glob.glob(os.path.join(runs_dir, '*', '*', 'log.lammps')):
         d = os.path.dirname(os.path.abspath(log))
         m = re.search(r'_(\d{8})_\d{6}$', d)
-        if d in known or not m or m.group(1) < cut_day or os.path.exists(os.path.join(d, 'run_info.txt')):
+        if d in known or staged(d) or not m or m.group(1) < cut_day or os.path.exists(os.path.join(d, 'run_info.txt')):
             continue
         if time.time() - os.path.getmtime(log) < 3600:    # may still be running
             continue
         rec = legacy_record_from_dir(d, os.environ.get('CLUSTER', ''))
-        if rec is None:
+        if rec is None or record_name(rec) in names:
             continue
+        names.add(record_name(rec))
         write_record(store, close_record(rec, d, 'complete' if log_facts(d)['done'] else 'ended'))
         n_new += 1
     for p, rec in have.items():
