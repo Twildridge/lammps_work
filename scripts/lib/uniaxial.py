@@ -374,8 +374,6 @@ class Config:
     UNLOAD_L: str = 'hold'                # the L in tau_1 = L^2/(pi^2 D_c) of the unload fits: 'hold' (the compressed thickness,
                                           # the hold's own L -- so hold and unload D_c compare like for like), 'ref' (the swollen
                                           # reference thickness; D_c then reads (L_ref/L_hold)^2 larger) or 'mean'
-    UNLOAD_TRACE_SKIP: float = 0.0        # tau after the retraction start left out of the thickness-trace fit (0 = none: the
-                                          # faces detach from the retracting plates within a few tau)
     UNLOAD_N_MODES: int = 0               # modes of the unload profile fit (0 -> DC_N_MODES)
     DC_PRIMARY: str = 'unload'            # the D_c that kappa = D_c/M, fig_kappa and the summary use: the free re-swelling profile fit.
                                           # 2026-11-17: the only one -- the hold (load) fits are archived (archive/scripts/lib/
@@ -1570,11 +1568,14 @@ def _lsq_amps(Xd, y):
 #  the reservoirs and fill the half thickness).  The initial state is the UNIFORM equilibrated
 #  compression eps_0 = -dL_inf/L, so the solution is known in full:
 #      u(zeta,t) - u(zeta,0) = sum_k B_k cos(k pi zeta) [exp(-lam_k t) - 1]       (free B_k in the fit)
-#      dL(t)/dL_inf          = 1 - sum_{k odd} 8/(k pi)^2 exp(-k^2 pi^2 D_c t/L^2)   (no free amplitude)
-#  and with dL_inf = L_ref - L_hold known from the reference, the thickness trace is a
-#  ONE-parameter fit for D_c.  The faces detach from the retracting plates within a few tau
-#  (the free face moves as 2 eps_0 sqrt(D t/pi), faster than the plates at first), so t = 0 of
-#  the trace is the retraction start; the displacement reference is reset when the plates stop.
+#  The displacement reference is reset when the plates stop, so t = 0 of the fit is the start of
+#  the free re-swelling.
+#  Thickness-trace fits removed 2026-11-21 (dL(t)/dL_inf = 1 - sum_odd 8/(k pi)^2 exp(-k^2 pi^2 D_c t/L^2)
+#  on the bounding-box and Rg thickness): the bounding box follows the surface fringe, which springs
+#  out in ~100 tau and is not diffusion; the fixed asymptote dL_inf = L_ref - L_hold is wrong whenever
+#  the gel does not return exactly to the seated reference (rg-seated runs re-swell past it); and with
+#  the asymptote free the Rg trace is a weaker fit of the SAME re-swelling event the profiles resolve
+#  in z, so it is not an independent estimate.  The profile fit is the only unload D_c.
 # ---------------------------------------------------------------------------
 def load_unload(cfg, R, lvl, F_hold):
     """The level's _u<lvl> files -> dict, or None when there is no unload (no displacement file).
@@ -1632,16 +1633,8 @@ def load_unload(cfg, R, lvl, F_hold):
     return U
 
 
-def _unload_series(t, Dc, L, n=60):
-    """dL(t)/dL_inf of the free re-swelling from a uniform strain: 1 - sum_odd 8/(k pi)^2 exp(-k^2 pi^2 Dc t/L^2)."""
-    k = 2.0 * np.arange(1, n + 1) - 1.0
-    t = np.atleast_1d(np.asarray(t, float))[:, None]
-    return 1.0 - (8.0 / (k * np.pi) ** 2 * np.exp(-(k * np.pi / L) ** 2 * Dc * np.clip(t, 0.0, None))).sum(axis=1)
-
-
 def fit_Dc_unload(cfg, R, U, F_hold):
-    """D_c of the free re-swelling (see the section comment): (a) the thickness trace L_bb(t) against the
-    exact uniform-IC series, dL_inf FIXED at L_ref - L_hold (one parameter) and free (two); (b) the
+    """D_c of the free re-swelling (see the section comment): the
     displacement profiles since the reset in the Lagrangian frame of the compressed gel, modes
     cos(k pi zeta) with free amplitudes, the COM drift removed, fitted over the first DC_FIT_TAU1 tau_1
     (self-consistent window, tau_1 = L^2/(pi^2 D_c)) with a stability scan.  F_hold is unused (kept for callers).  Returns a dict or None."""
@@ -1651,40 +1644,8 @@ def fit_Dc_unload(cfg, R, U, F_hold):
     L = {'hold': Lh, 'ref': Lr, 'mean': 0.5 * (Lh + Lr)}.get(cfg.UNLOAD_L, Lh)
     dL_inf0 = Lr - Lh
     out = dict(L=L, L_hold=Lh, L_ref=Lr, L_ref_src=U['L_ref_src'], dL_inf_ref=dL_inf0, t_retract=U['t_retract'],
-               t_free=U['t_free'], retract_T=(U['t_free'] - U['t_retract']) * cfg.dt_lj, fine=U['fine'], trace=None, prof=None)
-    # ---- (a) the thickness traces: bounding box (the deck's L_bb) and the Rg thickness ----
-    def _trace(step, Lt, L_hold_t, dL_inf_t, what):
-        if not dL_inf_t > 0:
-            return None
-        tt = (step - U['t_retract']) * cfg.dt_lj
-        dL = Lt - L_hold_t
-        w = tt >= cfg.UNLOAD_TRACE_SKIP
-        if w.sum() < 20:
-            return None
-        T = dict(t=tt, dL=dL, fit=w, dL_inf=float(dL_inf_t), what=what)
-        try:
-            p1, c1 = curve_fit(lambda t_, Dc: dL_inf_t * _unload_series(t_, Dc, L), tt[w], dL[w],
-                               p0=(cfg.DC_SLOW_REF / 4.0,), bounds=((1e-5,), (10.0,)), maxfev=20000)
-            r1 = dL[w] - dL_inf_t * _unload_series(tt[w], p1[0], L)
-            T.update(Dc=float(p1[0]), Dc_se=float(np.sqrt(c1[0, 0]) * np.sqrt(max(autocorr_time(r1), 1.0))),
-                     rms=float(np.sqrt(np.mean(r1 ** 2))), tau1=L ** 2 / (np.pi ** 2 * float(p1[0])),
-                     R2=float(1.0 - np.sum(r1 ** 2) / max(np.sum((dL[w] - dL[w].mean()) ** 2), 1e-30)),
-                     model=lambda t_, D=float(p1[0]): dL_inf_t * _unload_series(t_, D, L))
-            p2, c2 = curve_fit(lambda t_, A, Dc: A * _unload_series(t_, Dc, L), tt[w], dL[w],
-                               p0=(dL_inf_t, float(p1[0])), bounds=((0.0, 1e-5), (np.inf, 10.0)), maxfev=20000)
-            r2 = dL[w] - p2[0] * _unload_series(tt[w], p2[1], L)
-            s2 = np.sqrt(np.abs(np.diag(c2))) * np.sqrt(max(autocorr_time(r2), 1.0))
-            T.update(Dc_free=float(p2[1]), Dc_free_se=float(s2[1]), dL_inf_free=float(p2[0]), dL_inf_free_se=float(s2[0]),
-                     model_free=lambda t_, A=float(p2[0]), D=float(p2[1]): A * _unload_series(t_, D, L),
-                     relaxed=float(_unload_series(tt[-1], float(p1[0]), L)[0]))
-            return T
-        except (RuntimeError, ValueError) as e:
-            print(f'  NOTE: unload {what} thickness-trace fit failed ({e})')
-            return None
-    if 'bb_L' in U:
-        out['trace'] = _trace(U['bb_step'], U['bb_L'], Lh, dL_inf0, 'bounding-box')
-    out['trace_rg'] = _trace(U['rg_step'], U['rg_L'], U['L_hold_rg'], U['L_ref_rg'] - U['L_hold_rg'], 'Rg') if 'rg_L' in U else None
-    # ---- (b) the profiles: Lagrangian zeta of the compressed gel, COM drift removed ----
+               t_free=U['t_free'], retract_T=(U['t_free'] - U['t_retract']) * cfg.dt_lj, fine=U['fine'], prof=None)
+    # ---- the profiles: Lagrangian zeta of the compressed gel, COM drift removed ----
     ts, z, Nc, uz = U['ts'], U['z'], U['Nc'], U['uz']
     t_lj = (ts - U['t_free']) * cfg.dt_lj
     keep = t_lj > 0
@@ -1761,7 +1722,7 @@ def fit_Dc_unload(cfg, R, U, F_hold):
                                stab_flag=bool(n_tau > 0 and len(early) < len(all_) and abs(Dc_all / Dc - 1.0) > cfg.DC_STAB_FLAG),
                                u_model=lambda zh, t, A_=A, D_=Dc: np.cos(np.pi * np.outer(np.atleast_1d(zh), k)) @ (A_ * (_decay_mat((np.pi * k / L) ** 2 * D_, t, W)[0] - 1.0)),
                                shown=early[::max(1, int(np.ceil(len(early) / max(cfg.DC_PLOT_MAX, 1))))])
-    if out['trace'] is None and out['prof'] is None:
+    if out['prof'] is None:
         return None
     return out
 
@@ -2198,18 +2159,9 @@ def load_level(cfg, R, lvl, verbose=True):
         Uf = fit_Dc_unload(cfg, R, load_unload(cfg, R, lvl, Hg), Hg)
         L['unload'] = Uf
         if Uf is not None:
-            T, Pf = Uf['trace'], Uf['prof']
+            Pf = Uf['prof']
             say(f"  UNLOAD (free re-swelling after the hold; retraction {Uf['retract_T']:.0f} tau; L = {Uf['L']:.2f} = {cfg.UNLOAD_L!r} "
                 f"[hold {Uf['L_hold']:.2f}, reference {Uf['L_ref']:.2f}: {Uf['L_ref_src']}]; tau_1 = L^2/(pi^2 D_c), faces free)")
-            for T_, nm in ((T, 'bounding-box thickness trace'), (Uf.get('trace_rg'), 'Rg thickness trace')):
-                if T_ is not None:
-                    say(f"    D_c ({nm}, dL_inf fixed = {T_['dL_inf']:.2f} sigma) = {T_['Dc']:.4e} +/- {T_['Dc_se']:.1e}  "
-                        f"(R^2 {T_['R2']:.3f}, rms {T_['rms']:.3f} sigma; tau_1 = {T_['tau1']:.0f} tau, {T_['t'][-1] / T_['tau1']:.1f} tau_1 recorded, "
-                        f"{100 * T_['relaxed']:.1f}% relaxed);  free asymptote: D_c = {T_['Dc_free']:.4e} +/- {T_['Dc_free_se']:.1e}, "
-                        f"dL_inf = {T_['dL_inf_free']:.2f} +/- {T_['dL_inf_free_se']:.2f}")
-            if T is not None and Pf is not None and T['Dc'] > 1.3 * Pf['Dc']:
-                say("    (the bounding-box trace reads high: L_bb follows the outermost beads, which spring back within ~100 tau of the "
-                    "retraction -- ~3 sigma of the 12 before the bulk has moved -- so it is not a bulk re-swelling measure; the profile fit is)")
             if Pf is not None:
                 say(f"    D_c (profiles, first {Pf['n_tau1_fit']:.1f} tau_1 = {len(Pf['early'])} of {Pf['n_all']} {'FINE' if Uf['fine'] else 'coarse'} snapshots) = "
                     f"{Pf['Dc']:.4e} (R^2 {Pf['R2']:.3f});  whole unload {Pf['Dc_all']:.4e}"
@@ -4915,12 +4867,57 @@ def fig_Dc_reswelling(cfg, R, L):
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02).set_label('timestep')
-    T, Tr = Uf.get('trace'), Uf.get('trace_rg')
     fig.suptitle(f"Cooperative diffusivity from the UNLOAD (free re-swelling), level _c{L['lvl']}  |  {cfg.sim_name}\n"
-                 f"$\\tau_1 = L^2/(\\pi^2 D_c)$ = {Pf['tau1']:.0f} $\\tau$ with $L$ = {Uf['L']:.1f} ({cfg.UNLOAD_L})"
-                 + (f";  thickness traces: bb {sig(T['Dc'])}" if T else '') + (f", Rg {sig(Tr['Dc'])}" if Tr else ''),
+                 f"$\\tau_1 = L^2/(\\pi^2 D_c)$ = {Pf['tau1']:.0f} $\\tau$ with $L$ = {Uf['L']:.1f} ({cfg.UNLOAD_L})",
                  fontsize=12, fontweight='bold')
     return _save(fig, cfg, 'Dc_reswelling_fit', L['lvl'])
+
+
+def fig_Dc_reswelling_time(cfg, R, L, n_show=1):
+    """The profile fit of fig_Dc_reswelling seen against TIME (2026-11-21): each snapshot's profile projected on the fit's
+    cosine modes gives one amplitude a_k(t) per mode, drawn as its contribution to the thickness change, -2 L a_k(t) for odd k
+    (even modes do not change the thickness), against the fitted B_k [exp(-k^2 pi^2 D_c t/L^2) - 1]; residuals underneath.
+    n_show odd modes are drawn (default: the first only; the higher ones are usually at the noise level -- their fitted
+    asymptotes are quoted in the title).
+    Same data and same fit as figure 10 -- a second view of it, not a second estimate."""
+    Uf = L.get('unload')
+    Pf = (Uf or {}).get('prof')
+    if Pf is None:
+        print('re-swelling D_c time view skipped (no unload displacement profiles)')
+        return None
+    Lf, k, t = Uf['L'], Pf['k'], Pf['t_lj']
+    amps = np.array([_lsq_amps(np.cos(np.pi * np.outer(z_, k)), y_) if len(z_) > len(k) else np.full(len(k), np.nan)
+                     for z_, y_ in zip(Pf['zl'], Pf['yl'])])
+    dec = _decay_mat((np.pi * k / Lf) ** 2 * Pf['Dc'], t, Pf['W']) - 1.0
+    infit = np.zeros(len(t), bool)
+    infit[Pf['early']] = True
+    fig, (ax, axr) = plt.subplots(2, 1, figsize=(11, 8.6), sharex=True, constrained_layout=True, gridspec_kw=dict(height_ratios=[3, 1.25]))
+    odd = [j for j in range(len(k)) if int(round(k[j])) % 2 == 1][:n_show]
+    for n_, j in enumerate(odd):
+        col = LEVEL_COLORS[n_ % len(LEVEL_COLORS)]
+        dat, mod = -2.0 * Lf * amps[:, j], -2.0 * Lf * Pf['A'][j] * dec[:, j]
+        r = dat - mod
+        ss = np.nansum((dat[infit] - np.nanmean(dat[infit])) ** 2)
+        R2m = float(1.0 - np.nansum(r[infit] ** 2) / ss) if ss > 0 else np.nan
+        ax.plot(t, dat, '.', color=col, ms=3.5, alpha=0.45)
+        ax.plot(t, mod, '-', color=col, lw=2.4, label=rf"mode $k$ = {int(round(k[j]))}: $\tau_k$ = {Pf['tau1'] / k[j] ** 2:.0f} $\tau$, "
+                                                       rf"asymptote {sig(2.0 * Lf * Pf['A'][j])} $\sigma$, $R^2$ = {sig(R2m)}")
+        axr.plot(t, r, '.', color=col, ms=3.5, alpha=0.6)
+    ax.axvspan(t[Pf['early'][0]], t[Pf['early'][-1]], color='0.5', alpha=0.07, lw=0, label=rf"fit window (first {Pf['n_tau1_fit']:.1f} $\tau_1$)")
+    ax.set_xscale('log')
+    ax.set_ylabel(r'thickness change, $-2L\,a_k(t)$  ($\sigma$)')
+    axr.set(xlabel=r'time since the plates stopped  ($\tau$)', ylabel=r'data $-$ fit  ($\sigma$)')
+    axr.axhline(0.0, color='k', lw=0.8)
+    for a_ in (ax, axr):
+        a_.grid(alpha=0.3, which='both')
+    ax.legend(fontsize=10, loc='best')
+    fig.suptitle(f"Re-swelling profile fit against time, level _c{L['lvl']}  |  {cfg.sim_name}\n"
+                 f"dots = each snapshot projected on the modes, lines = the fit of figure 10 ($D_c$ = {sig(Pf['Dc'])}, $R^2$ = {sig(Pf['R2'])} "
+                 f"over all bins and modes);  $L$ = {Lf:.1f} ({cfg.UNLOAD_L})"
+                 + (";  higher odd modes not drawn, fitted asymptotes " + ', '.join(
+                     rf"$k$={int(round(k[j]))}: {sig(2.0 * Lf * Pf['A'][j], 2)} $\sigma$" for j in range(len(k)) if int(round(k[j])) % 2 == 1 and j not in odd)
+                    if len(odd) < sum(int(round(x)) % 2 for x in k) else ''), fontsize=12, fontweight='bold')
+    return _save(fig, cfg, 'Dc_reswelling_time', L['lvl'])
 
 
 def fig_kappa(cfg, R, L):
@@ -5442,10 +5439,6 @@ def fig_Dc_sweep(cfg, R, levels):
     for L in hd:
         ax.annotate(f"$R^2$={sig(L['unload']['prof']['R2'])}", (L['eps'], L['unload']['prof']['Dc']), textcoords='offset points',
                     xytext=(0, -12), ha='center', va='top', fontsize=10, color='0.35', annotation_clip=True)
-    hr = [L for L in hd if L['unload'].get('trace_rg')]
-    if hr:
-        ax.errorbar([L['eps'] for L in hr], [L['unload']['trace_rg']['Dc'] for L in hr], yerr=[L['unload']['trace_rg']['Dc_se'] for L in hr],
-                    fmt='^--', color=WONG['green'], lw=1.6, ms=8, capsize=5, label='Rg thickness trace (check)')
     ax.margins(x=0.12, y=0.15)
     ax.set_xlabel(r'applied strain  $\varepsilon$')
     ax.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
@@ -6153,7 +6146,7 @@ def print_summary(cfg, levels):
     if cfg.RELAX_SYS:
         how += '; M lower bounds include delta_sys (unrelaxed-hold excess, last column)'
     print(f"{'eps':>6s} {'eps_M':>9s} {'M_net':>18s} {'M_pist':>18s} {'G_x':>18s} {'G_y':>18s} | "
-          f"{'UNLOAD: D_c_prof':>17s} {'D_c_rg_trace':>12s} | {'kappa_net':>11s} {'kappa_pist':>11s} {'delta_sys':>10s}")
+          f"{'UNLOAD: D_c_prof':>17s} | {'kappa_net':>11s} {'kappa_pist':>11s} {'delta_sys':>10s}")
     for L in levels:
         def ci_(v, lo, hi):
             return f'{v:.3f} [{lo:.3f},{hi:.3f}]'
@@ -6165,14 +6158,13 @@ def print_summary(cfg, levels):
         gy = ci_(L['G']['yy']['G'], L['G']['yy']['lo'], L['G']['yy']['hi']) if 'yy' in L['G'] else 'n/a'
         Uf = L.get('unload') or {}
         dup = f"{Uf['prof']['Dc']:.3e}" if Uf.get('prof') else 'n/a'
-        dur = f"{Uf['trace_rg']['Dc']:.3e}" if Uf.get('trace_rg') else 'n/a'
         kn = f"{L['kappa']['net']['k']:.3e}" if L.get('kappa', {}).get('net') else 'n/a'
         kp = f"{L['kappa']['pist']['k']:.3e}" if L.get('kappa', {}).get('pist') else 'n/a'
         print(f"{L['eps']:6.3f} {em:>9s} {ci_(L['M_net'], L['M_net_lo'], L['M_net_hi']):>18s} {mp:>18s} {gx:>18s} {gy:>18s} | "
-              f"{dup:>17s} {dur:>12s} | {kn:>11s} {kp:>11s} {ds_s:>10s}")
+              f"{dup:>17s} | {kn:>11s} {kp:>11s} {ds_s:>10s}")
     print('  eps_M = the strain M, G and kappa divide by (M_STRAIN): d = steady displacement-profile slope, r = Rg, a = applied')
     print('  UNLOAD = the free re-swelling after the hold (files _u<lvl>): D_c_prof = the profile fit, tau_1 = L^2/(pi^2 D_c); '
-          'D_c_rg_trace = the Rg thickness trace (check; the bounding-box trace reads high: surface beads).')
+          '(the only unload D_c: the thickness-trace fits were removed 2026-11-21).')
     print('  kappa = D_c/M with the unload D_c_prof; n/a = the level has no unload.')
     if cfg.RELAX_SYS:
         print('  delta_sys = (piston plateau - fitted tail asymptote) / eps;  * = larger than the M_net bootstrap half-width')

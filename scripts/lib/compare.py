@@ -18,7 +18,7 @@ First comparison: D_c and kappa as functions of the solvent volume fraction phi_
 
   Unload (free re-swelling after a hold; deck Phase 2c, files _u<lvl>).  The ONLY compression-side
   D_c in this comparison: the re-swelling profile fit of every level that has an unload
-  (unload_states), with its Rg thickness-trace D_c as a check, and kappa = D_c / M_i with that
+  (unload_states) and kappa = D_c / M_i with that
   level's secant M.  Closure (ii) uses this D_c (constant at one level, interpolated over several).
 
   Permeation (one run, a range of phi_s at once).  In the steady state the network is at rest and
@@ -69,6 +69,10 @@ class Config:
                                           # Voronoi-based profiles come from the few steady trajectory frames: more
                                           # segments than ~3 leave the slope of a segment unresolved; 'mf' carries 4-5)
     PERM_POLY_DEG: int = 2                # degree of the polynomial phi_s(z) behind the continuous D_c(phi_s) curve
+    PERM_FROZEN_REF: bool = False         # the permeation run's network was frozen UNDEFORMED for the whole drive (deck FROZEN_AT=ref).
+                                          # Its phi_s profile is flat and nothing moves, so it has no local D_c = q phi_p/(dphi_s/dz), no
+                                          # M_perm, no transient D_c and no closures: only the Darcy kappa at the reference phi_s, which is
+                                          # compared with the unload kappa = D_c/M (and kappa_Darcy x the unload level's M with its D_c)
     N_MC: int = 400                       # Monte-Carlo draws for the CI of the compression curve sigma'(phi_s)
     # ---- the solvent-measures figure of the permeation membrane (fig_solvent_measures, 2026-10-08) ----
     CONC_MARGIN: float = 5.0              # sigma of reservoir kept on either side of the membrane (the reservoir values of
@@ -282,6 +286,18 @@ def permeation_local(ccfg, perm, C):
     L_mem = float(P['z_mem_hi'] - P['z_mem_lo'])
     out['L_mem'], out['L_fit'] = L_mem, float(zs[-1] - zs[0])
     out['kappa_local_mean'] = float(q * out['L_fit'] / out['dsig']) if out['dsig'] > 0 else np.nan   # harmonic mean of kappa(z)
+    out['frozen'] = bool(ccfg.PERM_FROZEN_REF)
+    if out['frozen']:
+        # frozen undeformed network: the slope of phi_s(z) is noise about zero and the displacement is zero by construction,
+        # so everything derived from either is void -- only q, dP and the Darcy kappa stand
+        nan = np.full_like(zz, np.nan)
+        out.update(Dc_prof=np.nan, Dc_trace=np.nan, M_perm=np.nan, M_perm_ci=(np.nan, np.nan), M_perm_how=None,
+                   Dc_fit=nan, kappa_fit=nan, dsig=np.nan, kappa_local_mean=np.nan)
+        for k_ in ('Dc', 'Dc_lo', 'Dc_hi', 'kappa', 'kappa_lo', 'kappa_hi'):
+            out['seg'][k_] = np.full_like(out['seg'][k_], np.nan)
+    elif np.all(np.abs(out['seg']['slope']) < out['seg']['slope_h']) and abs(out['phi_top'] - out['phi_bot']) < 0.01:
+        print("  NOTE: the steady phi_s(z) of the permeation run is flat within its noise in every segment. If its network was frozen "
+              "undeformed (deck FROZEN_AT=ref), set PERM_FROZEN_REF = True in cmp.Config: the local D_c, M_perm and the closures are void.")
     return out
 
 
@@ -304,9 +320,9 @@ def flux_from_unload(RW, PL):
 def unload_states(ccfg, decks):
     """Every compression level WITH an unload (deck Phase 2c, files _u<lvl>) across the given compression decks: the
     free re-swelling profile-fit D_c -- the trusted D_c and the only compression-side D_c of this comparison
-    (2026-10-21) -- its Rg thickness-trace D_c as a check, the level's phi_s, its displacement-strain secant M and
+    (2026-10-21) -- the level's phi_s, its displacement-strain secant M and
     kappa = D_c/M (CI from the M CI).  -> dict of arrays (run_id, lvl, eps, phi, phi_h, Dc, Dc_R2, tau1,
-    Dc_trace_rg, M_sec, M_sec_lo, M_sec_hi, M_pist, kappa, kappa_lo, kappa_hi) ordered by decreasing phi_s, or None
+    M_sec, M_sec_lo, M_sec_hi, M_pist, kappa, kappa_lo, kappa_hi) ordered by decreasing phi_s, or None
     when no level has an unload.  The hold D_c of these levels is NOT carried: it is a load measurement (the
     compression notebooks keep it)."""
     key = 'phi_' + ccfg.PHI_KIND
@@ -322,9 +338,8 @@ def unload_states(ccfg, decks):
             p, h = _interior_mean(L[key], L['interior'], ccfg.ci_level)
             Dc = float(Pf['Dc'])
             M, Mlo, Mhi = float(L['M_net']), float(L['M_net_lo']), float(L['M_net_hi'])
-            Tr = (L['unload'] or {}).get('trace_rg')
             rows.append(dict(run_id=d['cfg'].RUN_ID, lvl=str(L['lvl']), eps=float(L['eps_M']), phi=float(p), phi_h=float(h),
-                             Dc=Dc, Dc_R2=float(Pf['R2']), tau1=float(Pf['tau1']), Dc_trace_rg=float(Tr['Dc']) if Tr else np.nan,
+                             Dc=Dc, Dc_R2=float(Pf['R2']), tau1=float(Pf['tau1']),
                              M_sec=M, M_sec_lo=Mlo, M_sec_hi=Mhi, M_pist=float(L.get('M_pist', np.nan)),
                              kappa=Dc / M, kappa_lo=Dc / Mhi, kappa_hi=Dc / Mlo))
     if not rows:
@@ -346,7 +361,7 @@ def phi_dependence(ccfg, comp, perm, unload=None):
     if RW is None:
         print("  NOTE: no compression level with an unload -> no compression-side D_c in this comparison "
               "(the holds' D_c is a load measurement and is not used; pass a run with _u<lvl> files as `unload`)")
-    q_pred, n_u = flux_from_unload(RW, PL)
+    q_pred, n_u = (np.nan, 0) if PL['frozen'] else flux_from_unload(RW, PL)
     return dict(S=S, C=C, PL=PL, RW=RW, q_pred=q_pred, n_unload=n_u, comp=comp, perm=perm, unload=decks[1:])
 
 
@@ -367,6 +382,9 @@ def print_summary(ccfg, X):
         print(f"  {S['label'][i]:<6s}  {S['phi'][i]:.4f} ± {S['phi_h'][i]:.4f}  {S['eps'][i]:.4f}  {S['sig'][i]:.4f}    "
               f"{S['M_sec'][i]:.3f} [{S['M_sec_lo'][i]:.3f}, {S['M_sec_hi'][i]:.3f}]")
     sg = PL['seg']
+    if PL['frozen']:
+        _print_frozen(ccfg, X)
+        return
     print(f"\nPERMEATION  {X['perm']['cfg'].RUN_ID}:  steady profile over z in [{PL['z_lo']:.0f}, {PL['z_hi']:.0f}] ({len(PL['z'])} bins, "
           f"{ccfg.PERM_TRIM:g} sigma trimmed at each end);  q = Q/A = {PL['q']:.3e} ± {PL['q_h']:.1e};  dP = {PL['dP']:.4f}")
     print(f"  phi_s: {PL['phi_bot']:.3f} (support side) -> {PL['phi_top']:.3f} (feed side);  zero-flux reference {PL['phi_ref']:.3f}")
@@ -387,10 +405,10 @@ def print_summary(ccfg, X):
           + f"consolidation-fit D_c = {PL['Dc_prof']:.4f} (profile) / {PL['Dc_trace']:.4f} (trace)")
     if RW is not None:
         print("\nUNLOAD (free re-swelling after a hold) -- the compression-side D_c of this comparison (the trusted estimate):")
-        print("  run                                         level  eps_disp  phi_s            D_c profile  R^2    D_c Rg trace  M_sec [CI]             kappa = D_c/M_sec [CI]")
+        print("  run                                         level  eps_disp  phi_s            D_c profile  R^2    M_sec [CI]             kappa = D_c/M_sec [CI]")
         for i in range(len(RW['phi'])):
             print(f"  {RW['run_id'][i]:<43s} {RW['lvl'][i]:<6s} {RW['eps'][i]:.4f}    {RW['phi'][i]:.4f} ± {RW['phi_h'][i]:.4f}  {RW['Dc'][i]:.4f}       {RW['Dc_R2'][i]:.3f}  "
-                  f"{RW['Dc_trace_rg'][i]:.4f}        {RW['M_sec'][i]:.3f} [{RW['M_sec_lo'][i]:.3f}, {RW['M_sec_hi'][i]:.3f}]   "
+                  f"{RW['M_sec'][i]:.3f} [{RW['M_sec_lo'][i]:.3f}, {RW['M_sec_hi'][i]:.3f}]   "
                   f"{RW['kappa'][i]:.4f} [{RW['kappa_lo'][i]:.4f}, {RW['kappa_hi'][i]:.4f}]")
         if kd:
             print(f"  against the permeation Darcy kappa {kd[0]:.4f} [{kd[1]:.4f}, {kd[2]:.4f}]")
@@ -413,11 +431,47 @@ def print_summary(ccfg, X):
         print("  (ii) flux from the compression-side D_c: skipped (no unload level)")
 
 
+def _print_frozen(ccfg, X):
+    """The permeation / unload / comparison blocks of print_summary for a permeation run with the network frozen undeformed."""
+    PL, RW = X['PL'], X.get('RW')
+    kd = PL['kappa_darcy']
+    print(f"\nPERMEATION  {X['perm']['cfg'].RUN_ID}  (network FROZEN undeformed, PERM_FROZEN_REF):  q = Q/A = {PL['q']:.3e} ± {PL['q_h']:.1e};  "
+          f"dP = {PL['dP']:.4f};  phi_s = {0.5 * (PL['phi_bot'] + PL['phi_top']):.3f} across the membrane (flat: the reference state)")
+    print("  no local D_c, M_perm, transient D_c or closures: the profile has no slope and the network no displacement.")
+    if kd:
+        print(f"  Darcy kappa = Q L/(A dP) = {kd[0]:.4f} [{kd[1]:.4f}, {kd[2]:.4f}]  (zero-strain permeability)")
+    if RW is None:
+        print("\nUNLOAD: no loaded compression level has an unload -> nothing to compare the Darcy kappa with")
+        return
+    print("\nUNLOAD (free re-swelling after a hold) against the frozen-network Darcy kappa:")
+    print("  run                                         level  phi_s            D_c profile  M_sec [CI]             kappa = D_c/M_sec [CI]"
+          + ("     / kappa_Darcy   kappa_Darcy x M_sec  (vs D_c)" if kd else ''))
+    for i in range(len(RW['phi'])):
+        print(f"  {RW['run_id'][i]:<43s} {RW['lvl'][i]:<6s} {RW['phi'][i]:.4f} ± {RW['phi_h'][i]:.4f}  {RW['Dc'][i]:.4f}       "
+              f"{RW['M_sec'][i]:.3f} [{RW['M_sec_lo'][i]:.3f}, {RW['M_sec_hi'][i]:.3f}]   "
+              f"{RW['kappa'][i]:.4f} [{RW['kappa_lo'][i]:.4f}, {RW['kappa_hi'][i]:.4f}]"
+              + (f"   {RW['kappa'][i] / kd[0]:.2f}            {kd[0] * RW['M_sec'][i]:.4f}               ({RW['Dc'][i] / (kd[0] * RW['M_sec'][i]):.2f})" if kd else ''))
+    print("  (The unload level sits at a lower phi_s than the frozen membrane: kappa falls with compression,\n"
+          "   so the two are not at the same state.  CLOSURES: skipped -- they need the membrane's phi_s gradient.)")
+
+
 def print_phi_kinds(ccfg, comp, perm, unload=None, kinds=('cal', 'vor', 'mf')):
     """The same comparison under each phi_s definition, one line per permeation segment: how much
     of the result hangs on the choice (and on the noise of the Voronoi profiles).  The compression-side
     D_c it compares with is the UNLOAD one (constant at one level, interpolated over several)."""
     from dataclasses import replace
+    if ccfg.PERM_FROZEN_REF:
+        print('phi_s definition   frozen membrane phi_s   unload level phi_s   (frozen network: no local D_c to compare under each definition)')
+        for kind in kinds:
+            try:
+                X = phi_dependence(replace(ccfg, PHI_KIND=kind), comp, perm, unload)
+            except ValueError as e:
+                print(f'  {kind:<4s} skipped: {e}')
+                continue
+            RW = X.get('RW')
+            print(f"  {kind:<16s} {0.5 * (X['PL']['phi_bot'] + X['PL']['phi_top']):.3f}                   "
+                  + (', '.join(f"{v:.3f}" for v in RW['phi']) if RW is not None else 'n/a'))
+        return
     print('phi_s definition   segment phi_s    D_c local [CI]              kappa local    |  unload D_c (compression side)   ratio')
     for kind in kinds:
         try:
@@ -631,8 +685,9 @@ def fig_states(ccfg, X):
     b.plot(pp, C['sig'](pp), '-', color=WONG['blue'], lw=2.2, label='PCHIP through the levels')
     b.plot(S['phi'], S['sig'], 'o', color=WONG['blue'], ms=9, label='compression levels')
     b.errorbar(S['phi'], S['sig'], xerr=S['phi_h'], yerr=S['sig_h'], fmt='none', color=WONG['blue'], capsize=3)
-    b.plot([PL['phi_bot']], [PL['dP']], '*', color=WONG['vermillion'], ms=18, zorder=5,
-           label=rf"permeation: $\Delta P$ = {sig(PL['dP'])} at the support-side $\phi_s$")
+    if not PL['frozen']:                                     # a frozen network carries no network stress from the flow
+        b.plot([PL['phi_bot']], [PL['dP']], '*', color=WONG['vermillion'], ms=18, zorder=5,
+               label=rf"permeation: $\Delta P$ = {sig(PL['dP'])} at the support-side $\phi_s$")
     b.set_ylim(-0.02, max(4 * PL['dP'], 0.3))
     b.set_ylabel(r"network stress  $\sigma'_{zz}$")
     b.set_title(r"(b) compression: $\sigma'(\phi_s)$", fontsize=14)
@@ -678,15 +733,27 @@ def _bands(ax, PL, y, col, lab):
 
 
 def fig_Dc(ccfg, X):
-    """D_c against phi_s: the UNLOAD levels (free re-swelling profile fit, stars; Rg thickness trace hollow) -- the only
+    """D_c against phi_s: the UNLOAD levels (free re-swelling profile fit, stars) -- the only
     compression-side D_c here (2026-10-21) -- the permeation steady state (local: q phi_p / (dphi_s/dz), segments + the
     polynomial curve) and the permeation notebook's membrane averages as bars over the membrane's phi_s range."""
     PL, RW = X['PL'], X.get('RW')
     sg = PL['seg']
     fig, ax = plt.subplots(figsize=(11, 7), constrained_layout=True)
-    ax.plot(PL['phi_fit'], PL['Dc_fit'], '-', color=WONG['vermillion'], lw=2.2, alpha=0.8,
-            label=rf"permeation, local: $q\,\phi_p/(\mathrm{{d}}\phi_s/\mathrm{{d}}z)$, degree-{ccfg.PERM_POLY_DEG} profile")
-    _seg_points(ax, ccfg, sg, 'Dc')
+    if PL['frozen']:
+        # frozen undeformed membrane: no local D_c; the Darcy kappa times each unload level's own M is the D_c the two decks
+        # would share if kappa were the same at the two states
+        if PL['kappa_darcy'] and RW is not None:
+            kd = PL['kappa_darcy']
+            for i in range(len(RW['phi'])):
+                x = [min(PL['phi_bot'], PL['phi_top'], RW['phi'][i]), max(PL['phi_bot'], PL['phi_top'], RW['phi'][i])]
+                ax.fill_between(x, kd[1] * RW['M_sec_lo'][i], kd[2] * RW['M_sec_hi'][i], color='0.35', alpha=0.2, lw=0)
+                ax.plot(x, [kd[0] * RW['M_sec'][i]] * 2, '-', color='0.35', lw=3, alpha=0.8, solid_capstyle='butt',
+                        label=rf"frozen-network Darcy $\kappa$ ({sig(kd[0])}, at $\phi_s$ {0.5 * (PL['phi_bot'] + PL['phi_top']):.2f}) $\times$ the level's "
+                              rf"secant $M$ ({sig(RW['M_sec'][i])}) = {sig(kd[0] * RW['M_sec'][i])}")
+    else:
+        ax.plot(PL['phi_fit'], PL['Dc_fit'], '-', color=WONG['vermillion'], lw=2.2, alpha=0.8,
+                label=rf"permeation, local: $q\,\phi_p/(\mathrm{{d}}\phi_s/\mathrm{{d}}z)$, degree-{ccfg.PERM_POLY_DEG} profile")
+        _seg_points(ax, ccfg, sg, 'Dc')
     if np.isfinite(PL['Dc_prof']):
         _bands(ax, PL, PL['Dc_prof'], WONG['green'], f"permeation, transient fit (profile): {sig(PL['Dc_prof'])}")
     if np.isfinite(PL['Dc_trace']):
@@ -697,14 +764,12 @@ def fig_Dc(ccfg, X):
         for i in range(len(RW['phi'])):
             ax.errorbar([RW['phi'][i]], [RW['Dc'][i]], xerr=[RW['phi_h'][i]], fmt='*', color=WONG['blue'], ms=18, capsize=4, zorder=6,
                         label=f"UNLOAD, free re-swelling profile fit: {sig(RW['Dc'][i])}  [{RW['run_id'][i]}, level {RW['lvl'][i]}]")
-            if np.isfinite(RW['Dc_trace_rg'][i]):
-                ax.plot([RW['phi'][i]], [RW['Dc_trace_rg'][i]], '*', color=WONG['blue'], mfc='none', ms=15, mew=1.5, zorder=6,
-                        label=f"... its Rg thickness trace: {sig(RW['Dc_trace_rg'][i])}")
     else:
         ax.text(0.02, 0.03, 'no compression level with an unload: no compression-side $D_c$ drawn', transform=ax.transAxes, fontsize=11, color='0.4')
     ax.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)')
-    ax.set_yscale('log')
-    ax.set_title(r'Cooperative diffusivity $D_c(\phi_s)$: unload (free re-swelling) vs steady permeation  --  no hold (load) $D_c$', fontsize=15)
+    ax.set_yscale('linear' if PL['frozen'] else 'log')     # frozen membrane: two or three points within ~10 %
+    ax.set_title(r'Cooperative diffusivity $D_c$: unload (free re-swelling) vs frozen-network Darcy $\kappa \times M$' if PL['frozen'] else
+                 r'Cooperative diffusivity $D_c(\phi_s)$: unload (free re-swelling) vs steady permeation  --  no hold (load) $D_c$', fontsize=15)
     _phi_axis(ax, ccfg)
     smart_legend(ax, fontsize=10)
     return _save(fig, ccfg, 'Dc_vs_phi')
@@ -717,14 +782,18 @@ def fig_kappa(ccfg, X):
     PL, RW = X['PL'], X.get('RW')
     sg = PL['seg']
     fig, ax = plt.subplots(figsize=(11, 7), constrained_layout=True)
-    ax.plot(PL['phi_fit'], PL['kappa_fit'], '-', color=WONG['vermillion'], lw=2.2, alpha=0.8,
-            label=rf"permeation, local: $q\,\phi_p/(\mathrm{{d}}\phi_s/\mathrm{{d}}z)\;/\;M_{{\rm perm}}$, degree-{ccfg.PERM_POLY_DEG} profile;  "
-                  rf"$M_{{\rm perm}} = \Delta P\,L/(2|u_F|)$ = {sig(PL['M_perm'])}")
-    _seg_points(ax, ccfg, sg, 'kappa')
+    if not PL['frozen']:
+        ax.plot(PL['phi_fit'], PL['kappa_fit'], '-', color=WONG['vermillion'], lw=2.2, alpha=0.8,
+                label=rf"permeation, local: $q\,\phi_p/(\mathrm{{d}}\phi_s/\mathrm{{d}}z)\;/\;M_{{\rm perm}}$, degree-{ccfg.PERM_POLY_DEG} profile;  "
+                      rf"$M_{{\rm perm}} = \Delta P\,L/(2|u_F|)$ = {sig(PL['M_perm'])}")
+        _seg_points(ax, ccfg, sg, 'kappa')
     kd = PL['kappa_darcy']
     if kd:
         ax.fill_between([PL['phi_bot'], PL['phi_top']], kd[1], kd[2], color='0.35', alpha=0.2, lw=0)
-        _bands(ax, PL, kd[0], '0.35', rf"permeation, Darcy $QL/(A\,\Delta P)$ = {sig(kd[0])} (membrane average)")
+        _bands(ax, PL, kd[0], '0.35', rf"permeation, Darcy $QL/(A\,\Delta P)$ = {sig(kd[0])} "
+               + ('(network frozen undeformed: zero-strain value)' if PL['frozen'] else '(membrane average)'))
+        if PL['frozen']:
+            ax.plot([0.5 * (PL['phi_bot'] + PL['phi_top'])], [kd[0]], 's', color='0.25', ms=10, zorder=5)
     if RW is not None:
         for i in range(len(RW['phi'])):
             ax.errorbar([RW['phi'][i]], [RW['kappa'][i]], yerr=[[RW['kappa'][i] - RW['kappa_lo'][i]], [RW['kappa_hi'][i] - RW['kappa'][i]]], fmt='*',
@@ -733,8 +802,9 @@ def fig_kappa(ccfg, X):
     else:
         ax.text(0.02, 0.03, 'no compression level with an unload: no compression-side $\kappa$ drawn', transform=ax.transAxes, fontsize=11, color='0.4')
     ax.set_ylabel(r'$\kappa$  ($\sigma^5/(\epsilon\,\tau)$)')
-    ax.set_yscale('log')
-    ax.set_title(r'Hydraulic permeability $\kappa(\phi_s)$: unload (free re-swelling) vs steady permeation  --  no hold (load) $D_c$', fontsize=15)
+    ax.set_yscale('linear' if PL['frozen'] else 'log')     # frozen membrane: two or three points within ~10 %
+    ax.set_title(r'Hydraulic permeability $\kappa(\phi_s)$: unload $D_c/M$ vs the frozen-network Darcy $\kappa$' if PL['frozen'] else
+                 r'Hydraulic permeability $\kappa(\phi_s)$: unload (free re-swelling) vs steady permeation  --  no hold (load) $D_c$', fontsize=15)
     _phi_axis(ax, ccfg)
     smart_legend(ax, fontsize=10)
     return _save(fig, ccfg, 'kappa_vs_phi')
@@ -745,6 +815,9 @@ def fig_closure(ccfg, X):
     linear pressure drop; (b) measured flux against the one the compression D_c(phi_s) predicts."""
     S, C, PL = X['S'], X['C'], X['PL']
     P = X['perm']['P']
+    if PL['frozen']:
+        print('closure figure skipped: the permeation network is frozen undeformed (no phi_s gradient to close on)')
+        return None
     fig, (a, b) = plt.subplots(1, 2, figsize=(17, 6.5), constrained_layout=True, gridspec_kw=dict(width_ratios=[2, 1]))
     lo, hi = C['sig_ci'](PL['phi'])
     a.fill_between(PL['z'], lo, hi, color=WONG['blue'], alpha=0.2, lw=0)

@@ -25,7 +25,7 @@ uni.add_volume_fractions(cfg, R, LEVELS)
 uni.print_summary(cfg, LEVELS)
 L = LEVELS[1]
 for f in (uni.fig_strain, uni.fig_volfrac, uni.fig_total_stress, uni.fig_partial_stress, uni.fig_network_stress,
-          uni.fig_piston, uni.fig_M, uni.fig_ratio, uni.fig_G, uni.fig_Dc_reswelling, uni.fig_kappa, uni.fig_wet_pistons, uni.fig_solvent_expelled,
+          uni.fig_piston, uni.fig_M, uni.fig_ratio, uni.fig_G, uni.fig_Dc_reswelling, uni.fig_Dc_reswelling_time, uni.fig_kappa, uni.fig_wet_pistons, uni.fig_solvent_expelled,
           uni.fig_thermo_pressure, uni.fig_osmotic_pressure):
     f(cfg, R, L) if f is not uni.fig_strain else f(cfg, R, [L])
     plt.close('all')
