@@ -71,7 +71,7 @@ Input `.data` files are not in the repo. They live in `lammps_data_files_local/`
 | `calibration_sweep/` | Solvent volume-fraction calibration across pressure and interaction strength | `calibration_analysis.ipynb` |
 | `allocation_benchmark/` | Fastest nodes × ranks × threads on a cluster | its `README.md` |
 
-The notebooks listed are analysis notebooks unless marked as builders of the input file. `slab_two_pistons_periodic.ipynb` converts an equilibrated slab into the two-piston input of the uniaxial and shear decks. `cross_deck_comparison.ipynb` combines the compression and permeation runs (D_c and κ against solvent fraction, the equation-of-state and flux closures). What each deck does and its knobs are in [docs/running_simulations.md](docs/running_simulations.md); what each notebook computes is in [docs/analysis.md](docs/analysis.md).
+The notebooks listed are analysis notebooks unless marked as builders of the input file. `slab_two_pistons_periodic.ipynb` converts an equilibrated slab into the two-piston input of the uniaxial and shear decks. `manuscript_figures.ipynb` combines the compression and permeation runs (D_c and κ against solvent fraction, the equation-of-state and flux closures). What each deck does and its knobs are in [docs/running_simulations.md](docs/running_simulations.md); what each notebook computes is in [docs/analysis.md](docs/analysis.md).
 
 ## Clusters
 

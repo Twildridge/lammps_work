@@ -432,6 +432,7 @@ NETWORK_GELS = {   # label: glob of the gel's eps = 0 reference trajectory (newe
     'rot45, 5 beads':  'traj_ref_final_config_slab_support_periodic_5beads_tall_rho04_rot45_*.lammpstrj',
     'rot45, 15 beads': 'traj_ref_final_config_slab_support_periodic_15beads_tall_rho04_rot45_*.lammpstrj',
     'random, 5 beads': 'traj_ref_final_config_slab_support_periodic_5beads_tall_rho04_random_*.lammpstrj',
+    'random, 10 beads': 'traj_ref_final_config_slab_support_periodic_10beads_wide_rho04_random_*.lammpstrj',
 }
 NETWORK_COLORS = ('#0072B2', '#D55E00', '#009E73', '#CC79A7', '#E69F00')
 
@@ -465,6 +466,51 @@ def load_network_modes(traj_dir, gels=None, cache=None):
     return out
 
 
+def load_void_persistence(traj_dir, gels=None, cache_dir=None, probes=(1.0, 1.5), last=100):
+    """Frozen-pore fraction of every gel found: screen_voids.void_persistence on the gel's reference trajectory
+    (the last `last` frames; the compression decks write 16, 10k steps apart = 750 tau).  For each probe radius
+    r_p a grid point is a pore in a frame when no polymer bead centre lies within r_p of it; Phi is the share of
+    the pore pattern that stays in place over the window: 0 = every point is a pore equally often (the pores are
+    thermally renewed), 1 = the same points are pores in every frame (permanent pores).
+    -> {label: dict(phi={r_p: Phi}, empty={r_p: pore volume fraction}, span_tau, n_frames)}.
+    Results are kept as JSON per trajectory in cache_dir (default <raw_data>/chain_length/void_persistence)."""
+    import json
+    import screen_voids as sv
+    traj_dir = Path(traj_dir)
+    cache_dir = Path(cache_dir) if cache_dir is not None else traj_dir.parent / 'chain_length' / 'void_persistence'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    out = {}
+    for label, path in find_network_trajs(traj_dir, gels).items():
+        js = cache_dir / (path.stem + '.json')
+        res = None
+        if js.exists() and js.stat().st_mtime >= path.stat().st_mtime:
+            try:
+                res = json.loads(js.read_text()).get('voids')
+            except ValueError:
+                res = None
+            if res is not None and not all(any(abs(r['r_p'] - rp) < 1e-9 for r in res['probes']) for rp in probes):
+                res = None
+        if res is None:
+            print(f'{label}: void persistence of {path.name} ...')
+            frames, _ = sv.read_last_frames(str(path), last, 1, log=lambda *a: None)
+            res = sv.void_persistence(frames, list(probes), log=lambda *a: None)
+            js.write_text(json.dumps(dict(label=label, traj=str(path), voids=res), indent=1))
+        rows = {round(r['r_p'], 6): r for r in res['probes']}
+        out[label] = dict(phi={rp: rows[round(rp, 6)]['phi'] for rp in probes},
+                          empty={rp: rows[round(rp, 6)]['empty_fraction'] for rp in probes},
+                          span_tau=(res['step_last'] - res['step_first']) * 0.005, n_frames=res['n_frames'])
+    return out
+
+
+def print_void_table(VOIDS):
+    if not VOIDS:
+        return
+    rps = list(next(iter(VOIDS.values()))['phi'])
+    print(f"{'gel':<18}" + ''.join(f"{'Phi(r_p=' + format(rp, 'g') + ')':>14}{'pore frac':>11}" for rp in rps) + f"{'window (tau)':>14}")
+    for label, V in VOIDS.items():
+        print(f"{label:<18}" + ''.join(f"{V['phi'][rp]:>14.3f}{V['empty'][rp]:>11.3f}" for rp in rps) + f"{V['span_tau']:>14.0f}")
+
+
 def print_network_table(MODES):
     import xlink
     if not MODES:
@@ -476,12 +522,13 @@ def print_network_table(MODES):
               f"{np.sqrt(S['u2_bead']) / S['Rbar']:>16.2f}{S['stiffening']:>15.2f}{S['rope_stretch']:>+15.2f}{xlink.mesh_frozen(S, 'bead'):>11.2f}")
 
 
-def fig_network_compare(MODES, out=None):
+def fig_network_compare(MODES, out=None, voids=None, r_p=1.0):
     """One column of the top row per gel: the mean network in a thin slab (3.5 mean chords each way) with every
     bead's rms in-plane displacement as a disc (crosslinkers dark; a strand's partner crosslinker that lies
     outside the slab is a dashed hollow circle, so every crosslinker shows its f strands).  Bottom row, one colour per gel: (a) the fluctuation budget in
     units of the squared mean chord, (b) the frozen fraction of the chain beads against the length scale in mean
-    chords, (c) the distribution of the chord extension.  The one legend sits under the figure."""
+    chords, (c) the distribution of the chord extension.  The one legend sits under the figure.
+    voids (load_void_persistence): a box on each map with the gel's frozen-pore fraction Phi at probe radius r_p."""
     from matplotlib.collections import EllipseCollection, LineCollection
     import matplotlib.patheffects as pe
     if not MODES:
@@ -494,12 +541,13 @@ def fig_network_compare(MODES, out=None):
     col = {lab: NETWORK_COLORS[(known.index(lab) if lab in known else len(known) + extra.index(lab)) % len(NETWORK_COLORS)]
            for lab in labels}
     fig = plt.figure(figsize=(21, 14.5), constrained_layout=True)
-    gs = fig.add_gridspec(3, 6, height_ratios=[1.0, 0.8, 0.07])     # last row: the legend, on its own axes
+    NC = 12                                                         # columns: 1 to 4 maps tile them evenly
+    gs = fig.add_gridspec(3, NC, height_ratios=[1.0 if ng <= 3 else 0.8, 0.8, 0.07])     # last row: the legend, on its own axes
     fs_lab, fs_tick = 19, 16
 
     # ---- top row: the maps ----------------------------------------------------
-    span = 6 // max(ng, 2)
-    off = (6 - span * ng) // 2
+    span = max(1, NC // max(ng, 2))
+    off = (NC - span * ng) // 2
     for i, lab in enumerate(labels):
         S, ax = MODES[lab], fig.add_subplot(gs[0, off + i * span: off + (i + 1) * span])
         m = S['map']
@@ -525,9 +573,14 @@ def fig_network_compare(MODES, out=None):
         ax.set_ylabel(r'$z$  ($\sigma$)', fontsize=fs_lab)
         ax.tick_params(labelsize=fs_tick)
         ax.set_title(f"{lab}\n" + rf"mean chord $\bar R = {S['Rbar']:.2f}\,\sigma$,  {S['n']} bonds", fontsize=18, color=col[lab])
+        V = (voids or {}).get(lab)
+        if V is not None and r_p in V['phi']:
+            ax.text(0.03, 0.03, rf"frozen-pore fraction $\Phi$ = {V['phi'][r_p]:.2f}" + '\n'
+                    + rf"(probe $r_p$ = {r_p:g} $\sigma$, {V['span_tau']:.0f} $\tau$)", transform=ax.transAxes, ha='left', va='bottom',
+                    fontsize=14, zorder=6, bbox=dict(boxstyle='round,pad=0.35', fc='white', ec=col[lab], lw=1.5, alpha=0.93))
 
     # ---- bottom row -----------------------------------------------------------
-    axb, axf, axx = (fig.add_subplot(gs[1, k:k + 2]) for k in (0, 2, 4))
+    axb, axf, axx = (fig.add_subplot(gs[1, k:k + NC // 3]) for k in (0, NC // 3, 2 * NC // 3))
     modes = (('xl', 'crosslinker\nposition'), ('stretch', 'chord\nstretch'), ('swing', 'chord\nswing'), ('rope', 'jump-rope'))
     w = 0.8 / ng
     for i, lab in enumerate(labels):

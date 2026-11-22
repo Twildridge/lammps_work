@@ -50,7 +50,7 @@ lammps_work/                    ← This git repository
 │   ├── simple_shear_sweep.ipynb           ← every level of a shear sweep: G vs γ, stress–strain slope, D_c (unloads), κ
 │   ├── isotropic_compression_{single,sweep}.ipynb ← Bulk modulus K (code in lib/isotropic.py, on top of lib/uniaxial.py)
 │   ├── calibration_analysis.ipynb           ← φ_f calibration / PMV sweep analysis (lib/volfrac.py)
-│   ├── cross_deck_comparison.ipynb          ← figures built from more than one deck's run (lib/compare.py)
+│   ├── manuscript_figures.ipynb          ← the paper's figures, editable per cell (lib/manuscript.py); the cross-deck comparison (lib/compare.py) at its end
 │   ├── (one-piston analysis notebooks, the walled/angled/isolate/split/add_plates builders and run_analysis_notebook.sh → archive/scripts/, 2026-10-11;
 │   │    volume_of_mixing.ipynb, cavity_widom.py, clearance_sensitivity_cell.py → archive/, 2026-08)
 │   │

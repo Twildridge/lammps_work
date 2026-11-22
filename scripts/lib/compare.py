@@ -1,6 +1,6 @@
 """Cross-deck comparison -- figures built from MORE THAN ONE deck's run (2026-10-03).
 
-Notebook: scripts/cross_deck_comparison.ipynb.  Each deck is loaded with its own library
+Notebook: scripts/manuscript_figures.ipynb.  Each deck is loaded with its own library
 (lib/uniaxial.py for the two-piston compression and permeation decks, lib/shear.py for
 simple_shear_plates) through `load_deck`, which returns a plain dict
     dict(kind='compression' | 'permeation' | 'shear', cfg, R, levels | P)

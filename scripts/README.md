@@ -38,7 +38,7 @@ Rule (same as `lammps_data_files_local/`): a notebook or script lives here while
 | `simple_shear_single.ipynb`, `simple_shear_sweep.ipynb` | Shear G for the isolated-gel `simple_shear_iso` (`DECK`; the archived `simple_shear_plates` and periodic two-piston runs still load). D_c and κ come from each level's **unload** (deck Phase 2c, 2026-10-28), not from the hold. |
 | `isotropic_compression_single.ipynb`, `isotropic_compression_sweep.ipynb` | Bulk modulus K from the `isotropic_compression` hold and D_m = (K/M) D_c, κ = D_m/K from its free re-swelling unload (2026-10-28). |
 | `chain_length_comparison.ipynb` (2026-11-03) | The beads-per-strand sweep: the equilibration traces of `simulations/chain_length_testing` (Rg, thickness, box, where the Rg-plateau halt fired) and the compression observables (M, G, φ_s) of every N against N with fitted power laws; code in `lib/chain_length.py` (`sync_equilibration` pulls each N's volume_data traces + `log.lammps` from Expanse into `flow_data_local/raw_data/chain_length/<run dir>/` in one login), the compression runs loaded through `lib/compare.py`. |
-| `cross_deck_comparison.ipynb` | Figures that combine decks (D_c(φ_s), κ(φ_s), EOS). |
+| `manuscript_figures.ipynb` | The figures being prepared for the paper, each editable in its cell (`lib/manuscript.py`: text, fonts, size, limits, legends; global settings at the top). Formerly `cross_deck_comparison.ipynb`; its D_c(φ_s), κ(φ_s) and EOS figures are at the end. |
 | `calibration_analysis.ipynb` | φ_f calibration / PMV sweep (`calibration/` holds its λ table and summary figure). |
 
 ## Folders

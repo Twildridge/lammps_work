@@ -66,7 +66,7 @@ sizes per side) leave about 23 interior bins at 65 sigma and 18 at 55 sigma.
 See the table in the conversation of 2026-11-14 (build with `build_beads_sweep.py --beads 10
 --box-xy ... --thickness ...`, benchmark, equilibrate in `chain_length_testing`, qualify with the
 `screen_*` tools, convert, then compression, permeation and shear on the same `_two_pist_pm40`
-file, closure in `cross_deck_comparison.ipynb`).
+file, closure in `manuscript_figures.ipynb`).
 
 ## Running now on the existing random 10 slab
 

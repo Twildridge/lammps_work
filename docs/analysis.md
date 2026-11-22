@@ -79,7 +79,7 @@ Open the notebooks on the MacBook in JupyterLab (`jupyter lab`). They read data 
 | `uniaxial_permeation_single.ipynb` | `uniaxial.py` (`volfrac.py`, `psd.py`) | Two-piston permeation: D_c and M from the polymer displacement, κ from the velocity-controlled and frozen stages, their reconciliation |
 | `isotropic_compression_single.ipynb`, `isotropic_compression_sweep.ipynb` | `isotropic.py` | Bulk modulus K from the hold, D_m = (K/M) D_c and κ = D_m/K from the free re-swelling unload |
 | `simple_shear_single.ipynb`, `simple_shear_sweep.ipynb` | `shear.py` | Shear modulus G, N1/N2, unload D_c and κ = D_c/G |
-| `cross_deck_comparison.ipynb` | `compare.py` | Figures that combine decks: D_c(φ_s), κ(φ_s), the equation of state σ′(φ_s) |
+| `manuscript_figures.ipynb` | `manuscript.py`, `compare.py`, `chain_length.py` | The paper's figures, each editable in its cell; then the figures that combine decks: D_c(φ_s), κ(φ_s), the equation of state σ′(φ_s) |
 | `chain_length_comparison.ipynb`, `calibration_analysis.ipynb` | `chain_length.py` (chain-length notebook) | Beads-per-strand sweep and the φ_f calibration; described in `scripts/README.md` |
 
 There is no permeation sweep notebook.
@@ -383,7 +383,15 @@ When a source is missing the chain falls back in that order. The chosen strain's
 
 Use the same bath pressure and the G = (σ′_zz − σ′_xx)/2ε values from `uniaxial_compression_sweep.ipynb`. The converter's calibrated solvent deletion around the plates puts the gel at P* = 1.5, and the notebook's bulk `<p_total>` is the check. The thermo `press` of this box is not the gel pressure.
 
-#### `cross_deck_comparison.ipynb`
+#### `manuscript_figures.ipynb`
+
+Named `cross_deck_comparison.ipynb` until 2026-11-22. It opens with the figures chosen for the paper: (1) strain and solvent exchange over the compression cycle (`cmp.fig_strain_solvent`, twin axis), (2) displacement evolution in re-swelling and, once a live-network permeation run is loaded, in permeation (`ms.fig_displacement_evolution`), (3) the four networks with their frozen-pore fraction (`cl.fig_network_compare` with `cl.load_void_persistence`).
+
+`lib/manuscript.py` finishes a figure after its library has drawn it. `ms.capture()` holds back the library's `plt.show()`; `ms.finish(fig, name, text, size, fonts, limits, legends, style)` applies the cell's edits and the global settings of `ms.set_style` (font, sizes per kind of text, line-width and marker scales, grid, title switches, dpi, formats, output folder) and saves to `flow_data_local/plots/manuscript/`. Every piece of text has a key (`suptitle`, `ax0.xlabel`, `ax0.legend.2`, `ax1.text.0`, `fig.text.0`); `ms.print_text(fig)` lists them. In a cell's `TEXT` dict a string replaces the text, `''` removes it and `None` keeps the library's wording, which is the setting for text that carries a fitted number.
+
+The frozen-pore fraction Φ is the void persistence of `lib/screen_voids.py`: a grid point is a pore in a frame when no polymer bead centre lies within the probe radius, and Φ is the share of the pore pattern that stays in place over the window (0 renewed, 1 permanent). `cl.load_void_persistence` runs it on each gel's compression reference trajectory (16 frames, 750 τ) and caches the result under `raw_data/chain_length/void_persistence/`. At a probe radius of 1 σ: rot45 5-bead 0.05, rot45 15-bead 0.04, random 5-bead 0.31, random 10-bead 0.07.
+
+The cross-deck cells that follow are skipped while no permeation deck is loaded. The frozen-reference run `random_10b_wide_perm_fref_1` is left out: a frozen network's stress is a single instant's value, so its profiles are about 50 times rougher from bin to bin than a live run's (0.077 against 0.0014 in total stress).
 
 This notebook builds figures from more than one deck's run. One Config per deck, copied from that deck's own notebook, goes into `CFG`. `cmp.load_deck` loads each run with its own library (`lib/uniaxial.py` for the two-piston compression and permeation decks, `lib/shear.py` for `simple_shear_plates`) into `DECKS[name] = dict(kind, cfg, R, levels | P)`. The comparison functions in `lib/compare.py` take the decks they need. Plots go to `flow_data_local/plots/comparison/<NAME>`.
 

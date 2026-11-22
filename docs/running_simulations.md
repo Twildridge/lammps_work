@@ -593,7 +593,7 @@ sbatch --dependency=afterany:J15 --export=ALL,SLAB_JOB=J15,SLAB_FOLDER=chain_len
 
 **Permeation budgets.** The permeation batch's 48 h was sized at the old layout's ~0.55 M steps/h (about 31 h, about 47 h with the optional unload; the frozen reference run about 11 h) and has not been re-timed. The random slab ran at 0.75 M/h on 288 k atoms there and lost the end of its 25 M unload to the 48 h limit.
 
-**Analysis.** `uniaxial_compression_single.ipynb` (LEVEL 0.10, the unload figures) and `uniaxial_permeation_single.ipynb` with the new `DATANAME` and a `RUN_ID` of your choice, then `cross_deck_comparison.ipynb`.
+**Analysis.** `uniaxial_compression_single.ipynb` (LEVEL 0.10, the unload figures) and `uniaxial_permeation_single.ipynb` with the new `DATANAME` and a `RUN_ID` of your choice, then `manuscript_figures.ipynb`.
 
 #### Isolated cube
 
