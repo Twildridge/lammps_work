@@ -626,16 +626,21 @@ def six_plate_bulk(root, levels=('0.05', '0.10')):
             s_hold = -e_lin / (1.0 - e_lin)
             kk_u = 2.0 * np.arange(1, 41) - 1.0
             La_, Lb_, Lc_ = Lrg_hold[ia], Lrg_hold[(ia + 1) % 3], Lrg_hold[(ia + 2) % 3]
-            cum_u = []
-            for j, t_ in enumerate(hs_u):
-                tw = (t_ - t_u0) * B_DT + np.linspace(-W_u, 0.0, 9)
-                tw = np.clip(tw, 0.0, None)
-                trans = np.mean(_b_slab_remaining(tw, B_DM, Lb_) * _b_slab_remaining(tw, B_DM, Lc_))
-                Ek = np.array([np.mean(np.exp(-(k * np.pi / La_) ** 2 * B_DM * tw)) for k in kk_u])
-                shape = (np.cos(np.pi * np.outer(zeta_u, kk_u)) * (4.0 / (kk_u * np.pi) ** 2 * Ek)[None, :]).sum(axis=1)
-                u_now = -s_hold * L_c * shape * trans
-                cum_u.append(np.column_stack([np.where(g, 1500, 0), np.where(g, u_now + rng.normal(0, 0.001, len(zc)), 0.0)]))
-            _b_chunk(dd / f'{_b_name("disp_cum", a)}_{ust}.dat', 'uavg_disp_cum', hs_u, zc, cum_u, [f'v_u{a}_poly_cum'])
+            def _cum_blocks(steps, W):
+                out = []
+                for t_ in steps:
+                    tw = np.clip((t_ - t_u0) * B_DT + np.linspace(-W, 0.0, 9), 0.0, None)
+                    trans = np.mean(_b_slab_remaining(tw, B_DM, Lb_) * _b_slab_remaining(tw, B_DM, Lc_))
+                    Ek = np.array([np.mean(np.exp(-(k * np.pi / La_) ** 2 * B_DM * tw)) for k in kk_u])
+                    shape = (np.cos(np.pi * np.outer(zeta_u, kk_u)) * (4.0 / (kk_u * np.pi) ** 2 * Ek)[None, :]).sum(axis=1)
+                    u_now = -s_hold * L_c * shape * trans
+                    out.append(np.column_stack([np.where(g, 1500, 0), np.where(g, u_now + rng.normal(0, 0.001, len(zc)), 0.0)]))
+                return out
+            _b_chunk(dd / f'{_b_name("disp_cum", a)}_{ust}.dat', 'uavg_disp_cum', hs_u, zc, _cum_blocks(hs_u, W_u), [f'v_u{a}_poly_cum'])
+            # the fine-cadence copy (DISP_FINE_NFREQ > 0, decks since 2026-11-21): 5 blocks per standard block, the file the lib prefers
+            nf = int(round(W_u / B_DT / 5.0))
+            hs_f = np.arange(int(t_u0) + nf, int(hs_u[-1]) + 1, nf)
+            _b_chunk(dd / f'{_b_name("disp_cum", a)}_fine_{ust}.dat', 'uavg_disp_fine', hs_f, zc, _cum_blocks(hs_f, nf * B_DT), [f'v_u{a}_poly_cum'])
         t_start = usteps[-1] + 1000
     # whole-run polymer partial-stress anisotropy (stem tagged with NSTEPS = hold here), as slab_with_support writes it
     asteps = np.arange(0, t_start, 500)

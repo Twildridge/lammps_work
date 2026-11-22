@@ -496,6 +496,24 @@ def print_phi_kinds(ccfg, comp, perm, unload=None, kinds=('cal', 'vor', 'mf')):
 # ===========================================================================
 #  5. FIGURES -- the permeation membrane on its own (2026-10-08)
 # ===========================================================================
+def fig_strain_solvent(ccfg, comp, lvl=None, layout='stacked'):
+    """The compression run over its whole load + unload on one time axis (uni.fig_strain_solvent): (a) the strain
+    diagnostic (eps_Rg, eps_BB, plate gap), (b) the rate at which solvent enters (> 0) or leaves (< 0) the gel, from the
+    polymer mass planes (uni.gel_solvent_series).  The level drawn: `lvl`, else the first level with an unload, else the
+    first level.  layout 'twin' puts both on one panel (strain left, rate right).  The deck's own library saves it under
+    the deck's plot folder; a copy goes to the comparison folder."""
+    cfg, R, levels = comp['cfg'], comp['R'], comp['levels']
+    pick = [L for L in levels if str(L['lvl']) == str(lvl)] if lvl is not None else [L for L in levels if L.get('U') is not None]
+    L = (pick or levels)[0]
+    fig = uni.fig_strain_solvent(cfg, R, L, layout=layout)
+    if fig is not None and ccfg.save:
+        ccfg.PLOT_DIR.mkdir(parents=True, exist_ok=True)
+        out = ccfg.PLOT_DIR / ('compression_strain_solvent_cycle' + ('_twin' if layout == 'twin' else '') + '.png')
+        fig.savefig(out, dpi=150, bbox_inches='tight')
+        print('copied to', out)
+    return fig
+
+
 def fig_thermo_pressure_norm(ccfg, perm):
     """The permeation notebook's normalised thermodynamic-pressure figure (uni.fig_thermo_pressure_norm:
     solvent, polymer and total traces with the back pressure removed, / dP_ext) with its two dash-dot

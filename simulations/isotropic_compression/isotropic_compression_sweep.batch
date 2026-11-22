@@ -28,5 +28,8 @@ export PRESS_TARGET=1.5
 export COMPRESSIONS="${COMPRESSIONS:-0.05 0.075 0.10 0.13 0.16}"
 export SEAT_MODE="${SEAT_MODE:-rg}"
 export UNLOAD="${UNLOAD:-1}" UNLOAD_STEPS="${UNLOAD_STEPS:-0}" UNLOAD_MARGIN="${UNLOAD_MARGIN:-3.0}"
+# Fine displacement profiles through every unload (every 25 tau, from the start of the retraction): what the D_m
+# fit reads. The standard profiles are one block per unload/20, about one tau_1 on a 12-cell cube. 0 = off.
+export DISP_FINE_NFREQ="${DISP_FINE_NFREQ:-5000}"
 
 bash "$LAMMPS_WORK_DIR/scripts/run_lammps.sh" "$FOLDER" "$DATANAME" "$INTERACTION" "$NSTEPS"

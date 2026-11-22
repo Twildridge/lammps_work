@@ -1,7 +1,7 @@
 {
  "run_id": "random_16M_comp_1",
  "sim_name": "final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_4000000",
- "saved": "2026-11-21T18:14",
+ "saved": "2026-11-21T23:06",
  "M_STRAIN": "disp",
  "M_SUBTRACT_REF": true,
  "L0": 81.1415,

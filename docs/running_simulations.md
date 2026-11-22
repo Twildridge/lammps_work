@@ -277,7 +277,7 @@ Run the smoke test after any edit to a block the production runs have not reache
 LAMMPS gotchas these tests caught:
 - `${...}` is not expanded inside an immediate `$(...)`. Write such lines as plain `equal` variables or use `v_` references inside the `$()`.
 - An apostrophe inside a double-quoted `print` line stops LAMMPS with "Unmatched single quote".
-- A `fix ave/chunk` (`ave one`) removed in mid-window leaves its lock on the chunk/atom compute, so the Phase 2v displacement logger has its own compute (`chunk_zv_polymer`), deleted after the stage.
+- A `fix ave/chunk` (`ave one`) removed in mid-window leaves its lock on the chunk/atom compute, and the next fix on that compute stops LAMMPS with "Two fix commands using same compute chunk/atom command in incompatible ways". The fine and drive-stage displacement fixes of the two compression decks therefore make their compute with the fix and delete it with it (2026-11-21). Likewise the Phase 2v displacement logger has its own compute (`chunk_zv_polymer`), deleted after the stage.
 
 **`uniaxial_compression` with the Phase 2c unload** (`lmp -sf omp -pk omp 8`, 290k-atom file, 28 min):
 
@@ -293,7 +293,7 @@ Also pass `vel_seed` / `skip_widom` / `compressions_list` and the `piston_mass` 
 -var phase0_steps 200 -var npt_piston_steps 400 -var min_iter 50 -var t_seat 1000 -var nsteps_settle 400 -var ref_avg_steps 400 -var ref_nfreq 200 -var nsteps 2000 -var compressions 0.02 -var compressions_list "0.02" -var hold_auto 0 -var unload 1 -var unload_steps 2000 -var unload_margin 1.0 -var v_piston_prod 0.4 -var thermo_freq 500 -var volume_freq 200 -var strain_freq 100 -var aniso_nevery 100 -var aniso_nrepeat 2 -var aniso_nfreq 200
 ```
 
-Also pass `seat_mode` / `drive_split` / `piston_mass` / `c_pist_frac` / `settle_halt`. Pass: the log's `[unload 0.02] retraction done` line with every gap at its target (seated gap + 2 margins), no `hit its cap` warning, 46 `_<hold>_u0.02` files (the level's loggers, the 18 stress profiles, 3 densities, the bath pressures and the 3 cumulative displacement profiles), and `strain sweep complete (unload = 1)`. `scripts/tests/make_fixtures.flatten_to_flow_data` turns the work dir into the notebooks' layout, on which `iso.load_level` must report the unload and run `fig_Dm`.
+Also pass `seat_mode` / `drive_split` / `piston_mass` / `c_pist_frac` / `settle_halt`, and `disp_fine_nfreq 300` for the fine unload profiles (three more `_u` files, `disp_*_polymer_cum_fine`). Pass: the log's `[unload 0.02] retraction done` line with every gap at its target (seated gap + 2 margins), no `hit its cap` warning, 46 `_<hold>_u0.02` files (the level's loggers, the 18 stress profiles, 3 densities, the bath pressures and the 3 cumulative displacement profiles), and `strain sweep complete (unload = 1)`. `scripts/tests/make_fixtures.flatten_to_flow_data` turns the work dir into the notebooks' layout, on which `iso.load_level` must report the unload and run `fig_Dm`.
 
 **`uniaxial_permeation`, base line** (290k-atom `_two_pist_pm40` file):
 

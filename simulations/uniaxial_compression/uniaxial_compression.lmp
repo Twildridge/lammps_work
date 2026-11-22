@@ -243,6 +243,17 @@ variable disp_fine_bin     index 1.0
 variable disp_fine_nevery  equal 10
 variable disp_fine_nrepeat equal floor(${disp_fine_nfreq}/v_disp_fine_nevery)
 variable disp_fine_nf      equal v_disp_fine_nevery*v_disp_fine_nrepeat
+# (2026-11-21) with disp_fine_nfreq > 0 the two DRIVE stages are profiled too: the ramp and the unload retraction
+# write disp_z_polymer_drive (files _c<strain> and _u<strain>): the cumulative u_z and the polymer count per
+# disp_fine_bin bin every disp_drive_nfreq steps.  The holds' files start when the plates stop, so without these the
+# polymer mass planes (lib/uniaxial.py gel_solvent_series: solvent entering / leaving the gel) are unknown while the
+# plates move.  A halt ends each drive in mid-window, so the last partial block is not written.
+# Every fine / drive fix gets its OWN chunk/atom compute, made with the fix and deleted with it: a fix ave/chunk
+# removed in mid-window leaves its lock on the compute, and the next fix on it stops LAMMPS with "Two fix commands
+# using same compute chunk/atom command in incompatible ways".
+variable disp_drive_nfreq   index 1000
+variable disp_drive_nrepeat equal floor(${disp_drive_nfreq}/v_disp_fine_nevery)
+variable disp_drive_nf      equal v_disp_fine_nevery*v_disp_drive_nrepeat
 
 variable skip_widom index 1
 variable num_widom_frames equal 50
@@ -686,7 +697,7 @@ compute chunk_z_poly_zz  polymer chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_poly_xx  polymer chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_poly_yy  polymer chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_polymer  polymer chunk/atom bin/1d z lower ${binWidth}
-compute chunk_z_poly_dfine polymer chunk/atom bin/1d z lower ${disp_fine_bin}
+# (chunk_z_poly_dfine / chunk_z_poly_ddrive, the fine and drive-stage displacement bins, are made with their fixes)
 compute chunk_z_solv_p   solvent chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_solv_zz  solvent chunk/atom bin/1d z lower ${binWidth}
 compute chunk_z_solv_xx  solvent chunk/atom bin/1d z lower ${binWidth}
@@ -1100,11 +1111,15 @@ fix nve_support support     nve
 velocity piston_load set 0.0 0.0 -${vdrive_pist}
 velocity support     set 0.0 0.0  ${vdrive_supp}
 fix halt_compress all halt ${strain_freq} v_piston_support_gap <= ${gap_target} error continue
+if "${disp_fine_nfreq} > 0" then &
+    "compute chunk_z_poly_ddrive polymer chunk/atom bin/1d z lower ${disp_fine_bin}" &
+    "fix avg_disp_z_poly_drive all ave/chunk ${disp_fine_nevery} ${disp_drive_nrepeat} ${disp_drive_nf} chunk_z_poly_ddrive v_uz_poly_cum file output_files/displacement_data/disp_z_polymer_drive_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat"
 variable drive_dump_freq equal floor((${compressions}*${L0_bb}/(${v_piston_prod}*${timestep_prod}))/${num_drive_frames})
 if "${movie_open} == 1" then "dump_modify traj_setup every ${drive_dump_freq}"
 print ">>> [strain=${compressions}] driving load piston DOWN to z=${piston_target_z} and support UP to z=${support_target_z}: target gap ${gap_target} = L0_gap - ${compressions}*L0_bb (cap ${nsteps_comp} steps; drive frames every ${drive_dump_freq})..."
 run ${nsteps_comp}
 unfix halt_compress
+if "${disp_fine_nfreq} > 0" then "unfix avg_disp_z_poly_drive" "uncompute chunk_z_poly_ddrive"
 if "${movie_open} == 1" then &
     "undump traj_setup" &
     "variable movie_open delete" &
@@ -1235,6 +1250,7 @@ fix avg_disp_z_poly_cum all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq
     file output_files/displacement_data/disp_z_polymer_cum_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat
 if "${disp_fine_nfreq} > 0" then &
     "print '>>> [strain=${compressions}] fine displacement profile: every ${disp_fine_nf} steps (nevery=${disp_fine_nevery} nrepeat=${disp_fine_nrepeat}), bins ${disp_fine_bin} sigma'" &
+    "compute chunk_z_poly_dfine polymer chunk/atom bin/1d z lower ${disp_fine_bin}" &
     "fix avg_disp_z_poly_fine all ave/chunk ${disp_fine_nevery} ${disp_fine_nrepeat} ${disp_fine_nf} chunk_z_poly_dfine v_uz_poly file output_files/displacement_data/disp_z_polymer_fine_${dataname}_${interaction}_${hold_tag}_c${compressions}.dat"
 
 variable hold_steps equal (floor(($(step)+${hold_len}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
@@ -1244,7 +1260,7 @@ run ${hold_steps}
 # ----- Teardown this level's hold fixes/dumps -----
 unfix avg_disp_z_poly
 unfix avg_disp_z_poly_cum
-if "${disp_fine_nfreq} > 0" then "unfix avg_disp_z_poly_fine"
+if "${disp_fine_nfreq} > 0" then "unfix avg_disp_z_poly_fine" "uncompute chunk_z_poly_dfine"
 unfix avg_P_res
 unfix avg_solv_density_fpp
 unfix avg_solv_density_ffp
@@ -1380,9 +1396,13 @@ fix nve_support support     nve
 velocity piston_load set 0.0 0.0  ${vdrive_pist}
 velocity support     set 0.0 0.0 -${vdrive_supp}
 fix halt_unload all halt ${strain_freq} v_piston_support_gap >= ${unload_gap} error continue
+if "${disp_fine_nfreq} > 0" then &
+    "compute chunk_z_poly_ddrive polymer chunk/atom bin/1d z lower ${disp_fine_bin}" &
+    "fix uavg_disp_z_poly_drive all ave/chunk ${disp_fine_nevery} ${disp_drive_nrepeat} ${disp_drive_nf} chunk_z_poly_ddrive v_uz_poly_cum file output_files/displacement_data/disp_z_polymer_drive_${dataname}_${interaction}_${unload_tag}.dat"
 print ">>> [unload ${compressions}] driving load piston UP and support DOWN at the drive speeds until gap >= ${unload_gap} (seated L0_gap ${L0_gap} + 2 x ${unload_margin}; cap ${unload_cap} steps)..."
 run ${unload_cap}
 unfix halt_unload
+if "${disp_fine_nfreq} > 0" then "unfix uavg_disp_z_poly_drive" "uncompute chunk_z_poly_ddrive"
 velocity piston_load set 0.0 0.0 0.0
 velocity support     set 0.0 0.0 0.0
 unfix nve_load
@@ -1419,6 +1439,7 @@ fix uavg_disp_z_poly all ave/chunk ${nevery_stress} ${nrepeat_stress} ${nfreq_st
     chunk_z_polymer v_uz_poly &
     file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${unload_tag}.dat
 if "${disp_fine_nfreq} > 0" then &
+    "compute chunk_z_poly_dfine polymer chunk/atom bin/1d z lower ${disp_fine_bin}" &
     "fix uavg_disp_z_poly_fine all ave/chunk ${disp_fine_nevery} ${disp_fine_nrepeat} ${disp_fine_nf} chunk_z_poly_dfine v_uz_poly file output_files/displacement_data/disp_z_polymer_fine_${dataname}_${interaction}_${unload_tag}.dat"
 
 variable unload_run equal (floor(($(step)+${unload_len}-1)/${nfreq_stress})+1)*${nfreq_stress}-$(step)
@@ -1426,7 +1447,7 @@ print ">>> [unload ${compressions}] re-swelling HOLD (plates frozen at the seate
 run ${unload_run}
 
 unfix uavg_disp_z_poly
-if "${disp_fine_nfreq} > 0" then "unfix uavg_disp_z_poly_fine"
+if "${disp_fine_nfreq} > 0" then "unfix uavg_disp_z_poly_fine" "uncompute chunk_z_poly_dfine"
 unfix uavg_sigmazz_solv
 unfix uavg_sigmazz_poly
 unfix uavg_P_res

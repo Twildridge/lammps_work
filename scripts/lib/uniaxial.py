@@ -375,6 +375,10 @@ class Config:
                                           # the hold's own L -- so hold and unload D_c compare like for like), 'ref' (the swollen
                                           # reference thickness; D_c then reads (L_ref/L_hold)^2 larger) or 'mean'
     UNLOAD_N_MODES: int = 0               # modes of the unload profile fit (0 -> DC_N_MODES)
+    SOLV_Q: float = 0.025                 # solvent content of the gel (gel_solvent_series): the slab between the planes below which the
+                                          # fractions SOLV_Q and 1 - SOLV_Q of the polymer mass lie.  Part of the definition: the outer
+                                          # few % of the mass is the surface fringe, whose thickness changes most (totals move with q)
+    SOLV_RATE_WINDOW: float = 0.3         # the rate is a local straight-line slope over +/- this fraction of the time since the phase began
     DC_PRIMARY: str = 'unload'            # the D_c that kappa = D_c/M, fig_kappa and the summary use: the free re-swelling profile fit.
                                           # 2026-11-17: the only one -- the hold (load) fits are archived (archive/scripts/lib/
                                           # uniaxial_load_Dc.py; the knobs DC_STRESS*, DC_TV_*, PHI_S0, DC_SLOW_REF's hold check serve it).
@@ -1576,6 +1580,9 @@ def _lsq_amps(Xd, y):
 #  the gel does not return exactly to the seated reference (rg-seated runs re-swell past it); and with
 #  the asymptote free the Rg trace is a weaker fit of the SAME re-swelling event the profiles resolve
 #  in z, so it is not an independent estimate.  The profile fit is the only unload D_c.
+#  The series was also the wrong one for the Rg trace: the Rg thickness weights the strain by
+#  (3/2)(1 - 4Z^2/L^2), so it follows 1 - sum_odd 96/(k pi)^4 exp(-k^2 pi^2 D_c t/L^2), not the
+#  8/(k pi)^2 series; fitting it with the latter read D_c ~20-40 % low.
 # ---------------------------------------------------------------------------
 def load_unload(cfg, R, lvl, F_hold):
     """The level's _u<lvl> files -> dict, or None when there is no unload (no displacement file).
@@ -2764,9 +2771,9 @@ _REQUIRED_PROD = ('sigmazz_polymer', 'sigmazz_solvent', 'solvent_density_z', 'st
 # two-piston compression extras (per level) and permeation-mode lists (no level tag), 2026-09-16
 _TWO_PIST_DAT = ('piston_pressure', 'permeation', 'pressure_reservoirs')
 # fine-cadence hold displacement profile (DISP_FINE_NFREQ > 0 in the batch, 2026-10-05): optional, most runs have none
-_TWO_PIST_OPT = ('disp_z_polymer_fine',)
+_TWO_PIST_OPT = ('disp_z_polymer_fine', 'disp_z_polymer_drive')      # _drive: the ramp's profiles (decks since 2026-11-21)
 # unload / free re-swelling files (deck Phase 2c, -var unload 1, 2026-10-09): optional, tagged _<tag>_u<lvl>
-_UNLOAD_DAT = ('disp_z_polymer', 'disp_z_polymer_fine', 'gel_dimensions_bb', 'gel_dimensions_rg', 'piston_position',
+_UNLOAD_DAT = ('disp_z_polymer', 'disp_z_polymer_fine', 'disp_z_polymer_drive', 'gel_dimensions_bb', 'gel_dimensions_rg', 'piston_position',
                'support_position', 'piston_force_avg', 'piston_pressure', 'permeation', 'strain_piston', 'polymer_com',
                'gel_edges', 'pressure_reservoirs', 'sigmazz_polymer', 'sigmazz_solvent')
 _PERM_DAT = ('sigmazz_polymer', 'sigmazz_solvent', 'sigmaxx_polymer', 'sigmaxx_solvent',
@@ -3647,9 +3654,13 @@ def _strain_unload_axis(ax, cfg, levels):
 
 def fig_strain(cfg, R, levels, stem='strain_diagnostic'):
     """Strain vs step: solid eps_Rg, dashed eps_BB, faint eps_piston (diagnostic);
+    eps_Rg is exact on a plateau; during a transient it weights the strain by (3/2)(1 - 4Z^2/L^2) (faces 0,
+    mid-plane 1.5) and lags the thickness strain -- its drift in a hold at fixed plates is strain moving inward.
     shaded plateau window.  Works for one level or a sweep (colour = level).
     Levels with an unload (L['U'], 2026-10-12) get a second panel (b) with the same
     strains over the retraction + free re-swelling; the hold is then panel (a)."""
+    if len(levels) == 1:                                  # one level: one time axis, phases shaded (2026-11-21)
+        return fig_strain_cycle(cfg, R, levels[0], stem=stem)
     has_U = any(L.get('U') is not None for L in levels)
     if has_U:
         fig, (ax, axU) = plt.subplots(1, 2, figsize=(19, 6.5), sharey=True, constrained_layout=True)
@@ -6291,85 +6302,381 @@ def fig_wet_pistons(cfg, R, L):
     return fig
 
 
-def gel_solvent_exchange(cfg, R, L):
-    """Solvent that has left (hold) or entered (unload) the gel since the first sample of the level's own file, vs step.
-    The polymer is incompressible and the box is fixed laterally, so the solvent volume crossing the gel faces is the
-    change of the gel volume, A dL.  Two thickness measures from the deck's gel_dimensions files: the bounding box (outermost
-    beads; under load these are the plates) and the Rg thickness (bulk-weighted).  On a hold the solvent_density_z snapshots
-    give a direct count between the two plates, (N_ref - N)/rho_reservoir, as a check on the bounding-box curve.
-    Returns dict(step, V_bb, V_rg, count_step, count_V, word) or None."""
-    un = _is_unload(L)
-    ph = 'u' if un else 'c'
-    sgn = 1.0 if un else -1.0                              # hold: thickness lost = expelled; unload: thickness gained = absorbed
-    A = float(R['AREA'])
-    out = dict(word='absorbed' if un else 'expelled', unload=un, count_step=None)
-    for key, name in (('bb', 'gel_dimensions_bb'), ('rg', 'gel_dimensions_rg')):
-        a = load2c(cfg.path(name, L['lvl'], phase=ph), 4)
-        if a is not None and len(a) > 1:
-            out['step_' + key], out['V_' + key] = a[:, 0], sgn * A * (a[:, 3] - a[0, 3])
-    if 'V_bb' not in out and 'V_rg' not in out:
-        return None
-    if not un:                                             # direct count between the plates (the unload writes no density file)
-        fd, fr = cfg.path('solvent_density_z', L['lvl']), cfg.path('solvent_density_z_ref')
-        if fd.exists() and fr.exists() and L.get('piston_z_at') is not None and L.get('support_z_at') is not None:
-            sn, sr = read_ave_chunk_file(fd), read_ave_chunk_file(fr)
-            z = sn[0][1][:, 1]
-            if len(sn) and len(sr) and len(z) == len(R['z']) and R['bw'].any():
-                dz = float(z[1] - z[0])
-
-                def count(N, lo, hi):                      # atoms between two planes, edge bins weighted by their overlap
-                    w = np.clip((np.minimum(z + dz / 2, hi) - np.maximum(z - dz / 2, lo)) / dz, 0.0, 1.0)
-                    return float((N * w).sum())
-
-                rho = float(np.mean([x[1][:, 3][R['bw']] for x in sr]))            # bulk solvent number density (feed reservoir)
-                N0 = float(np.mean([count(x[1][:, 2], R['z_support'], R['z_piston']) for x in sr]))
-                ts = np.array([x[0] for x in sn], float)
-                out['count_step'] = ts
-                out['count_V'] = np.array([(N0 - count(x[1][:, 2], L['support_z_at'](t), L['piston_z_at'](t))) / rho for x, t in zip(sn, ts)])
-                out['rho_res'] = rho
+# ---------------------------------------------------------------------------
+#  The load + unload cycle of one level on one time axis (2026-11-21): phases, strains, and the
+#  solvent content of the gel with its rate of change
+#
+#  Solvent content.  The polymer is incompressible and the box is fixed laterally, so the solvent
+#  between two planes that move WITH the network changes by A x (change of their separation).  The
+#  planes used are mass planes: the z below which the fractions q and 1 - q of the polymer mass lie
+#  (SOLV_Q; cumulative polymer mass is the material coordinate in 1-D, so these are material planes
+#  as long as the strands do not pass through each other).  L_q(t), their separation, comes from the
+#  per-bin polymer counts of the displacement files (disp_z_polymer_fine, else disp_z_polymer) and
+#  at eps = 0 from the traj_ref frames.  Every part of the slab counts with weight 1.
+#  Why not the Rg thickness: to first order dL_Rg = integral of (3/2)(1 - 4Z^2/L^2) eps(Z) dZ, so it
+#  weights the mid-plane 1.5 and the faces 0 and lags the thickness whenever the strain is not
+#  uniform (every transient).  Why not the bounding box: it is two beads of the surface fringe.
+#  What the number is: the solvent inside the central 1 - 2q of the network.  Under load the plates
+#  enclose the whole network, so the exchange with the BATH is over when the plates stop (the direct
+#  count between the plates moves ~3 % more during the hold); what L_q shows during the hold is
+#  solvent leaving the bulk for the outer q layers as the ramp's compressed skins relax.  The total
+#  depends on q in the unload as well (the outer few % of the mass is a diffuse fringe that springs
+#  out on release), so q is part of the definition, not a tuning knob.
+#  The decks write no profiles during the ramp or the retraction: there L_q is interpolated between
+#  the bracketing profile values (ramp: on the plate gap; retraction: linear in time) and drawn dashed.
+# ---------------------------------------------------------------------------
+def mass_plane_thickness(z, Nc, q):
+    """Separation of the planes below which the fractions q and 1 - q of the polymer mass lie, one value per row of
+    Nc (snapshots x bins, per-bin polymer counts on the bin centres z); the cumulative count is linear inside a bin."""
+    z = np.asarray(z, float)
+    Nc = np.atleast_2d(np.asarray(Nc, float))
+    bw = float(z[1] - z[0])
+    edges = np.concatenate([[z[0] - bw / 2], z + bw / 2])
+    out = np.full(len(Nc), np.nan)
+    for i, row in enumerate(Nc):
+        tot = row.sum()
+        if tot > 0:
+            c = np.concatenate([[0.0], np.cumsum(row)]) / tot
+            out[i] = np.interp(1.0 - q, c, edges) - np.interp(q, c, edges)
     return out
 
 
-def _solvent_exchange_fig(cfg, R, L, stem):
-    X = gel_solvent_exchange(cfg, R, L)
-    if X is None:
-        print('solvent figure skipped (no gel_dimensions files for this level)')
+def cycle_events(cfg, L):
+    """Steps that bound the phases of the level: dict(t0 = the ramp starts, t_ramp1 = the plates stop (None when no
+    strain_piston file), t_hold1 = end of the hold, and with an unload t_retract, t_free, t_end)."""
+    lvl = L['lvl']
+    S = load2c(cfg.path('strain_zz', lvl), 3)
+    PS = load2c(cfg.path('strain_piston', lvl), 4)
+    src = PS if PS is not None else S
+    if src is None:
         return None
-    word = X['word']
-    fig, ax = plt.subplots(figsize=(11, 6), constrained_layout=True)
-    fin = []
-    if 'V_bb' in X:
-        ax.plot(X['step_bb'], X['V_bb'], '-', color=WONG['blue'], lw=2.2, label=r'$A\,\Delta L_{\rm bb}$: between the outermost beads (bounding box)')
-        fin.append(f"bb {sig(X['V_bb'][-1])}")
-    if 'V_rg' in X:
-        ax.plot(X['step_rg'], X['V_rg'], '-', color=WONG['vermillion'], lw=2.2, label=r'$A\,\Delta L_{R_g}$: bulk ($R_g$ thickness)')
-        fin.append(f"$R_g$ {sig(X['V_rg'][-1])}")
-    if X['count_step'] is not None:
-        ax.plot(X['count_step'], X['count_V'], 'o', color='k', ms=7, mfc='none', mew=1.6,
-                label=r'direct count between the plates, $(N_{\rm ref}-N)/\rho_{\rm res}$')
-    ax.axhline(0, color='k', ls=':', lw=1, alpha=0.5)
-    _mark_unload_times(ax, L)
-    ax.set_xlabel('time step')
-    ax.set_ylabel(rf'solvent {word}  ($\sigma^3$)')
-    since = 'the start of the retraction' if X['unload'] else 'the start of the drive'
-    ax.set_title(f'Solvent {word} by the gel since {since} (gel volume change), $\\varepsilon={L["lvl"]}$'
-                 f'  |  final: ' + ', '.join(fin) + r' $\sigma^3$', fontsize=13)
-    if _ab(L):
-        fig.suptitle(_sup(L, _ab(L).rstrip(' |') + f'  |  {cfg.sim_name}'), fontsize=13, fontweight='bold')
+    ev = dict(t0=float(src[0, 0]), t_hold1=float(src[-1, 0]), t_ramp1=None, PS=PS)
+    if PS is not None and len(PS) > 2:
+        ev['t_ramp1'] = float(PS[np.argmax(np.isclose(PS[:, 2], PS[-1, 2], atol=1e-6)), 0])
+    U = L.get('U')
+    if U is not None:
+        ev.update(t_retract=float(U['t_retract']), t_free=float(U['t_free']), t_end=float(U['ts'][-1]))
+        for k in ('strain_ts', 'bb_ts', 'pist_ts'):
+            if k in U and len(U[k]):
+                ev['t_end'] = max(ev['t_end'], float(U[k][-1]))
+    return ev
+
+
+def _local_rate(t, y, t0, frac, n_min=7, n_out=140):
+    """dy/dt of a noisy series by straight-line fits in windows that grow with the time since t0 (half-width
+    frac x (t - t0), at least n_min points) -> (t_out, rate, se).  Early times keep their resolution, late times
+    average the noise down."""
+    t, y = np.asarray(t, float), np.asarray(y, float)
+    if len(t) < n_min + 2:
+        return t[:0], t[:0], t[:0]
+    tau = np.clip(t - t0, 1e-9, None)
+    h = n_min // 2
+    grid = np.unique(np.concatenate([np.geomspace(tau[h], tau[-1], n_out), tau[h::max(1, len(tau) // n_out)]]))
+    tc_, r_, s_ = [], [], []
+    for tc in grid:
+        sel = np.abs(tau - tc) <= frac * tc
+        if sel.sum() < n_min:
+            sel = np.zeros(len(tau), bool)
+            sel[np.argsort(np.abs(tau - tc))[:n_min]] = True
+        x = tau[sel] - tau[sel].mean()
+        sxx = float(np.sum(x ** 2))
+        if sxx <= 0:
+            continue
+        b = float(np.sum(x * (y[sel] - y[sel].mean())) / sxx)
+        res = y[sel] - y[sel].mean() - b * x
+        tc_.append(tc + t0); r_.append(b)        # at the ends the window is one-sided: the slope of the nearest stretch
+        s_.append(float(np.sqrt(np.sum(res ** 2) / max(sel.sum() - 2, 1) / sxx)))
+    return np.array(tc_), np.array(r_), np.array(s_)
+
+
+def gel_solvent_series(cfg, R, L):
+    """Solvent content of the central 1 - 2q of the network over the level's whole load + unload and its rate of
+    change (see the section comment).  -> dict(ev, q, rho, A, L_ref, segs) or None when the level has no polymer-count
+    profiles.  segs: list of dict(phase 'ramp'|'hold'|'retraction'|'reswelling', measured, t (tau since the ramp
+    start), Lq, N (solvent beads in the slab minus the reference), rate_t, rate (beads/tau; > 0 = entering), rate_se)."""
+    if L.get('solvent_series') is not None:
+        return L['solvent_series']
+    q, lvl = float(cfg.SOLV_Q), L['lvl']
+    ev = cycle_events(cfg, L)
+    if ev is None:
+        return None
+
+    def profiles(pathfn, names=('disp_z_polymer_fine', 'disp_z_polymer')):
+        for name in names:
+            f = pathfn(name, lvl)
+            if not f.exists():
+                continue
+            sn = [s for s in read_ave_chunk_file(f) if s[1].shape[1] >= 3]
+            if len(sn) < 3:
+                continue
+            nb = min(s[1].shape[0] for s in sn)
+            ts = np.array([s[0] for s in sn], float)
+            W = float(np.min(np.diff(ts)))
+            return ts - 0.5 * W, mass_plane_thickness(sn[0][1][:nb, 1], np.array([s[1][:nb, 2] for s in sn]), q)
+        return None
+
+    H = profiles(cfg.path)
+    if H is None:
+        return None
+    Un = profiles(cfg.upath) if L.get('U') is not None else None
+    # the two drive stages (decks since 2026-11-21 with DISP_FINE_NFREQ > 0): profiles while the plates move
+    Dr = profiles(cfg.path, ('disp_z_polymer_drive',))
+    Du = profiles(cfg.upath, ('disp_z_polymer_drive',)) if Un is not None else None
+    L_ref = None
+    try:                                                    # eps = 0: the same planes from the reference trajectory frames
+        zs = load_ref_positions(cfg, R)['z']
+        L_ref = float(np.quantile(zs, 1.0 - q) - np.quantile(zs, q))
+    except Exception:
+        pass
+    rho = float(R.get('rho_s0', np.nan))
+    A = float(R['AREA'])
+    k_N = (rho if np.isfinite(rho) else 1.0) * A           # beads per sigma of slab thickness
+    L_zero = L_ref if L_ref is not None else float(H[1][0])
+    tau = lambda step: (np.asarray(step, float) - ev['t0']) * cfg.dt_lj
+    frac = float(cfg.SOLV_RATE_WINDOW)
+    segs = []
+
+    def add(phase, measured, step, Lq, t_rate=None, rate=None, se=None):
+        segs.append(dict(phase=phase, measured=measured, t=tau(step), Lq=np.asarray(Lq, float), N=k_N * (np.asarray(Lq, float) - L_zero),
+                         rate_t=None if t_rate is None else tau(t_rate), rate=rate, rate_se=se))
+
+    def add_drive(phase, D, step0, L0, step1, L1):
+        """A drive stage with its own profiles: the series closed with the value before (step0, L0; None = unknown) and
+        the first profile of the hold that follows (step1, L1)."""
+        m = (D[0] > (step0 if L0 is not None else -np.inf)) & (D[0] < step1)
+        st = np.concatenate([[step0] if L0 is not None else [], D[0][m], [step1]])
+        Lq = np.concatenate([[L0] if L0 is not None else [], D[1][m], [L1]])
+        tr, r, se = _local_rate(st * cfg.dt_lj, Lq, (st[0] - 1.0) * cfg.dt_lj, frac, n_min=5)
+        if not len(tr):
+            tr, r, se = st * cfg.dt_lj, np.gradient(Lq, st * cfg.dt_lj), None
+        add(phase, True, st, Lq, tr / cfg.dt_lj, k_N * r, None if se is None else k_N * se)
+
+    # ---- ramp: its own profiles when the deck wrote them, else interpolated on the plate gap between the reference
+    #      and the first hold profile ----
+    PS = ev['PS']
+    if Dr is not None:
+        add_drive('ramp', Dr, ev['t0'], L_ref, H[0][0], H[1][0])
+    elif L_ref is not None and PS is not None and H[0][0] > PS[0, 0]:
+        m = PS[:, 0] <= H[0][0]
+        g0, g1 = float(PS[0, 2]), float(np.interp(H[0][0], PS[:, 0], PS[:, 2]))
+        if m.sum() >= 2 and abs(g1 - g0) > 1e-9:
+            st = np.append(PS[m, 0], H[0][0])
+            Lq = L_ref + (np.append(PS[m, 2], g1) - g0) * (H[1][0] - L_ref) / (g1 - g0)
+            add('ramp', False, st, Lq, st, k_N * np.gradient(Lq, st * cfg.dt_lj), None)
+    # ---- hold ----
+    t_h0 = ev['t_ramp1'] if ev['t_ramp1'] is not None else ev['t0']
+    tr, r, se = _local_rate(H[0] * cfg.dt_lj, H[1], min(t_h0, H[0][0] - 1.0) * cfg.dt_lj, frac)
+    add('hold', True, H[0], H[1], tr / cfg.dt_lj, k_N * r, k_N * se)
+    if Un is not None:
+        # ---- retraction: its own profiles, else the mean rate between the end of the hold and the first unload profile ----
+        Lh = float(np.mean(H[1][-max(3, len(H[1]) // 50):]))
+        st = np.array([ev['t_retract'], Un[0][0]])
+        if Du is not None:
+            add_drive('retraction', Du, ev['t_retract'], Lh, Un[0][0], Un[1][0])
+        elif st[1] > st[0]:
+            mean_rate = k_N * (Un[1][0] - Lh) / ((st[1] - st[0]) * cfg.dt_lj)
+            add('retraction', False, st, [Lh, Un[1][0]], st, np.array([mean_rate, mean_rate]), None)
+        tr, r, se = _local_rate(Un[0] * cfg.dt_lj, Un[1], min(ev['t_retract'], Un[0][0] - 1.0) * cfg.dt_lj, frac)
+        add('reswelling', True, Un[0], Un[1], tr / cfg.dt_lj, k_N * r, k_N * se)
+    out = dict(ev=ev, q=q, rho=rho, A=A, L_ref=L_ref, L_zero=L_zero, segs=segs, beads=bool(np.isfinite(rho)))
+    L['solvent_series'] = out
+    return out
+
+
+PHASE_STYLE = {'ramp': (WONG['blue'], 0.30, 'ramp'), 'hold': (WONG['blue'], 0.07, 'LOAD: hold at fixed plates'),
+               'retraction': (WONG['orange'], 0.38, 'plates retract'), 'reswelling': (WONG['orange'], 0.09, 'UNLOAD: free re-swelling')}
+
+
+def _phase_spans(ax, cfg, ev, labels=True):
+    """Shade the phases of the level on a time axis in tau since the ramp start: load (blue; the ramp darker), unload
+    (orange; the retraction darker), with their names along the top."""
+    tau = lambda s: (s - ev['t0']) * cfg.dt_lj
+    spans = []
+    r1 = ev['t_ramp1'] if ev['t_ramp1'] is not None else ev['t0']
+    if r1 > ev['t0']:
+        spans.append(('ramp', ev['t0'], r1))
+    spans.append(('hold', r1, ev['t_hold1']))
+    if 't_retract' in ev:
+        spans.append(('retraction', ev['t_retract'], ev['t_free']))
+        spans.append(('reswelling', ev['t_free'], ev['t_end']))
+    tr = ax.get_xaxis_transform()
+    for name, a, b in spans:
+        col, alpha, lab = PHASE_STYLE[name]
+        ax.axvspan(tau(a), tau(b), color=col, alpha=alpha, lw=0, zorder=0)
+        if labels and name in ('hold', 'reswelling'):
+            ax.text(0.5 * (tau(a) + tau(b)), 1.012, lab, transform=tr, ha='center', va='bottom', fontsize=12, fontweight='bold', color=col)
+    if 't_retract' in ev:
+        ax.axvline(tau(ev['t_retract']), color='0.25', ls='--', lw=1.2, zorder=1)
+    if labels:
+        dur = [f"ramp {tau(r1):.0f} $\\tau$" if r1 > ev['t0'] else None,
+               f"retraction {(ev['t_free'] - ev['t_retract']) * cfg.dt_lj:.0f} $\\tau$" if 't_retract' in ev else None]
+        return ';  '.join(d for d in dur if d) + ' (the two darker bands)'
+    return ''
+
+
+def _strain_cycle_axis(ax, cfg, R, L, ev, labels=True):
+    """The three strains of the level over its whole load + unload, time in tau since the ramp start."""
+    lvl, U = L['lvl'], L.get('U')
+    tau = lambda s: (np.asarray(s, float) - ev['t0']) * cfg.dt_lj
+    note = _phase_spans(ax, cfg, ev, labels=labels)
+    cat = lambda a, b: np.concatenate([np.asarray(a, float), np.asarray(b, float)]) if b is not None else np.asarray(a, float)
+    S = load2c(cfg.path('strain_zz', lvl), 3)
+    if S is not None:
+        has = U is not None and 'strain_eps' in U
+        ax.plot(tau(cat(S[:, 0], U['strain_ts'] if has else None)), cat((S[:, 1] - S[:, 2]) / S[:, 1], U['strain_eps'] if has else None),
+                '-', color=WONG['blue'], lw=2.4, label=r'$\varepsilon_{Rg}$: network, $R_g$ thickness')
+    BB = load2c(cfg.path('gel_dimensions_bb', lvl), 4)
+    if BB is not None and BB[0, 3] != 0:
+        has = U is not None and 'bb_eps' in U
+        ax.plot(tau(cat(BB[:, 0], U['bb_ts'] if has else None)), cat((BB[0, 3] - BB[:, 3]) / BB[0, 3], U['bb_eps'] if has else None),
+                '--', color=WONG['vermillion'], lw=1.5, alpha=0.85, label=r'$\varepsilon_{BB}$: network, outermost beads')
+    PS = ev['PS']
+    if PS is not None:
+        has = U is not None and 'pist_eps' in U
+        ax.plot(tau(cat(PS[:, 0], U['pist_ts'] if has else None)), cat(PS[:, 3], U['pist_eps'] if has else None),
+                '-', color='0.35', lw=3.2, alpha=0.35, label=r'$\varepsilon_\mathrm{plates}$: plate gap')
+    ax.axhline(L['eps'], color='0.3', ls=':', lw=1.0)
+    ax.axhline(0.0, color='0.3', ls=':', lw=1.0)
+    box = dict(boxstyle='round,pad=0.25', fc='white', ec='none', alpha=0.85)
+    ax.annotate(f'end of hold: Rg {sig(L.get("eps_rg", np.nan))}  BB {sig(L.get("eps_bb", np.nan))}', (tau(ev['t_hold1']), L.get('eps_rg', L['eps'])),
+                textcoords='offset points', xytext=(-8, -9), ha='right', va='top', fontsize=10, color=WONG['blue'], bbox=box)
+    if U is not None and np.isfinite(U.get('eps_rg', np.nan)):
+        ax.annotate(f'end of unload: Rg {sig(U["eps_rg"])}  BB {sig(U.get("eps_bb", np.nan))}', (tau(ev['t_end']), U['eps_rg']),
+                    textcoords='offset points', xytext=(-6, 8), ha='right', va='bottom', fontsize=10, color=WONG['blue'], bbox=box)
+    ax.set_ylabel(r'strain  $\varepsilon=(L_0-L)/L_0$', fontsize=16)
+    ax.tick_params(labelsize=14)
     ax.grid(alpha=0.3)
-    smart_legend(ax, fontsize=12)
+    ax.margins(x=0.01)
+    ax.legend(loc='lower left', fontsize=10, framealpha=0.9)
+    return note
+
+
+RG_NOTE = (r"$\varepsilon_{Rg}$ is exact on a plateau.  During a transient it weights the strain at the mid-plane by 1.5 and at the faces by 0, "
+           "so it lags the thickness strain;\nits drift during the hold at fixed plates is strain moving inward from the faces, not a change of thickness.")
+
+
+def fig_strain_cycle(cfg, R, L, stem='strain_diagnostic'):
+    """Strain diagnostic of ONE level on one time axis (2026-11-21): the ramp + hold and, when the level has an unload,
+    the retraction + free re-swelling, phases shaded and named.  Solid eps_Rg, dashed eps_BB, faint the plate gap;
+    zero = the seated reference, dotted = the applied level."""
+    ev = cycle_events(cfg, L)
+    if ev is None:
+        print('strain diagnostic skipped (no strain_zz / strain_piston files)')
+        return None
+    fig, ax = plt.subplots(figsize=(13, 6.8), constrained_layout=True)
+    note = _strain_cycle_axis(ax, cfg, R, L, ev)
+    ax.set_xlabel(r'time since the ramp started  ($\tau$)', fontsize=16)
+    fig.suptitle(f"Strain over the load and unload of level _c{L['lvl']}  |  {cfg.sim_name}\n"
+                 f"zero = seated reference, dotted = applied level;  {note}", fontsize=12, fontweight='bold')
+    fig.text(0.5, -0.01, RG_NOTE, ha='center', va='top', fontsize=10.5, color='0.25')
     return _save(fig, cfg, stem, L['lvl'])
 
 
-def fig_solvent_expelled(cfg, R, L):
-    """Two-piston compression: solvent expelled from the gel over the drive + hold (gel volume change A dL, see
-    gel_solvent_exchange), and for a level with an unload (L['U']) the solvent absorbed over the retraction + re-swelling
-    as its '(b)' figure.  2026-11-17: replaces the wet-piston displacement trace, which measures the volume change of
-    everything between the two wet pistons (~1 % of the solvent crossing the gel faces), not the exchange with the gel."""
-    fig = _solvent_exchange_fig(cfg, R, L, 'solvent_expelled')
-    if L.get('U') is not None:
-        _solvent_exchange_fig(cfg, R, L['U'], 'solvent_absorbed_unload')
-    return fig
+def _solvent_rate_axis(ax, cfg, R, L, X, labels=True, spans=True, legend=True):
+    """Rate of change of the solvent content of the gel (central 1 - 2q of the network mass): > 0 entering, < 0 leaving.
+    spans / legend False: the bare curve and axis, for a twin axis over the strain diagnostic."""
+    if spans:
+        _phase_spans(ax, cfg, X['ev'], labels=labels)
+    col = WONG['green']
+    pk = 0.0
+    for i, s in enumerate(X['segs']):
+        if s['rate'] is None or not len(s['rate']):
+            continue
+        ax.plot(s['rate_t'], s['rate'], '-' if s['measured'] else '--', color=col, lw=2.4 if s['measured'] else 1.8)
+        if s['rate_se'] is not None:
+            ax.fill_between(s['rate_t'], s['rate'] - 2 * s['rate_se'], s['rate'] + 2 * s['rate_se'], color=col, alpha=0.18, lw=0)
+        if s['measured']:
+            pk = max(pk, float(np.nanmax(np.abs(s['rate']))))
+    ax.plot([], [], '-', color=col, lw=2.4, label=rf"from the polymer mass planes at {100 * X['q']:g} % and {100 * (1 - X['q']):g} % (band: $\pm 2$ s.e. of the local slope)")
+    if any(not s['measured'] for s in X['segs']):
+        ax.plot([], [], '--', color=col, lw=1.8, label='ramp / retraction: no profiles written, interpolated between the bracketing values')
+    ax.axhline(0.0, color='k', lw=0.9)
+    unit = r'beads/$\tau$' if X['beads'] else r'$\sigma^3/\tau$ per unit density'
+    ax.set_ylabel(f'solvent entering the gel  ({unit})', fontsize=16)
+    lin = 10.0 ** np.floor(np.log10(max(pk / 5.0, 1e-12)))
+    ax.set_yscale('symlog', linthresh=lin, linscale=1.2)
+    top = 10.0 ** np.ceil(np.log10(max(max((float(np.nanmax(np.abs(s['rate']))) for s in X['segs'] if s['rate'] is not None and len(s['rate'])), default=lin), lin)))
+    dec = lin * 10.0 ** np.arange(0, int(round(np.log10(top / lin))) + 1)
+    ax.set_yticks(np.concatenate([-dec[::-1], [0.0], dec]))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{v:g}'))
+    ax.set_ylim(-1.6 * top, 1.6 * top)
+    ax.tick_params(labelsize=14)
+    ax.margins(x=0.01)
+    if spans:
+        ax.grid(alpha=0.3)
+    if legend:
+        ax.legend(loc='lower right', fontsize=10, framealpha=0.9)
+    return lin
+
+
+def _solvent_totals(X):
+    tot = {}
+    for s in X['segs']:
+        tot[s['phase']] = float(s['N'][-1] - s['N'][0])
+    load = tot.get('ramp', 0.0) + tot.get('hold', 0.0)
+    un = tot.get('retraction', 0.0) + tot.get('reswelling', 0.0)
+    return tot, load, un
+
+
+def fig_solvent_rate(cfg, R, L, stem='solvent_rate'):
+    """Rate at which solvent enters (> 0) or leaves (< 0) the gel over the level's whole load + unload, one curve
+    (gel_solvent_series: the central 1 - 2 SOLV_Q of the network mass, every part of it counted with weight 1)."""
+    X = gel_solvent_series(cfg, R, L)
+    if X is None:
+        print('solvent-rate figure skipped (no displacement files with polymer counts for this level)')
+        return None
+    fig, ax = plt.subplots(figsize=(13, 6.8), constrained_layout=True)
+    lin = _solvent_rate_axis(ax, cfg, R, L, X)
+    ax.set_xlabel(r'time since the ramp started  ($\tau$)', fontsize=16)
+    tot, load, un = _solvent_totals(X)
+    u = 'beads' if X['beads'] else r'$\sigma^3 \rho$'
+    fig.suptitle(f"Solvent entering / leaving the gel, level _c{L['lvl']}  |  {cfg.sim_name}\n"
+                 f"central {100 * (1 - 2 * X['q']):g} % of the network mass;  net over the load {load:+.0f} {u}"
+                 + (f" (ramp {tot['ramp']:+.0f}, hold {tot['hold']:+.0f})" if 'ramp' in tot else '')
+                 + (f", over the unload {un:+.0f} {u}" if 'reswelling' in tot else '')
+                 + f";  axis linear inside $\\pm${sig(lin, 2)}, logarithmic outside", fontsize=12, fontweight='bold')
+    return _save(fig, cfg, stem, L['lvl'])
+
+
+def fig_strain_solvent(cfg, R, L, stem='strain_solvent_cycle', layout='stacked'):
+    """The strain diagnostic and the solvent rate on one time axis (the load + unload of one level).
+    layout 'stacked': two panels sharing the time axis.  'twin': one panel, strain on the left axis and the solvent
+    rate (green) on the right; the strain axis is made symmetric about zero so the two zero lines coincide (the rate
+    axis is linear near zero and logarithmic outside, the strain axis linear).  Saved as <stem> / <stem>_twin."""
+    ev = cycle_events(cfg, L)
+    X = gel_solvent_series(cfg, R, L)
+    if ev is None or X is None:
+        print('strain + solvent figure skipped (strain files or polymer-count profiles missing)')
+        return None
+    pct = f"{100 * (1 - 2 * X['q']):g} %"
+    if layout == 'twin':
+        fig, a = plt.subplots(figsize=(14, 7.4), constrained_layout=True)
+        note = _strain_cycle_axis(a, cfg, R, L, ev)
+        lim = 1.12 * max(abs(v) for v in a.get_ylim())
+        a.set_ylim(-lim, lim)
+        b = a.twinx()
+        lin = _solvent_rate_axis(b, cfg, R, L, X, labels=False, spans=False, legend=False)
+        col = WONG['green']
+        b.set_ylabel(b.get_ylabel(), fontsize=16, color=col)
+        b.tick_params(axis='y', colors=col)
+        b.spines['right'].set_color(col)
+        a.set_xlabel(r'time since the ramp started  ($\tau$)', fontsize=16)
+        h, lab = a.get_legend_handles_labels()
+        h2, lab2 = b.get_legend_handles_labels()
+        a.legend(h + h2, lab + [f'right axis: solvent entering ($>0$) / leaving ($<0$) the central {pct} of the network mass']
+                 + lab2[1:], loc='upper right', fontsize=10, framealpha=0.92).set_zorder(10)
+        fig.suptitle(f"Strain (left) and solvent exchange (right) over the load and unload of level _c{L['lvl']}  |  {cfg.sim_name}\n"
+                     f"{note};  the two zero lines coincide;  right axis linear inside $\\pm${sig(lin, 2)}, logarithmic outside",
+                     fontsize=12, fontweight='bold')
+        return _save(fig, cfg, stem + '_twin', L['lvl'])
+    fig, (a, b) = plt.subplots(2, 1, figsize=(13, 10.5), sharex=True, constrained_layout=True)
+    note = _strain_cycle_axis(a, cfg, R, L, ev)
+    _solvent_rate_axis(b, cfg, R, L, X, labels=False)
+    b.set_title(f"solvent entering ($>0$) or leaving ($<0$) the central {pct} of the network mass", fontsize=12, loc='left')
+    b.set_xlabel(r'time since the ramp started  ($\tau$)', fontsize=16)
+    fig.suptitle(f"Strain and solvent exchange over the load and unload of level _c{L['lvl']}  |  {cfg.sim_name}\n{note}",
+                 fontsize=12, fontweight='bold')
+    return _save(fig, cfg, stem, L['lvl'])
 
 
 def fig_wet_pistons_sweep(cfg, R, levels):

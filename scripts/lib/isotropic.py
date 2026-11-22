@@ -38,10 +38,10 @@ the compression notebooks estimate M:
     the hold the six plates open and the cube RE-SWELLS FREELY (_u<level> files).  All six faces
     unloaded is the 3-D unconstrained problem, whose diffusivity is D_m = (K/M) D_c = K/zeta
     (the confined D_c = M/zeta of the uniaxial holds divides by the longitudinal modulus; the
-    free volumetric response by K).  fit_Dm_unload fits the exact free-cube series -- the
-    product of three slab series, every observable linear in the dilatation relaxes as
-    1 - M_x M_y M_z -- to the Rg edges (headline), the Rg volume strain, the interior Pi and
-    the cumulative displacement profiles referenced to the re-swollen plateau; kappa = D_m / K
+    free volumetric response by K).  fit_Dm_unload fits the free-cube modes (the product of
+    three slab series) to the cumulative displacement profiles referenced to the re-swollen
+    plateau, per axis and jointly (the headline; the Rg-edge, Rg-volume and interior-Pi
+    estimators were removed 2026-11-21, see section 10); kappa = D_m / K
     from the same run.  No D_c is read from the compression hold any more (the hold-onset
     displace/atom files were dropped: a one-snapshot reference, and the shell folding mixed in
     with the drainage); the wet-piston bath check stays (no 'solvent expelled' reading: the
@@ -69,7 +69,7 @@ Layout of this file
     4. one strain level              load_level       (stresses, Terzaghi, plates, K; + the unload: D_m, kappa)
     5. Expanse sync                  sync_from_expanse (via uniaxial.sync_pull)
     6. per-axis views                view, axis context for uniaxial's figures
-    7. figures, single level         fig_strain ... fig_Dm, fig_closure
+    7. figures, single level         fig_strain ... fig_Dm, fig_Dm_time, fig_closure
     8. figures, sweep                fig_*_sweep
     9. summaries                     print_summary
    10. unload: free re-swelling      load_unload, fit_Dm_unload (the free-cube series; D_m, kappa = D_m / K)
@@ -155,10 +155,10 @@ class Config(uni.Config):
     # ---- unload / free re-swelling (deck Phase 2c, 2026-10-28): the diffusivity D_m = (K/M) D_c ----
     DM_UNLOAD: bool = True                # read the level's _u<lvl> files when they exist and fit the re-swelling (fit_Dm_unload)
     DM_N_MODES: int = 3                   # odd cos modes k = 1, 3, 5 of the displacement-profile fit along each axis
-    DM_TRACE_SKIP: float = 0.0            # tau after the plates stop left out of the edge / volume / Pi fits (0 = none)
+    DM_TRACE_SKIP: float = 0.0            # tau after the plates stop left out of the displacement-profile fit (0 = none)
     DM_BOUNDS: tuple = (1e-4, 10.0)       # D_m search interval (sigma^2/tau)
     DM_SERIES_TERMS: int = 40             # odd terms kept in each slab series
-    DM_N_BOOT: int = 200                  # block-bootstrap resamples behind the D_m confidence interval of the edge fit
+    DM_AXIS_SPREAD: float = 2.0           # per-axis D_m fits further apart than this factor: the level's D_m is flagged, not reported as a measurement
                                           # (UNLOAD_L, inherited: 'hold' = the compressed edges at the hold end set the lengths
                                           # of the series; 'ref' = the edges the level drove from; 'mean')
     HOST: str = 'expanse'                 # 'expanse' | 'pod' | 'bridges': which cluster folder RUNS_ROOT defaults to
@@ -213,6 +213,8 @@ class Config(uni.Config):
             return 'disp_z_polymer' if axis == 'z' else f'disp_along{axis}_polymer'
         if kind == 'disp_cum':                      # cumulative since the eps_vol = 0 reference (decks since 2026-10-05)
             return 'disp_z_polymer_cum' if axis == 'z' else f'disp_along{axis}_polymer_cum'
+        if kind == 'disp_cum_fine':                 # the unload's fine-cadence copy (DISP_FINE_NFREQ > 0, decks since 2026-11-21)
+            return 'disp_z_polymer_cum_fine' if axis == 'z' else f'disp_along{axis}_polymer_cum_fine'
         raise ValueError(kind)
 
     def plot(self, stem, lvl=None):
@@ -795,19 +797,14 @@ def load_level(cfg, R, lvl, verbose=True):
     L['Dm'] = fit_Dm_unload(cfg, R, L, L['U']) if L['U'] is not None else None
     if L['Dm'] is not None:
         F = L['Dm']
-        E = F['edges']
         say(f"  UNLOAD (free re-swelling after the hold; retraction {F['retract_T']:.0f} tau; re-swelling hold {F['hold_T']:.0f} tau"
             f" = {F['n_tau1']:.1f} tau_1;  series lengths {F['L3'][0]:.1f} x {F['L3'][1]:.1f} x {F['L3'][2]:.1f} = {cfg.UNLOAD_L!r} edges)")
-        say(f"    D_m (Rg edges, one D_m for x, y, z) = {F['Dm']:.4f} [{F['Dm_lo']:.4f}, {F['Dm_hi']:.4f}] sigma^2/tau  (R^2 {E['R2']:.3f}; "
-            f"tau_1 = L^2/(3 pi^2 D_m) = {F['tau1']:.0f} tau;  recovery of the compression per axis "
-            + ', '.join(f"{a} {r:.2f}" for a, r in zip('xyz', E['recovery'])) + ')'
-            + ('   <-- at a search bound' if E['at_bound'] else ''))
-        for key, label in (('volume', 'Rg volume strain'), ('stress', 'interior Pi relaxation'), ('prof_joint', 'displacement profiles, joint')):
-            if F.get(key) is not None:
-                G_ = F[key]
-                say(f"    D_m ({label}) = {G_['Dm']:.4f}  (R^2 {G_['R2']:.3f})" + ('   <-- at a search bound' if G_.get('at_bound') else ''))
-        if F.get('prof'):
-            say('    D_m (profiles per axis): ' + '   '.join(f"{a}: {Pa['Dm']:.4f} (R^2 {Pa['R2']:.3f})" for a, Pa in F['prof'].items()))
+        say(f"    D_m (displacement profiles, joint) = {F['Dm']:.4f} sigma^2/tau  (R^2 {F['prof_joint']['R2']:.3f}; "
+            f"tau_1 = L^2/(3 pi^2 D_m) = {F['tau1']:.0f} tau; profile blocks {F['block_T']:.0f} tau)"
+            + ('   <-- at a search bound' if F['prof_joint']['at_bound'] else ''))
+        say('    D_m per axis: ' + '   '.join(f"{a}: {Pa['Dm']:.4f} (R^2 {Pa['R2']:.3f})" + (' <-- bound' if Pa['at_bound'] else '') for a, Pa in F['prof'].items()))
+        if _dm_warning(F):
+            say('    ' + _dm_warning(F))
         L['kappa'] = F['Dm'] / L['K_net']
         L['kappa_lo'], L['kappa_hi'] = F['Dm_lo'] / L['K_net_hi'], F['Dm_hi'] / L['K_net_lo']
         say(f"  kappa = D_m / K_network = {L['kappa']:.4e} [{L['kappa_lo']:.4e}, {L['kappa_hi']:.4e}]")
@@ -860,6 +857,7 @@ def sync_files(cfg, levels=None):
         req += [cfg.path(n, l) for n in _REQUIRED + (cfg.pname('sigma', cfg.AXES[0], False, 'zz', 'polymer'),)]
         # the level's UNLOAD files (deck Phase 2c, runs with UNLOAD=1): the same set tagged _u<level>; all optional
         data += [cfg.path(n, l, phase='u') for n in tuple(_PROD) + tuple(_profile_names(cfg, False))]
+        data += [cfg.path(cfg.pname('disp_cum_fine', a), l, phase='u') for a in cfg.AXES]
         if cfg.SYNC_TRAJ:
             traj.append(cfg.traj('traj_stress', l))
     return data, traj, req
@@ -1564,7 +1562,7 @@ def print_summary(cfg, levels):
         kp = c(L['K_pl'], L['K_pl_lo'], L['K_pl_hi']) if 'K_pl' in L else 'n/a'
         ds = L.get('K_sys', 0.0)
         F = L.get('Dm')
-        dm = c(F['Dm'], F['Dm_lo'], F['Dm_hi']) if F is not None else 'n/a'
+        dm = (c(F['Dm'], F['Dm_lo'], F['Dm_hi']) + ('' if not _dm_warning(F) else ' !')) if F is not None else 'n/a'
         ka = f"{L['kappa']:11.4e}" if 'kappa' in L else f"{'n/a':>11s}"
         print(f"{L['eps_nominal']:7.3f} {L['eps']:8.4f} {L['strain'].get('rg', np.nan):8.4f} "
               f"{c(L['K_net'], L['K_net_lo'], L['K_net_hi']):>22s} {L.get('K_net_rg', np.nan):10.4f} {kp:>22s} {L['dev_rel']:8.1%} "
@@ -1577,8 +1575,10 @@ def print_summary(cfg, levels):
     if cfg.RELAX_SYS:
         print('  delta_sys = (plate plateau - fitted tail asymptote) / eps_vol;  * = larger than the K_net half-width')
     if any(L.get('Dm') is not None for L in levels):
-        print('  D_m = diffusivity of the FREE re-swelling after the hold (deck Phase 2c; Rg edges against the free-cube series, 95% block-bootstrap CI);'
+        print('  D_m = diffusivity of the FREE re-swelling after the hold (deck Phase 2c; joint displacement-profile fit, bracket = the range of the per-axis fits, not a CI);'
               '  kappa = D_m / K_net' + (';  D_c = (M/K) D_m = the confined diffusivity a uniaxial hold would show' if cfg.M_REF is not None else ''))
+        if any(L.get('Dm') is not None and _dm_warning(L['Dm']) for L in levels):
+            print('  ! = flagged: the per-axis fits disagree by more than DM_AXIS_SPREAD or the profile blocks are longer than tau_1 -- not a measurement')
     elif cfg.DM_UNLOAD:
         print('  D_m / kappa: no unload files (the run had UNLOAD=0); the compression hold itself is not used for a diffusivity')
 
@@ -1601,26 +1601,30 @@ def print_summary(cfg, levels):
 # solutions.  The fraction of the initial excess still inside the cube at time t,
 #     R(t) = M(t; L_x) M(t; L_y) M(t; L_z),
 #     M(t; L) = sum_{k odd} 8/(k pi)^2 exp(-k^2 pi^2 D_m t / L^2),
-# is what every observable linear in the dilatation follows: each Rg edge and the Rg volume
-# strain grow as 1 - R(t), the interior osmotic-pressure excess decays as R(t), and the
-# cumulative displacement along axis a, referenced to its re-swollen plateau, relaxes in
-# cos(k pi zeta_a) (odd k; u = 0 at the centre) at exp(-k^2 pi^2 D_m t / L_a^2) times the
-# transverse factors M(t; L_b) M(t; L_c).  The fundamental (1,1,1) decays at
-# tau_1 = L^2 / (3 pi^2 D_m) for a cube of edge L -- three times faster than a slab of the same
-# thickness.  The lengths are the COMPRESSED Rg edges at the hold end (UNLOAD_L = 'hold'; 'ref'
-# = the edges the level drove from; 'mean').  Time runs from the start of the retraction; the
-# fitted windows start when the plates have stopped (t_free, + DM_TRACE_SKIP).
+# is what the TRUE volume and the interior osmotic-pressure excess follow.  The cumulative
+# displacement along axis a, referenced to its re-swollen plateau, relaxes in cos(k pi zeta_a)
+# (odd k; u = 0 at the centre) at exp(-k^2 pi^2 D_m t / L_a^2) times the transverse factors
+# M(t; L_b) M(t; L_c).  The fundamental (1,1,1) decays at tau_1 = L^2 / (3 pi^2 D_m) for a cube of
+# edge L -- three times faster than a slab of the same thickness.  The lengths are the COMPRESSED
+# Rg edges at the hold end (a plateau, where the Rg edge is exact; UNLOAD_L = 'hold'; 'ref' = the
+# edges the level drove from; 'mean').  Time runs from the start of the retraction; the fitted
+# window starts when the plates have stopped (t_free, + DM_TRACE_SKIP).
 #
-# Estimators (one D_m each; the Rg-edge fit is the headline, the others are cross-checks):
-#   edges   -- the three Rg edges Delta L_a(t) = L_a(t) - L_a(hold end), one D_m, one free
-#              amplitude per axis (its ratio to L_start - L_hold is the recovery of the
-#              compression); 95 % interval from a circular block bootstrap of the residuals;
-#   volume  -- the Rg volumetric strain given back, eps_hold - eps_Rg(t);
-#   stress  -- the interior <Pi>(t) of every profile axis, block means: Pi_inf + dPi0 R(t);
-#   prof    -- the cumulative displacement profiles per axis (and jointly), the lag
-#              u_late(zeta) - u(zeta, t) in cos(k pi zeta) with a free constant per block
-#              (the floating gel's COM drift), a time-independent amplitude per mode (the
-#              late plateau has not fully relaxed itself) and the transverse factors in the decay.
+# One estimator (2026-11-21): the cumulative displacement profiles per axis and jointly -- the lag
+# u_late(zeta) - u(zeta, t) in cos(k pi zeta) with a free constant per block (the floating gel's COM
+# drift), a time-independent amplitude per mode (the late plateau has not fully relaxed itself) and
+# the transverse factors in the decay.  The joint fit is the headline; the per-axis fits give its
+# range, and a level whose axes disagree by more than DM_AXIS_SPREAD, or whose profile blocks are
+# longer than tau_1, is flagged as not a measurement.
+# Removed the same day, with the uniaxial thickness-trace fits:
+#   Rg edges, Rg volume strain -- an Rg edge is not the edge length during a transient.  To first
+#     order dL_a,Rg/L_a = (1/V) integral of (3/2)(1 - 4 X_a^2/L_a^2) eps_aa dV: it weights the NORMAL
+#     strain eps_aa (not the dilatation) by 1.5 at the mid-plane and 0 at the faces, so it lags the
+#     true edge and does not follow 1 - R(t).  Fitted with R(t) it reads D_m low (a factor ~0.6 on a
+#     synthetic cube under eps_aa = e/3, worse on short windows), and its free amplitude absorbs the
+#     misfit.  No exact series exists for it without the elastic solution for each eps_aa.
+#   interior Pi relaxation -- a handful of block means with a free offset and amplitude; it sat at
+#     a search bound on the one run that has an unload.
 def slab_remaining(t, D, L, n=40):
     """M(t; L): the fraction of a uniform initial excess still inside a slab of thickness L whose
     two faces are held at the final value, sum over odd k of 8/(k pi)^2 exp(-k^2 pi^2 D t / L^2)."""
@@ -1629,72 +1633,12 @@ def slab_remaining(t, D, L, n=40):
     return (8.0 / (k * np.pi) ** 2 * np.exp(-(k * np.pi / L) ** 2 * D * t)).sum(axis=1)
 
 
-def cube_remaining(t, D, Lx, Ly, Lz, n=40):
-    """R(t) of the free cube: the product of the three slab fractions."""
-    return slab_remaining(t, D, Lx, n) * slab_remaining(t, D, Ly, n) * slab_remaining(t, D, Lz, n)
-
-
-def _cube_remaining_avg(t_end, W, D, L3, n=40, m=9):
-    """R(t) averaged over the block window [t_end - W, t_end] (the deck's ave/time and ave/chunk
-    blocks end at t_end); W = 0 -> the instantaneous value."""
-    t_end = np.atleast_1d(np.asarray(t_end, float))
-    if W <= 0:
-        return cube_remaining(t_end, D, *L3, n=n)
-    offs = np.linspace(-W, 0.0, m)
-    return np.mean([cube_remaining(t_end + o, D, *L3, n=n) for o in offs], axis=0)
-
-
 def _search_D(resid_logD, bounds, xatol=1e-4):
     """bounded scalar minimisation over log D; returns (D, at_bound)."""
     lo, hi = np.log(bounds[0]), np.log(bounds[1])
     r = minimize_scalar(resid_logD, bounds=(lo, hi), method='bounded', options=dict(xatol=xatol))
     D = float(np.exp(r.x))
     return D, bool(D <= bounds[0] * 1.02 or D >= bounds[1] / 1.02)
-
-
-def _fit_traces(t, Y, D_bounds, L3, n_terms, W=0.0, offset=False):
-    """One D_m for the columns of Y (n_t x n_series): column j = a_j (1 - R(t)) [+ c_j].  Linear
-    least squares for the a_j (and c_j) at every D, bounded scalar search over log D.
-    Returns dict(Dm, amps, offs, R2, model, ss, at_bound)."""
-    t = np.asarray(t, float)
-    Y = np.asarray(Y, float)
-    if Y.ndim == 1:
-        Y = Y[:, None]
-
-    def solve(logD):
-        D = np.exp(logD)
-        F = 1.0 - _cube_remaining_avg(t, W, D, L3, n=n_terms)
-        X = np.column_stack([F, np.ones_like(F)]) if offset else F[:, None]
-        coef = np.linalg.lstsq(X, Y, rcond=None)[0]
-        model = X @ coef
-        return float(np.sum((Y - model) ** 2)), coef, model
-
-    D, at_bound = _search_D(lambda lg: solve(lg)[0], D_bounds)
-    ss, coef, model = solve(np.log(D))
-    ss_t = float(np.sum((Y - Y.mean(axis=0)) ** 2))
-    return dict(Dm=D, amps=coef[0], offs=(coef[1] if offset else np.zeros(Y.shape[1])),
-                R2=float(1.0 - ss / ss_t) if ss_t > 0 else np.nan, model=model, ss=ss, at_bound=at_bound)
-
-
-def _boot_D(t, Y, fit, D_bounds, L3, n_terms, n_boot, seed=12345):
-    """95 % interval of D_m from a circular block bootstrap of the residuals about the fitted
-    model (block = a tenth of the series, so the autocorrelation of the trace is kept)."""
-    Y = np.asarray(Y, float)
-    if Y.ndim == 1:
-        Y = Y[:, None]
-    if n_boot < 2:
-        return np.nan, np.nan
-    rng = np.random.default_rng(seed)
-    res = Y - fit['model']
-    n = len(t)
-    blk = max(5, n // 10)
-    Ds = []
-    for _ in range(int(n_boot)):
-        starts = rng.integers(0, n, size=int(np.ceil(n / blk)))
-        idx = np.concatenate([np.arange(s, s + blk) % n for s in starts])[:n]
-        Ds.append(_fit_traces(t, fit['model'] + res[idx], D_bounds, L3, n_terms)['Dm'])
-    lo, hi = np.percentile(Ds, [2.5, 97.5])
-    return float(lo), float(hi)
 
 
 def load_unload(cfg, R, lvl, L, verbose=True):
@@ -1744,13 +1688,16 @@ def load_unload(cfg, R, lvl, L, verbose=True):
     perm_at = _at(_track(Wp, 'z_perm'), L.get('z_perm', R['z_perm']))
     U['disp'], U['ax'] = {}, {}
     for a in cfg.AXES:
-        f = cfg.path(cfg.pname('disp_cum', a), lvl, phase='u')
-        if f.exists():
+        for kind in ('disp_cum_fine', 'disp_cum'):                   # the fine-cadence file when the run wrote one
+            f = cfg.path(cfg.pname(kind, a), lvl, phase='u')
+            if not f.exists():
+                continue
             snaps = [sn for sn in uni.read_ave_chunk_file(f) if sn[1].shape[1] >= 4]
-            if snaps:
+            if len(snaps) >= 3:
                 nb = min(sn[1].shape[0] for sn in snaps)
-                U['disp'][a] = dict(ts=np.array([sn[0] for sn in snaps], float), z=snaps[-1][1][:nb, 1],
+                U['disp'][a] = dict(ts=np.array([sn[0] for sn in snaps], float), z=snaps[-1][1][:nb, 1], fine=kind.endswith('fine'),
                                     Nc=np.array([sn[1][:nb, 2] for sn in snaps]), u=np.array([sn[1][:nb, 3] for sn in snaps]))
+                break
         if a not in R['ax'] or a not in L['ax']:
             continue
         stx = _stacks(cfg, a, lvl=lvl, phase='u')
@@ -1784,15 +1731,15 @@ def load_unload(cfg, R, lvl, L, verbose=True):
         f" re-swelling {(U['ts_end'] - U['t_free']) * cfg.dt_lj:.0f} tau;  open gaps x {U['gap']['x']:.2f} y {U['gap']['y']:.2f} z {U['gap']['z']:.2f}"
         + (f";  Rg edges at the hold end {' x '.join(f'{v:.1f}' for v in U['L_hold_rg'])}" if 'L_hold_rg' in U else '')
         + (f", before the drive {' x '.join(f'{v:.1f}' for v in U['L_start_rg'])}" if 'L_start_rg' in U else '')
-        + f";  stress profiles along {', '.join(U['ax']) or 'none'}, displacement along {', '.join(U['disp']) or 'none'}")
+        + f";  stress profiles along {', '.join(U['ax']) or 'none'}, displacement along {', '.join(U['disp']) or 'none'}"
+        + (' (fine-cadence files)' if U['disp'] and all(d['fine'] for d in U['disp'].values()) else ''))
     return U
 
 
 def fit_Dm_unload(cfg, R, L, U):
-    """D_m of the free re-swelling (see the section comment): the Rg edges (headline, with a
-    block-bootstrap interval), the Rg volume strain, the interior Pi relaxation and the
-    cumulative displacement profiles, each against the free-cube series with the lengths
-    UNLOAD_L selects.  Returns a dict or None (no unload, no Rg trace, or too few points)."""
+    """D_m of the free re-swelling (see the section comment): the cumulative displacement profiles along every profile
+    axis against the free-cube modes, one fit per axis and one joint fit (the headline).  Returns a dict or None (no
+    unload, no Rg edges for the series lengths, or no usable displacement profile)."""
     if U is None or 'rg_L' not in U:
         return None
     Lh, Ls = U['L_hold_rg'], U['L_start_rg']
@@ -1803,51 +1750,7 @@ def fit_Dm_unload(cfg, R, L, U):
     t_start = (tf - t0) * cfg.dt_lj + float(cfg.DM_TRACE_SKIP)
     out = dict(L3=L3, L_hold=Lh, L_start=Ls, L_mode=cfg.UNLOAD_L, t_retract=t0, t_free=tf, n_terms=nt,
                retract_T=(tf - t0) * cfg.dt_lj, hold_T=(U['ts_end'] - tf) * cfg.dt_lj, t_start=t_start)
-    # ---- (a) the Rg edges: one D_m, a free amplitude per axis ----------------------------
-    tt = (U['rg_step'] - t0) * cfg.dt_lj
-    w = tt >= t_start
-    if w.sum() < 20:
-        return None
-    dL = U['rg_L'] - Lh[None, :]
-    E = _fit_traces(tt[w], dL[w], cfg.DM_BOUNDS, L3, nt)
-    gain = Ls - Lh
-    E.update(t=tt, dL=dL, fit=w, dL_inf_ref=gain, recovery=E['amps'] / np.where(np.abs(gain) > 1e-12, gain, np.nan))
-    E['Dm_lo'], E['Dm_hi'] = _boot_D(tt[w], dL[w], E, cfg.DM_BOUNDS, L3, nt, cfg.DM_N_BOOT)
-    if 'bb_L' in U:
-        E['bb_t'], E['bb_dL'] = (U['bb_step'] - t0) * cfg.dt_lj, U['bb_L'] - U['L_hold_bb'][None, :]
-    out['edges'] = E
-    out['Dm'], out['Dm_lo'], out['Dm_hi'] = E['Dm'], E['Dm_lo'], E['Dm_hi']
-    Lm = float(np.mean(L3))
-    out['tau1'] = Lm ** 2 / (3.0 * np.pi ** 2 * out['Dm'])
-    out['n_tau1'] = out['hold_T'] / out['tau1']
-    # ---- (b) the Rg volume strain given back ------------------------------------------------
-    S = U['strain_tab']
-    if 'V_rg' in S and np.isfinite(R.get('V0_rg', np.nan)):
-        ts_ = (S['step'] - t0) * cfg.dt_lj
-        ws = ts_ >= t_start
-        e_rg = 1.0 - S['V_rg'] / R['V0_rg']
-        e_hold = float(L['strain'].get('rg', e_rg[0]))
-        de = e_hold - e_rg
-        if ws.sum() >= 20:
-            V = _fit_traces(ts_[ws], de[ws], cfg.DM_BOUNDS, L3, nt)
-            V.update(t=ts_, de=de, fit=ws, e_hold=e_hold, amp=float(V['amps'][0]))
-            out['volume'] = V
-    # ---- (c) the interior Pi relaxation, block means, joint over the profile axes ---------
-    axs = [a for a in cfg.AXES if a in U['ax']]
-    if axs:
-        n = min(len(U['ax'][a]['Pi_series']) for a in axs)
-        tsP = (U['ax'][axs[0]]['ts'][:n] - t0) * cfg.dt_lj
-        Wb = float(np.min(np.diff(tsP))) if n > 1 else 0.0
-        wp = tsP >= t_start - Wb                                    # the first block may start in the retraction
-        Y = np.column_stack([U['ax'][a]['Pi_series'][:n] for a in axs])
-        if wp.sum() >= 4:
-            Pf = _fit_traces(tsP[wp], Y[wp], cfg.DM_BOUNDS, L3, nt, W=Wb, offset=True)
-            Pf.update(t=tsP, Pi=Y, fit=wp, axes=axs, W=Wb, Pi_ref=np.array([U['ax'][a]['Pi_ref'] for a in axs]),
-                      Pi_hold=np.array([U['ax'][a]['Pi_hold'] for a in axs]))
-            Pf['Pi_inf'] = Pf['offs'] + Pf['amps']                   # Pi(t) = Pi_inf + dPi0 R(t) = (c + a) - a (1 - R)
-            Pf['dPi0'] = -Pf['amps']
-            out['stress'] = Pf
-    # ---- (d) the cumulative displacement profiles, referenced to the re-swollen plateau ---
+    # ---- the cumulative displacement profiles, referenced to the re-swollen plateau ---
     prof, fns, ss_tot = {}, {}, 0.0
     kk = 2.0 * np.arange(1, int(cfg.DM_N_MODES) + 1) - 1.0           # odd k: u = 0 at the centre
     for a in [a for a in cfg.AXES if a in U['disp'] and a in L['ax']]:
@@ -1877,171 +1780,193 @@ def fit_Dm_unload(cfg, R, L, U):
         y = du[wb].ravel()
         offs = np.linspace(-Wb, 0.0, 9) if Wb > 0 else np.array([0.0])
         nB = len(tfit)
-
         nk = len(kk)
 
-        def design(D, tfit=tfit, S_=S_, La_=La_, Lb=Lb, Lc2=Lc2, offs=offs, nB=nB, nk=nk, nz=len(zeta)):
-            blocks = []
-            for i, te in enumerate(tfit):
-                tw = np.clip(te + offs, 0.0, None)
-                trans = float(np.mean(slab_remaining(tw, D, Lb, nt) * slab_remaining(tw, D, Lc2, nt)))
-                Ek = np.array([np.mean(np.exp(-(k * np.pi / La_) ** 2 * D * tw)) for k in kk]) * trans
-                Xi = np.zeros((nz, nB + 2 * nk))
-                Xi[:, i] = 1.0                                        # a free constant per block (COM drift)
-                Xi[:, nB:nB + nk] = S_ * Ek[None, :]                  # the decaying modes
-                Xi[:, nB + nk:] = S_                                  # time-independent modes: the late plateau the lag is
-                blocks.append(Xi)                                     # referenced to has not fully relaxed itself
-            return np.vstack(blocks)
+        def decay(D, tfit=tfit, La_=La_, Lb=Lb, Lc2=Lc2, offs=offs):
+            """(n_blocks, n_modes): each mode's decay factor averaged over the block window, transverse factors included."""
+            tw = np.clip(np.asarray(tfit, float)[:, None] + offs[None, :], 0.0, None)
+            trans = (slab_remaining(tw.ravel(), D, Lb, nt) * slab_remaining(tw.ravel(), D, Lc2, nt)).reshape(tw.shape).mean(axis=1)
+            return np.exp(-((kk * np.pi / La_) ** 2 * D)[None, None, :] * tw[:, :, None]).mean(axis=1) * trans[:, None]
 
-        def resid(D, design=design, y=y):
-            X = design(D)
-            coef = np.linalg.lstsq(X, y, rcond=None)[0]
-            return float(np.sum((X @ coef - y) ** 2)), coef, X
+        # A free constant per block (the floating gel's COM drift) is taken out exactly by centring every block and
+        # every mode shape across the bins, which leaves 2 n_modes unknowns whatever the number of blocks.
+        S0 = S_ - S_.mean(axis=0)
+        Yb = du[wb]
+        ym = Yb.mean(axis=1)
+        yc = (Yb - ym[:, None]).ravel()
+
+        def resid(D, decay=decay, S0=S0, yc=yc, nB=nB, nk=nk, nz=len(zeta)):
+            Ek = decay(D)
+            X = np.concatenate([(Ek[:, None, :] * S0[None, :, :]).reshape(nB * nz, nk),      # the decaying modes
+                                np.tile(S0, (nB, 1))], axis=1)                               # time-independent modes: the late
+            coef = np.linalg.lstsq(X, yc, rcond=None)[0]                                     # plateau has not fully relaxed itself
+            return float(np.sum((X @ coef - yc) ** 2)), coef, X
 
         D, at_bound = _search_D(lambda lg, resid=resid: resid(np.exp(lg))[0], cfg.DM_BOUNDS)
         ss, coef, X = resid(D)
         ss_t = float(np.sum((y - y.mean()) ** 2))
-        prof[a] = dict(Dm=D, at_bound=at_bound, R2=float(1.0 - ss / ss_t) if ss_t > 0 else np.nan, amps=coef[nB:nB + nk],
-                       late_amps=coef[nB + nk:], consts=coef[:nB], zeta=zeta, z=z[ok], t=tb, fit=wb, late=late, du=du,
-                       model=(X @ coef).reshape(nB, len(zeta)), L=La_, kk=kk, W=Wb, lo_c=lo_c, Lc=Lc, n_blocks=nB)
+        # each fitted block projected on the modes (a constant + the cosines): the data of the time view (fig_Dm_time)
+        Xp = np.column_stack([np.ones(len(zeta)), S_])
+        proj = np.array([np.linalg.lstsq(Xp, row, rcond=None)[0][1:] for row in du[wb]])
+        mc = (X @ coef).reshape(nB, len(zeta))
+        consts = ym - (decay(D) * coef[:nk] + coef[nk:]) @ S_.mean(axis=0)
+        prof[a] = dict(Dm=D, at_bound=at_bound, R2=float(1.0 - ss / ss_t) if ss_t > 0 else np.nan, amps=coef[:nk],
+                       late_amps=coef[nk:], consts=consts, zeta=zeta, z=z[ok], t=tb, fit=wb, late=late, du=du,
+                       model=mc + ym[:, None], L=La_, kk=kk, W=Wb, lo_c=lo_c, Lc=Lc, n_blocks=nB, fine=bool(d.get('fine')),
+                       proj=proj, decay=decay, tau1_axis=1.0 / (D * np.pi ** 2 * (1 / La_ ** 2 + 1 / Lb ** 2 + 1 / Lc2 ** 2)))
         fns[a] = resid
         ss_tot += ss_t
-    if prof:
-        Dj, atb = _search_D(lambda lg: sum(fn(np.exp(lg))[0] for fn in fns.values()), cfg.DM_BOUNDS)
-        ssj = sum(fn(Dj)[0] for fn in fns.values())
-        out['prof_joint'] = dict(Dm=Dj, at_bound=atb, R2=float(1.0 - ssj / ss_tot) if ss_tot > 0 else np.nan, axes=list(prof))
+    if not prof:
+        return None
+    Dj, atb = _search_D(lambda lg: sum(fn(np.exp(lg))[0] for fn in fns.values()), cfg.DM_BOUNDS)
+    ssj = sum(fn(Dj)[0] for fn in fns.values())
+    out['prof_joint'] = dict(Dm=Dj, at_bound=atb, R2=float(1.0 - ssj / ss_tot) if ss_tot > 0 else np.nan, axes=list(prof))
     out['prof'] = prof
+    # headline = the joint fit; its range = the per-axis fits (their spread, not a confidence interval)
+    per = np.array([Pa['Dm'] for Pa in prof.values()])
+    out['Dm'], out['Dm_lo'], out['Dm_hi'] = Dj, float(min(per.min(), Dj)), float(max(per.max(), Dj))
+    out['axis_spread'] = float(per.max() / per.min()) if per.min() > 0 else np.inf
+    out['consistent'] = bool(len(per) > 1 and out['axis_spread'] <= float(cfg.DM_AXIS_SPREAD)
+                             and not atb and not any(Pa['at_bound'] for Pa in prof.values()))
+    Lm = float(np.mean(L3))
+    out['tau1'] = Lm ** 2 / (3.0 * np.pi ** 2 * out['Dm'])
+    out['n_tau1'] = out['hold_T'] / out['tau1']
+    out['block_T'] = float(np.mean([Pa['W'] for Pa in prof.values()]))
     return out
 
 
+def _dm_warning(F):
+    """One line when the D_m of the level should not be read as a measurement, else ''."""
+    w = []
+    if not F.get('consistent', True):
+        w.append(f"the per-axis fits disagree by a factor {F['axis_spread']:.1f}" if np.isfinite(F['axis_spread']) else 'a per-axis fit failed')
+    if F['block_T'] > F['tau1']:
+        w.append(f"the profile blocks ({F['block_T']:.0f} tau) are longer than tau_1 ({F['tau1']:.0f} tau)")
+    return ('NOT A MEASUREMENT: ' + ';  '.join(w)) if w else ''
+
+
 def fig_Dm(cfg, R, L):
-    """The free re-swelling after the hold (deck Phase 2c) and its D_m fits: (a) the three Rg
-    edges growing back with the fitted free-cube series (BB edges faint: the outermost beads
-    spring back at once), (b) the collapse of every estimator onto 1 - R(t) (edges, volume
-    strain, interior Pi), (c) the numbers; bottom row: the cumulative displacement lag
-    u_late - u(zeta, t) along each axis with the cos(k pi zeta) model."""
+    """The free re-swelling after the hold (deck Phase 2c) and its D_m: the cumulative displacement lag
+    u_late - u(zeta, t) along each axis with the cos(k pi zeta) model, and the numbers."""
     F = L.get('Dm')
     if F is None:
-        print('D_m figure skipped (no unload files for this level)')
+        print('D_m figure skipped (no unload displacement profiles for this level)')
         return None
-    E = F['edges']
-    fig = plt.figure(figsize=(20, 12), constrained_layout=True)
-    gs = fig.add_gridspec(2, 3, width_ratios=[1.25, 1.25, 1.0])
-    axA, axB, axC = (fig.add_subplot(gs[0, j]) for j in range(3))
-    fig.suptitle(f"Free re-swelling after the hold (level _c{L['lvl']}, files _u{L['lvl']}):  $D_m$ = {sig(F['Dm'])} "
-                 f"[{sig(F['Dm_lo'])}, {sig(F['Dm_hi'])}] $\\sigma^2/\\tau$ from the Rg edges,  $\\tau_1 = L^2/(3\\pi^2 D_m)$ = {F['tau1']:.0f} $\\tau$,"
-                 f"  re-swelling = {F['n_tau1']:.1f} $\\tau_1$   |   {cfg.sim_name}", fontsize=13, fontweight='bold')
-    # ---- (a) the edges ----
-    t = E['t']
-    tm = np.linspace(max(t[E['fit']].min(), 0.0), t.max(), 400)
-    Fm = 1.0 - cube_remaining(tm, E['Dm'], *F['L3'], n=F['n_terms'])
-    for j, a in enumerate('xyz'):
-        axA.plot(t, E['dL'][:, j], '-', color=AX_COLOR[a], lw=1.0, alpha=0.5, label=fr'$\Delta L_{a}$ (Rg edge)')
-        if 'bb_t' in E:
-            axA.plot(E['bb_t'], E['bb_dL'][:, j], ':', color=AX_COLOR[a], lw=0.8, alpha=0.3)
-        axA.plot(tm, E['amps'][j] * Fm, '--', color='k', lw=1.5, alpha=0.9)
-        axA.axhline(E['dL_inf_ref'][j], color=AX_COLOR[a], ls=':', lw=0.9, alpha=0.6)
-    axA.axvline(F['retract_T'], color='0.4', ls='-.', lw=1.0)
-    axA.plot([], [], '--', color='k', lw=1.5, label=fr'fit $a_a\,[1-R(t)]$, one $D_m$ = {sig(E["Dm"])}')
-    axA.plot([], [], ':', color='0.5', lw=0.9, label='full recovery (edge before the drive)')
-    axA.plot([], [], '-.', color='0.4', lw=1.0, label='plates stopped')
-    axA.set(xlabel=r'$t$ since the retraction began  ($\tau$)', ylabel=r'$L_a(t) - L_a^{\rm hold}$  ($\sigma$)')
-    axA.set_title(fr'(a) Rg edges   ($R^2$ = {sig(E["R2"])}; recovery x/y/z = ' + '/'.join(f'{r:.2f}' for r in E['recovery']) + ')', fontsize=13)
-    axA.grid(alpha=0.3)
-    axA.legend(loc='lower right', fontsize=9, framealpha=0.85).set_in_layout(False)   # inside the axes: not a layout artist
-    # ---- (b) the collapse ----
-    for j, a in enumerate('xyz'):
-        if E['amps'][j] != 0:
-            axB.plot(t[E['fit']], E['dL'][E['fit'], j] / E['amps'][j], '-', color=AX_COLOR[a], lw=0.9, alpha=0.5, label=fr'edge {a} / $a_{a}$')
-    if F.get('volume') is not None:
-        V = F['volume']
-        if V['amp'] != 0:
-            axB.plot(V['t'][V['fit']], V['de'][V['fit']] / V['amp'], '-', color=WONG['skyblue'], lw=0.9, alpha=0.6,
-                     label=fr'Rg volume strain / $a_V$  ($D_m$ = {sig(V["Dm"])})')
-    if F.get('stress') is not None:
-        P = F['stress']
-        for j, a in enumerate(P['axes']):
-            if P['dPi0'][j] != 0:
-                axB.plot(P['t'][P['fit']], 1.0 - (P['Pi'][P['fit'], j] - P['Pi_inf'][j]) / P['dPi0'][j], 's', mfc='none',
-                         color=AX_COLOR[a], ms=6, alpha=0.8)
-        axB.plot([], [], 's', mfc='none', color='0.4', label=fr'interior $\Pi$ blocks, $1-(\Pi-\Pi_\infty)/\Delta\Pi_0$  ($D_m$ = {sig(P["Dm"])})')
-    axB.plot(tm, Fm, '-', color='k', lw=2.0, label=fr'$1-R(t)$ at $D_m$ = {sig(F["Dm"])}')
-    axB.set(xlabel=r'$t$ since the retraction began  ($\tau$)', ylabel='fraction of the relaxation done', ylim=(-0.05, 1.15))
-    axB.set_title('(b) every estimator against the free-cube series', fontsize=13)
-    axB.grid(alpha=0.3)
-    axB.legend(loc='lower right', fontsize=9, framealpha=0.85).set_in_layout(False)
-    # ---- (c) the numbers ----
-    axC.axis('off')
-    lines = [f"lengths of the series ({F['L_mode']} edges): " + ' x '.join(f'{v:.1f}' for v in F['L3']) + ' sigma',
-             f"retraction {F['retract_T']:.0f} tau, then {F['hold_T']:.0f} tau of free re-swelling",
-             '',
-             f"D_m (Rg edges)        = {F['Dm']:.4f}  [{F['Dm_lo']:.4f}, {F['Dm_hi']:.4f}]   R^2 {E['R2']:.3f}",
-             f"D_m (Rg volume)       = {F['volume']['Dm']:.4f}   R^2 {F['volume']['R2']:.3f}" if F.get('volume') else 'D_m (Rg volume): n/a',
-             f"D_m (interior Pi)     = {F['stress']['Dm']:.4f}   R^2 {F['stress']['R2']:.3f}" if F.get('stress') else 'D_m (interior Pi): n/a',
-             f"D_m (profiles, joint) = {F['prof_joint']['Dm']:.4f}   R^2 {F['prof_joint']['R2']:.3f}" if F.get('prof_joint') else 'D_m (profiles): n/a']
-    if F.get('prof'):
-        lines.append('   per axis: ' + '  '.join(f"{a} {Pa['Dm']:.4f}" for a, Pa in F['prof'].items()))
-    lines += ['', f"tau_1 = L^2/(3 pi^2 D_m) = {F['tau1']:.0f} tau;  re-swelling = {F['n_tau1']:.1f} tau_1",
-              "recovery of the compression (a_i / (L_start - L_hold)): " + ', '.join(f'{a} {r:.2f}' for a, r in zip('xyz', E['recovery'])),
-              '',
-              f"K_network (hold)      = {L['K_net']:.4f}  [{L['K_net_lo']:.4f}, {L['K_net_hi']:.4f}]",
-              f"kappa = D_m / K       = {L['kappa']:.4e}  [{L.get('kappa_lo', np.nan):.3e}, {L.get('kappa_hi', np.nan):.3e}]" if 'kappa' in L else '']
-    if 'Dc_from_Dm' in L:
-        lines.append(f"confined D_c = (M/K) D_m = {L['Dc_from_Dm']:.4f}   (M_REF = {float(cfg.M_REF):.4f})")
-    if any(G_.get('at_bound') for G_ in (E, F.get('volume'), F.get('stress'), F.get('prof_joint')) if G_):
-        lines.append('')
-        lines.append('WARNING: a fit sits at a DM_BOUNDS edge -- not a measurement')
-    axC.text(0.0, 1.0, '\n'.join(lines), transform=axC.transAxes, va='top', ha='left', fontsize=11, family='monospace')
-    axC.set_title('(c) the numbers  (profiles: odd cos modes, per-block constant removed)', fontsize=13)
-    # ---- bottom row: the displacement profiles (one shared colour bar: the blocks' times are the same along every axis) ----
+    axs_ = list(cfg.AXES[:3])
+    fig = plt.figure(figsize=(6.2 * len(axs_) + 6.0, 6.6), constrained_layout=True)
+    gs = fig.add_gridspec(1, len(axs_) + 1, width_ratios=[1.0] * len(axs_) + [0.95])
+    warn = _dm_warning(F)
+    fig.suptitle(f"Free re-swelling after the hold (level _c{L['lvl']}, files _u{L['lvl']}):  $D_m$ = {sig(F['Dm'])} $\\sigma^2/\\tau$ "
+                 f"(joint profile fit; per axis {sig(F['Dm_lo'])} to {sig(F['Dm_hi'])}),  $\\tau_1 = L^2/(3\\pi^2 D_m)$ = {F['tau1']:.0f} $\\tau$"
+                 f"   |   {cfg.sim_name}" + (f"\n{warn}" if warn else ''), fontsize=13, fontweight='bold', color=WONG['vermillion'] if warn else 'k')
     cmap = plt.cm.viridis
-    tf_all = np.concatenate([Pa['t'][Pa['fit']] for Pa in F.get('prof', {}).values()]) if F.get('prof') else np.array([0.0, 1.0])
+    tf_all = np.concatenate([Pa['t'][Pa['fit']] for Pa in F['prof'].values()])
     norm = Normalize(vmin=tf_all.min(), vmax=tf_all.max())
-    bottom = []
-    for j, a in enumerate(cfg.AXES[:3]):
-        ax = fig.add_subplot(gs[1, j])
-        bottom.append(ax)
-        Pa = F.get('prof', {}).get(a)
+    panels = []
+    for j, a in enumerate(axs_):
+        ax = fig.add_subplot(gs[0, j])
+        panels.append(ax)
+        Pa = F['prof'].get(a)
         if Pa is None:
             ax.text(0.5, 0.5, f'no displacement profile along {a}', transform=ax.transAxes, ha='center', va='center', fontsize=12)
             ax.set_axis_off()
             continue
         tf = Pa['t'][Pa['fit']]
-        for i, (ti, row, mrow, c0) in enumerate(zip(tf, Pa['du'][Pa['fit']], Pa['model'], Pa['consts'])):
+        show = np.arange(len(tf))                                    # fine-cadence files: 14 blocks, evenly spaced in log time
+        if len(tf) > 14:
+            show = np.unique(np.round(np.geomspace(1, len(tf), 14)).astype(int) - 1)
+        for i in show:
+            ti, row, mrow, c0 = tf[i], Pa['du'][Pa['fit']][i], Pa['model'][i], Pa['consts'][i]
             c = cmap(norm(ti))
             ax.plot(Pa['zeta'], (row - c0) / Pa['L'], 'o', color=c, ms=3.5, alpha=0.5)
             ax.plot(Pa['zeta'], (mrow - c0) / Pa['L'], '-', color=c, lw=1.4)
         ax.axhline(0, color='k', lw=0.8, alpha=0.5)
         ax.set(xlabel=fr'$\zeta$ along {a} (compressed gel)', ylabel=fr'lag  $[u_{a}^{{\rm late}}-u_{a}(t)]/L_{a}$', xlim=(0, 1))
-        ax.set_title(fr'({"def"[j]}) along {a}:  $D_m$ = {sig(Pa["Dm"])},  $R^2$ = {sig(Pa["R2"])}', fontsize=12, color=AX_COLOR[a])
+        ax.set_title(fr'({"abc"[j]}) along {a}:  $D_m$ = {sig(Pa["Dm"])},  $R^2$ = {sig(Pa["R2"])}', fontsize=12, color=AX_COLOR[a])
         ax.grid(alpha=0.3)
-    if F.get('prof'):
-        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-        sm.set_array([])
-        fig.colorbar(sm, ax=bottom, pad=0.01, shrink=0.9, label=r'$t$ since the retraction ($\tau$)')
+    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    fig.colorbar(sm, ax=panels, pad=0.01, shrink=0.9, label=r'$t$ since the retraction ($\tau$)')
+    axC = fig.add_subplot(gs[0, -1])
+    axC.axis('off')
+    lines = [f"series lengths ({F['L_mode']} edges): " + ' x '.join(f'{v:.1f}' for v in F['L3']),
+             f"retraction {F['retract_T']:.0f} tau, then {F['hold_T']:.0f} tau free",
+             f"profile blocks: {F['block_T']:.0f} tau each" + (f" ({max(Pa['n_blocks'] for Pa in F['prof'].values())} fitted, 14 drawn)"
+                                                                if max(Pa['n_blocks'] for Pa in F['prof'].values()) > 14 else ''),
+             '',
+             f"D_m (joint)  = {F['Dm']:.4f}   R^2 {F['prof_joint']['R2']:.3f}"]
+    lines += [f"D_m (along {a}) = {Pa['Dm']:.4f}   R^2 {Pa['R2']:.3f}" + ('  <- bound' if Pa['at_bound'] else '') for a, Pa in F['prof'].items()]
+    lines += ['', f"tau_1 = L^2/(3 pi^2 D_m) = {F['tau1']:.0f} tau",
+              f"re-swelling recorded = {F['n_tau1']:.1f} tau_1", '',
+              f"K_network (hold) = {L['K_net']:.4f}",
+              f"kappa = D_m / K  = {L['kappa']:.4e}" if 'kappa' in L else '']
+    if 'Dc_from_Dm' in L:
+        lines.append(f"D_c = (M/K) D_m  = {L['Dc_from_Dm']:.4f}")
+    axC.text(0.0, 1.0, '\n'.join(lines), transform=axC.transAxes, va='top', ha='left', fontsize=11, family='monospace')
+    axC.set_title(f"({'abcd'[len(axs_)]}) the numbers", fontsize=12)
     return _save(fig, cfg, 'Dm_reswelling_fit', L['lvl'])
 
 
+def fig_Dm_time(cfg, R, L):
+    """The profile fit of fig_Dm against TIME: each fitted block's lag profile projected on the cosine modes gives one
+    amplitude per mode; the first mode's (dots) against the fit, late amplitude + B_1 x decay (line), one panel per
+    axis, residuals underneath.  Same data and same fit as fig_Dm -- a second view of it, not a second estimate."""
+    F = L.get('Dm')
+    if F is None:
+        print('D_m time view skipped (no unload displacement profiles for this level)')
+        return None
+    axs_ = [a for a in cfg.AXES[:3] if a in F['prof']]
+    fig, axes = plt.subplots(2, len(axs_), figsize=(6.4 * len(axs_), 7.6), sharex='col', squeeze=False, constrained_layout=True,
+                             gridspec_kw=dict(height_ratios=[3, 1.25]))
+    warn = _dm_warning(F)
+    for j, a in enumerate(axs_):
+        Pa = F['prof'][a]
+        ax, axr = axes[0, j], axes[1, j]
+        t = Pa['t'][Pa['fit']]
+        dat = Pa['proj'][:, 0]
+        mod = Pa['late_amps'][0] + Pa['amps'][0] * Pa['decay'](Pa['Dm'])[:, 0]
+        tm = np.linspace(t.min(), t.max(), 200)
+        ax.plot(t, dat, 'o', color=AX_COLOR[a], ms=6 if len(t) < 60 else 3, alpha=0.8, label='each block projected on the modes, $a_1(t)$')
+        ax.plot(t, mod, '-', color='k', lw=2.0, label=fr'fit: $D_m$ = {sig(Pa["Dm"])}')
+        axr.plot(t, dat - mod, 'o', color=AX_COLOR[a], ms=5)
+        axr.axhline(0.0, color='k', lw=0.8)
+        ax.axvline(F['retract_T'], color='0.4', ls='-.', lw=1.0, label='plates stopped')
+        ax.set_title(fr'({"abc"[j]}) along {a}: first-mode lag,  $\tau_1$ = {Pa["tau1_axis"]:.0f} $\tau$ at this $D_m$,  blocks {Pa["W"]:.0f} $\tau$',
+                     fontsize=12, color=AX_COLOR[a])
+        ax.set_ylabel(r'first-mode lag  ($\sigma$)' if j == 0 else '')
+        axr.set_ylabel(r'data $-$ fit' if j == 0 else '')
+        axr.set_xlabel(r'$t$ since the retraction began  ($\tau$)')
+        ax.grid(alpha=0.3); axr.grid(alpha=0.3)
+        ax.legend(fontsize=9, loc='best')
+    fig.suptitle(f"Re-swelling profile fit against time, level _c{L['lvl']}  |  {cfg.sim_name}\n"
+                 f"joint $D_m$ = {sig(F['Dm'])}, per axis {sig(F['Dm_lo'])} to {sig(F['Dm_hi'])}" + (f"\n{warn}" if warn else ''),
+                 fontsize=12, fontweight='bold', color=WONG['vermillion'] if warn else 'k')
+    return _save(fig, cfg, 'Dm_reswelling_time', L['lvl'])
+
+
 def fig_Dm_sweep(cfg, R, levels):
-    """(a) D_m vs volumetric strain: Rg edges (filled, 95 % interval), Rg volume (hollow),
-    interior Pi (triangles), displacement profiles (crosses); (b) kappa = D_m / K per level."""
+    """(a) D_m vs volumetric strain: the joint displacement-profile fit (filled; bar = the range of the per-axis fits,
+    hollow where the level is flagged), the per-axis fits as small crosses; (b) kappa = D_m / K per level."""
     hd = [L for L in _usable(levels) if L.get('Dm') is not None]
     if not hd:
-        print('D_m sweep figure skipped (no level has unload files)')
+        print('D_m sweep figure skipped (no level has unload displacement profiles)')
         return None
     fig, (axD, axK) = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
     eps = np.array([L['eps'] for L in hd])
     Dm = np.array([L['Dm']['Dm'] for L in hd])
     lo = np.array([L['Dm']['Dm_lo'] for L in hd])
     hi = np.array([L['Dm']['Dm_hi'] for L in hd])
-    axD.errorbar(eps, Dm, yerr=[np.clip(Dm - lo, 0, None), np.clip(hi - Dm, 0, None)], fmt='o-', color='k', lw=2, ms=9, capsize=5,
-                 label='Rg edges (headline; block-bootstrap 95 %)')
-    for key, mk, col, lab in (('volume', 'o', WONG['skyblue'], 'Rg volume strain'), ('stress', '^', WONG['orange'], r'interior $\Pi$ relaxation'),
-                              ('prof_joint', 'x', WONG['blue'], 'displacement profiles (joint)')):
-        pts = [(L['eps'], L['Dm'][key]['Dm']) for L in hd if L['Dm'].get(key) is not None]
+    good = np.array([not _dm_warning(L['Dm']) for L in hd])
+    axD.errorbar(eps, Dm, yerr=[np.clip(Dm - lo, 0, None), np.clip(hi - Dm, 0, None)], fmt='-', color='k', lw=1.6, capsize=5)
+    axD.plot(eps[good], Dm[good], 'o', color='k', ms=9, label='joint displacement-profile fit (bar: range of the per-axis fits)')
+    if (~good).any():
+        axD.plot(eps[~good], Dm[~good], 'o', color='k', mfc='white', ms=9, label='flagged: axes disagree or blocks longer than $\\tau_1$')
+    for a in cfg.AXES[:3]:
+        pts = [(L['eps'], L['Dm']['prof'][a]['Dm']) for L in hd if a in L['Dm']['prof']]
         if pts:
             e_, d_ = zip(*pts)
-            axD.plot(e_, d_, mk, mfc=('none' if mk == 'o' else col), color=col, ms=9, mew=1.8, ls=':', lw=1.0, label=lab)
+            axD.plot(e_, d_, 'x', color=AX_COLOR[a], ms=8, mew=1.8, label=f'along {a}')
+    axD.set_yscale('log')
     axD.set_xlabel(r'volumetric strain  $\varepsilon_{vol}$ (of the compression the gel re-swells from)')
     axD.set_ylabel(r'$D_m$  ($\sigma^2/\tau$)')
     axD.set_title(r'(a) $D_m$ of the free re-swelling vs the strain released', fontsize=14)
@@ -2051,7 +1976,7 @@ def fig_Dm_sweep(cfg, R, levels):
     klo = np.array([L.get('kappa_lo', np.nan) for L in hd])
     khi = np.array([L.get('kappa_hi', np.nan) for L in hd])
     axK.errorbar(eps, ka, yerr=[np.clip(ka - klo, 0, None), np.clip(khi - ka, 0, None)], fmt='s-', color=WONG['green'], lw=2, ms=9, capsize=5,
-                 label=r'$\kappa = D_m / K_{\rm network}$')
+                 label=r'$\kappa = D_m / K_{\rm network}$ (bar: per-axis $D_m$ range and the $K$ interval)')
     axK.set_xlabel(r'volumetric strain  $\varepsilon_{vol}$')
     axK.set_ylabel(r'$\kappa = D_m/K$  ($\sigma^4/(\epsilon\,\tau)$)')
     axK.set_title(r'(b) mobility $\kappa$ from the same run', fontsize=14)

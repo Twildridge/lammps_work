@@ -25,10 +25,12 @@ uni.add_volume_fractions(cfg, R, LEVELS)
 uni.print_summary(cfg, LEVELS)
 L = LEVELS[1]
 for f in (uni.fig_strain, uni.fig_volfrac, uni.fig_total_stress, uni.fig_partial_stress, uni.fig_network_stress,
-          uni.fig_piston, uni.fig_M, uni.fig_ratio, uni.fig_G, uni.fig_Dc_reswelling, uni.fig_Dc_reswelling_time, uni.fig_kappa, uni.fig_wet_pistons, uni.fig_solvent_expelled,
+          uni.fig_piston, uni.fig_M, uni.fig_ratio, uni.fig_G, uni.fig_Dc_reswelling, uni.fig_Dc_reswelling_time, uni.fig_kappa, uni.fig_wet_pistons, uni.fig_solvent_rate, uni.fig_strain_solvent,
           uni.fig_thermo_pressure, uni.fig_osmotic_pressure):
     f(cfg, R, L) if f is not uni.fig_strain else f(cfg, R, [L])
     plt.close('all')
+uni.fig_strain_solvent(cfg, R, L, layout='twin')        # one panel, strain left / solvent rate right
+plt.close('all')
 for f in (uni.fig_volfrac_sweep, uni.fig_total_stress_sweep, uni.fig_partial_stress_sweep, uni.fig_network_stress_sweep,
           uni.fig_piston_sweep, uni.fig_M_sweep, uni.fig_stress_strain_sweep, uni.fig_ratio_sweep, uni.fig_G_sweep,
           uni.fig_Dc_sweep, uni.fig_kappa_sweep, uni.fig_wet_pistons_sweep, uni.fig_thermo_pressure_sweep, uni.fig_osmotic_pressure_sweep):
@@ -132,13 +134,11 @@ for L in LB:
     assert 'Dc' not in L and 'Dc_axis' not in L, 'the compression hold must not produce a D_c any more (2026-10-28)'
     assert L['U'] is not None and L['Dm'] is not None, 'the unload (_u files) was not loaded / fitted'
     F = L['Dm']
-    assert abs(F['Dm'] - B_DM) < 0.15 * B_DM and F['edges']['R2'] > 0.95, f"D_m (Rg edges) = {F['Dm']:.4f} (R^2 {F['edges']['R2']:.3f}), built from {B_DM}"
-    assert F['Dm_lo'] <= F['Dm'] <= F['Dm_hi'] and not F['edges']['at_bound'], 'D_m interval / bound'
-    assert abs(F['volume']['Dm'] - B_DM) < 0.15 * B_DM, f"D_m (Rg volume) = {F['volume']['Dm']:.4f}"
-    assert abs(F['stress']['Dm'] - B_DM) < 0.25 * B_DM, f"D_m (interior Pi) = {F['stress']['Dm']:.4f}"
     assert F.get('prof_joint') is not None and not F['prof_joint']['at_bound'], 'profile D_m missing / at a bound'
-    assert abs(F['prof_joint']['Dm'] - B_DM) < 0.2 * B_DM, f"D_m (profiles) = {F['prof_joint']['Dm']:.4f}"
-    assert np.all(np.abs(F['edges']['recovery'] - 1.0) < 0.1), f"recovery {F['edges']['recovery']}"
+    assert abs(F['Dm'] - B_DM) < 0.2 * B_DM, f"D_m (joint displacement-profile fit) = {F['Dm']:.4f}, built from {B_DM}"
+    assert F['Dm'] == F['prof_joint']['Dm'] and F['Dm_lo'] <= F['Dm'] <= F['Dm_hi'], 'headline D_m / per-axis range'
+    assert 'edges' not in F and 'volume' not in F and 'stress' not in F, 'the Rg-edge / volume / Pi estimators were removed (2026-11-21)'
+    assert F['consistent'], f"per-axis D_m fits disagree by a factor {F['axis_spread']:.2f} on synthetic data"
     assert abs(L['kappa'] - F['Dm'] / L['K_net']) < 1e-12 and abs(L['Dc_from_Dm'] - F['Dm'] * 0.30 / L['K_net']) < 1e-12
     assert abs(L['G_from_MK'] - 0.75 * (0.30 - L['K_net'])) < 1e-12
 Lb = LB[1]
@@ -147,7 +147,7 @@ for f in (iso.fig_volfrac, iso.fig_total_stress, iso.fig_partial_stress, iso.fig
           iso.fig_osmotic_pressure):
     f(cfgb, Rb, Lb, axes=cfgb.AXES)
     plt.close('all')
-for f in (iso.fig_plates, iso.fig_K, iso.fig_isotropy, iso.fig_Dm, iso.fig_closure, iso.fig_wet_pistons, iso.fig_ratio):
+for f in (iso.fig_plates, iso.fig_K, iso.fig_isotropy, iso.fig_Dm, iso.fig_Dm_time, iso.fig_closure, iso.fig_wet_pistons, iso.fig_ratio):
     assert f(cfgb, Rb, Lb) is not None, f.__name__
     plt.close('all')
 iso.fig_strain(cfgb, Rb, LB, stem='sweep_strain_diagnostic')

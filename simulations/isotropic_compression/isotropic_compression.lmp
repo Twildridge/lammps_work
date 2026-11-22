@@ -13,7 +13,7 @@
 # bath cropped, six load plates PARKED outside the gel faces, two wet pistons).
 # Variables from run_lammps.sh: dataname, interaction, epsSS, epsSP, nsteps,
 #   compressions (+ compressions_list), press_target, piston_mass, c_pist_frac,
-#   npt_piston_steps, settle_halt, drive_split      (optional -var: hold_auto)
+#   npt_piston_steps, settle_halt, drive_split      (optional -var: hold_auto, disp_fine_nfreq)
 #   (no cont / continue_sim.sh support: every run is a fresh start)
 #
 # Atom types: 1=crosslink, 2=chain bead, 3=solvent,
@@ -172,6 +172,19 @@ variable unload_margin index 3.0          # sigma: extra retraction of EACH plat
 # largest of the three axes, one value for all so the opening stays isotropic); 0 with seat_mode bb.  The
 # re-swollen gel then has the room it had as a free gel whatever the fringe: 5-7 sigma per axis on the
 # rot45 12-cell cube, 13-16 on the random 10-bead gels.  unload_margin_eff = unload_margin + unload_extra.
+
+# ---- FINE-CADENCE UNLOAD DISPLACEMENT PROFILES (2026-11-21; -var disp_fine_nfreq / DISP_FINE_NFREQ, 0 = off) ----
+# The disp_*_polymer_cum files share the stress cadence: unload_len / 20 per block, 750 tau on a 3M-step
+# re-swelling, about the tau_1 = L^2/(3 pi^2 D_m) of a 12-cell cube, so the D_m fit (lib/isotropic.py
+# fit_Dm_unload) had one block per decay time.  With disp_fine_nfreq > 0 (steps) every unload also writes
+# disp_{z,alongx,alongy}_polymer_cum_fine_<stem>_<hold>_u<strain>.dat: the same cumulative displacement on the
+# same core-column bins, block-averaged over every 10th step of each disp_fine_nfreq window, from the START OF
+# THE RETRACTION to the end of the re-swelling.  The lib prefers these files.  Their chunk/atom computes are made
+# and deleted with the fixes (a fix ave/chunk removed in mid-window leaves its lock on the compute).
+variable disp_fine_nfreq   index 0
+variable disp_fine_nevery  equal 10
+variable disp_fine_nrepeat equal floor(${disp_fine_nfreq}/v_disp_fine_nevery)
+variable disp_fine_nf      equal v_disp_fine_nevery*v_disp_fine_nrepeat
 
 # ---- STRAINED-STATE RESTART (2026-11-17; -var save_strained 0 / SAVE_STRAINED=0 turns it off) ----
 # At the end of every level's hold, BEFORE the unload retracts the plates, the equilibrated
@@ -1446,6 +1459,15 @@ fix uout_gel_edges all print ${strain_freq} &
     "$(step) $(c_minz) $(c_maxz) $(v_p_zhi) $(v_p_zlo)" &
     file output_files/volume_data/gel_edges_${dataname}_${interaction}_${unload_tag}.dat screen no
 
+if "${disp_fine_nfreq} > 0" then &
+    "print '>>> [unload ${compressions}] fine displacement profiles: every ${disp_fine_nf} steps (nevery=${disp_fine_nevery} nrepeat=${disp_fine_nrepeat}), from the start of the retraction'" &
+    "compute ch_dfine_z polymer chunk/atom bin/1d z lower ${binWidth} region reg_col_z" &
+    "compute ch_dfine_x polymer chunk/atom bin/1d x lower ${binWidth} region reg_col_x" &
+    "compute ch_dfine_y polymer chunk/atom bin/1d y lower ${binWidth} region reg_col_y" &
+    "fix uavg_disp_z_fine all ave/chunk ${disp_fine_nevery} ${disp_fine_nrepeat} ${disp_fine_nf} ch_dfine_z v_uz_poly_cum file output_files/displacement_data/disp_z_polymer_cum_fine_${dataname}_${interaction}_${unload_tag}.dat" &
+    "fix uavg_disp_x_fine all ave/chunk ${disp_fine_nevery} ${disp_fine_nrepeat} ${disp_fine_nf} ch_dfine_x v_ux_poly_cum file output_files/displacement_data/disp_alongx_polymer_cum_fine_${dataname}_${interaction}_${unload_tag}.dat" &
+    "fix uavg_disp_y_fine all ave/chunk ${disp_fine_nevery} ${disp_fine_nrepeat} ${disp_fine_nf} ch_dfine_y v_uy_poly_cum file output_files/displacement_data/disp_alongy_polymer_cum_fine_${dataname}_${interaction}_${unload_tag}.dat"
+
 # ----- retraction: reversed drive until every gap is back at its seated value + 2 x unload_margin -----
 fix nve_plates plates nve
 velocity plate_zhi set 0.0 0.0 $(v_drive_split*v_urate_z)
@@ -1521,6 +1543,9 @@ print ">>> [unload ${compressions}] re-swelling HOLD (plates frozen at the seate
 run ${unload_run}
 
 # ----- teardown of the re-swelling fixes -----
+if "${disp_fine_nfreq} > 0" then &
+    "unfix uavg_disp_z_fine" "unfix uavg_disp_x_fine" "unfix uavg_disp_y_fine" &
+    "uncompute ch_dfine_z" "uncompute ch_dfine_x" "uncompute ch_dfine_y"
 unfix uavg_disp_y_cum
 unfix uavg_disp_x_cum
 unfix uavg_disp_z_cum
