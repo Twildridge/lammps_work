@@ -23,6 +23,7 @@ The notebooks live in `scripts/`. The Python modules they import live in `script
 
 The notebook sets the knobs and calls `lib/data_file_generator.py`, which builds a finite gel block (diamond lattice) in a solvent bath, optionally with a frozen support sheet and a piston sheet.
 
+- `chain_placement='walk'` (2026-11-22, as the periodic generator) lays each strand as a random walk pinned to its two junctions. Use it for strands longer than 5 beads, whose beads would overlap on the straight line; `scripts/submit_cube_pipeline.sh` does so for its 10-bead cube.
 - `includeWalls = False` writes an isolated gel with no sheets. Five atom types are still declared. `pistonMargin` is ignored in this mode, because a margin without sheets only wrote a vacuum frame round the box (as in the `square_rho10_nowalls` cube).
 - `NETWORK = "tetrahedral" | "rot45" | "random"` selects the preset (`gen.NETWORKS`).
 - The isolated gels are the starting point for `isotropic_compression` (K) and the isolated-gel shear deck. Equilibrate them with `slab_with_support_single.batch` (`BARO_MODE=iso`, `PIN_GEL=1`, `PISTON_TRANSPARENT=1`; `DATANAME` from the environment, default the random gel's stem).

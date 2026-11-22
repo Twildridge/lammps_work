@@ -735,7 +735,7 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
                                    output_file="gel_slab.data",
                                    pre_swell=1.0, include_walls=True, rot45_y=False,
                                    bond_switch=0.0, bond_switch_seed=7, bond_switch_keep_size=True,
-                                   switch_options=None):
+                                   switch_options=None, chain_placement='straight', walk_seed=11, walk_bond=0.97):
     """
     Generate a tetrahedral (diamond lattice) polymer gel slab in solvent bath.
 
@@ -979,16 +979,30 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
             neighbors[id1].sort()
 
     # Build chains for each bonded crosslink pair, in ascending-id order.
+    # chain_placement (2026-11-22, as periodic_data_file_generator since 2026-11-03): 'straight' puts the interior
+    # beads on the line between the two junctions (every isolated gel so far, 5 beads per strand).  'walk' lays
+    # them on a random walk of walk_bond-long steps pinned to both junctions (a Brownian bridge): a strand of 10
+    # or more beads at its equilibrium mesh is far shorter end to end than its contour, and on the straight line
+    # its beads would sit 0.2-0.4 sigma apart.  A coil may reach a sigma or two past the block faces into the bath.
+    if chain_placement not in ('straight', 'walk'):
+        raise ValueError(f"chain_placement must be 'straight' or 'walk' (got {chain_placement!r})")
+    walk_rng = np.random.default_rng(walk_seed)
     for id1 in cl_ids:
         pos1 = particles[id1 - 1]['pos']
         for id2 in neighbors.get(id1, ()):
             pos2 = particles[id2 - 1]['pos']
 
             chain_ids = [id1]
+            if chain_placement == 'walk' and beads_per_chain > 2:
+                steps = walk_rng.normal(size=(beads_per_chain - 1, 3))
+                steps *= walk_bond / np.linalg.norm(steps, axis=1)[:, None]
+                walk = np.cumsum(steps, axis=0)
+                fr = np.arange(1, beads_per_chain)[:, None] / (beads_per_chain - 1)
+                interior = pos1 + walk[:-1] + fr[:-1] * ((pos2 - pos1) - walk[-1])
 
             for b in range(1, beads_per_chain - 1):
                 frac = b / (beads_per_chain - 1)
-                pos = pos1 * (1 - frac) + pos2 * frac
+                pos = pos1 * (1 - frac) + pos2 * frac if chain_placement == 'straight' else interior[b - 1]
                 particles.append({
                     'id': particle_id,
                     'type': 2,  # Chain bead

@@ -1385,8 +1385,13 @@ fix vavg_sigmazz_poly all ave/time ${nevery_stress_v} ${nrepeat_stress_v} ${nfre
     c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${vctrl_tag}.dat
 fix vavg_sigmazz_solv all ave/time ${nevery_stress_v} ${nrepeat_stress_v} ${nfreq_stress_v} &
     c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${vctrl_tag}.dat
+# Its OWN chunk/atom compute, made here and deleted with the fix (2026-11-21): the drive's avg_solv_density and the
+# later stages ran on the shared chunk_z_solv_density at different cadences, and a stage that ends in mid-window
+# (a halt, or a length not aligned to the earlier cadence) leaves its lock on the compute -- job 55913759 stopped
+# at the next stage with "Two fix commands using same compute chunk/atom command in incompatible ways".
+compute chunk_zv_solv_density solvent chunk/atom bin/1d z lower ${binWidth}
 fix vavg_solv_density all ave/chunk ${nevery_stress_v} ${nrepeat_stress_v} ${nfreq_stress_v} &
-    chunk_z_solv_density density/number density/mass &
+    chunk_zv_solv_density density/number density/mass &
     file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${vctrl_tag}.dat
 # polymer displacement: the SAME reference as the drive (the ramp start), so these snapshots continue the
 # drive's steady profile at the stage's own (measured) pressure drop.  Its OWN chunk/atom compute, deleted
@@ -1408,6 +1413,7 @@ unfix halt_perm_v
 unfix vavg_disp_z_poly
 uncompute chunk_zv_polymer
 unfix vavg_solv_density
+uncompute chunk_zv_solv_density
 unfix vavg_sigmazz_solv
 unfix vavg_sigmazz_poly
 unfix vavg_P_perm
@@ -1506,8 +1512,10 @@ fix favg_sigmazz_poly all ave/time ${nevery_stress_f} ${nrepeat_stress_f} ${nfre
     c_sigmazz_poly mode vector file output_files/stress_data/sigmazz_polymer_${dataname}_${interaction}_${frozen_tag}.dat
 fix favg_sigmazz_solv all ave/time ${nevery_stress_f} ${nrepeat_stress_f} ${nfreq_stress_f} &
     c_sigmazz_solv mode vector file output_files/stress_data/sigmazz_solvent_${dataname}_${interaction}_${frozen_tag}.dat
+# own chunk/atom compute, deleted with the fix (see the velocity-controlled stage)
+compute chunk_zf_solv_density solvent chunk/atom bin/1d z lower ${binWidth}
 fix favg_solv_density all ave/chunk ${nevery_stress_f} ${nrepeat_stress_f} ${nfreq_stress_f} &
-    chunk_z_solv_density density/number density/mass &
+    chunk_zf_solv_density density/number density/mass &
     file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${frozen_tag}.dat
 fix halt_perm_f all halt ${volume_freq} v_feed_thickness <= ${feed_halt_thick} error continue
 fix halt_box_f all halt 1000 v_box_guard > 0.5 error continue
@@ -1519,6 +1527,7 @@ run ${frozen_run}
 unfix halt_box_f
 unfix halt_perm_f
 unfix favg_solv_density
+uncompute chunk_zf_solv_density
 unfix favg_sigmazz_solv
 unfix favg_sigmazz_poly
 unfix favg_P_perm
@@ -1630,8 +1639,10 @@ variable uz_poly delete
 uncompute displace_poly
 compute displace_poly polymer displace/atom
 variable uz_poly atom c_displace_poly[3]
+# own chunk/atom compute, deleted with the fix (see the velocity-controlled stage)
+compute chunk_zu_polymer polymer chunk/atom bin/1d z lower ${binWidth}
 fix uavg_disp_z_poly all ave/chunk ${disp_nevery} ${disp_nrepeat} ${disp_nfreq_eff} &
-    chunk_z_polymer v_uz_poly &
+    chunk_zu_polymer v_uz_poly &
     file output_files/displacement_data/disp_z_polymer_${dataname}_${interaction}_${unload_tag}.dat
 
 # ----- P_feed ramp-down (permeate stays at P_target) -----
@@ -1660,8 +1671,10 @@ fix uavg_sigmayy_poly all ave/time ${nevery_stress_u} ${nrepeat_stress_u} ${nfre
     c_sigmayy_poly mode vector file output_files/stress_data/sigmayy_polymer_${dataname}_${interaction}_${unload_tag}.dat
 fix uavg_sigmayy_solv all ave/time ${nevery_stress_u} ${nrepeat_stress_u} ${nfreq_stress_u} &
     c_sigmayy_solv mode vector file output_files/stress_data/sigmayy_solvent_${dataname}_${interaction}_${unload_tag}.dat
+# own chunk/atom compute, deleted with the fix (see the velocity-controlled stage)
+compute chunk_zu_solv_density solvent chunk/atom bin/1d z lower ${binWidth}
 fix uavg_solv_density all ave/chunk ${nevery_stress_u} ${nrepeat_stress_u} ${nfreq_stress_u} &
-    chunk_z_solv_density density/number density/mass &
+    chunk_zu_solv_density density/number density/mass &
     file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${unload_tag}.dat
 
 # hold length aligned to the stress cadence so the last profile window closes on the last step
@@ -1670,6 +1683,7 @@ print ">>> [unload] re-swelling HOLD at zero dP for ${unload_run} steps (>= unlo
 run ${unload_run}
 
 unfix uavg_solv_density
+uncompute chunk_zu_solv_density
 unfix uavg_sigmayy_solv
 unfix uavg_sigmayy_poly
 unfix uavg_sigmaxx_solv
@@ -1677,6 +1691,7 @@ unfix uavg_sigmaxx_poly
 unfix uavg_sigmazz_solv
 unfix uavg_sigmazz_poly
 unfix uavg_disp_z_poly
+uncompute chunk_zu_polymer
 unfix halt_box_u
 unfix uavg_P_perm
 unfix uavg_P_feed
