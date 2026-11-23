@@ -38,6 +38,11 @@
 # NETWORK=rot45 (default random) selects the slab family: prepared states, tags and inputs then
 # carry a _<network> suffix, as in debug_sweep.batch / run_benchmark.sh.  NS="5 15" limits the N
 # of nodescan and layouts; with NS set, prep prepares only those N at scale 1.0.
+# BENCH_STEM=<stem> (2026-11-23) benchmarks one data file outside that family, input_data/<stem>.data:
+# NS must then name a single N (its beads per strand) and NETWORK labels the gel in the tags, the
+# prepared state and results.csv (plot with --network <label>), as in
+#   NETWORK=random_wide NS=10 BENCH_STEM=slab_support_periodic_10beads_wide_rho04_random bash submit_benchmark.sh prep
+#   NETWORK=random_cube NS=10 BENCH_STEM=slab_support_10beads_cube10_rho044_nowalls_random_br2_s11 bash submit_benchmark.sh prep
 #
 # A run whose log already exists, or that is already queued, is skipped, so a tier can be re-submitted
 # after a failure.  A tier that would take the total past SU_CAP is refused.
@@ -62,6 +67,10 @@ ALL_N=(5 10 15 20 25 30)
 NETWORK="${NETWORK:-random}"
 NET_SUFFIX=""; [ "$NETWORK" = random ] || NET_SUFFIX="_${NETWORK}"
 read -r -a SCAN_N <<<"${NS:-5 15}"
+BENCH_STEM="${BENCH_STEM:-}"
+if [ -n "$BENCH_STEM" ] && [ "${#SCAN_N[@]}" -ne 1 ]; then
+    echo "BENCH_STEM=$BENCH_STEM needs exactly one N in NS (NS='${NS:-5 15}'); nothing submitted."; exit 1
+fi
 ENDS=(5 30)
 THREE=(5 15 30)
 NODE_COUNTS=(1 2 4 8)
@@ -208,10 +217,10 @@ fi
 for item in "${PENDING[@]:-}"; do
     [ -n "$item" ] || continue
     IFS='|' read -r tag role n scale _ <<<"$item"
-    stem="slab_support_periodic_${n}beads_tall_rho04_${NETWORK}"
+    stem="${BENCH_STEM:-slab_support_periodic_${n}beads_tall_rho04_${NETWORK}}"
     if [ "$role" = "prep" ]; then
         if [ "$scale" = "1.0" ]; then f="$INPUT_DIR/$stem.data"; else f="$INPUT_DIR/allocation_benchmark/scale$scale/$stem.data"; fi
-        hint="python build_benchmark_data.py"
+        hint="python build_benchmark_data.py"; [ -z "$BENCH_STEM" ] || hint="copy it from the machine that built it"
     else
         f="$INPUT_DIR/allocation_benchmark/prepared/prep_${n}b_s${scale}${NET_SUFFIX}.data"
         hint="bash submit_benchmark.sh prep, and wait for it"
@@ -225,7 +234,7 @@ for item in "${PENDING[@]:-}"; do
     # shellcheck disable=SC2086  # $sb is the cluster's list of sbatch flags (may be empty)
     jid=$(sbatch --parsable --job-name="$tag" $sb --nodes="$nodes" --ntasks-per-node="$tasks" \
         --cpus-per-task="$cpus" --time="$limit" \
-        --export=ALL,CLUSTER="$CLUSTER",ROLE="$role",NETWORK="$NETWORK",NBEADS="$n",SCALE="$scale",MAP="$map",COMM_CUT="$cut",NSTEPS="$steps",PREP_STEPS="$steps",REP="$rep",TAG="$tag" \
+        --export=ALL,CLUSTER="$CLUSTER",ROLE="$role",NETWORK="$NETWORK",NBEADS="$n",SCALE="$scale",MAP="$map",COMM_CUT="$cut",NSTEPS="$steps",PREP_STEPS="$steps",REP="$rep",TAG="$tag",BENCH_STEM="$BENCH_STEM" \
         allocation_benchmark.batch)
     echo "$tag: job $jid"
 done

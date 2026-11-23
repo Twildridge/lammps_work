@@ -19,6 +19,7 @@
 #                differ from the Slurm allocation (debug_sweep.batch cycles layouts inside one
 #                full-node allocation); default: the allocation's own values
 #   BENCH_FRESH  path of the fresh data file for ROLE=prep when it is not input_data/<stem>.data
+#   BENCH_STEM   (2026-11-23) the stem of the fresh file when it is not slab_support_periodic_<N>beads_tall_rho04_<NETWORK>
 {
 set -uo pipefail
 
@@ -60,7 +61,7 @@ else
 fi
 NTASKS=$((NODES * TASKS_PER_NODE))
 
-STEM="slab_support_periodic_${NBEADS}beads_tall_rho04_${NETWORK}"
+STEM="${BENCH_STEM:-slab_support_periodic_${NBEADS}beads_tall_rho04_${NETWORK}}"
 NET_SUFFIX=""; [ "$NETWORK" = random ] || NET_SUFFIX="_${NETWORK}"
 BENCH_DATA="$INPUT_DIR/allocation_benchmark"
 PREP_DIR="$BENCH_DATA/prepared"

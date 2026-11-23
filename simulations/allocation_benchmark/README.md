@@ -55,7 +55,9 @@ scp lammps_data_files_local/slab_support_periodic_{5,15}beads_tall_rho04_rot45.d
 # 1. On Pod: does lib/site.sh match the machine? Fix its pod block until this is clean.
 cd ~/Documents/lammps_work && git pull && bash scripts/cluster_check.sh
 
-# 2. The common starting states (2 jobs, 1 node each), then wait for them
+# 2. The common starting states (2 jobs, 1 node each), then wait for them.  Each tier below takes
+#    NETWORK and NS from the environment; the node health screen (section further down) decides
+#    the --exclude list on its own through lsbatch's batch_header, so nothing is pinned by hand.
 cd simulations/allocation_benchmark
 export NETWORK=rot45 NS="5 15"
 bash submit_benchmark.sh prep --dry-run && bash submit_benchmark.sh prep
@@ -84,6 +86,34 @@ wins here needs the stress output checked before it is used for production.
 What to do with the result: set the node count and `--time` of the `#POD` line in each batch file (they are
 4 nodes and four times the Expanse time until then), set `MPI_MAP_BY` in the pod block of `lib/site.sh` if
 `node` wins, and add a Pod table next to the Expanse one in `docs/running_simulations.md` §5f.
+
+### The random 10-bead gels on Pod (2026-11-23)
+
+The production gel since 2026-11 is the random 10-bead network, in two forms: the periodic wide slab
+`slab_support_periodic_10beads_wide_rho04_random.data` (the two-piston runs; about 750 k atoms) and its
+isolated cube twin `slab_support_10beads_cube10_rho044_nowalls_random_br2_s11.data` (the cube pipeline,
+`scripts/submit_cube_pipeline.sh`). Neither stem fits the `periodic_<N>beads_tall_rho04_<network>`
+family the tiers assume, so `BENCH_STEM=<stem>` names the fresh file directly and `NETWORK` becomes a
+free label that keeps the two gels apart in the tags, the prepared states (`prep_10b_s1.0_<label>.data`)
+and `results.csv`; `NS` must name the single N (10). Both files are built on the laptop, so copy them
+first:
+
+```bash
+# on the laptop
+scp ~/Documents/lammps_data/input_data/slab_support_periodic_10beads_wide_rho04_random.data \
+    ~/Documents/lammps_data/input_data/slab_support_10beads_cube10_rho044_nowalls_random_br2_s11.data \
+    pod-login1.cnsi.ucsb.edu:Documents/lammps_data/input_data/
+
+# on Pod, one gel at a time; the same tier order as above
+cd ~/Documents/lammps_work/simulations/allocation_benchmark
+export NS=10 NETWORK=random_wide BENCH_STEM=slab_support_periodic_10beads_wide_rho04_random
+bash submit_benchmark.sh prep --dry-run && bash submit_benchmark.sh prep
+export NETWORK=random_cube BENCH_STEM=slab_support_10beads_cube10_rho044_nowalls_random_br2_s11
+bash submit_benchmark.sh prep --dry-run && bash submit_benchmark.sh prep
+# ... pilot, nodescan, layouts per gel; plots with --network random_wide / --network random_cube
+```
+
+Dry runs on 2026-11-23 (per gel): prep 1 job, pilot 4, nodescan 27, layouts 15, about 250 core-hours.
 
 ## Debug-partition layout scan of the rot45 standard gel (2026-11-07)
 
