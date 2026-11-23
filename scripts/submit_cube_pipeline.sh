@@ -20,6 +20,13 @@
 #      for all three. 5 beads: pre_swell 1.10, straight strands. Longer strands: the lattice constant
 #      and pre_swell of build_beads_sweep.knobs (a_eq = 4.82 ((BEADS-1)/4)^0.59) and strands laid as
 #      random walks between their junctions (chain_placement 'walk'), as the periodic 10-bead slabs.
+#      Random networks with longer strands (2026-11-22) also take BRIDGE (default 2) and SEED (default 11),
+#      which go into the file name (_br<BRIDGE>_s<SEED>): every face junction with BRIDGE or fewer strands
+#      gets one extra strand to a neighbour with a free site (data_file_generator.bridge_dangling: fewer
+#      dangling ends, so a thinner surface fringe, at the cost of stiffer face junctions; BRIDGE=0 = none),
+#      and SEED is the bond-switching seed (11 was the most isotropic of 7, 11, 13, 17 on the 10-cell cube).
+#      The build takes about 10 min on a free machine and far longer on a busy login node; a file built
+#      elsewhere and copied to input_data/ under the same name is used as it is.
 #      An existing file is never overwritten: the build is skipped;
 #   2. sbatch simulations/slab_with_support/slab_with_support_single.batch (DATANAME = that stem; iso
 #      barostat, PIN_GEL, CHAIN=1). 5 beads: 8 M steps. Longer strands: a 16 M-step budget with the
@@ -69,6 +76,11 @@ else
     SLAB_NSTEPS=16000000; SLAB_TIME="--time=30:00:00"
     SLAB_ENV=(RG_HALT=1 RG_BLOCK=1000000 RG_EVERY=10000 RG_TOL=0.0015 RG_NCONSEC=3 RG_EXTRA=0.10)
 fi
+# Bridging and seed of the random long-strand builds (see the header); no effect, and no name tag, otherwise.
+BRIDGE="${BRIDGE:-2}"
+SEED="${SEED:-11}"
+NET_TAG=""
+if [ "$NETWORK" = random ] && [ "$BEADS" -gt 5 ]; then NET_TAG="_br${BRIDGE}_s${SEED}"; else BRIDGE=0; SEED=7; fi
 
 LAMMPS_WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$LAMMPS_WORK_DIR/scripts/lib/site.sh"
@@ -86,7 +98,7 @@ case "$NETWORK" in
     *) echo "ERROR: NETWORK must be rot45, tetrahedral or random (got '$NETWORK')"; exit 1 ;;
 esac
 
-STEM="slab_support_${BEADS}beads_cube${N}_${RHO_TAG}_nowalls_${NETWORK}"
+STEM="slab_support_${BEADS}beads_cube${N}_${RHO_TAG}_nowalls_${NETWORK}${NET_TAG}"
 DATA="$INPUT_DATA/$STEM.data"
 echo ">>> NETWORK=$NETWORK  N=$N  BEADS=$BEADS  ->  units ${UX} x ${UY} x ${UZ}   STEM=$STEM"
 echo ">>> bath $RHO_SOLV, pads $PAD_XY (x, y) / $PAD_Z (z);  equilibration budget $SLAB_NSTEPS steps ${SLAB_ENV[*]:-}"
@@ -105,12 +117,13 @@ else
     load_python_module || { echo "ERROR: could not load $PYTHON_MODULE"; exit 1; }
     LOG="$INPUT_DATA/$STEM.build.log"
     cd "$LAMMPS_WORK_DIR/scripts/lib" || exit 1
-    python - "$NETWORK" "$DATA" "$UX" "$UY" "$UZ" "$RHO_SOLV" "$PAD_XY" "$PAD_Z" "$BEADS" <<'EOF' 2>&1 | tee "$LOG"
+    python -u - "$NETWORK" "$DATA" "$UX" "$UY" "$UZ" "$RHO_SOLV" "$PAD_XY" "$PAD_Z" "$BEADS" "$BRIDGE" "$SEED" <<'EOF' 2>&1 | tee "$LOG"
 import sys
 import data_file_generator as gen
 network, out, ux, uy, uz = sys.argv[1], sys.argv[2], *map(int, sys.argv[3:6])
 rho, pad_xy, pad_z = map(float, sys.argv[6:9])
-beads = int(sys.argv[9])
+beads, bridge, seed = int(sys.argv[9]), int(sys.argv[10]), int(sys.argv[11])
+extra = dict(bond_switch_seed=seed, bridge_max_f=bridge) if (network == 'random' and beads > 5) else {}
 if beads <= 5:                      # the lattice cubes: a = 4.8 x 1.10 = 5.28 sigma, straight strands
     pre_swell, placement = 1.10, 'straight'
 else:                               # longer strands: the equilibrium mesh estimate of the beads-per-chain sweep
@@ -122,7 +135,7 @@ print(f"CELL_A {1.2 * (beads - 1) * pre_swell:.4f}")
 gen.build(network=network, output_file=out, beads_per_chain=beads,
           units_x=ux, units_y=uy, units_z=uz, solvent_density=rho,
           side_thickness=pad_xy, below_thickness=pad_z, top_thickness=pad_z,
-          pre_swell=pre_swell, include_walls=False, chain_placement=placement)
+          pre_swell=pre_swell, include_walls=False, chain_placement=placement, **extra)
 EOF
     if [ "${PIPESTATUS[0]}" -ne 0 ] || [ ! -s "$DATA" ]; then
         echo "ERROR: the build of $DATA failed (see $LOG); nothing submitted."

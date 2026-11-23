@@ -724,6 +724,59 @@ def verify_network_isotropy(data_file, label=None, seed=0, n_ref=20, face_depth=
     log(f"  ISOTROPY {'OK' if passed else 'NOT reached'} (verdict = the interior strands, every metric within 3 sd of random directions)")
     return out.get('ALL')[0], out.get('INTERIOR', out.get('ALL'))[0], passed
 
+def bridge_dangling(P, neighbors_pairs, r0, max_f=2, max_len=1.9, rest=1.43, log=print):
+    """Extra strands for the under-coordinated junctions of an isolated block (2026-11-22).
+
+    Cutting the network at the block faces leaves junctions with fewer than four strands: with one strand the
+    strand is a dangling end, with two the junction is only a link in a longer loop.  Both carry no stress
+    and swell outwards, which is the diffuse surface fringe of the random gels (13-16 sigma on the 10-bead
+    ones).  This adds at most ONE strand to every junction whose functionality is <= max_f, to the partner with
+    a free site (functionality < 4, not already bonded to it) whose distance is closest to the typical strand
+    length rest * r0 and no longer than max_len * r0.  Pairs are taken closest-to-rest first and every junction
+    takes part in at most one new strand, so f = 1 -> 2, f = 2 -> 3 and a partner gains one.  It is deliberately
+    partial: every bridged junction is a face junction that fluctuates less afterwards, so bridging more trades
+    the fringe against crosslinker mobility at the surface (max_f = 1: dangling ends only; 3: every free site
+    that finds a partner).
+
+    P (n, 3) junction positions; neighbors_pairs: iterable of (i, j) index pairs.  Returns (new_pairs, report)."""
+    from scipy.spatial import cKDTree
+    n = len(P)
+    deg = np.zeros(n, int)
+    bonded = set()
+    for i, j in neighbors_pairs:
+        deg[i] += 1
+        deg[j] += 1
+        bonded.add((min(i, j), max(i, j)))
+    before = {int(f): int((deg == f).sum()) for f in range(0, 5)}
+    free = np.flatnonzero(deg < 4)
+    seek = set(np.flatnonzero(deg <= max_f).tolist())
+    tree = cKDTree(P[free])
+    cand = []
+    for a, b in tree.query_pairs(max_len * r0):
+        i, j = int(free[a]), int(free[b])
+        if (min(i, j), max(i, j)) in bonded or not (i in seek or j in seek):
+            continue
+        d = float(np.linalg.norm(P[i] - P[j]))
+        cand.append((abs(d - rest * r0), i, j, d))
+    cand.sort()
+    used, new, lens = set(), [], []
+    for _, i, j, d in cand:
+        if i in used or j in used:
+            continue
+        used.update((i, j))
+        new.append((i, j))
+        lens.append(d)
+        deg[i] += 1
+        deg[j] += 1
+    after = {int(f): int((deg == f).sum()) for f in range(0, 5)}
+    rep = dict(n_new=len(new), before=before, after=after, mean_len=float(np.mean(lens)) if lens else float('nan'),
+               max_len=float(np.max(lens)) if lens else float('nan'), unbridged=int(len(seek - used)))
+    log(f"  bridging: {len(new)} strand(s) added to junctions with functionality <= {max_f} "
+        f"(length {rep['mean_len'] / r0:.2f} r0 on average, longest {rep['max_len'] / r0:.2f} r0; {rep['unbridged']} found no partner); "
+        f"functionality histogram {before} -> {after}")
+    return new, rep
+
+
 def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
                                    solvent_density=0.6,
                                    side_thickness=5.0, below_thickness=0.0, top_thickness=None,
@@ -735,7 +788,8 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
                                    output_file="gel_slab.data",
                                    pre_swell=1.0, include_walls=True, rot45_y=False,
                                    bond_switch=0.0, bond_switch_seed=7, bond_switch_keep_size=True,
-                                   switch_options=None, chain_placement='straight', walk_seed=11, walk_bond=0.97):
+                                   switch_options=None, chain_placement='straight', walk_seed=11, walk_bond=0.97,
+                                   bridge_max_f=0, bridge_max_len=1.9, bridge_rest=1.43):
     """
     Generate a tetrahedral (diamond lattice) polymer gel slab in solvent bath.
 
@@ -978,6 +1032,18 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
         for id1 in neighbors:
             neighbors[id1].sort()
 
+    if bridge_max_f > 0:
+        # one extra strand for the under-coordinated face junctions (see bridge_dangling)
+        id_to_idx = {cid: k for k, cid in enumerate(cl_ids)}
+        Pj = np.array([particles[cid - 1]['pos'] for cid in cl_ids])
+        pairs = [(id_to_idx[a_], id_to_idx[b_]) for a_ in neighbors for b_ in neighbors[a_]]
+        new_pairs, bridge_report = bridge_dangling(Pj, pairs, bond_distance, max_f=bridge_max_f, max_len=bridge_max_len, rest=bridge_rest)
+        for i1, i2 in new_pairs:
+            a_, b_ = sorted((cl_ids[i1], cl_ids[i2]))
+            neighbors[a_].append(b_)
+        for id1 in neighbors:
+            neighbors[id1].sort()
+
     # Build chains for each bonded crosslink pair, in ascending-id order.
     # chain_placement (2026-11-22, as periodic_data_file_generator since 2026-11-03): 'straight' puts the interior
     # beads on the line between the two junctions (every isolated gel so far, 5 beads per strand).  'walk' lays
@@ -1107,6 +1173,14 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
     max_attempts = num_solvent_total * 100
     attempts = 0
 
+    # the overlap test is against the last 100 particles placed, as it always was; they are kept in a ring buffer so
+    # the test is one array operation (2026-11-22: same random-number stream and same accepted beads as the
+    # per-particle loop, about 20x faster -- a 1 M-bead bath took most of the build time)
+    min_dist = 0.8
+    recent = np.array([p['pos'] for p in particles[-100:]], float).reshape(-1, 3)
+    ring = np.full((100, 3), 1e30)
+    ring[:len(recent)] = recent
+    ring_i = len(recent) % 100
     while solvent_count < num_solvent_total and attempts < max_attempts:
         attempts += 1
         pos = np.array([
@@ -1119,14 +1193,12 @@ def generate_gel_slab(beads_per_chain=5, units_x=8, units_y=8, units_z=4,
         if include_walls and abs(pos[2] - piston_z) < piston_exclusion:
             continue
 
-        min_dist = 0.8
-        too_close = False
-        for p in particles[-min(100, len(particles)):]:
-            if np.linalg.norm(pos - p['pos']) < min_dist:
-                too_close = True
-                break
+        dd = ring - pos
+        too_close = bool(np.any(np.einsum('ij,ij->i', dd, dd) < min_dist * min_dist))
 
         if not too_close:
+            ring[ring_i] = pos
+            ring_i = (ring_i + 1) % 100
             particles.append({
                 'id': particle_id,
                 'type': 3,  # Solvent
