@@ -23,13 +23,13 @@ The jobs most recently started on any cluster. Each job records itself when it s
 <!-- RECENT_RUNS:BEGIN (written by scripts/lib/run_record.py; edits here are overwritten) -->
 | Started | Cluster | Job | Deck | Lattice | Initial data file | Final data file(s) | Simulated | Wall time | Status | Laptop RUN_ID |
 |---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-23 10:03 | expanse | 55987615 | slab_with_support | random, 10 beads/strand | `slab_support_10beads_cube10_rho044_nowalls_random_br2_s11.data` |  | planned 16000000 (production) |  | running |  |
 | 2026-11-22 12:47 | expanse | 55957038 | uniaxial_permeation | random, 10 beads/strand | `final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40.data` |  | 6.71 M steps = 33,550 τ | 4 h 34 min | failed: ERROR: Two fix commands using same compute chunk/atom command in incompatible ways (src/compute_chunk_atom.cpp:680) |  |
 | 2026-11-21 00:21 | expanse | 55913759 | uniaxial_permeation | random, 10 beads/strand | `final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40.data` |  | 6.71 M steps = 33,550 τ | 4 h 31 min | failed: ERROR: Two fix commands using same compute chunk/atom command in incompatible ways (src/compute_chunk_atom.cpp:680) |  |
 | 2026-11-17 03:30 | expanse | 55793779 | uniaxial_compression | random, 10 beads/strand | `final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40.data` | `final_tricomp_{dataname}_1.0_1.0_4000000.data` | 13.65 M steps = 68,250 τ | 10 h 01 min | complete: rerun of 55745206 with SEAT_MODE=rg UNLOAD_MARGIN=8 | `random_16M_comp_1` |
 | 2026-11-15 22:44 | expanse | 55745208 | uniaxial_permeation | random, 10 beads/strand | `final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40.data` | `final_triperm_{dataname}_1.0_1.0_4000000.data` | 6.21 M steps = 31,050 τ | 4 h 31 min | complete | `random_10b_wide_perm_fref_1` |
-| 2026-11-15 22:44 | expanse | 55745207 | simple_shear | random, 10 beads/strand | `final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40.data` | `final_shear_{dataname}_1.0_1.0_3000000.data` | 4.50 M steps = 22,500 τ | 3 h 19 min | complete | `random_10b_wide_shear_1` |
 
-The 5 most recent of 23 recorded jobs; all of them: [`runs/README.md`](runs/README.md). `{dataname}` in a final file name is the initial data file's name without `.data`. A reason after the status is the last `ERROR` line of the log, or a note in `runs/annotations.json`.
+The 5 most recent of 24 recorded jobs; all of them: [`runs/README.md`](runs/README.md). `{dataname}` in a final file name is the initial data file's name without `.data`. A reason after the status is the last `ERROR` line of the log, or a note in `runs/annotations.json`.
 <!-- RECENT_RUNS:END -->
 
 ## Start here
