@@ -6462,6 +6462,8 @@ def gel_solvent_series(cfg, R, L):
         if m.sum() >= 2 and abs(g1 - g0) > 1e-9:
             st = np.append(PS[m, 0], H[0][0])
             Lq = L_ref + (np.append(PS[m, 2], g1) - g0) * (H[1][0] - L_ref) / (g1 - g0)
+            st, iu = np.unique(st, return_index=True)       # the plate file repeats the step where one stage ends and the
+            Lq = Lq[iu]                                     # next begins: a zero time step in np.gradient (divide by zero)
             add('ramp', False, st, Lq, st, k_N * np.gradient(Lq, st * cfg.dt_lj), None)
     # ---- hold ----
     t_h0 = ev['t_ramp1'] if ev['t_ramp1'] is not None else ev['t0']
