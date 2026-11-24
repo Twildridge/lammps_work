@@ -19,7 +19,7 @@
  "run_dir": "/home/dpollard/Documents/lammps_runs/slab_with_support/slab_with_support_slab_support_10beads_cube10_rho044_nowalls_random_br2_s11_1.0_1.0_20261123_100353",
  "run_name": "slab_with_support_slab_support_10beads_cube10_rho044_nowalls_random_br2_s11_1.0_1.0_20261123_100353",
  "started": "2026-11-23 10:03:54",
- "status": "incomplete",
+ "status": "complete",
  "steps_done": 13020002,
  "vars": "-var dataname slab_support_10beads_cube10_rho044_nowalls_random_br2_s11 -var interaction 1.0_1.0 -var epsSS 1.0 -var epsSP 1.0 -var nsteps 16000000 -var oldsteps 0 -var totsteps 16000000 -var wall_timeout 105599 -var press_target 1.5 -var baro_mode iso -var pin_gel 1 -var piston_transparent 1 -var rg_halt 1 -var rg_block 1000000 -var rg_every 10000 -var rg_tol 0.0015 -var rg_nconsec 3 -var rg_extra 0.10 -var strains 0.1 -var strains_list 0.1 -var compressions 0.1 -var compressions_list 0.1 -var nsteps_eq 200000 -var nsteps_prod 100000",
  "wall_seconds": 22881
