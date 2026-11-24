@@ -168,7 +168,7 @@ variable unload_steps  index 0            # re-swelling hold length (steps); 0 -
 variable unload_margin index 3.0          # sigma: extra retraction of EACH plate beyond the free gel's outermost-bead seat
 # 2026-11-17: the margin counts from where a bb-seated plate would sit, in BOTH seat modes.  With seat_mode rg
 # the plates seat on the Rg faces, inside the surface fringe, so the unload opens every gap by a further
-# unload_extra per plate = half the largest free-gel fringe (free BB edge + 2 contact_gap - seated gap, the
+# unload_extra per plate = half the largest free-gel fringe (free BB edge + 2 contact_gap_bb - seated gap, the
 # largest of the three axes, one value for all so the opening stays isotropic); 0 with seat_mode bb.  The
 # re-swollen gel then has the room it had as a free gel whatever the fringe: 5-7 sigma per axis on the
 # rot45 12-cell cube, 13-16 on the random 10-bead gels.  unload_margin_eff = unload_margin + unload_extra.
@@ -195,7 +195,15 @@ variable disp_fine_nf      equal v_disp_fine_nevery*v_disp_fine_nrepeat
 variable save_strained index 1
 
 # ----- Phase 1.25: seating -----
-variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) short of the gel face they seat on
+variable contact_gap_bb equal 1.12        # seat_mode bb: plates stop this far (= WCA cutoff) short of the outermost bead of the face
+variable seat_gap_rg  index 2.5           # seat_mode rg: plates stop this far outside the Rg face (-var seat_gap_rg / SEAT_GAP_RG).
+#   2026-11-24, was 1.12 (pass 1.12 to repeat an older run).  A plate 1.12 sigma from the Rg face compresses the
+#   whole network: the polymer is depleted next to the plate, so the gel's Rg edge ends 1.5-1.7 sigma per face
+#   inside where the plate lets the beads go.  Job 56000507 (random 10-bead cube): Rg edges 79.7 -> 76.7,
+#   density of the core (+/- 20 sigma) 0.280 -> 0.313 and +9 to +15 % along every axis, plate preload 0.0128,
+#   volumetric pre-strain 0.1147 (GUARD PRESTRAIN).  The free Rg size is kept at about 2.7-2.8 sigma; 2.5 leaves
+#   the plates in contact with a predicted pre-strain of about 2 % and preload of about 0.0025.  The actual
+#   values are on the `>>> reference check` line.  contact_gap (below, after seat_mode) = the one in use.
 # seat_mode = which gel face the plates seat on.
 #   (2026-11-17: both batch files set SEAT_MODE=rg.  With bb the closure of a 10 % level, ~2.4 sigma per
 #   axis, stays inside the fringe of every cube run so far: rot45 12-cell cube 5-7 sigma of fringe, Rg
@@ -211,11 +219,10 @@ variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) 
 #       folded in by the first levels: the displacement-profile strain
 #       (disp_*_polymer_cum, lib/isotropic.py K_STRAIN = 'disp') is the network strain
 #       the plate strain overstates there.
-#   rg: the Rg-based face, com +/- L_rg/2 (L_rg = 2 sqrt(3) Rg_ii).  Plates start
-#       at the network's effective surface, but the shell they fold in during the
-#       seating carries a preload (~0.028 on the 12-cell cube, run _04), so the
-#       eps_vol = 0 reference is a pre-compressed state (phi_s 0.40 vs 0.45 for the
-#       free-swollen slab of the uniaxial runs) and every K is a secant from there.
+#   rg: the Rg-based face, com +/- L_rg/2 (L_rg = 2 sqrt(3) Rg_ii), with the plates seat_gap_rg outside it.
+#       At seat_gap_rg 1.12 (every run before 2026-11-24) the seated gel is a pre-compressed state (preload
+#       ~0.028 on the 12-cell cube, run _04, phi_s 0.40 vs 0.45 for the free-swollen slab of the uniaxial
+#       runs; 0.115 by volume on the random 10-bead cube) and every K is a secant from there.  See seat_gap_rg.
 variable seat_mode    index bb
 if "${seat_mode} == bb" then &
     "variable seat_rg equal 0" &
@@ -224,6 +231,10 @@ elif "${seat_mode} == rg" &
 else &
     "print 'ERROR: seat_mode must be rg or bb (got ${seat_mode})'" &
     "quit 1"
+if "${seat_gap_rg} < ${contact_gap_bb}" then &
+    "print 'ERROR: seat_gap_rg must be at least ${contact_gap_bb}, the range of the plate-polymer repulsion (got ${seat_gap_rg})'" &
+    "quit 1"
+variable contact_gap  equal $(v_seat_rg*v_seat_gap_rg+(1-v_seat_rg)*v_contact_gap_bb)   # the plate-to-face distance of this run
 
 # ----- credit guards (2026-11-16; FRINGE_MAX / PRESTRAIN_MAX / RG_STRAIN_MIN in the batch; 0 = that guard off;
 #       as uniaxial_compression.lmp) -----
@@ -853,7 +864,7 @@ variable d_xlo equal $(v_face_xlo-v_p_xlo-v_contact_gap)
 variable d_yhi equal $(v_p_yhi-v_face_yhi-v_contact_gap)
 variable d_ylo equal $(v_face_ylo-v_p_ylo-v_contact_gap)
 variable seat_T equal $(v_t_seat*v_timestep_prod)
-print ">>> seat_mode = ${seat_mode}: gel faces  x ${face_xlo} / ${face_xhi}   y ${face_ylo} / ${face_yhi}   z ${face_zlo} / ${face_zhi}   (means over the last ${l0_avg_steps} steps of the settle)"
+print ">>> seat_mode = ${seat_mode}, plates stop ${contact_gap} sigma from the faces: gel faces  x ${face_xlo} / ${face_xhi}   y ${face_ylo} / ${face_yhi}   z ${face_zlo} / ${face_zhi}   (means over the last ${l0_avg_steps} steps of the settle)"
 print ">>>   (bounding box at this step x $(c_minx:%.2f) / $(c_maxx:%.2f)   y $(c_miny:%.2f) / $(c_maxy:%.2f)   z $(c_minz:%.2f) / $(c_maxz:%.2f))"
 print ">>> seating travel: x ${d_xlo} / ${d_xhi}   y ${d_ylo} / ${d_yhi}   z ${d_zlo} / ${d_zhi}   (t_seat=${t_seat} steps)"
 
@@ -880,9 +891,9 @@ variable L0_gap_y equal $(v_gap_y)
 variable L0_gap_z equal $(v_gap_z)
 variable L0_gap   equal ${L0_gap_z}
 # unload opening beyond the seated gaps (see unload_margin): free-gel BB edges are Phase-1 window means
-variable open_x   equal $(v_off_xlo_avg+v_off_xhi_avg+2.0*v_contact_gap-v_L0_gap_x)
-variable open_y   equal $(v_off_ylo_avg+v_off_yhi_avg+2.0*v_contact_gap-v_L0_gap_y)
-variable open_z   equal $(v_off_zlo_avg+v_off_zhi_avg+2.0*v_contact_gap-v_L0_gap_z)
+variable open_x   equal $(v_off_xlo_avg+v_off_xhi_avg+2.0*v_contact_gap_bb-v_L0_gap_x)
+variable open_y   equal $(v_off_ylo_avg+v_off_yhi_avg+2.0*v_contact_gap_bb-v_L0_gap_y)
+variable open_z   equal $(v_off_zlo_avg+v_off_zhi_avg+2.0*v_contact_gap_bb-v_L0_gap_z)
 variable open_xy  equal $((v_open_x>v_open_y)*v_open_x+(v_open_x<=v_open_y)*v_open_y)
 variable open_max equal $((v_open_xy>v_open_z)*v_open_xy+(v_open_xy<=v_open_z)*v_open_z)
 variable unload_extra      equal $(v_seat_rg*(v_open_max>0.0)*0.5*v_open_max)
@@ -967,8 +978,8 @@ fix ref_plate_force_avg all ave/time ${pf_nevery} ${pf_nrepeat} ${pf_nfreq} &
     v_N_zlo v_N_zhi v_N_xlo v_N_xhi v_N_ylo v_N_yhi v_A_x v_A_y v_A_z ave one &
     title2 "# TimeStep N_zlo N_zhi N_xlo N_xhi N_ylo N_yhi A_x A_y A_z   (compressive plate loads + BB face areas; block-averaged)" &
     file output_files/piston_data/plate_force_avg_ref_${dataname}_${interaction}_${hold_tag}.dat
-fix ref_plate_pos all print ${strain_freq} "$(step) $(v_p_zlo) $(v_p_zhi) $(v_p_xlo) $(v_p_xhi) $(v_p_ylo) $(v_p_yhi)" &
-    title "# step zlo zhi xlo xhi ylo yhi" &
+fix ref_plate_pos all print ${strain_freq} "$(step) $(v_p_zlo) $(v_p_zhi) $(v_p_xlo) $(v_p_xhi) $(v_p_ylo) $(v_p_yhi) ${contact_gap}" &
+    title "# step zlo zhi xlo xhi ylo yhi contact_gap" &
     file output_files/piston_data/plate_position_ref_${dataname}_${interaction}_${hold_tag}.dat screen no
 fix ref_strain_vol all print ${strain_freq} &
     "$(step) $(v_strain_vol_plate) $(v_strain_vol_bb) $(v_strain_vol_rg) $(v_eps_x) $(v_eps_y) $(v_eps_z) $(v_gel_vol_bb) $(v_gel_vol_rg)" &

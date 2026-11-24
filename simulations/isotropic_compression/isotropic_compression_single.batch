@@ -35,6 +35,8 @@ export COMPRESSIONS="${COMPRESSIONS:-0.10}"
 # surface fringe onto the dense gel, so the plate closure strains the network on a sharp lattice
 # surface and on the thick fringe of a random gel alike. The strain reference is the free gel's
 # Rg box (L0 = seated gap - 2 contact_gap = the free L_rg); the seated gel carries a small preload,
+# set by how far outside the Rg faces the plates stop (SEAT_GAP_RG, deck default 2.5 sigma since
+# 2026-11-24; 1.12 before, which pre-compressed the random 10-bead cube by 11.5 % in volume) and
 # printed on the `>>> reference check` line and subtracted with the reference window. bb (the
 # outermost bead) leaves the closure inside the fringe on every cube so far and is stopped by
 # FRINGE_MAX about 2 min in. PRESTRAIN_MAX / RG_STRAIN_MIN stop a run whose seating or response

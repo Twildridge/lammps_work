@@ -73,7 +73,8 @@
 #                then held for nsteps (NO SWEEP -- one continuous constant-
 #                pressure drive at ONE dP, exactly like uniaxial_permeation_one_pist.lmp; files
 #                are tagged <name>_${dataname}_${interaction}_${nsteps}).  Halts if the
-#                feed reservoir thins to feed_halt_thick or a piston nears a box face.
+#                feed reservoir thins to feed_halt_thick or a piston nears a box face (the frozen stage also
+#                when the feed piston nears the outermost frozen bead, feed_frozen_gap).
 #   - Phase 2v:  VELOCITY-CONTROLLED FLUX (vctrl = 1, the default; 2026-11-16): after the drive the
 #                feed piston stops being a pressure piston and is moved at a CONSTANT velocity, the
 #                mean velocity it had over the last vctrl_avg_steps of the drive (its displacement
@@ -186,6 +187,11 @@ variable phase0_steps index 50000          # Langevin NVT with all pistons froze
 variable n_ramp          index 100         # equal dP stages (-var n_ramp N)         (was 5 x 1000 = 5k steps
 variable ramp_steps      index 10000       # steps held at each stage (-var ramp_steps)  before 2026-09-28)
 variable feed_halt_thick equal 2.0         # halt when feed reservoir <= this (sigma)
+variable feed_frozen_gap index 1.5         # frozen stage (Phase 2d): halt when the feed piston is this close (sigma, bead centres) to the
+                                          # outermost frozen polymer bead.  The piston-polymer repulsion reaches 1.122, the frozen beads
+                                          # cannot give way, and feed_halt_thick measures from the Rg top, 8 sigma below that bead on the
+                                          # wide random gel: in job 55987856 the velocity-controlled piston ran into the gel (contact
+                                          # from step 12.78 M, P_feed 1e14 by 13.3 M) and no guard fired (2026-11-24)
 variable flux_freq       index 1000        # permeate bead-count interval (steps)
 variable box_guard_gap   equal 2.0         # halt if a piston face comes this close to a box face
 
@@ -1540,11 +1546,25 @@ fix favg_solv_density all ave/chunk ${nevery_stress_f} ${nrepeat_stress_f} ${nfr
     file output_files/chemical_potential/solvent_density_z_${dataname}_${interaction}_${frozen_tag}.dat
 fix halt_perm_f all halt ${volume_freq} v_feed_thickness <= ${feed_halt_thick} error continue
 fix halt_box_f all halt 1000 v_box_guard > 0.5 error continue
+# the feed piston must stay clear of the frozen network (see feed_frozen_gap)
+variable feed_poly_gap equal c_feed_com[3]-c_maxz
+fix halt_gel_f all halt ${volume_freq} v_feed_poly_gap <= ${feed_frozen_gap} error continue
 
 variable frozen_run equal (floor(($(step)+${frozen_len}-1)/${nfreq_stress_f})+1)*${nfreq_stress_f}-$(step)
+variable frozen_stop equal $(step)+${frozen_run}
 print ">>> [frozen] driving the solvent through the frozen network for ${frozen_run} steps (>= frozen_len=${frozen_len}, aligned to nfreq=${nfreq_stress_f}); files tagged _${frozen_tag}"
+variable frozen_room equal $(v_feed_poly_gap-v_feed_frozen_gap)
+if "${vctrl_active} == 1" then &
+    "print '>>> [frozen] feed piston $(v_feed_poly_gap:%.2f) sigma above the outermost frozen bead (z = $(c_maxz:%.2f)): room for $(v_frozen_room:%.2f) sigma of travel before the limit feed_frozen_gap = ${feed_frozen_gap}; the stage takes $(abs(v_vfeed_set)*v_frozen_run*v_timestep_prod:%.2f), and at this velocity the limit is reached at about step $(step+v_frozen_room/(abs(v_vfeed_set)*v_timestep_prod):%.0f) (stage planned to step ${frozen_stop})'" &
+else &
+    "print '>>> [frozen] feed piston $(v_feed_poly_gap:%.2f) sigma above the outermost frozen bead (z = $(c_maxz:%.2f)): room for $(v_frozen_room:%.2f) sigma of travel before the limit feed_frozen_gap = ${feed_frozen_gap}'"
 run ${frozen_run}
 
+if "$(step) < ${frozen_stop}" then &
+    "print '>>> [frozen] ENDED EARLY at step $(step) (planned ${frozen_stop}): feed piston to outermost frozen bead $(v_feed_poly_gap:%.2f) sigma (limit ${feed_frozen_gap}), feed reservoir $(v_feed_thickness:%.2f) (limit ${feed_halt_thick}), box guard $(v_box_guard:%.0f) (1 = a piston is at a box face)'"
+variable frozen_stop delete
+variable frozen_room delete
+unfix halt_gel_f
 unfix halt_box_f
 unfix halt_perm_f
 unfix favg_solv_density

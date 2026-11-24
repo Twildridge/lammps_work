@@ -1,4 +1,7 @@
 {
+ "55987856": {
+  "note": "drive and velocity-controlled stage good; frozen stage usable to step 12.75 M only (the feed piston ran into the frozen gel from 12.78 M, P_feed 1e14; ended by the box guard at 13.555 M of 14.8 M). Do not start from final_uniperm_…_4500000.data (written after the overlap); the strained restart of step 6.71 M is before it"
+ },
  "triaxial_compression_two_pist_final_config_slab_support_periodic_10beads_wide_rho04_random_1.0_1.0_16000000_two_pist_pm40_1.0_1.0_20261117_033033": {
   "job_id": "55793779",
   "note": "rerun of 55745206 with SEAT_MODE=rg UNLOAD_MARGIN=8"

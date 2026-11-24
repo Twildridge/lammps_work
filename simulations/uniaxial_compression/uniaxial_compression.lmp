@@ -154,7 +154,14 @@ variable unload_margin index 0.0          # sigma: extra retraction of EACH plat
 variable save_strained index 1
 
 # ----- Phase 1.25: seating -----
-variable contact_gap  equal 1.12          # plates stop this far (= WCA cutoff) short of the outermost gel bead
+variable contact_gap_bb equal 1.12        # seat_mode bb: plates stop this far (= WCA cutoff) short of the outermost gel bead
+variable seat_gap_rg  index 2.5           # seat_mode rg: plates stop this far outside the Rg face (-var seat_gap_rg / SEAT_GAP_RG).
+#   2026-11-24, was 1.12 (pass 1.12 to repeat an older run), as isotropic_compression.lmp.  A plate 1.12 sigma
+#   from the Rg face compresses the network, because the polymer is depleted next to the plate: job 55793779
+#   (wide random 10-bead slab) Rg thickness 78.90 -> 75.02, 1.9 sigma per face, pre-strain 0.049; on the cube
+#   of job 56000507 the same seating raised the density of the whole interior by 9 to 15 %.  The free Rg
+#   thickness of that slab is kept at about 3.1 sigma; at 2.5 the predicted pre-strain is about 1.5 %.  The
+#   actual values are on the `>>> reference check` line.  contact_gap (below, after seat_mode) = the one in use.
 variable t_seat       index 143000        # common approach time (steps)
 # seat_mode = which gel face the plates seat on (2026-11-16; SEAT_MODE in the batch; as isotropic_compression.lmp).
 # The strain bookkeeping is the bounding box in BOTH modes: L0_bb is the BB thickness of the SEATED gel,
@@ -163,7 +170,8 @@ variable t_seat       index 143000        # common approach time (steps)
 #       for a sharp surface (rot45 lattices: outermost bead ~2 sigma beyond the half-density face).  On a
 #       diffuse surface the closure goes into the fringe instead of the network (see fringe_max).
 #   rg: the Rg face, COM +/- L_rg/2, which is the half-density face within ~1 sigma on both the rot45 and
-#       the wide random gels.  The plates fold the fringe onto the dense gel during the seating, so the
+#       the wide random gels; the plates stop seat_gap_rg outside it (2.5 since 2026-11-24, 1.12 before).
+#       The plates fold the fringe onto the dense gel during the seating, so the
 #       reference is the gel in contact with the plates: it carries a small preload and pre-strain, both
 #       printed after the settle (`>>> reference check`) and subtracted by the analysis (the reference
 #       window records the preload; moduli are increments from it).  prestrain_max stops the run there
@@ -178,6 +186,10 @@ elif "${seat_mode} == rg" &
 else &
     "print 'ERROR: seat_mode must be bb or rg (got ${seat_mode})'" &
     "quit 1"
+if "${seat_gap_rg} < ${contact_gap_bb}" then &
+    "print 'ERROR: seat_gap_rg must be at least ${contact_gap_bb}, the range of the plate-polymer repulsion (got ${seat_gap_rg})'" &
+    "quit 1"
+variable contact_gap  equal $(v_seat_rg*v_seat_gap_rg+(1-v_seat_rg)*v_contact_gap_bb)   # the plate-to-face distance of this run
 variable nsteps_settle index 1000000      # both plates fixed before the epsilon=0 reference (2026-09-05 value)
 
 # ----- reference averaging (2026-11-11; L0_AVG_STEPS in the batch) -----
@@ -852,7 +864,7 @@ variable d_piston    equal $(v_piston_z0 - v_gel_top_bb0 - v_contact_gap)
 variable d_support   equal $(v_gel_bot_bb0 - v_support_z0 - v_contact_gap)
 variable vseat_piston  equal $(-1.0*v_d_piston/(v_t_seat*v_timestep_prod))
 variable vseat_support equal $(v_d_support/(v_t_seat*v_timestep_prod))
-print ">>> seating: d_piston=${d_piston}  d_support=${d_support}  v_piston=${vseat_piston}  v_support=${vseat_support}  (t_seat=${t_seat} steps)"
+print ">>> seating (plates stop ${contact_gap} sigma from the faces): d_piston=${d_piston}  d_support=${d_support}  v_piston=${vseat_piston}  v_support=${vseat_support}  (t_seat=${t_seat} steps)"
 
 fix nve_load     piston_load nve
 fix nve_support support    nve

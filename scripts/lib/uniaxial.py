@@ -257,6 +257,11 @@ class Config:
                                           # state, same dP on the solvent) read the frozen-network flux -> P['frozen'] (Darcy kappa of the
                                           # rigid network beside the live one, add_perm_frozen / fig_perm_frozen); False = ignore them
     PERM_FROZEN_SKIP: int = 0             # steps after the freeze left out of the frozen flux windows (0 = plateau_frac_auto drift test only)
+    PERM_FROZEN_END: int = 0              # 2026-11-24: last step of the frozen stage that is read (0 = the whole stage).  The stage's windows
+                                          # are TRAILING ones, so samples that are not the stage any more have to be cut here: with the
+                                          # polymer stopped the velocity-controlled feed piston can reach the gel's outermost beads, which
+                                          # cannot give way (job 55987856: contact from step 12.78 M, P_feed 1e14 by 13.3 M).
+                                          # add_perm_frozen warns when the stage holds such samples and this is 0
     PERM_VCTRL: bool = True               # 2026-11-16: when the run has _v files (deck Phase 2v: after the drive the feed piston is moved at the
                                           # constant mean velocity of the drive's tail, the permeate piston still at P_target) read them ->
                                           # P['vctrl']: kappa_v = q L/dP_measured on the live network (add_perm_vctrl).  False = ignore them
@@ -8198,8 +8203,10 @@ def _perm_k(Q, Qlo, Qhi, dP, dPlo, dPhi, L, area):
     return dict(k=float(k), lo=float(k - h), hi=float(k + h))
 
 
-def _perm_stage(cfg, R, P, pathfn, skip=0, q_set=None):
+def _perm_stage(cfg, R, P, pathfn, skip=0, q_set=None, end=0):
     """Flux and pressure drop of one post-drive stage (pathfn = cfg.vpath or cfg.fpath).
+    end > 0: samples after that step are dropped from every file of the stage before anything is computed
+    (F['n_cut'] = rows of the permeation table left out, F['step_last_file'] = the file's own last step).
 
     q_set None (pressure control, the frozen stage of runs before 2026-11-16): the drive's estimators --
     Q from the N_permeate slope over independent q_win_steps windows of the drift-tested trailing window
@@ -8218,8 +8225,14 @@ def _perm_stage(cfg, R, P, pathfn, skip=0, q_set=None):
     en, et = read_piston_table(pathfn('permeation'))
     if not et.size or en is None:
         return None
+    n_file, step_last_file = len(et), float(et[-1, 0])
+    if end:
+        et = et[et[:, 0] <= end]
+        if not et.size:
+            return None
     area = P['area']
-    F = dict(step=et[:, 0], mode='velocity' if q_set else 'pressure', q_set=(float(q_set) if q_set else np.nan))
+    F = dict(step=et[:, 0], mode='velocity' if q_set else 'pressure', q_set=(float(q_set) if q_set else np.nan),
+             n_cut=n_file - len(et), step_last_file=step_last_file)
     for key, pre in (('z_feed', 'z_feed'), ('z_perm', 'z_perm'), ('P_feed_meas', 'P_feed_meas'),
                      ('P_perm_meas', 'P_perm_meas'), ('Q', 'Q_perm'), ('N', 'N_permeate')):
         F[key] = table_col(en, et, pre)
@@ -8229,6 +8242,8 @@ def _perm_stage(cfg, R, P, pathfn, skip=0, q_set=None):
     t_from = F['t_start'] + skip
     rho0 = R.get('rho_s0', np.nan)
     cnt = load2c(pathfn('permeate_count'), 2)
+    if end and cnt is not None:
+        cnt = cnt[cnt[:, 0] <= end]
     if cnt is not None and (cnt[:, 0] >= t_from).sum() >= 8:
         cw = cnt[:, 0] >= t_from
         n_st, n_val, F['count'] = cnt[cw, 0], cnt[cw, 1], cnt
@@ -8279,6 +8294,8 @@ def _perm_stage(cfg, R, P, pathfn, skip=0, q_set=None):
     F['dP_app'] = float(live.get('dP_app', np.nan))
     Lg = P['L_gel']
     G = load2c(pathfn('gel_dimensions_rg'), 4)
+    if end and G is not None:
+        G = G[G[:, 0] <= end]
     if G is not None and (G[:, 0] >= NS['step0']).sum() >= 2:
         Lg = float(np.mean(G[G[:, 0] >= NS['step0'], 3]))
         F['L_src'] = "the stage's Rg thickness over its window"
@@ -8370,10 +8387,12 @@ def add_perm_frozen(cfg, R, P, verbose=True):
         return P
     info = perm_vctrl_info(cfg) if cfg.PERM_VCTRL else None
     q_set = abs(info['vfeed_set']) if (info and info.get('vfeed_set') and info.get('frozen_follows', 1)) else None
-    F = _perm_stage(cfg, R, P, cfg.fpath, cfg.PERM_FROZEN_SKIP, q_set=q_set)
+    end = int(getattr(cfg, 'PERM_FROZEN_END', 0) or 0)
+    F = _perm_stage(cfg, R, P, cfg.fpath, cfg.PERM_FROZEN_SKIP, q_set=q_set, end=end)
     if F is None:
         if cfg.fpath('permeation').exists():
-            say('  NOTE: frozen-network files present but too short for a flux window')
+            say('  NOTE: frozen-network files present but too short for a flux window'
+                + (f' (PERM_FROZEN_END = {end} leaves too few samples)' if end else ''))
         return P
     F['t_freeze'] = F['t_start']
     ref = P.get('vctrl') if (q_set and P.get('vctrl')) else (P.get('flux') or {})
@@ -8382,6 +8401,16 @@ def add_perm_frozen(cfg, R, P, verbose=True):
     P['frozen'] = F
     say(f"FROZEN NETWORK (deck Phase 2d): polymer stopped at step {int(F['t_freeze'])}, {len(F['step'])} samples to step {int(F['step'][-1])}; "
         + ('feed piston at the prescribed velocity' if q_set else 'both pistons pressure-controlled at the applied dP'))
+    if F.get('n_cut'):
+        say(f"  PERM_FROZEN_END = {end}: the {F['n_cut']} samples after it (the file runs to step {int(F['step_last_file'])}) are left out")
+    # a pressure drop larger than the bath pressure is not flow through the gel: the feed piston is on the frozen polymer
+    dps = F.get('dP_series')
+    if dps is not None:
+        bad = ~np.isfinite(dps) | (np.abs(dps) > cfg.P_BARO)
+        if bad.any():
+            say(f"  WARNING: |dP| exceeds P_target from step {int(F['step'][np.argmax(bad)])} on ({int(bad.sum())} samples, largest "
+                f"{np.nanmax(np.abs(dps)):.3g}): the feed piston has reached the frozen polymer.  The stage's windows are trailing "
+                f"ones, so kappa_f below is NOT usable; set PERM_FROZEN_END to a step before the rise (see the timeline, figure 1)")
     _say_stage(say, F, 'kappa_f')
     for kk, rr in F['ratio'].items():
         say(f"  kappa_f / kappa ({F['ratio_ref']}; {kk}) = {rr['r']:.3f} [{rr['lo']:.3f}, {rr['hi']:.3f}]")

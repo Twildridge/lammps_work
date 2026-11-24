@@ -222,7 +222,7 @@ Knobs:
 
 ##### Velocity-controlled and frozen stages
 
-Functions: `perm_vctrl_info`, `_perm_stage`, `add_perm_vctrl`, `add_perm_frozen`, `perm_reconcile`; paths from `Config.vpath` and `Config.fpath`. Knobs: `PERM_VCTRL` and `PERM_FROZEN` (both `True`: read the stage when its files exist), `PERM_VCTRL_SKIP` and `PERM_FROZEN_SKIP` (both 0 steps).
+Functions: `perm_vctrl_info`, `_perm_stage`, `add_perm_vctrl`, `add_perm_frozen`, `perm_reconcile`; paths from `Config.vpath` and `Config.fpath`. Knobs: `PERM_VCTRL` and `PERM_FROZEN` (both `True`: read the stage when its files exist), `PERM_VCTRL_SKIP` and `PERM_FROZEN_SKIP` (both 0 steps). `PERM_FROZEN_END` (0 = the whole stage) is the last step of the frozen stage that is read: the stage's windows are trailing ones, so a stage whose end is not flow through the gel any more has to be cut there. With the polymer stopped, the velocity-controlled feed piston can reach the gel's outermost beads, which cannot give way (job 55987856: contact from step 12.78 M, `P_feed` 10¹⁴ by 13.3 M); `add_perm_frozen` prints a warning when |ΔP| exceeds `P_BARO` in the samples it reads.
 
 **Velocity-controlled stage (`_v` files, deck Phase 2v).** After the drive the feed piston moves at a prescribed velocity and ΔP is measured. `add_perm_vctrl` fills `P['vctrl']`:
 

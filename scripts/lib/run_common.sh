@@ -12,9 +12,9 @@ KNOBS=(
     mean_box mean_box_window mean_box_ramp mean_box_hold mean_lx mean_ly    # mean-box ending (slab_with_support, 2026-11-14)
     piston_mass c_pist_frac npt_piston_steps settle_halt                    # NPT pistons
     dp_piston n_ramp ramp_steps perm_stress_curves disp_nfreq               # permeation
-    frozen frozen_steps frozen_at                                           # permeation, frozen network
+    frozen frozen_steps frozen_at feed_frozen_gap                           # permeation, frozen network
     vctrl vctrl_steps vctrl_avg_steps vfeed                                 # permeation, velocity-controlled flux (Phase 2v)
-    drive_split hold_auto seat_mode disp_fine_nfreq disp_fine_bin           # compression decks
+    drive_split hold_auto seat_mode seat_gap_rg disp_fine_nfreq disp_fine_bin   # compression decks
     unload unload_steps unload_margin                                       # compression / shear unload
     save_strained                                                           # strained-state restart at the end of each hold (default 1; 0 = off)
     l0_avg_steps                                                            # window of the L0 / L_ss means (compression, isotropic_compression, permeation)

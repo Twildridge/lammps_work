@@ -213,7 +213,10 @@ def cmd_end(store, work_dir, status):
                 rec.update({k: v for k, v in json.load(f).items() if k in ('started',) and v})
         except ValueError:
             pass
-    if status == 'complete' and 'STATUS INCOMPLETE' in _read(os.path.join(work_dir, 'log.lammps'))[-200000:]:
+    # Printed lines only (as chain_if_incomplete in run_common.sh): LAMMPS also echoes the deck's
+    # `if ... else "print '... STATUS INCOMPLETE'"` command into the log, so the bare text is always there.
+    if status == 'complete' and re.search(r'^>>> PRODUCTION_STEPS_DONE \d+ .*STATUS INCOMPLETE',
+                                          _read(os.path.join(work_dir, 'log.lammps'))[-200000:], re.M):
         status = 'incomplete'                             # the deck stopped at its wall-clock budget (a continuation follows)
     print('run record: ' + write_record(store, close_record(rec, work_dir, status)) + ' (' + status + ')')
     return 0

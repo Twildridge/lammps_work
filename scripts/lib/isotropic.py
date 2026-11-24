@@ -125,7 +125,9 @@ class Config(uni.Config):
     plateau_frac, wall_margin, res_wall_margin, RELAX_SYS, SS_FIT_NPTS, DC_*, ...); COMP_LEVELS
     holds the cumulative VOLUMETRIC strain targets as strings, = STRAIN_TARGETS in the .batch."""
     AXES: tuple = ('z', 'x', 'y')         # profile axes analysed; the first is the one the profile figures draw by default
-    contact_gap: float = 1.12             # isotropic_compression.lmp contact_gap: seated plate plane to the gel face
+    contact_gap: float = 1.12             # isotropic_compression.lmp contact_gap: seated plate plane to the gel face.  Runs since
+                                          # 2026-11-24 write it into plate_position_ref (SEAT_GAP_RG, 2.5 with seat_mode rg) and
+                                          # load_reference takes it from there; this value serves the older runs (1.12)
     core_margin: float = 6.0              # isotropic_compression.lmp core_margin: the core column stops this far inside the plates
     K_SUBTRACT_REF: bool = True           # K = (stress - its own eps_vol = 0 reading) / eps_vol for BOTH estimators
     K_STRAIN: str = 'disp'                # eps_vol in the denominator: 'disp' (steady displacement-profile slopes of
@@ -369,6 +371,12 @@ def load_reference(cfg, verbose=True):
     if not P:
         raise FileNotFoundError(f'{cfg.path("plate_position_ref").name} missing -- run the sync cell')
     R['plate_tab'] = P
+    if 'contact_gap' in P:                                # the run's own plate-to-face distance (decks since 2026-11-24)
+        cg = float(np.mean(P['contact_gap']))
+        if abs(cg - cfg.contact_gap) > 1e-9:
+            say(f'contact_gap = {cg:g} sigma (from plate_position_ref; the Config had {cfg.contact_gap:g})')
+        cfg.contact_gap = cg
+    R['contact_gap'] = float(cfg.contact_gap)
     R['plane'] = {f: float(np.mean(P[f])) for f in PLATES}
     R['gap'] = {a: R['plane'][a + 'hi'] - R['plane'][a + 'lo'] for a in 'xyz'}
     R['A_gap'] = {a: float(v) for a, v in face_areas(cfg, R['gap']).items()}

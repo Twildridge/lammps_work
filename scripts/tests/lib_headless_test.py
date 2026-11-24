@@ -74,6 +74,15 @@ X0 = uni.perm_reconcile(cfg0, Rp, P0, verbose=False)
 assert 'v' not in X0['kappa'] and 'dP' in X0['kappa']
 uni.fig_perm_stages(cfg0, Rp, P0); uni.fig_perm_reconcile(cfg0, Rp, P0)
 plt.close('all')
+# PERM_FROZEN_END (2026-11-24): the frozen stage read up to a step only (a feed piston that ran into the frozen gel)
+cfgE = uni.Config(DATANAME='fixture_slab', INTERACTION='1.0_1.0', RUN_ID='fixture_perm', mode='permeation', base_dir=base,
+                  VOR_ENABLE=False, PSD_ENABLE=False, PERM_FROZEN_END=int(Sf['step'][-3]))
+PE = uni.load_permeation(cfgE, Rp, verbose=False)
+uni.add_perm_displacement(cfgE, Rp, PE, verbose=False)
+uni.add_perm_vctrl(cfgE, Rp, PE, verbose=False); uni.add_perm_frozen(cfgE, Rp, PE, verbose=False)
+SE = PE['frozen']
+assert SE is not None and SE['n_cut'] == 2 and SE['step'][-1] == Sf['step'][-3] and SE['step_last_file'] == Sf['step'][-1], (SE and SE['n_cut'])
+assert SE['count'][-1, 0] <= cfgE.PERM_FROZEN_END and Sf['n_cut'] == 0
 for f in (uni.fig_perm_pistons, uni.fig_total_stress, uni.fig_partial_stress, uni.fig_network_stress, uni.fig_perm_density,
           uni.fig_perm_volfrac, uni.fig_perm_volfrac_evolution, uni.fig_perm_psd, uni.fig_perm_flux, uni.fig_perm_permeability,
           uni.fig_thermo_pressure, uni.fig_osmotic_pressure):
