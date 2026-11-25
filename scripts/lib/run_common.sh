@@ -14,6 +14,7 @@ KNOBS=(
     dp_piston n_ramp ramp_steps perm_stress_curves disp_nfreq               # permeation
     frozen frozen_steps frozen_at feed_frozen_gap                           # permeation, frozen network
     vctrl vctrl_steps vctrl_avg_steps vfeed                                 # permeation, velocity-controlled flux (Phase 2v)
+    seat_support seat_frac seat_vel seat_hold_steps damp_ramp               # permeation, seating on the support + damper through the ramp (2026-11-24)
     drive_split hold_auto seat_mode seat_gap_rg disp_fine_nfreq disp_fine_bin   # compression decks
     unload unload_steps unload_margin                                       # compression / shear unload
     save_strained                                                           # strained-state restart at the end of each hold (default 1; 0 = off)

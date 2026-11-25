@@ -199,9 +199,11 @@ The sync logs in when a trajectory is missing. An unresolved `<steps>` tag match
 
 **Model.** 1-D poroelasticity, `∂u_z/∂t = q(t) + D_c ∂²u_z/∂z²`, with `u_z = 0` at the support and a free feed face. The pistons prescribe the pressure drop and the total stress is uniform, so the network stress at the support equals ΔP from t = 0⁺. The strain then obeys the diffusion equation with Dirichlet ends, and the displacement modes are 1 − cos(kπζ) at k²π²D_c/L₀², τ₁ = L₀²/(π²D_c). The drive is the applied-ΔP history read from `piston_pressure`, so any ramp shape is treated exactly.
 
-**D_c (`fig_perm_Dc`).** Two readings: the profile snapshots with free modal amplitudes (window-averaged modes), and the feed-face trace `L_bb(t) − L₀` against the exact zero-initial-condition series, which also gives the asymptote u_F(∞).
+**D_c (`fig_perm_Dc`).** The profile snapshots are fitted with free modal amplitudes (window-averaged modes). Since 2026-11-24 the model is driven by the polymer-support pair force / A (`support_force`), which is the network stress at the pinned face, instead of the applied ΔP ramp. The two differ whenever the gel does not rest on the support at zero flux: in random_10b_wide_perm_1 the gel floated 8 σ above the plate, fell through the whole ramp carrying no load, landed at the ramp end and took 2.3 times the steady load from the pistons' momentum before settling 1.8 M steps later. With the applied ramp the fit gave R² 0.87; with the support force 0.99. The fit domain is the dense gel only (`PERM_DENSE_FRAC`): displacement binned by current z is biased where the density has a gradient, and L₀ ends at the half-density top edge of the first snapshot's count profile. The loader refits three variants (theory amplitudes A_k = 2e₀/(kπ)², and the first and second half of the snapshots after the load arrives); their range is the interval D_c carries into `perm_reconcile`. The bounding-box trace fit is off by default (`PERM_TRACE_FIT`): on a gel with a fringe the bounding box follows the fringe.
 
-**M (`fig_perm_M`).** M = ΔP_ext L₀/(2|u_F|) from the steady thickness change (primary), from the steady-profile parabola, and from the trace asymptote. The CIs include the measured ΔP_ext in quadrature. The loader prints κ = D_c/M next to the Darcy κ.
+**Skin test (`perm_skin_test`, panel d).** A layer at the support that is less permeable than the bulk acts as a hydraulic resistance in series at the drainage face. For a thin layer this is the same as applying the support load a distance ℓ below the pinned plane, where ℓ is the skin's excess equivalent thickness (bulk permeability times the skin's resistance, minus its real thickness). The linear solution is refitted (scale and D_c) on a slab of length L₀ + ℓ for a scan of ℓ. A skin shows as a residual minimum at ℓ > 0, and D_c(ℓ = 0)/D_c(ℓ*) is the factor by which it lowers the whole-gel D_c. On synthetic profiles with ℓ = 8 σ and D_c = 0.2 the scan returns 7.9 σ and 0.199 (the no-skin fit of the same profiles gives 0.119). random_10b_wide_perm_1: the residual is smallest at ℓ = 0 and passes the 25 % tolerance (`PERM_SKIN_TOL`) at 5.5 σ, so a skin lowers D_c by less than 30 %.
+
+**M (`fig_perm_M`).** M = ΔP_ext L_ss/(2|u_F|) with L_ss = L₀(1 + c), the steady thickness of the dense gel; u_F from the per-atom pairing over the dense reference bins (primary), from the steady-profile parabola, and from the bounding box (kept for reference; it counts the fringe). The CIs include the measured ΔP_ext in quadrature. The loader prints κ = D_c/M next to the Darcy κ.
 
 **Flux check (`fig_perm_flux_check`).** The flux the fits imply, Q(t) = A[(D_c/M) ΔP(t)/L₀ − d⟨u_z⟩/dt], is drawn against the measured piston-velocity trace, the N_perm-slope Q and the cumulative bead count. Nothing in it is fitted to the flux.
 
@@ -212,9 +214,13 @@ Knobs:
 | Knob | Default | Meaning |
 |---|---|---|
 | `PERM_GAP` | 1.0 σ | The pinned polymer face is z_support + `PERM_GAP` |
-| `PERM_L0_MODE` | `'face'` | L₀ of the fit: the reference polymer-stress edge minus the pinned face; `'bb'` is the bounding-box thickness |
+| `PERM_L0_MODE` | `'dense'` | L₀ of the fit: half-density top edge of the first snapshot's polymer count profile minus the pinned face; `'face'` is the reference polymer-stress edge (in the fringe on the random gel), `'bb'` the bounding-box thickness |
+| `PERM_DENSE_FRAC` | 0.8 | Bins of the fit domain, of the contact layer and of the per-atom profile hold at least this fraction of the bulk polymer count; 0 restores the `Ncount_min` floor |
 | `PERM_L0_STEPS` | 500 000 | Window of the bounding-box L₀ before the ramp and of the unload's L_ss before the ramp-down, ending at the last sample before the ramp (100 000 before 2026-11-11) |
-| `PERM_FORCING` | `'applied'` | ΔP(t) driving the model; `'measured'` uses the reservoir pressure difference, for runs whose pistons ring |
+| `PERM_FORCING` | `'support'` | Load history driving the model: the polymer-support force / A (falls back to `'applied'` without a `support_force` file); `'applied'` is the ΔP ramp, `'measured'` the reservoir pressure difference |
+| `PERM_DC_AMPS` | `'free'` | Modal amplitudes: fitted per mode, or `'theory'` (A_k = 2e₀/(kπ)², two parameters) |
+| `PERM_DC_VARIANTS` | `True` | Refit the variants that give the D_c range |
+| `PERM_TRACE_FIT` | `False` | Fit the bounding-box thickness trace as a second D_c |
 | `PERM_DC_WINDOW_AVG` | `True` | Average the fitted modes over each `ave/chunk` window |
 | `PERM_DC_BOUNDS` | (1e-6, 50.0) | D_c search interval |
 | `PERM_DISP_RESET` | `'auto'` | Where the deck reset the displacement: ramp start (decks since 2026-09-28) or ramp end (older decks), detected automatically |

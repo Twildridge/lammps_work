@@ -187,7 +187,7 @@ def permeation(D, rigid_drop=3.0, L0=126.4, dP=0.1, M=0.42, onset=1_000_000, n_r
     disp = dict(ts=ends.astype(float), z=zc, Nc=Nc, uz=uz, stride=float(stride), forcing=fz, reset_mode='ramp_start',
                 t_reset=float(onset), bb_step=S.astype(float), bb_L=L0 + U[:, -1] + rng.normal(0.0, noise, len(S)))
     cfg = _cfg(mode='permeation', PERM_GAP=gap, PERM_RIGID='contact' if rigid_drop > 0 else 'none',
-               PERM_DC_N_MODES=8, PERM_TRACE_SKIP=1_500_000)
+               PERM_DC_N_MODES=8, PERM_TRACE_SKIP=1_500_000, PERM_TRACE_FIT=True)
     P = dict(halt_ts=int(S[-1] - 0.25 * (S[-1] - onset)))
     F = uni.fit_perm_Dc(cfg, dict(z_support=z_sup), P, disp)
     return F, L0 ** 2 / (np.pi ** 2 * D)

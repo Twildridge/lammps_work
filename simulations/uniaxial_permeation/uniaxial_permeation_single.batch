@@ -11,7 +11,10 @@
 #POD --nodes=4 --ntasks-per-node=40 --cpus-per-task=1 --time=192:00:00   # Pod allocation (submit with lsbatch); provisional: 4x the Expanse time, not yet timed on Pod
 source "$HOME/Documents/lammps_work/scripts/batch_prologue.sh"
 
-# Two-piston permeation, one run, four stages (deck header has the details):
+# Two-piston permeation, one run, a seating step and four stages (deck header has the details):
+#   seating   SEAT_SUPPORT=1 (default): after the settle the support is moved up to the gel face
+#             (contact at SEAT_FRAC x dP) and held SEAT_HOLD_STEPS, so the gel does not spend the
+#             ramp falling onto it. DAMP_RAMP=1 (default) fades the piston damper out over the ramp.
 #   drive     P_feed = PRESS_TARGET + DP_PISTON, P_perm = PRESS_TARGET for NSTEPS after the settle, the
 #             reference window and the dP ramp. D_c from the displacement transient, M from the steady
 #             displacement profile.

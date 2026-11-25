@@ -206,7 +206,15 @@ class Config:
     # ---- permeation: D_c and M from the polymer displacement (2026-09-28) ----------
     PERM_GAP: float = 1.0                 # sigma: the pinned polymer face z^P = z_support + PERM_GAP (the plate-bead
                                           # exclusion; the compression fit's plate gap is the same ~1 sigma).  zeta = (z - z^P)/L_0
-    PERM_FORCING: str = 'applied'         # the dP(t) history driving the consolidation model (2026-10-07): 'applied' = the
+    PERM_FORCING: str = 'support'         # the load history driving the consolidation model.  'support' (2026-11-24, default) =
+                                          # the polymer-support pair force / A (support_force, pf cadence, smoothed over
+                                          # PERM_FORCING_SMOOTH samples): the network stress at the pinned face, i.e. the
+                                          # boundary condition of the model itself, whatever the pistons and the gap did
+                                          # (random_10b_wide_perm_1: the gel floated 8 sigma above the plate, fell through the
+                                          # whole 1M-step ramp with no load, landed at the ramp end and took 2.3x the steady
+                                          # load from the pistons' momentum; the applied ramp gave R^2 0.87, the support force
+                                          # 0.99).  Falls back to 'applied' when the run has no support_force file (decks
+                                          # before 2026-10-03).  'applied' = the
                                           # piston_pressure ramp P_feed_app - P_perm_app; 'measured' = the reservoir pressure
                                           # difference P_res_feed - P_res_perm (pressure_feed / pressure_permeate, pf cadence,
                                           # smoothed over PERM_FORCING_SMOOTH samples; the applied ramp start stays t = 0 and
@@ -215,7 +223,32 @@ class Config:
                                           # measured dP overshot to 2x the applied for ~0.3M steps and the gel followed it
                                           # (tau_1 ~0.35M steps); the full gel (tau_1 ~2M) filtered it.
     PERM_FORCING_SMOOTH: int = 5          # rolling-mean window (samples) of the measured dP before differencing
-    PERM_L0_MODE: str = 'face'            # the L_0 of the permeation fit (2026-10-07): 'face' = reference polymer-stress edge
+    PERM_DENSE_FRAC: float = 0.8          # 2026-11-24: bins of the fit domain hold >= this fraction of the snapshot's bulk
+                                          # (median) polymer count; 0 = the old Ncount_min floor.  u_z binned by current z is
+                                          # biased wherever the density has a gradient (the atoms now in a fringe bin are the
+                                          # ones that diffused there: +0.6 to +4 sigma in the top fringe of the random gel
+                                          # before any load), and the contact layer u_0 was read off 5-70 fringe atoms.  The
+                                          # per-atom steady profile ('lag' M) uses the same floor on its reference bins
+    PERM_DC_AMPS: str = 'free'            # 'free' = one fitted amplitude per mode (absorbs a non-parabolic steady profile) |
+                                          # 'theory' = A_k = 2 e_0/(k pi)^2, the linear solution: two parameters (e_0, D_c),
+                                          # _PERM_TRACE_MODES modes.  Whichever is primary, the other is fitted as a variant
+    PERM_DC_VARIANTS: bool = True         # refit D_c three more ways (other amplitude model; first / second half of the
+                                          # snapshots after the load arrives) -> F['Dc_var'], F['Dc_lo'], F['Dc_hi']: the
+                                          # spread is the profile D_c's interval in perm_reconcile
+    PERM_TRACE_FIT: bool = False          # 2026-11-24: the bounding-box thickness-trace fit (second D_c, 'trace' M).  Off: the
+                                          # bounding box follows the outermost beads, and on a gel with a fringe its change is
+                                          # the fringe collapsing (random_10b_wide_perm_1: -14.6 sigma against -8 for the dense
+                                          # gel; fit D_c 4.2 +/- 1e7)
+    PERM_SKIN_TEST: bool = True           # 2026-11-24: fig_perm_Dc panel (d), perm_skin_test: refit with a skin resistance at the
+                                          # support (excess equivalent thickness ell) -> does a skin lower D_c?  ~15 s
+    PERM_SKIN_TOL: float = 0.25           # ell interval = where the residual stays within this fraction of its minimum.  The
+                                          # residual is systematic misfit (non-linear steady profile), correlated over ~10
+                                          # snapshots, so ~10-20 independent pieces: an F-test at 95 % allows 20-40 %
+    PERM_L0_MODE: str = 'dense'           # the L_0 of the permeation fit.  'dense' (2026-11-24, default) = half-density top
+                                          # edge of the polymer count profile at the first displacement snapshot minus Z^P
+                                          # (needs a ramp-start reset; else 'face').  'face' put the top at the polymer-STRESS
+                                          # edge, which on the random gel sits in the fringe (144 vs 139; L_0 84.3 vs 79.3,
+                                          # 13 % in D_c).  (2026-10-07): 'face' = reference polymer-stress edge
                                           # minus Z^P (the pinned face's REFERENCE position z^P - u_0): the thickness of the
                                           # dense gel the material coordinate spans, so zeta reaches 1 at the real top face.
                                           # 'bb' (old): the bounding-box thickness, which also counts the ~3 sigma the face
@@ -5968,7 +6001,10 @@ def perm_lagrangian_profile(cfg, R, P):
     per = np.array([np.bincount(k, weights=u, minlength=nb) / np.maximum(cnt, 1) for u in U])
     zc = 0.5 * (edges[:-1] + edges[1:])
     um = per.mean(axis=0)
-    idx = np.where(cnt >= cfg.Ncount_min)[0]
+    # dense reference bins only (PERM_DENSE_FRAC, 2026-11-24): the fringe under the gel collapses onto the plate with
+    # strains of 0.5-0.8 and was counted in u_F (random_10b_wide_perm_1: -12.3 sigma with it, -8.0 without)
+    bulk = float(np.median(cnt[cnt > 0.5 * cnt.max()])) if cnt.max() > 0 else 0.0
+    idx = np.where(cnt >= max(cfg.Ncount_min, cfg.PERM_DENSE_FRAC * bulk))[0]
     eps_loc = np.full(nb, np.nan)
     if len(idx) >= 3:
         zi, ui = zc[idx], um[idx]
@@ -7569,7 +7605,7 @@ def _perm_trace_series(t_lj, Dc, L, forcing, n=_PERM_TRACE_MODES):
     return _perm_H(mu, Dc, L, t_lj, forcing) @ b
 
 
-def perm_forcing(cfg):
+def perm_forcing(cfg, area=None):
     """The applied-dP history from piston_pressure (P_feed_app - P_perm_app, one sample per
     volume_freq) -> dict(t0 = ramp start step (the last zero sample), t_end = step at which the
     full dP is first reached, full, n = number of increments, tj = increment times (LJ time from
@@ -7598,6 +7634,25 @@ def perm_forcing(cfg):
         inc, tinc = np.array([full]), np.array([t0])
     fz = dict(t0=t0, t_end=float(st[i_end]), full=full, n=int(inc.size), steps=st, dp=dp,
               tj=(tinc - t0) * cfg.dt_lj, wj=inc / inc.sum(), forcing='applied')
+    if cfg.PERM_FORCING == 'support':
+        sf = load2c(cfg.path('support_force'), 2)
+        after = sf[:, 0] > t0 if sf is not None else np.zeros(0, bool)
+        if after.sum() >= 8:
+            # network stress at the pinned face = polymer-support pair force / A: the strain boundary condition of the
+            # consolidation model, measured.  Signed increments (the load overshoots and comes back)
+            sig_s = np.abs(sf[:, 1]) / (area if area else 1.0)       # the weights are ratios: the area only sets the printed values
+            if cfg.PERM_FORCING_SMOOTH > 1:
+                sig_s = rolling_mean(sig_s, int(cfg.PERM_FORCING_SMOOTH))
+            sts, sg = sf[after, 0], sig_s[after]
+            n_ss = max(int(0.25 * len(sg)), 4)
+            s_ss = float(np.mean(sg[-n_ss:]))
+            if s_ss > 0:
+                inc_s = np.diff(np.concatenate([[0.0], sg]))
+                tinc_s = sts - 0.5 * np.diff(np.concatenate([[t0], sts]))
+                i_land = int(np.argmax(sg >= 0.05 * s_ss))
+                fz.update(tj=(tinc_s - t0) * cfg.dt_lj, wj=inc_s / s_ss, n=int(inc_s.size), forcing='support',
+                          sig_sup=sg, steps_sup=sts, sig_sup_ss=s_ss, dp_applied_full=full,
+                          sig_sup_max=float(np.max(sg)), step_sup_max=float(sts[np.argmax(sg)]), step_land=float(sts[i_land]))
     if cfg.PERM_FORCING == 'measured':
         pf, pp = load2c(cfg.path('pressure_feed'), 2), load2c(cfg.path('pressure_permeate'), 2)
         if pf is not None and pp is not None and len(pf) >= 8:
@@ -7643,7 +7698,7 @@ def load_perm_disp(cfg, R, P):
     d = dict(ts=np.array([s[0] for s in snaps], float), z=snaps[0][1][:, 1],
              Nc=np.array([s[1][:, 2] for s in snaps]), uz=np.array([s[1][:, 3] for s in snaps]))
     d['stride'] = float(np.min(np.diff(d['ts'])))       # = the ave/chunk window (nfreq = nevery x nrepeat in the deck)
-    fz = perm_forcing(cfg)
+    fz = perm_forcing(cfg, P.get('area'))
     if fz is None:
         t0 = float(d['ts'][0] - d['stride'])              # the first window must lie entirely after the reset
         fz = dict(t0=t0, t_end=t0, full=np.nan, n=1, tj=np.array([0.0]), wj=np.array([1.0]),
@@ -7653,8 +7708,13 @@ def load_perm_disp(cfg, R, P):
                         f"linear rise over {fz['n_ramp_prefix']} increments to the first sample): "
                         f"steady {fz['full']:.4f}, peak {fz['dp_meas_max']:.4f} at step {int(fz['step_meas_max'])} "
                         f"(applied {fz['dp_applied_full']:.4f})")
+    elif fz.get('forcing') == 'support':
+        fz['source'] = (f"SUPPORT FORCE / A (network stress at the pinned face, {cfg.PERM_FORCING_SMOOTH}-sample smoothing): "
+                        f"reaches 5 % of the steady value at step {int(fz['step_land'])}, peak {fz['sig_sup_max']:.4f} at step "
+                        f"{int(fz['step_sup_max'])}, steady {fz['sig_sup_ss']:.4f} (applied dP {fz['dp_applied_full']:.4f})")
     else:
-        fz['source'] = 'piston_pressure (applied P_feed_app - P_perm_app)'
+        fz['source'] = 'piston_pressure (applied P_feed_app - P_perm_app)' + (
+            '  [PERM_FORCING = support asked for, no usable support_force file]' if cfg.PERM_FORCING == 'support' else '')
     d['forcing'] = fz
     mode = cfg.PERM_DISP_RESET
     if mode == 'auto':
@@ -7668,6 +7728,19 @@ def load_perm_disp(cfg, R, P):
     if bb is not None:
         d['bb_step'], d['bb_L'] = bb[:, 0], bb[:, 3]
     return d
+
+
+def _half_edge_hi(z, n):
+    """z at which the count profile n(z) falls through half its bulk (median) value on the high-z side, linearly
+    interpolated between bin centres; None when the profile has no such edge."""
+    if n.max() <= 0:
+        return None
+    h = 0.5 * float(np.median(n[n > 0.5 * n.max()]))
+    i = np.where(n >= h)[0]
+    if len(i) == 0 or i[-1] + 1 >= len(n) or n[i[-1]] == n[i[-1] + 1]:
+        return None
+    b = i[-1]
+    return float(z[b] + (z[b + 1] - z[b]) * (n[b] - h) / (n[b] - n[b + 1]))
 
 
 def fit_perm_Dc(cfg, R, P, disp, free_offset=False, L0_override=None, L0_override_source='', halt_ts=None, phase='drive'):
@@ -7716,7 +7789,11 @@ def fit_perm_Dc(cfg, R, P, disp, free_offset=False, L0_override=None, L0_overrid
         steady = np.array([n_snap - 1])
     # ---- populated bins per snapshot: the top bins empty as the face comes down, so the old
     #      all-snapshot intersection threw the early snapshots' top ~10 % away ----
-    pop = [np.where(Nc[i] > cfg.Ncount_min)[0] for i in range(n_snap)]
+    def _bulk(n):
+        return float(np.median(n[n > 0.5 * n.max()])) if n.max() > 0 else 0.0
+
+    dfrac = float(cfg.PERM_DENSE_FRAC)
+    pop = [np.where(Nc[i] > max(cfg.Ncount_min, dfrac * _bulk(Nc[i])))[0] for i in range(n_snap)]
     nb = max(int(cfg.PERM_PIN_NBINS), 1)
     if min(len(p) for p in pop) < 4 + 2 * cfg.DC_TRIM_BINS + nb:
         return None
@@ -7739,7 +7816,12 @@ def fit_perm_Dc(cfg, R, P, disp, free_offset=False, L0_override=None, L0_overrid
     # ---- the fit's L_0: dense-gel thickness Z_top - Z^P ('face') or the bounding box ('bb'); the unload passes its own ----
     if L0_override is not None:
         L0, L0_ci, L0_source = float(L0_override), (np.nan, np.nan), L0_override_source or 'override'
-    elif cfg.PERM_L0_MODE == 'face' and np.isfinite(R.get('z_gel_hi', np.nan)):
+    elif cfg.PERM_L0_MODE == 'dense' and disp['reset_mode'] == 'ramp_start' and _half_edge_hi(z, Nc[0]) is not None:
+        Z_top = _half_edge_hi(z, Nc[0])                    # first snapshot: the gel has not moved yet (u ~ 0), z = Z
+        L0, L0_ci = float(Z_top - Z_P), (np.nan, np.nan)
+        L0_source = (f"half-density top edge of the polymer count profile at the first snapshot {Z_top:.1f} - Z^P "
+                     f"(PERM_L0_MODE 'dense'; bounding box {L0_bb:.2f})")
+    elif cfg.PERM_L0_MODE in ('face', 'dense') and np.isfinite(R.get('z_gel_hi', np.nan)):
         L0 = float(R['z_gel_hi'] + 0.5 * cfg.binWidth - Z_P)
         L0_ci = (np.nan, np.nan)
         L0_source = f"reference polymer-stress edge {R['z_gel_hi'] + 0.5 * cfg.binWidth:.1f} - Z^P (PERM_L0_MODE 'face'; bounding box {L0_bb:.2f})"
@@ -7770,46 +7852,66 @@ def fit_perm_Dc(cfg, R, P, disp, free_offset=False, L0_override=None, L0_overrid
     early = np.where(t_lj <= cfg.DC_FRAC_EARLY * t_lj[-1])[0]
     if len(early) < 2:
         return None
-    n_modes = int(cfg.PERM_DC_N_MODES) or int(cfg.DC_N_MODES)
-    mu = _perm_mu(n_modes)
-    modes_l = [_perm_phi(zl[i], mu) for i in range(n_snap)]          # (points_i, modes)
-    if free_offset:                                                   # strain-PDE fit (fig_perm_v0_check): the per-snapshot
-        modes_l = [m - m.mean(axis=0, keepdims=True) for m in modes_l]    # rigid translation projected out of data and modes
-        yl_fit = [y - y.mean() for y in yl]
-    else:
-        yl_fit = yl
-    y_all = np.concatenate([yl_fit[i] for i in early])
+    nsub = 12 if len(forcing[0]) <= 400 else 4                       # window sub-samples (a measured history has ~1000 increments)
 
-    def dH(Dc):
-        """H_k(t_i) - H_k(t_reset) for the fitted snapshots: (n_early, modes)"""
-        H = _perm_H(mu, Dc, L0, t_lj[early], forcing, W)
-        return H - _perm_H(mu, Dc, L0, t_reset_lj, forcing)[0][None, :]
+    def _fit(amps_mode, sel, scan=61):
+        """profile fit over the snapshots `sel` -> (Dc, A (per mode), R2, mu, predicted, data).  amps_mode 'free': one
+        amplitude per mode; 'theory': A_k = 2 e_0/mu_k^2 (the linear solution; one amplitude e_0 = the steady strain
+        at the pinned face)."""
+        th = amps_mode == 'theory'
+        mu_ = _perm_mu(_PERM_TRACE_MODES if th else (int(cfg.PERM_DC_N_MODES) or int(cfg.DC_N_MODES)))
+        ml = [_perm_phi(zl[i], mu_) for i in sel]                    # (points_i, modes)
+        yf = [yl[i] for i in sel]
+        if free_offset:                                               # strain-PDE fit (fig_perm_v0_check): the per-snapshot
+            ml = [m - m.mean(axis=0, keepdims=True) for m in ml]      # rigid translation projected out of data and modes
+            yf = [y - y.mean() for y in yf]
+        y_ = np.concatenate(yf)
+        b = 2.0 / mu_ ** 2
 
-    def amps(Dc, D=None):
-        D = dH(Dc) if D is None else D
-        X = np.vstack([modes_l[i] * D[n][None, :] for n, i in enumerate(early)])
-        return np.linalg.lstsq(X, y_all, rcond=None)[0]
+        def design(Dc_):
+            D = _perm_H(mu_, Dc_, L0, t_lj[sel], forcing, W, nsub) - _perm_H(mu_, Dc_, L0, t_reset_lj, forcing)[0][None, :]
+            X = np.vstack([m * D[n][None, :] for n, m in enumerate(ml)])
+            return (X @ b)[:, None] if th else X
 
-    def predict(Dc, A=None):
-        D = dH(Dc)
-        A = amps(Dc, D) if A is None else A
-        return np.concatenate([(modes_l[i] * D[n][None, :]) @ A for n, i in enumerate(early)]), A
+        def solve(Dc_):
+            X = design(Dc_)
+            a = np.linalg.lstsq(X, y_, rcond=None)[0]
+            return X @ a, a
 
-    def resid(Dc):
-        p, _ = predict(Dc)
-        return float(np.sum((p - y_all) ** 2))
+        # coarse log-spaced scan first: the residual has secondary minima once the transient is
+        # under-sampled (perm_2: 6 late snapshots), and bounded Brent alone landed on one at D_c ~ 30
+        grid = np.geomspace(cfg.PERM_DC_BOUNDS[0], cfg.PERM_DC_BOUNDS[1], scan)
+        rg = np.array([np.sum((solve(g)[0] - y_) ** 2) for g in grid])
+        j = int(np.nanargmin(rg))
+        Dc_ = float(minimize_scalar(lambda d_: float(np.sum((solve(d_)[0] - y_) ** 2)),
+                                    bounds=(grid[max(j - 1, 0)], grid[min(j + 1, len(grid) - 1)]), method='bounded').x)
+        p_, a = solve(Dc_)
+        ss_t = np.sum((y_ - np.mean(y_)) ** 2)
+        return Dc_, (a[0] * b if th else a), (float(1.0 - np.sum((p_ - y_) ** 2) / ss_t) if ss_t > 1e-30 else np.nan), mu_, p_, y_
 
-    # coarse log-spaced scan first: the residual has secondary minima once the transient is
-    # under-sampled (perm_2: 6 late snapshots), and bounded Brent alone landed on one at D_c ~ 30
-    grid = np.geomspace(cfg.PERM_DC_BOUNDS[0], cfg.PERM_DC_BOUNDS[1], 61)
-    rg = np.array([resid(g) for g in grid])
-    j = int(np.nanargmin(rg))
-    lo_b, hi_b = grid[max(j - 1, 0)], grid[min(j + 1, len(grid) - 1)]
-    Dc = float(minimize_scalar(resid, bounds=(lo_b, hi_b), method='bounded').x)
-    p_all, A = predict(Dc)
-    ss_t = np.sum((y_all - np.mean(y_all)) ** 2)
-    R2 = float(1.0 - np.sum((y_all - p_all) ** 2) / ss_t) if ss_t > 1e-30 else np.nan
+    amps_mode = cfg.PERM_DC_AMPS if cfg.PERM_DC_AMPS in ('free', 'theory') else 'free'
+    Dc, A, R2, mu, p_all, y_all = _fit(amps_mode, early)
+    n_modes = len(mu)
+    rms = float(np.sqrt(np.mean((p_all - y_all) ** 2)) * L0)
     H_reset = _perm_H(mu, Dc, L0, t_reset_lj, forcing)[0]
+    # ---- variants: how far D_c moves with the choices the data cannot settle (2026-11-24) ----
+    Dc_var = {}
+    if cfg.PERM_DC_VARIANTS and not free_offset:
+        other = 'theory' if amps_mode == 'free' else 'free'
+        try:
+            d_, _, r_, *_ = _fit(other, early, scan=31)
+            Dc_var[f'{other} amplitudes'] = dict(Dc=d_, R2=r_)
+            t_load = fz.get('step_land', fz['t0'])                   # the load arrives: landing (support forcing) or ramp start
+            live = early[ts[early] > t_load]
+            if len(live) >= 8:
+                h = len(live) // 2
+                for nm_, sel in (('first half after the load arrives', np.concatenate([early[ts[early] <= t_load], live[:h]])),
+                                 ('second half after the load arrives', live[h:])):
+                    d_, _, r_, *_ = _fit(amps_mode, sel, scan=31)
+                    Dc_var[nm_ + f' (steps {int(ts[sel[0]])}-{int(ts[sel[-1]])})'] = dict(Dc=d_, R2=r_)
+        except (np.linalg.LinAlgError, ValueError) as e:
+            print(f'  NOTE: D_c variants failed ({e})')
+    vals = [Dc] + [v['Dc'] for v in Dc_var.values()]
 
     def u_model(zh, t, Wm=W):
         """deformation (u_z - u_0)/L_0 since the RESET at zeta = zh (array) and time t (LJ from the
@@ -7829,7 +7931,8 @@ def fit_perm_Dc(cfg, R, P, disp, free_offset=False, L0_override=None, L0_overrid
 
     tau1 = L0 ** 2 / (np.pi ** 2 * Dc)                         # first-mode time (mu_1 = pi: Dirichlet strain at both faces)
     T_prod = float(t_lj[-1])
-    F = dict(Dc=Dc, A=A, R2=R2, L0=L0, L0_ci=L0_ci, L0_source=L0_source, L0_bb=L0_bb, L0_bb_ci=L0_bb_ci, free_offset=bool(free_offset),
+    F = dict(Dc=Dc, A=A, R2=R2, rms=rms, amps_mode=amps_mode, Dc_var=Dc_var, Dc_lo=float(min(vals)), Dc_hi=float(max(vals)),
+             dense_frac=dfrac, L0=L0, L0_ci=L0_ci, L0_source=L0_source, L0_bb=L0_bb, L0_bb_ci=L0_bb_ci, free_offset=bool(free_offset),
              phase=phase, halt_ts=halt_ts,
              z_P=z_P, z_F=z_F, Z_P=Z_P, Z_F=Z_F,
              u0=u0, u0_sd=u0_sd, u0_ss=u0_ss, rigid=cfg.PERM_RIGID, pin_nbins=nb, lagr=lagr, n_modes=n_modes,
@@ -7862,7 +7965,7 @@ def fit_perm_Dc(cfg, R, P, disp, free_offset=False, L0_override=None, L0_overrid
 
     # ---- feed-face thickness trace: exact zero-IC series, (u_F(inf), D_c) by least squares ----
     F['trace'] = None
-    if 'bb_L' in disp:
+    if 'bb_L' in disp and cfg.PERM_TRACE_FIT:
         wt = disp['bb_step'] >= t_on
         st, uF = disp['bb_step'][wt], disp['bb_L'][wt] - L0_bb      # the trace is a thickness CHANGE: bounding box minus bounding box
         tt = (st - t_on) * cfg.dt_lj
@@ -7886,6 +7989,7 @@ def fit_perm_Dc(cfg, R, P, disp, free_offset=False, L0_override=None, L0_overrid
                                   tau1=L0 ** 2 / (np.pi ** 2 * float(popt[1])))
             except (RuntimeError, ValueError) as e:
                 print(f'  NOTE: thickness-trace fit failed ({e})')
+    if 'bb_L' in disp:
         # steady thickness (the steady window of the stress snapshots) for M from dL
         ws = disp['bb_step'] >= halt_ts
         if ws.sum() >= 4:
@@ -7893,7 +7997,73 @@ def fit_perm_Dc(cfg, R, P, disp, free_offset=False, L0_override=None, L0_overrid
             F['L_ss'], F['L_ss_ci'] = float(Lss), (float(lo), float(hi))
         elif ws.any():
             F['L_ss'], F['L_ss_ci'] = float(np.mean(disp['bb_L'][ws])), (np.nan, np.nan)
+    # steady thickness of the DENSE gel the fit spans: L_0 (1 + c).  The bounding-box L_ss counts the fringe
+    F['L_ss_dense'] = float(L0 * (1.0 + c)) if (dfrac > 0 and phase == 'drive') else np.nan
     return F
+
+
+def perm_skin_test(cfg, F, ells=None, y_override=None, amps='theory'):
+    """Does a skin at the support slow the consolidation, i.e. lower the fitted D_c?  (2026-11-24)
+    A layer at the support that is less permeable than the bulk is a hydraulic resistance in series at the drainage
+    face.  For a thin layer (no storage of its own) that is a Robin condition on the bulk, which is the same as moving
+    the plane where the network stress equals the support load a distance ell BELOW the pinned plane:
+        ell = kappa_bulk x (resistance of the skin) - (its real thickness) = the skin's EXCESS equivalent thickness.
+    The model is then the linear consolidation solution (amplitudes 2 e_0/(k pi)^2, one scale) on a slab of length
+    L_0 + ell, driven by the same load history, read between zeta = 0 and 1 of the gel and referred to the pinned
+    plane.  For each ell the scale and D_c are fitted to the same data as the profile fit:
+      * ell = 0 is the 'theory amplitudes' variant of fit_perm_Dc (no skin);
+      * a skin shows as a residual that FALLS for ell > 0, with the minimum at the skin's excess thickness, and the
+        D_c there is the bulk's: D_c(ell = 0)/D_c(ell*) is the factor by which the skin lowers the whole-gel D_c;
+      * a residual that only rises with ell means the data hold no such delay.
+    The interval of ell is where the residual stays within PERM_SKIN_TOL of its minimum.
+    y_override (list like F['yl']): fit these instead of the data (the synthetic check of the tests).
+    -> dict(ell (sigma), Dc, R2, ssr, i_best, ell_best, ell_lo, ell_hi, Dc0, Dc_best, factor) or None."""
+    L0 = F['L0']
+    ells = np.array([0.0, 0.005, 0.01, 0.02, 0.04, 0.07, 0.10, 0.15, 0.20]) * L0 if ells is None else np.asarray(ells, float)
+    idx = np.asarray(F['early'])
+    forcing = (F['forcing']['tj'], F['forcing']['wj'])
+    t, W = F['t_lj'][idx], F['W']
+    free = amps == 'free'                                        # one fitted amplitude per mode, as in the main profile fit
+    mu = _perm_mu(F['n_modes'] if free else 30)                  # theory: amplitudes fall as 1/k^2, the data are window averages
+    bk = np.ones(len(mu)) if free else 2.0 / mu ** 2
+    yl = F['yl'] if y_override is None else y_override
+    y_all = np.concatenate([yl[i] for i in idx])
+    ss_t = float(np.sum((y_all - y_all.mean()) ** 2))
+    out = dict(ell=[], Dc=[], R2=[], ssr=[])
+    for ell in ells:
+        Le = L0 + ell
+        z0 = ell / Le
+        S = [(_perm_phi((F['zl'][i] * L0 + ell) / Le, mu) - _perm_phi([z0], mu)) * bk[None, :] for i in idx]
+
+        def solve(Dc_):
+            H = _perm_H(mu, Dc_, Le, t, forcing, W, 2) - _perm_H(mu, Dc_, Le, F['t_reset_lj'], forcing)[0][None, :]
+            if free:
+                X = np.vstack([m * H[n][None, :] for n, m in enumerate(S)])
+                return X @ np.linalg.lstsq(X, y_all, rcond=None)[0]
+            x = np.concatenate([m @ H[n] for n, m in enumerate(S)])
+            return x * float(x @ y_all) / max(float(x @ x), 1e-300)
+
+        grid = np.geomspace(0.02, 2.0, 15) if F['Dc'] < 1.5 else np.geomspace(cfg.PERM_DC_BOUNDS[0], cfg.PERM_DC_BOUNDS[1], 25)
+        rg = np.array([np.sum((solve(g) - y_all) ** 2) for g in grid])
+        j = int(np.nanargmin(rg))
+        r = minimize_scalar(lambda d_: float(np.sum((solve(d_) - y_all) ** 2)),
+                            bounds=(grid[max(j - 1, 0)], grid[min(j + 1, len(grid) - 1)]), method='bounded', options=dict(xatol=1e-4))
+        out['ell'].append(float(ell)); out['Dc'].append(float(r.x)); out['ssr'].append(float(r.fun))
+        out['R2'].append(1.0 - float(r.fun) / ss_t if ss_t > 1e-30 else np.nan)
+    out = {k: np.array(v) for k, v in out.items()}
+    ib = int(np.argmin(out['ssr']))
+    pegged = bool(out['Dc'].max() >= 0.98 * grid[-1] or out['Dc'].min() <= 1.02 * grid[0])   # a D_c on the search bound: no transient to fit
+    if pegged:
+        ib = 0
+    ok = out['ssr'] <= out['ssr'][ib] * (1.0 + cfg.PERM_SKIN_TOL)
+    # upper bound = the first grid point beyond the tolerance (the last one inside it understates a bound)
+    i_hi = int(np.where(ok)[0].max())
+    i_up = min(i_hi + 1, len(ok) - 1)
+    out.update(ell_up=float(out['ell'][i_up]), factor_up=float(out['Dc'][0] / out['Dc'][i_up]), bounded=bool(i_hi < len(ok) - 1 and not pegged))
+    out.update(i_best=ib, ell_best=float(out['ell'][ib]), ell_lo=float(out['ell'][ok].min()), ell_hi=float(out['ell'][ok].max()),
+               Dc0=float(out['Dc'][0]), Dc_best=float(out['Dc'][ib]), factor=float(out['Dc'][0] / out['Dc'][ib]),
+               Dc_ok=(float(out['Dc'][ok].min()), float(out['Dc'][ok].max())), tol=float(cfg.PERM_SKIN_TOL))
+    return out
 
 
 def perm_M_estimates(cfg, P, F):
@@ -7913,7 +8083,9 @@ def perm_M_estimates(cfg, P, F):
     if not dP > 0:
         return None
     L0 = F['L0']
-    L_ss = F.get('L_ss', np.nan)
+    L_ss = F.get('L_ss_dense', np.nan)                                # 2026-11-24: the dense gel's steady thickness L_0 (1 + c) ...
+    if not np.isfinite(L_ss):
+        L_ss = F.get('L_ss', np.nan)                                  # ... the bounding box when the fit has no dense floor
     Lm = float(L_ss) if np.isfinite(L_ss) else float(L0)              # the L in M = dP L/(2|u_F|)
     out = dict(dP=float(dP), dP_h=float(dP_h), dP_src=dP_src, L0=L0, L_ss=L_ss, L=Lm,
                L_src=('L_ss' if np.isfinite(L_ss) else 'L_0'))
@@ -7947,7 +8119,7 @@ def perm_M_estimates(cfg, P, F):
         h = float(stats.t.ppf(0.5 + cfg.ci_level / 2, len(pf) - 1) * pf.std(ddof=1) / np.sqrt(len(pf))) if len(pf) >= 2 else np.nan
         out['lag'] = _m(float(lag['u'][i1] - lag['u'][i0]), h, 'lag',
                         f"per-atom pairing of {lag['n_frames']} steady frame(s) with the zero-flux reference, binned by the reference Z: "
-                        f"u(Z = {lag['zc'][i1]:.0f}) - u(Z = {lag['zc'][i0]:.0f}) (rigid drop cancels, contact layer included)")
+                        f"u(Z = {lag['zc'][i1]:.0f}) - u(Z = {lag['zc'][i0]:.0f}) (dense reference bins, PERM_DENSE_FRAC; rigid drop cancels)")
     out = {k: v for k, v in out.items() if v is not None}
     order = [cfg.PERM_M_PRIMARY] + [k for k in ('lag', 'prof', 'bb', 'trace') if k != cfg.PERM_M_PRIMARY]
     out['primary'] = next((k for k in order if k in out), None)
@@ -7983,9 +8155,27 @@ def add_perm_displacement(cfg, R, P, verbose=True):
             + ', '.join(f"{v:+.2f}" for v in F['u0']) + f" sigma (bin spread {np.max(F['u0_sd']):.2f}); "
             f"steady u_0 = {F['u0_ss']:+.2f} sigma = the network's drop onto the plate -- subtracted before the fit")
     say(f"  D_c (profile fit, {len(F['early'])} snapshots{', window-averaged modes' if F['W'] > 0 else ''}) = "
-        f"{F['Dc']:.4e} sigma^2/tau  (R^2 = {F['R2']:.3f});  tau_1 = L_0^2/(pi^2 D_c) = {F['tau1']:.0f} tau = "
+        f"{F['Dc']:.4e} sigma^2/tau  (R^2 = {F['R2']:.3f}, rms residual {F['rms']:.2f} sigma, {F['amps_mode']} amplitudes);  tau_1 = L_0^2/(pi^2 D_c) = {F['tau1']:.0f} tau = "
         f"{F['tau1'] / cfg.dt_lj / 1e6:.2f}M steps;  production = {F['n_tau']:.2f} tau_1 "
         f"-> {100 * F['unrelaxed']:.1f}% of u_F still unrelaxed at the end (first mode)")
+    if F['Dc_var']:
+        say(f"  D_c variants -> range [{F['Dc_lo']:.4f}, {F['Dc_hi']:.4f}]:  "
+            + ';  '.join(f"{k}: {v['Dc']:.4f} (R^2 {v['R2']:.3f})" for k, v in F['Dc_var'].items()))
+    F['skin'] = None
+    if cfg.PERM_SKIN_TEST:
+        try:
+            F['skin'] = S = perm_skin_test(cfg, F)
+            say(f"  skin test (resistance at the support as an excess thickness ell; linear model, D_c and scale refitted per ell):  "
+                + ';  '.join(f"ell {e:.1f}: D_c {d:.3f}, R^2 {r:.4f}" for e, d, r in zip(S['ell'], S['Dc'], S['R2'])))
+            if S['ell_best'] == 0:
+                say(f"    -> residual smallest with NO skin (ell = 0) and "
+                    + (f"more than {100 * S['tol']:.0f} % above it by ell = {S['ell_up']:.1f} sigma: a skin lowers this D_c by less than "
+                       f"{100 * (1 - S['factor_up']):.0f} %" if S['bounded'] else 'flat over the whole scan (the test does not resolve a skin here)'))
+            else:
+                say(f"    -> residual smallest at ell = {S['ell_best']:.1f} sigma [{S['ell_lo']:.1f}, {S['ell_hi']:.1f}]: bulk D_c = {S['Dc_best']:.3f} "
+                    f"against {S['Dc0']:.3f} with no skin in the model, i.e. the skin lowers the whole-gel D_c by {100 * (1 - S['factor']):.0f} %")
+        except (np.linalg.LinAlgError, ValueError, KeyError) as e:
+            say(f'  NOTE: skin test failed ({e})')
     T = F.get('trace')
     if T is not None:
         say(f"  D_c (thickness trace, zero-IC series) = {T['Dc']:.4e} +/- {T['Dc_se']:.1e} sigma^2/tau  "
@@ -8007,7 +8197,7 @@ def add_perm_displacement(cfg, R, P, verbose=True):
                     + (f"; with L_0 instead -> {v['M_L0']:.4f}" if 'M_L0' in v else '') + f")  {v['how']}")
         Mref = Mp.get(Mp['primary']) if Mp.get('primary') else None
         if Mref:
-            K = {'profile': dict(k=F['Dc'] / Mref['M'], lo=F['Dc'] / Mref['hi'], hi=F['Dc'] / Mref['lo'])}
+            K = {'profile': dict(k=F['Dc'] / Mref['M'], lo=F['Dc_lo'] / Mref['hi'], hi=F['Dc_hi'] / Mref['lo'])}   # D_c range over the fit variants
             if T is not None:
                 K['trace'] = dict(k=T['Dc'] / Mref['M'], lo=(T['Dc'] - _Z95 * T['Dc_se']) / Mref['hi'],
                                   hi=(T['Dc'] + _Z95 * T['Dc_se']) / Mref['lo'])
@@ -8440,7 +8630,8 @@ def perm_reconcile(cfg, R, P, verbose=True):
     out = dict(Dc={}, M=None, kappa={}, closure={})
     F2, Mp = P.get('Dc'), P.get('M_perm')
     if F2 is not None:
-        out['Dc']['profile'] = ent(F2['Dc'], how='profile fit of u_z(zeta, t), drive')
+        out['Dc']['profile'] = ent(F2['Dc'], *((F2['Dc_lo'], F2['Dc_hi']) if F2.get('Dc_var') else ()),
+                                   how='profile fit of u_z(zeta, t), drive' + (' (interval = range over the fit variants)' if F2.get('Dc_var') else ''))
         T = F2.get('trace')
         if T:
             out['Dc']['trace'] = ent(T['Dc'], T['Dc'] - _Z95 * T['Dc_se'], T['Dc'] + _Z95 * T['Dc_se'], 'thickness trace, drive')
@@ -8613,29 +8804,29 @@ def fig_perm_reconcile(cfg, R, P):
         print('reconciliation figure skipped (no D_c, M or kappa)')
         return None
     M = X['M']
-    names = {'v': r'$\kappa_v$: live network,' + '\nprescribed flux', 'f': r'$\kappa_f$: frozen' + '\nnetwork',
-             'dP': r'$\kappa_{\Delta P}$: live network,' + '\nconstant $\\Delta P$', 'Dc': r'$\mathcal{D}_c/M$' + '\n(profile fit)',
-             'Dc_trace': r'$\mathcal{D}_c/M$' + '\n(thickness trace)'}
+    names = {'v': r'$\kappa_v$:' + '\nlive,\nset flux', 'f': r'$\kappa_f$:' + '\nfrozen\nnetwork',
+             'dP': r'$\kappa_{\Delta P}$:' + '\nlive,\nset $\\Delta P$', 'Dc': r'$\mathcal{D}_c/M$' + '\nprofile\nfit',
+             'Dc_trace': r'$\mathcal{D}_c/M$' + '\nthickness\ntrace'}
     cols = {'v': WONG['blue'], 'f': WONG['vermillion'], 'dP': '0.4', 'Dc': WONG['green'], 'Dc_trace': WONG['green']}
 
     def bar(ax, i, e, col, hollow=False):
         yerr = [[e['v'] - e['lo']], [e['hi'] - e['v']]] if np.isfinite(e['lo']) else None
         ax.errorbar([i], [e['v']], yerr=yerr, fmt='o', ms=14, color=col, mfc='white' if hollow else col, mew=2.5, capsize=9, lw=2.8)
-        ax.annotate(sig(e['v'], 3), (i, e['v']), textcoords='offset points', xytext=(16, 0), va='center', fontsize=_F8_LEG)
+        ax.annotate(sig(e['v'], 3), (i, e['v']), textcoords='offset points', xytext=(16, 0), va='center', fontsize=_F8_TITLE)
 
-    fig, (axK, axD, axR) = plt.subplots(1, 3, figsize=(28.5, 9.5), constrained_layout=True)
+    fig, (axK, axD, axR) = plt.subplots(1, 3, figsize=(22, 9.5), constrained_layout=True)
     # ---- (a) kappa ----
     keys = [k for k in ('v', 'f', 'dP', 'Dc', 'Dc_trace') if k in X['kappa']]
     for i, k in enumerate(keys):
         bar(axK, i, X['kappa'][k], cols[k], hollow=(k == 'Dc_trace'))
     axK.set_xticks(range(len(keys)))
-    axK.set_xticklabels([names[k] for k in keys], fontsize=_F8_LEG)
-    axK.set_xlim(-0.6, len(keys) - 0.3)
+    axK.set_xticklabels([names[k] for k in keys], fontsize=_F8_TITLE)
+    axK.set_xlim(-0.6, len(keys) - 0.05)
     axK.set_ylabel(r'$\kappa$  ($\sigma^5/\epsilon\tau$)')
-    axK.set_title(r'(a) permeability: $qL/\Delta P$ measured, and $\mathcal{D}_c/M$', fontsize=_F8_TITLE)
+    axK.set_title(r'(a) $\kappa$: $qL/\Delta P$ and $\mathcal{D}_c/M$', fontsize=_F8_TITLE)
     # ---- (b) D_c ----
-    rows = [(r'$\mathcal{D}_c$ transient' + '\n(profile fit)', X['Dc'].get('profile'), WONG['green'], False),
-            (r'$\mathcal{D}_c$ transient' + '\n(thickness trace)', X['Dc'].get('trace'), WONG['green'], True)]
+    rows = [(r'$\mathcal{D}_c$' + '\nprofile\nfit', X['Dc'].get('profile'), WONG['green'], False),
+            (r'$\mathcal{D}_c$' + '\nthickness\ntrace', X['Dc'].get('trace'), WONG['green'], True)]
     if M:
         for k in ('v', 'f', 'dP'):
             e = X['kappa'].get(k)
@@ -8643,15 +8834,15 @@ def fig_perm_reconcile(cfg, R, P):
                 relh = np.hypot(0.5 * (e['hi'] - e['lo']) / abs(e['v']) if np.isfinite(e['lo']) else 0.0,
                                 0.5 * (M['hi'] - M['lo']) / abs(M['v']) if np.isfinite(M['lo']) else 0.0)
                 v = e['v'] * M['v']
-                rows.append((names[k].split(':')[0] + r'$\,M$', dict(v=v, lo=v * (1 - relh), hi=v * (1 + relh)), cols[k], False))
+                rows.append((names[k].split(':')[0] + r'$\,M$' + '\n' + names[k].split(':')[1].strip().replace('\n', ' ').replace('network', '').strip(', ') , dict(v=v, lo=v * (1 - relh), hi=v * (1 + relh)), cols[k], False))
     rows = [r for r in rows if r[1]]
     for i, (lab, e, col, hollow) in enumerate(rows):
         bar(axD, i, e, col, hollow)
     axD.set_xticks(range(len(rows)))
-    axD.set_xticklabels([r[0] for r in rows], fontsize=_F8_LEG)
-    axD.set_xlim(-0.6, len(rows) - 0.3)
+    axD.set_xticklabels([r[0] for r in rows], fontsize=_F8_TITLE)
+    axD.set_xlim(-0.6, len(rows) - 0.05)
     axD.set_ylabel(r'$\mathcal{D}_c$  ($\sigma^2/\tau$)')
-    axD.set_title(r'(b) the same in $\mathcal{D}_c$: transient vs $\kappa M$' + (f"   ($M$ = {sig(M['v'])} [{sig(M['lo'])}, {sig(M['hi'])}])" if M else ''),
+    axD.set_title(r'(b) $\mathcal{D}_c$ vs $\kappa M$' + (f",  $M$ = {sig(M['v'])} [{sig(M['lo'])}, {sig(M['hi'])}]" if M else ''),
                   fontsize=_F8_TITLE)
     # ---- (c) closure ----
     rk = list(X['closure'])
@@ -8662,10 +8853,10 @@ def fig_perm_reconcile(cfg, R, P):
         bar(axR, i, X['closure'][k], rcol.get(k, 'k'))
     axR.axhline(1.0, color='k', ls='--', lw=1.6)
     axR.set_xticks(range(len(rk)))
-    axR.set_xticklabels([rlab.get(k, k) for k in rk], fontsize=_F8_LEG + 2)
-    axR.set_xlim(-0.6, max(len(rk), 1) - 0.3)
+    axR.set_xticklabels([rlab.get(k, k) for k in rk], fontsize=_F8_TITLE + 3)
+    axR.set_xlim(-0.6, max(len(rk), 1) - 0.05)
     axR.set_ylabel('ratio')
-    axR.set_title('(c) closure: 1 = one poroelastic material', fontsize=_F8_TITLE)
+    axR.set_title('(c) closure ratios (1 = consistent)', fontsize=_F8_TITLE)
     for ax in (axK, axD, axR):
         ax.grid(axis='y', alpha=0.3)
         ax.margins(y=0.25)
@@ -8744,15 +8935,21 @@ def fig_perm_Dc(cfg, R, P, F=None):
     ramp_lbl, phase_lbl, win_lbl = (('ramp-down', 'UNLOAD, re-swelling at zero dP', 're-swollen window') if unl
                                     else ('ramp', 'permeation drive', 'steady window'))
     zff = np.linspace(0.0, 1.0, 400)
-    fig = plt.figure(figsize=(20, 14), constrained_layout=True)
-    gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 0.85])
-    axl, axr, axt = fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[1, :])
+    fig = plt.figure(figsize=(22, 21), constrained_layout=True)
+    S = None if unl else F.get('skin')
+    gs = fig.add_gridspec(4, 2, height_ratios=[1.0, 0.24, 0.8, 0.30])
+    gsb = gs[2, :].subgridspec(1, 2, width_ratios=[2.0, 1.0] if S else [1.0, 0.0001])
+    axl, axr, axt = fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]), fig.add_subplot(gsb[0, 0])
+    axtleg = fig.add_subplot(gs[3, :])
+    axtleg.axis('off')
+    axleg = fig.add_subplot(gs[1, :])
+    axleg.axis('off')
     norm = Normalize(vmin=F['ts'][F['early'][0]], vmax=F['ts'][F['early'][-1]])
     cmap = plt.cm.viridis
     for i in F['early']:
         c = cmap(norm(F['ts'][i]))
-        axl.plot(F['zl'][i], F['yl'][i], 'o-', color=c, ms=3, alpha=0.6)
-        axr.plot(F['zl'][i], F['yl'][i], 'o', color=c, ms=3, alpha=0.35)
+        axl.plot(F['zl'][i], F['yl'][i], 'o-', color=c, ms=4, alpha=0.6)
+        axr.plot(F['zl'][i], F['yl'][i], 'o', color=c, ms=4, alpha=0.35)
         axr.plot(zff, F['u_model'](zff, F['t_lj'][i]), '-', color=c, lw=2.0)
     u_end = float(F['u_inf'](1.0)[0])
     contact = F['rigid'] == 'contact'
@@ -8760,77 +8957,104 @@ def fig_perm_Dc(cfg, R, P, F=None):
     xlab = (r'$\zeta=(z-u_z-Z^P)/L_0$  (material coordinate)' if F['lagr'] else r'$\zeta=(z-z^P)/L_0$')
     for ax in (axl, axr):
         ax._tri_has_colorbar = True
-        ax.axhline(0.0, color='0.45', lw=1.6, label=(rf'IC: $u_z(\zeta,0)=0$ at the {ramp_lbl} start' if F['reset_mode'] == 'ramp_start'
+        ax.axhline(0.0, color='0.45', lw=1.8, label=(rf'IC: $u_z(\zeta,0)=0$ at the {ramp_lbl} start' if F['reset_mode'] == 'ramp_start'
                                                     else rf'reference: $u_z=0$ at the {ramp_lbl} end'))
-        ax.plot(zff, F['u_inf'](zff), 'k:', lw=1.8, label=(r're-swollen state ($t\to\infty$, fitted modes)' if unl
+        ax.plot(zff, F['u_inf'](zff), 'k:', lw=2.4, label=(r're-swollen state ($t\to\infty$, fitted modes)' if unl
                                                             else r'steady state ($t\to\infty$, fitted modes)'))
-        ax.plot(zff, F['c'] * zff * (2.0 - zff), '--', color='0.35', lw=1.4,
-                label=(rf"{win_lbl} parabola $c\,\zeta(2-\zeta)$, $c={sig(F['c'])}$  ($\to M$)" if ax is axl
-                       else f'{win_lbl} parabola'))
-        ax.plot(0.0, 0.0, 's', color=WONG['blue'], ms=9, zorder=5, label=r'BC: $u_z(0,t)=u_0$ (support, pinned)')
-        ax.plot([0.93, 1.0], [u_end, u_end], '-', color=WONG['vermillion'], lw=4, solid_capstyle='butt', zorder=5,
+        ax.plot(zff, F['c'] * zff * (2.0 - zff), '--', color='0.35', lw=2.0,
+                label=rf"{win_lbl} parabola $c\,\zeta(2-\zeta)$, $c={sig(F['c'])}$  ($\to M$)")
+        ax.plot(0.0, 0.0, 's', color=WONG['blue'], ms=12, zorder=5, label=r'BC: $u_z(0,t)=u_0$ (support, pinned)')
+        ax.plot([0.93, 1.0], [u_end, u_end], '-', color=WONG['vermillion'], lw=5, solid_capstyle='butt', zorder=5,
                 label=r'BC: $\partial u_z/\partial\zeta\,|_{\zeta=1}=0$ (free feed face)')
-        if contact and ax is axl:
+        if contact:
             ax.plot([], [], ' ', label=rf"rigid {'lift' if unl else 'drop'} $u_0={F['u0_ss']:+.2f}\,\sigma$ subtracted (contact layer)")
         ax.set(xlabel=(xlab if ax is axl else flip_hint(R, r'$\zeta$')), ylabel=ylab, xlim=_zlim(R))   # definition left, flip hint right (the full label overlapped)
         ax.grid(alpha=0.3)
-        smart_legend(ax, fontsize=10)
-    axl.set_title(r'(a) ' + ylab + (r' -- re-swelling snapshots (since the ramp-down start)' if unl else r' -- production snapshots (since the reset)')
-                  + ('\n' + (rf"contact layer $Z^P={F['Z_P']:.1f}$ (re-swollen) vs $z^P={F['z_P']:.1f}$ (support + gap)" if unl
-                              else rf"face $Z^P={F['Z_P']:.1f}$ at zero flux $\to z^P={F['z_P']:.1f}$ under flow") if contact else ''), fontsize=13)
-    axr.set_title(rf"(b) {'re-swelling' if unl else 'consolidation'} fit: $D_c={sig(F['Dc'])}\ \sigma^2/\tau$, $R^2={sig(F['R2'])}$, {F['n_modes']} modes"
-                  + (r' (window-averaged)' if F['W'] > 0 else ''), fontsize=13)
+    axleg.legend(*axl.get_legend_handles_labels(), loc='center', ncol=2, fontsize=_F8_LEG, frameon=True, handlelength=1.8)
+    axl.set_title(r'(a) ' + ylab + (', re-swelling snapshots' if unl else ', drive snapshots'), fontsize=_F8_TITLE)
+    axr.set_title(rf"(b) fit: $D_c={sig(F['Dc'])}\ \sigma^2/\tau$"
+                  + (rf" [{sig(F['Dc_lo'])}, {sig(F['Dc_hi'])}]" if F.get('Dc_var') else '')
+                  + rf", $R^2={sig(F['R2'])}$, {F['n_modes']} modes", fontsize=_F8_TITLE)
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
-    fig.colorbar(sm, ax=[axl, axr], fraction=0.015, pad=0.02).set_label('timestep')
-    # ---- (c) feed-face displacement vs time ----
+    fig.colorbar(sm, ax=[axl, axr], fraction=0.015, pad=0.02).set_label('time step')
+    # ---- (c) displacement of the top of the fit domain vs time, and the load history that drives the model ----
+    fz = F['forcing']
     T = F.get('trace')
-    if T is not None:
-        axt.plot(T['step'], T['uF'] / F['L0'], '-', color='0.6', lw=0.7, alpha=0.6,
-                 label=(r'$u_F(t)=L_{bb}(t)-L_{ss}$  (bounding box, 5k-step samples)' if unl
-                        else r'$u_F(t)=L_{bb}(t)-L_0$  (bounding box, 5k-step samples)'))
+    if T is not None:                                          # bounding-box thickness trace (PERM_TRACE_FIT)
         axt.plot(T['step'], rolling_mean(T['uF'], cfg.roll_win) / F['L0'], '-', color='0.25', lw=1.8,
-                 label=f'rolling mean ({cfg.roll_win})')
+                 label=(r'$L_{bb}(t)-L_{ss}$' if unl else r'$L_{bb}(t)-L_0$') + f', bounding box, rolling mean ({cfg.roll_win})')
         tt = np.linspace(0.0, T['t_lj'][-1], 400)
         axt.plot(F['t_onset'] + tt / cfg.dt_lj, T['model'](tt) / F['L0'], '-', color=WONG['vermillion'], lw=2.4,
-                 label=(rf"zero-IC series fit: $D_c={sig(T['Dc'])}$, $u_F(\infty)/L_0={sig(T['u_inf'] / F['L0'])}$, "
+                 label=(rf"zero-IC series fit of the trace: $D_c={sig(T['Dc'])}$, $u_F(\infty)/L_0={sig(T['u_inf'] / F['L0'])}$, "
                         rf"$R^2={sig(T['R2'])}$"))
-        if T['fit'].sum() < len(T['fit']):
-            axt.axvline(T['step'][T['fit']][-1], color=WONG['vermillion'], ls=':', lw=1.2, alpha=0.7)
         skip = cfg.PERM_UNLOAD_TRACE_SKIP if unl else cfg.PERM_TRACE_SKIP
         if skip > 0:
             axt.axvline(F['t_onset'] + skip, color=WONG['vermillion'], ls='-.', lw=1.2, alpha=0.7,
                         label=f"trace fit starts ({'PERM_UNLOAD_TRACE_SKIP' if unl else 'PERM_TRACE_SKIP'} = {skip / 1e6:.1f}M steps)")
-    tt = np.linspace(0.0, F['t_lj'][-1], 400)
-    axt.plot(F['t_onset'] + tt / cfg.dt_lj, [float(F['u_phys'](1.0, t)[0]) for t in tt], '--',
-             color=WONG['blue'], lw=2.0, label=rf"profile fit at $\zeta=1$ (instantaneous): $D_c={sig(F['Dc'])}$")
-    # the top fitted point of each snapshot: the deformation there (u_z - u_0), at the window centre,
-    # plus the fitted deformation already present at the reset (zero for a ramp-start reset)
-    ztop = np.array([F['zl'][i][-1] for i in range(len(F['ts']))])
-    ytop = np.array([F['yl'][i][-1] for i in range(len(F['ts']))])
-    off = np.array([float(F['u_phys'](zt, F['t_reset_lj'])[0]) for zt in ztop])
-    axt.plot(F['ts'] - 0.5 * F['stride'], ytop + off, 'o', color=WONG['blue'], ms=7, zorder=5,
-             label=(rf"top fitted point of each snapshot ($\zeta={ztop.min():.2f}$–${ztop.max():.2f}$, "
-                    + (r'$u_z-u_0$, ' if contact else '') + 'window centre'
-                    + (rf"; $+{np.max(np.abs(off)):.4f}$ fitted offset at the reset)" if np.max(np.abs(off)) > 1e-4 else ')')))
-    fz = F['forcing']
-    if fz['t_end'] - fz['t0'] > 0.02 * (float(F['ts'][-1]) - fz['t0']):
-        axt.axvspan(fz['t0'], fz['t_end'], color='0.5', alpha=0.12,
-                    label=rf"$\Delta P$ {ramp_lbl} ({fz['n']} {'decrements' if unl else 'increments'})")
+    # data: the top fitted point and the mid-gel point of each snapshot, (u_z - u_0), at the window end (the model is
+    # window-averaged the same way), plus the fitted deformation already present at the reset (zero for a ramp-start reset)
+    for frac, col, mk, nm in ((1.0, WONG['blue'], 'o', 'top of the fit domain'), (0.5, WONG['green'], 's', 'mid-gel')):
+        kk = [max(int(round(frac * (len(F['zl'][i]) - 1))), 0) for i in range(len(F['ts']))]
+        zp = np.array([F['zl'][i][k] for i, k in enumerate(kk)])
+        yp = np.array([F['yl'][i][k] for i, k in enumerate(kk)])
+        off = np.array([float(F['u_phys'](zt, F['t_reset_lj'])[0]) for zt in zp])
+        mod = np.array([float(F['u_model'](zt, t)[0]) for zt, t in zip(zp, F['t_lj'])])
+        axt.plot(F['ts'], yp + off, mk, color=col, ms=8, zorder=5, alpha=0.85,
+                 label=rf"data, {nm} ($\zeta={zp.min():.2f}$–${zp.max():.2f}$)")
+        axt.plot(F['ts'], mod + off, '-', color=col, lw=2.6, label=rf"fit at the same $\zeta$: $D_c={sig(F['Dc'])}$")
     axt.axvspan(halt_ts, float(F['ts'][-1]), color=WONG['green'], alpha=0.10, label=win_lbl)
     axt.axvline(F['t_onset'], color='k', ls=':', lw=1, alpha=0.6)
     axt.axhline(0.0, color='k', ls=':', lw=1, alpha=0.4)
     axt.set_xlabel('time step')
-    axt.set_ylabel(r'$u_F/L$' if unl else r'$u_F/L_0$')
-    axt.set_title(r'(c) feed-face displacement: thickness trace vs the two fits', fontsize=13)
+    axt.set_ylabel(ylab)
+    # the load: what the model is driven with (bold) and the applied dP ramp (dashed), each over its steady value
+    axf = axt.twinx()
+    hist = np.cumsum(fz['wj'])
+    axf.plot(fz['t0'] + fz['tj'] / cfg.dt_lj, hist, '-', color=WONG['vermillion'], lw=2.0, alpha=0.85,
+             label={'support': r'load driving the fit: support force$/A$ over its steady value',
+                    'measured': r'load driving the fit: reservoir $\Delta P$ over its steady value'}.get(
+                        fz.get('forcing'), rf'load driving the fit: applied $\Delta P$ {ramp_lbl}, over its full value'))
+    if fz.get('forcing') in ('support', 'measured') and 'dp' in fz and not unl:
+        m = fz['steps'] >= fz['t0']
+        axf.plot(fz['steps'][m], fz['dp'][m] / fz.get('dp_applied_full', np.nanmax(fz['dp'])), '--', color='0.3', lw=2.0,
+                 label=r'applied $\Delta P$ over its full value')
+    axf.set_ylabel('load / steady load', color=WONG['vermillion'])
+    axf.tick_params(axis='y', colors=WONG['vermillion'])
+    axf.set_ylim(bottom=min(0.0, float(np.min(hist))) - 0.05)
+    axt.set_title(r'(c) displacement at two depths vs the fit; load history (right axis)', fontsize=_F8_TITLE)
     axt.grid(alpha=0.3)
-    smart_legend(axt, fontsize=9)
-    fig.suptitle(f'Cooperative diffusivity, {phase_lbl}  |  {cfg.sim_name}  |  '
-                 + (rf"$L={sig(F['L0'])}\,\sigma$ (compressed), " if unl else rf"$L_0={sig(F['L0'])}\,\sigma$, ") + rf"$z^P={F['z_P']:.1f}$"
-                 + (rf" ($u_0={F['u0_ss']:+.2f}\,\sigma$)" if contact else '')
-                 + rf", {ramp_lbl} {(fz['t_end'] - fz['t0']) / 1e6:.2f}M steps, "
-                 + (r're-swelling' if unl else r'drive') + rf" $={F['n_tau']:.2f}\,\tau_1$ "
-                 rf"($\tau_1=L^2/\pi^2 D_c={F['tau1']:.0f}\,\tau$, profile fit)", fontsize=12, fontweight='bold')
+    h1, l1 = axt.get_legend_handles_labels()
+    h2, l2 = axf.get_legend_handles_labels()
+    # ---- (d) skin test: residual and D_c against the skin's excess equivalent thickness (perm_skin_test) ----
+    if S:
+        axd = fig.add_subplot(gsb[0, 1])
+        rel = S['ssr'] / S['ssr'].min()
+        axd.plot(S['ell'], rel, 'o-', color='k', lw=2.4, ms=9, label='fit residual / its minimum')
+        axd.axhline(1.0 + S['tol'], color='k', ls=':', lw=1.6, label=f"minimum + {100 * S['tol']:.0f} %")
+        axd.plot(S['ell'][S['i_best']], rel[S['i_best']], '*', color=WONG['vermillion'], ms=26, zorder=6, label='best fit')
+        axd.set_xlabel(r'skin excess thickness $\ell$  ($\sigma$)')
+        axd.set_ylabel('residual / minimum')
+        axd.grid(alpha=0.3)
+        axD = axd.twinx()
+        axD.plot(S['ell'], S['Dc'], 's--', color=WONG['green'], lw=2.2, ms=8, label=r'$D_c$ fitted at that $\ell$')
+        axD.set_ylabel(r'$D_c$  ($\sigma^2/\tau$)', color=WONG['green'])
+        axD.tick_params(axis='y', colors=WONG['green'])
+        if S['ell_best'] == 0:
+            verdict = ('best fit: none ($D_c$ loss $<$' + f"{100 * (1 - S['factor_up']):.0f} %)" if S['bounded'] else 'not resolved')
+        else:
+            verdict = rf"$\ell={S['ell_best']:.1f}\,\sigma$, $D_c$ loss {100 * (1 - S['factor']):.0f} %"
+        axd.set_title('(d) skin test.  ' + verdict, fontsize=_F8_TITLE)
+        hd, ld = axd.get_legend_handles_labels()
+        hD, lD = axD.get_legend_handles_labels()
+        h2, l2 = h2 + hd + hD, l2 + ld + lD
+    axtleg.legend(h1 + h2, l1 + l2, loc='center', ncol=3 if S else 2, fontsize=_F8_LEG, frameon=True, handlelength=1.8)
+    fig.suptitle(f'Cooperative diffusivity, {phase_lbl}:  '
+                 + (rf"$L={sig(F['L0'])}\,\sigma$ (compressed), " if unl else rf"$L_0={sig(F['L0'])}\,\sigma$, ")
+                 + (rf"rigid {'lift' if unl else 'drop'} $u_0={F['u0_ss']:+.2f}\,\sigma$, " if contact else '')
+                 + rf"$\tau_1=L^2/\pi^2 D_c={F['tau1'] / cfg.dt_lj / 1e6:.2f}$M steps, "
+                 + (r're-swelling' if unl else r'drive') + rf" $={F['n_tau']:.1f}\,\tau_1$" + f'\n{cfg.sim_name}',
+                 fontsize=_F8_LEG, fontweight='bold')
     return _save(fig, cfg, 'perm_Dc_reswelling_fit' if unl else 'perm_Dc_consolidation_fit')
 
 
@@ -8884,8 +9108,8 @@ def fig_perm_M(cfg, R, P):
                f"face, so \u0394L_bb (u_F = {ub:+.1f} \u03c3) carries {abs(ub - up):.1f} \u03c3 of the drop / tail statistics into |u_F| and the bounding-box M "
                f"({'bb and trace' if 'trace' in Mp else 'bb'}) come out\n"
                f"{dM:+.0f}% relative to the parabola.   Primary = {prim} (PERM_M_PRIMARY): it feeds \u03ba = D_c/M and the q(t) check (fig_perm_flux_check)."
-               + (f"\nThe per-atom (Lagrangian) reading pairs the steady frames with the zero-flux reference atom by atom, so the rigid drop cancels and the\n"
-                  f"contact layer's own compaction counts: u_F = {Mp['lag']['uF']:+.1f} \u03c3.  It is the one the compression sweep reproduces (fig_perm_vs_compression)." if 'lag' in Mp else ''))
+               + (f"\nThe per-atom (Lagrangian) reading pairs the steady frames with the zero-flux reference atom by atom, so the rigid drop cancels;\n"
+                  f"it runs over the dense reference bins only (PERM_DENSE_FRAC), leaving out the fringe that collapses onto the plate: u_F = {Mp['lag']['uF']:+.1f} \u03c3." if 'lag' in Mp else ''))
         fig.text(0.01, -0.02, cap, ha='left', va='top', fontsize=10, family='serif',
                  bbox=dict(boxstyle='round', fc='0.97', ec='0.75'))
     return _save(fig, cfg, 'perm_M')
@@ -9088,9 +9312,7 @@ def perm_Dc_summary(cfg, R, P, verbose=True):
       steady 2    q_s L/ln[(1 - phi_P)/(1 - phi_F)] (fig_perm_flux c, perm_dphi): the same flux with the
                   strain read from the COMPOSITION profile (local 1 - phi_s); per half of the gel too
     The two steady values share q_s (they differ in how the strain is measured); the transient one is
-    independent of both.  Last column: (1 - phi_s^0) D_c, the diffusivity the same gel should show with
-    no net solvent flux (compression hold / re-swelling) -- phi_s^0 = the reference in-gel mean of the
-    estimator perm_dphi used.  Returns the rows [(label, Dc, lo, hi)] and prints them."""
+    independent of both.  Returns the rows [(label, Dc, lo, hi)] and prints them."""
     rows = []
     F2, Mp, DP = P.get('Dc'), P.get('M_perm'), perm_dphi(cfg, R, P)
     if F2 is not None:
@@ -9113,17 +9335,12 @@ def perm_Dc_summary(cfg, R, P, verbose=True):
         rows.append((f'steady 2    q_s L/ln[(1-phi_P)/(1-phi_F)]  (phi_s {tag})', D['Dc'], D['Dc_lo'], D['Dc_hi']))
         rows.append(('              feed half (least deformed)', *D['Dc_feed']))
         rows.append(('              permeate half (most compressed)', *D['Dc_perm']))
-    phi0 = np.nan
-    if DP and R.get(DP['primary']) is not None:
-        phi0 = float(np.nanmean(R[DP['primary']][0][R['interior']]))
     if verbose and rows:
         w = max(len(r[0]) for r in rows)
-        print(f"\nD_c ESTIMATES  (sigma^2/tau; {int(round(100 * cfg.ci_level))} % intervals)"
-              + (f"   [phi_s^0 = {phi0:.3f}, 1 - phi_s^0 = {1 - phi0:.3f}]" if np.isfinite(phi0) else ''))
-        print(f"  {'':{w}s}   D_c                       " + ('(1 - phi_s^0) D_c' if np.isfinite(phi0) else ''))
+        print(f"\nD_c ESTIMATES  (sigma^2/tau; {int(round(100 * cfg.ci_level))} % intervals)")
         for lab, v, lo, hi in rows:
             ci = f'[{lo:.3f}, {hi:.3f}]' if np.isfinite(lo) else ''
-            print(f"  {lab:{w}s}   {v:.3f} {ci:18s}" + (f"    {(1 - phi0) * v:.3f}" if np.isfinite(phi0) else ''))
+            print(f"  {lab:{w}s}   {v:.3f} {ci}")
     P['Dc_rows'] = rows
     return rows
 

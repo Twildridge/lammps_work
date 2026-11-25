@@ -63,8 +63,13 @@
 #   - Phase 1:   NPT-PISTON SETTLE: both wet pistons released at P_feed = P_perm =
 #                P_target, Langevin on mobile, npt_piston_steps.  Optional
 #                convergence halt (settle_halt=1).
+#   - Phase 1.25: SEATING (seat_support = 1, the default; 2026-11-24): the support sheet is moved up
+#                at seat_vel until the polymer presses on it (see the SEATING knobs), then held for
+#                seat_hold_steps.  Without it the gel floats several sigma above the support at zero
+#                flux and spends the dP ramp falling onto it with no load on the network.
 #   - Phase 1.5: zero-flux REFERENCE window (_ref files) with both wet pistons live.
-#   - Phase 2:   PRODUCTION: P_feed ramped from P_target to P_target + dP in n_ramp
+#   - Phase 2:   PRODUCTION (the piston damper is faded out over the ramp, damp_ramp = 1):
+#                P_feed ramped from P_target to P_target + dP in n_ramp
 #                stages of ramp_steps (100 x 10k = 1M steps since 2026-09-28: the old
 #                5 x 1k step rang the undamped sheets for ~2M steps -- Q overshot 25x
 #                and the network compressed 7% in 300k steps before rebounding; the
@@ -162,6 +167,10 @@ variable timestep_gentle equal 0.001      # only if a gentle NVT stage is ever r
 # damp_prod: 0 (default) = redefine fz_feed/fz_perm WITHOUT the -C*v term at the
 #   start of Phase 2, so the full dP drives the flow; 1 = keep the damper through
 #   production (the 2026-09-22 behaviour: measured dP ~ dP - 2*C*v*N/A).
+# damp_ramp (with damp_prod=0; 2026-11-24): 1 (default) = the damper is scaled by 1 - stage/n_ramp
+#   through the dP ramp, so it is whole at the ramp start and gone at the ramp end with no step in
+#   the load; the drive is undamped as before.  0 = dropped at the ramp start (the earlier decks:
+#   random_10b_wide_perm_1 reached 2.3x the steady load on the network at the ramp end).
 # dp_piston: applied pressure step dP (P_feed = P_target + dP in production).
 # npt_piston_steps: length of the Phase-1 settle; the printed piston period tells
 #   you whether it is enough (aim for >= 3-5 periods).
@@ -169,10 +178,27 @@ variable piston_mass      index 1000.0
 variable K_solv           index 10.0
 variable c_pist_frac      index 1.0
 variable damp_prod        index 0          # 0 = drop the piston damper in Phase 2 (edit here or -var damp_prod 1)
+variable damp_ramp        index 1          # 1 = fade it out over the dP ramp, 0 = drop it at the ramp start (damp_prod=0 only)
 variable dp_piston        index 0.1        # = the current one-piston P_piston
 variable npt_piston_steps index 1000000
 variable dP_piston        equal ${dp_piston}
 variable two_pi           equal 6.283185307179586   # 2*pi (no PI constant needed)
+
+# ----- SEATING (Phase 1.25; 2026-11-24; SEAT_SUPPORT / SEAT_FRAC / SEAT_HOLD_STEPS in the batch) -----
+# The polymer feels the support only through their WCA contact, so at zero flux nothing holds the gel
+# on it: random_10b_wide_perm_1 started 8 sigma above the support, fell rigidly through the whole dP
+# ramp and landed at the ramp end with the pistons at 10x their steady velocity.  With seat_support = 1
+# the support sheet (transparent to solvent, so moving it displaces no solvent) is moved up at seat_vel
+# after the settle until the polymer-support pair force / area, averaged over 2000 steps, reaches
+# seat_frac * dP: first contact of the gel face, a load far below the drive's.  The travel is capped
+# at the Rg bottom edge of the gel and at seat_max.  The support then stays where it stopped and the
+# system is held for seat_hold_steps before the thickness baseline and the reference window, so the
+# reference state, L0 and traj_ref (the notebook's support plane) are those of the seated gel.
+variable seat_support     index 1          # 0 = leave the support where the data file has it
+variable seat_vel         index 0.01       # support speed (sigma/tau)
+variable seat_frac        index 0.02       # contact: F_poly_supp/A >= seat_frac * dP
+variable seat_max         index 25.0       # cap on the travel (sigma)
+variable seat_hold_steps  index 500000     # hold after seating (= l0_avg_steps: the L0 means cover the seated state)
 
 # ----- optional Phase-1 convergence halt (default OFF) -----
 variable settle_halt      index 0          # 1 -> fix halt when both pistons are at rest
@@ -355,7 +381,7 @@ comm_modify cutoff ${comm_cutoff}
 print "========================================"
 print "Uniaxial permeation, TWO-PISTON: ${dataname}"
 print "Interaction: epsSS=${epsSS}, epsSP=${epsSP}"
-print "P_target=${P_target}  dP=${dP_piston}  piston_mass=${piston_mass}  c_pist_frac=${c_pist_frac}  damp_prod=${damp_prod}  settle=${npt_piston_steps}"
+print "P_target=${P_target}  dP=${dP_piston}  piston_mass=${piston_mass}  c_pist_frac=${c_pist_frac}  damp_prod=${damp_prod}  damp_ramp=${damp_ramp}  seat_support=${seat_support}  settle=${npt_piston_steps}"
 print "Production steps: ${nsteps}"
 print "========================================"
 
@@ -571,7 +597,7 @@ timestep ${timestep_prod}
 minimize 1.0e-4 1.0e-6 ${min_iter} 10000
 
 # setup movie: ~num_dump_frames frames over Phase 0 + settle + reference + ramp
-variable setup_span      equal v_phase0_steps+v_npt_piston_steps+v_ref_avg_steps+v_n_ramp*v_ramp_steps
+variable setup_span      equal v_phase0_steps+v_npt_piston_steps+v_seat_support*v_seat_hold_steps+v_ref_avg_steps+v_n_ramp*v_ramp_steps
 variable dump_freq_setup equal floor(v_setup_span/v_num_dump_frames)
 dump traj_setup gel_system custom ${dump_freq_setup} &
    traj_files/gel_setup_${dataname}_${interaction}_${nsteps}.lammpstrj &
@@ -649,8 +675,11 @@ variable P_feed_app equal v_P_target+v_dP_now
 variable P_perm_app equal v_P_target
 
 # Eq. 3 per bead: -(P A)/N on the sheet, minus viscous damping on the sheet COM velocity
-variable fz_feed equal -v_P_feed_app*v_area/v_N_feed-v_C_pist_feed*vcm(piston_feed,z)
-variable fz_perm equal  v_P_perm_app*v_area/v_N_perm-v_C_pist_perm*vcm(piston_perm,z)
+# damp_scale multiplies the damper: 1 through the settle, the seating and the reference window; Phase 2
+# redefines it (damp_prod / damp_ramp)
+variable damp_scale equal 1.0
+variable fz_feed equal -v_P_feed_app*v_area/v_N_feed-v_damp_scale*v_C_pist_feed*vcm(piston_feed,z)
+variable fz_perm equal  v_P_perm_app*v_area/v_N_perm-v_damp_scale*v_C_pist_perm*vcm(piston_perm,z)
 
 unfix freeze_feed
 unfix freeze_perm
@@ -748,6 +777,47 @@ if "${settle_halt} == 1" then "unfix halt_settle"
 unfix settle_win
 print ">>> settle end (step $(step)): z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)  vz_feed=$(v_vz_feed:%.2e) vz_perm=$(v_vz_perm:%.2e)"
 print ">>>   P_feed_meas=$(v_P_feed_meas:%.4f) P_perm_meas=$(v_P_perm_meas:%.4f) (applied ${P_target});  L_feed=$(v_L_feed:%.2f) L_perm=$(v_L_perm:%.2f)  T=$(c_mobile_temp:%.4f)"
+
+# ==========================================================================
+#  PHASE 1.25: SEATING -- the support moved up to the gel face (seat_support = 1)
+# ==========================================================================
+if "${seat_support} == 0" then "jump SELF label_after_seat"
+variable seat_z0     equal $(c_support_com[3])
+variable seat_gap0   equal $(v_gel_bot_rg-c_support_com[3])
+variable seat_travel equal $((v_seat_gap0<v_seat_max)*v_seat_gap0+(v_seat_gap0>=v_seat_max)*v_seat_max)
+variable seat_p      equal abs(c_fp_supp_poly[3])/v_area
+variable seat_p_tol  equal $(v_seat_frac*v_dP_piston)
+print "========================================"
+print "Phase 1.25: seating -- support z = ${seat_z0}, gel bottom (Rg) $(v_gel_bot_rg:%.3f), lowest bead $(c_minz:%.3f); contact at F/A >= ${seat_p_tol}; travel cap ${seat_travel}"
+print "========================================"
+if "${seat_travel} <= 0.0" then &
+    "print '>>> [seat] the support is already at the Rg bottom edge of the gel: not moved'" &
+    "jump SELF label_seat_hold"
+variable seat_run   equal ceil(v_seat_travel/(v_seat_vel*dt))
+variable seat_start equal $(step)
+fix seat_win all ave/time 100 20 2000 v_seat_p ave one
+# f_seat_win is 0 until its first full 2000-step window has closed, so no start guard is needed
+variable seat_p_win equal f_seat_win
+fix halt_seat all halt 2000 v_seat_p_win > ${seat_p_tol} error continue
+fix seat_move support move linear 0.0 0.0 ${seat_vel} units box
+thermo 10000
+run ${seat_run}
+thermo ${thermo_freq}
+unfix seat_move
+unfix halt_seat
+variable seat_p_end equal $(f_seat_win)
+unfix seat_win
+velocity support set 0.0 0.0 0.0
+print ">>> [seat] support moved $(c_support_com[3]-v_seat_z0:%.3f) sigma in $(step-v_seat_start) steps: z = $(c_support_com[3]:%.3f); F_poly_supp/A = ${seat_p_end} (tolerance ${seat_p_tol}); gel bottom (Rg) $(v_gel_bot_rg:%.3f), lowest bead $(c_minz:%.3f)"
+if "${seat_p_end} <= ${seat_p_tol}" then &
+    "print '>>> [seat] WARNING: the travel cap was reached without contact -- raise seat_max or check the gel position'"
+label label_seat_hold
+print ">>> [seat] hold ${seat_hold_steps} steps"
+thermo 10000
+run ${seat_hold_steps}
+thermo ${thermo_freq}
+print ">>> [seat] hold done (step $(step)): support z = $(c_support_com[3]:%.3f)  gel bottom (Rg) $(v_gel_bot_rg:%.3f)  lowest bead $(c_minz:%.3f)  F_poly_supp/A (this step) $(v_seat_p:%.5f)  z_feed=$(v_z_feed:%.3f) z_perm=$(v_z_perm:%.3f)"
+label label_after_seat
 
 # ----- strain baseline from the SETTLED state: window means over the end of the settle -----
 # (f_l0_free[1] = 0 only when the settle was shorter than l0_avg_every: single-step fallback)
@@ -882,21 +952,24 @@ else &
     "fix nvt_prod mobile nvt temp ${temp_target} ${temp_target} 1.0" &
     "fix_modify nvt_prod temp myTemp"
 
-# ----- Production piston law: drop the viscous damper (damp_prod=0, 2026-09-23) -----
-# Same delete + equal idiom as dP_now: fix aveforce looks the variable up BY NAME
-# at the start of every run, so the redefinition takes effect from the first ramp
-# stage on.  With the damper the 2026-09-22 run saw P_feed_meas - P_perm_meas ~ 0.03
-# for dP = 0.1 (drag ~0.037 per sheet, both sheets).  The gel's hydraulic
-# resistance R = dP/Q gives an effective damping R*A^2 ~ 0.8*C_crit*N on its own,
-# so the undamped sheets remain (nearly) critically damped under flow.
-if "${damp_prod} == 0" then &
-    "variable fz_feed delete" &
-    "variable fz_feed equal -v_P_feed_app*v_area/v_N_feed" &
-    "variable fz_perm delete" &
-    "variable fz_perm equal  v_P_perm_app*v_area/v_N_perm" &
-    "print '>>> Phase 2: piston damper OFF (damp_prod=0): fz_feed = -P_feed_app*A/N, fz_perm = +P_perm_app*A/N'" &
+# ----- Production piston law: the viscous damper is dropped (damp_prod=0, 2026-09-23) -----
+# With the damper the 2026-09-22 run saw P_feed_meas - P_perm_meas ~ 0.03 for dP = 0.1 (drag ~0.037
+# per sheet, both sheets), so it cannot stay through the drive.  The gel's hydraulic resistance
+# R = dP/Q gives an effective damping R*A^2 ~ 0.8*C_crit*N on its own, so the undamped sheets remain
+# (nearly) critically damped under steady flow.
+# damp_ramp = 1 (2026-11-24): the damper is not dropped at the ramp start but scaled by
+# 1 - stage/n_ramp in the ramp loop below, so the sheets are damped while they pick up speed and
+# the load on the gel rises smoothly to the full dP (the notebook drives its model with the measured
+# support force, not with the applied ramp).  damp_scale is read BY NAME at the start of every run
+# (the dP_now idiom).
+if "${damp_prod} == 1" then &
+    "print '>>> Phase 2: piston damper KEPT (damp_prod=1): C_pist_feed=$(v_C_pist_feed:%.3f) C_pist_perm=$(v_C_pist_perm:%.3f) per bead'" &
+elif "${damp_ramp} == 1" &
+    "print '>>> Phase 2: piston damper faded out over the dP ramp (damp_ramp=1), OFF in the drive'" &
 else &
-    "print '>>> Phase 2: piston damper KEPT (damp_prod=1): C_pist_feed=$(v_C_pist_feed:%.3f) C_pist_perm=$(v_C_pist_perm:%.3f) per bead'"
+    "variable damp_scale delete" &
+    "variable damp_scale equal 0.0" &
+    "print '>>> Phase 2: piston damper OFF from the ramp start (damp_prod=0, damp_ramp=0): fz_feed = -P_feed_app*A/N, fz_perm = +P_perm_app*A/N'"
 
 # ----- Displacement reference = RAMP START (u_z(z,0)=0); profile fix live through the ramp -----
 # 2026-09-28: the reset used to follow the ramp.  With a 1M-step ramp the network
@@ -915,7 +988,10 @@ variable ramp_stage loop ${n_ramp}
 label ramp_loop
 variable dP_now delete
 variable dP_now equal $(v_ramp_stage*v_dP_piston/v_n_ramp)
-print ">>> P_feed ramp stage ${ramp_stage}/${n_ramp}: dP_now=${dP_now}  P_feed_app=$(v_P_feed_app)"
+if "${damp_prod} == 0 && ${damp_ramp} == 1" then &
+    "variable damp_scale delete" &
+    "variable damp_scale equal $(1.0-v_ramp_stage/v_n_ramp)"
+print ">>> P_feed ramp stage ${ramp_stage}/${n_ramp}: dP_now=${dP_now}  P_feed_app=$(v_P_feed_app)  damper x $(v_damp_scale:%.3f)"
 run ${ramp_steps}
 next ramp_stage
 jump SELF ramp_loop
