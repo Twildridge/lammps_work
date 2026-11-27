@@ -1,0 +1,10 @@
+{
+ "run_id": "random_10b_cube10_iso_1",
+ "deck": "isotropic_compression",
+ "dataname": "final_config_slab_support_10beads_cube10_rho044_nowalls_random_br2_s11_1.0_1.0_16000000_six_plates",
+ "cluster": "expanse",
+ "run_names": [
+  "isotropic_compression_final_config_slab_support_10beads_cube10_rho044_nowalls_random_br2_s11_1.0_1.0_16000000_six_plates_1.0_1.0_20261124_201153"
+ ],
+ "pulled": "2026-11-27T10:04"
+}

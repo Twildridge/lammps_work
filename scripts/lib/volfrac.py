@@ -121,6 +121,74 @@ def _frame_bins(box, bin_width):
     return origin, L, edges, 0.5 * (edges[:-1] + edges[1:]), widths, L[0] * L[1] * widths
 
 
+# tess keeps every cell's full geometry (~50 kB per cell), so one container over a
+# million-atom frame needs tens of GB.  Above TESS_BLOCK_MIN_N points the frame is
+# tessellated in z-pencils instead: each pencil is its own container holding the pencil's
+# points plus a halo of periodic neighbours in x and y (z stays periodic over the whole box),
+# and only the volumes of the pencil's own points are kept.  The cells are the same as the
+# single container's as long as no cell reaches further than TESS_HALO sideways.
+TESS_BLOCK_MIN_N = 60000      # at or below this: one periodic container (the original path)
+TESS_BLOCK_W     = 16.0       # target pencil width in x and y [sigma]
+TESS_HALO        = 4.0        # halo around each pencil [sigma]
+TESS_WORKERS     = 4          # pencils tessellated in parallel (each holds ~1.5 GB); 1 = serial
+
+
+def _pencil_volumes(args):
+    """volumes of the first n_own points of q (pencil-local coordinates; z periodic)."""
+    q, lim_hi, zlo, n_own = args
+    import tess
+    pad = 1e-6                                       # voro++ rejects a point lying on a wall to round-off
+    cont = tess.Container(q, limits=((-pad, -pad, zlo), (lim_hi[0] + pad, lim_hi[1] + pad, lim_hi[2])),
+                          periodic=(False, False, True))
+    return np.array([cont[i].volume() for i in range(n_own)])
+
+
+def _cell_volumes_blocked(p, origin, L, w=None, halo=None, workers=None):
+    """Voronoi cell volumes of the points p (wrapped into the periodic box origin, L), from
+    z-pencils with a halo -- bounded memory, see the note above."""
+    w = TESS_BLOCK_W if w is None else w
+    halo = TESS_HALO if halo is None else halo
+    workers = TESS_WORKERS if workers is None else workers
+    nb = [max(1, int(L[k] // w)) for k in (0, 1)]
+    bw = [L[k] / nb[k] for k in (0, 1)]
+    if min(nb) < 3 or min(bw) <= 2 * halo:           # box too narrow for pencils + halo
+        import tess
+        cont = tess.Container(p, limits=(tuple(origin), tuple(origin + L)), periodic=True)
+        return np.array([c.volume() for c in cont])
+    rel = [(p[:, k] - origin[k]) % L[k] for k in (0, 1)]
+    idx = [np.minimum((rel[k] / bw[k]).astype(int), nb[k] - 1) for k in (0, 1)]
+    zlo, zhi = float(origin[2]), float(origin[2] + L[2])
+    tasks, owners = [], []
+    for i in range(nb[0]):
+        dx = (rel[0] - i * bw[0] + halo) % L[0]          # pencil-local x, halo included
+        inx = np.flatnonzero(dx < bw[0] + 2 * halo)
+        for j in range(nb[1]):
+            dy = (rel[1][inx] - j * bw[1] + halo) % L[1]
+            s = inx[dy < bw[1] + 2 * halo]
+            own = (idx[0][s] == i) & (idx[1][s] == j)
+            if not own.any():
+                continue
+            s = np.concatenate([s[own], s[~own]])        # the pencil's own points first
+            q = np.column_stack([dx[s], (rel[1][s] - j * bw[1] + halo) % L[1], p[s, 2]])
+            tasks.append((q, (bw[0] + 2 * halo, bw[1] + 2 * halo, zhi), zlo, int(own.sum())))
+            owners.append(s[:int(own.sum())])
+    res = None
+    if workers > 1 and len(tasks) > 1:
+        try:
+            import multiprocessing as mp
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context('spawn')) as ex:
+                res = list(ex.map(_pencil_volumes, tasks))
+        except Exception as e:
+            print(f'    (parallel tessellation unavailable: {type(e).__name__}: {e} -> serial)')
+    if res is None:
+        res = [_pencil_volumes(t) for t in tasks]
+    vol = np.full(len(p), np.nan)
+    for s, v in zip(owners, res):
+        vol[s] = v
+    return vol
+
+
 def _tessellate(box, types, xyz, mobile_only=True, mobile_types=MOBILE_TYPES):
     """Periodic voro++ tessellation of one frame → (points, types_kept, volumes,
     origin, L). Shared by the per-bin and whole-box estimators so the two can
@@ -136,8 +204,12 @@ def _tessellate(box, types, xyz, mobile_only=True, mobile_types=MOBILE_TYPES):
     if len(ui) < len(p):
         print(f'    warning: dropping {len(p)-len(ui)} duplicate positions')
         ui = np.sort(ui); p, t_k = p[ui], t_k[ui]
-    cont = tess.Container(p, limits=(tuple(origin), tuple(origin + L)), periodic=True)
-    vol  = np.array([c.volume() for c in cont])
+    if len(p) <= TESS_BLOCK_MIN_N:
+        cont = tess.Container(p, limits=(tuple(origin), tuple(origin + L)), periodic=True)
+        vol  = np.array([c.volume() for c in cont])
+        del cont
+    else:
+        vol = _cell_volumes_blocked(p, origin, L)
     _err = abs(vol.sum() - L.prod()) / L.prod()
     if _err > 0.01:
         print(f'    warning: sum(V_cell) off box volume by {100*_err:.1f}%')
