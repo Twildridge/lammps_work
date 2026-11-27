@@ -63,6 +63,14 @@ DRY=0
 ARGS=()
 for a in "$@"; do if [ "$a" = "--dry-run" ]; then DRY=1; else ARGS+=("$a"); fi; done
 
+# Pod (2026-11-23): the node health screen's verdicts, applied here as lsbatch applies them to
+# production jobs (pod block of site.sh): refresh the table, report, and put --exclude on every sbatch.
+if declare -F pod_health_refresh >/dev/null; then
+    pod_health_refresh "$DRY"
+    POD_EX=$(pod_node_exclude_list)
+    if [ -n "$POD_EX" ]; then BENCH_SBATCH+=("--exclude=$POD_EX"); echo "    --exclude=$POD_EX"; fi
+fi
+
 ALL_N=(5 10 15 20 25 30)
 NETWORK="${NETWORK:-random}"
 NET_SUFFIX=""; [ "$NETWORK" = random ] || NET_SUFFIX="_${NETWORK}"
